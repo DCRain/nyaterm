@@ -253,9 +253,8 @@ export default function XTerminal({
   const showLineNumbers = terminalSettings.show_line_numbers;
   const showTimestamps = terminalSettings.show_timestamps;
   const timestampFormat = terminalSettings.timestamp_format ?? "[HH:mm:ss]";
-  const showWorkspacePadding = terminalSettings.show_workspace_padding ?? false;
   const showGutter = showLineNumbers || showTimestamps;
-  const showContentPadding = showWorkspacePadding;
+  const showContentPadding = true;
   const commandSuggestionsEnabled = interaction.command_suggestions_enabled;
   const commandSuggestionMinChars = interaction.command_suggestion_min_chars;
   const commandSuggestionMaxChars = interaction.command_suggestion_max_chars;
@@ -3246,10 +3245,11 @@ export default function XTerminal({
 
   return (
     <div
-      className="nyaterm-wallpaper-transparent-surface h-full w-full relative flex"
+      className="nyaterm-wallpaper-transparent-surface h-full w-full relative flex box-border overflow-hidden"
       style={{
         display: visible ? "flex" : "none",
         backgroundColor: terminalBackground,
+        padding: 6,
       }}
     >
       {showGutter && terminalReady && (
@@ -3265,7 +3265,7 @@ export default function XTerminal({
         />
       )}
       <div
-        className="nyaterm-wallpaper-transparent-surface flex-1 min-w-0 h-full relative"
+        className="nyaterm-wallpaper-transparent-surface flex-1 min-h-0 min-w-0 relative"
         style={{ backgroundColor: terminalBackground }}
       >
         <TerminalContextMenu
@@ -3275,9 +3275,7 @@ export default function XTerminal({
           onPasteClipboard={pasteClipboard}
         >
           <div
-            className={`nyaterm-wallpaper-transparent-surface h-full w-full ${
-              showContentPadding ? "pl-2" : ""
-            }`}
+            className="nyaterm-wallpaper-transparent-surface h-full w-full"
             style={{ backgroundColor: terminalBackground }}
           >
             <div
