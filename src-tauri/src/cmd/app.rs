@@ -71,6 +71,12 @@ pub fn hide_main_window(app: tauri::AppHandle) -> AppResult<()> {
 }
 
 #[tauri::command]
+pub fn open_devtools(window: tauri::WebviewWindow) -> AppResult<()> {
+    window.open_devtools();
+    Ok(())
+}
+
+#[tauri::command]
 pub fn open_download_dir(app: tauri::AppHandle) -> AppResult<()> {
     let path = resolve_download_dir(&app)?;
 

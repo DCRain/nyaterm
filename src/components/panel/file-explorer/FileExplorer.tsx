@@ -30,6 +30,7 @@ import {
   MdInfo,
   MdLink,
   MdNoteAdd,
+  MdOutlineSubdirectoryArrowRight,
   MdRefresh,
   MdSyncLock,
   MdUpload,
@@ -71,10 +72,14 @@ import { openAIAssistant } from "@/lib/aiEvents";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
-import { sendSessionInput, sendSessionInputWithSync } from "@/lib/sessionInput";
+import {
+  buildTerminalCommandInput,
+  sendSessionInput,
+  sendSessionInputWithSync,
+} from "@/lib/sessionInput";
 import { matchesKeyEvent } from "@/lib/shortcutRegistry";
 import { getSessionInputPeerIds } from "@/lib/syncInputGroups";
-import { cn, formatSize } from "@/lib/utils";
+import { cn, formatSize, shellQuote } from "@/lib/utils";
 import type { FileWindowTarget } from "@/lib/windowManager";
 import { openAutoUpload, openFilePreview, openRemoteFileEditor } from "@/lib/windowManager";
 import type {
@@ -1740,6 +1745,29 @@ function FileExplorerPane({
     sendTextToTerminal(currentPath);
   };
 
+  const quoteCdPath = useCallback(
+    (path: string) => {
+      if (explorerBackend === "local" && /Win/i.test(navigator.platform || "")) {
+        return `"${path.replace(/"/g, '\\"')}"`;
+      }
+      return shellQuote(path);
+    },
+    [explorerBackend],
+  );
+
+  const sendCdCommandToTerminal = useCallback(
+    (directoryPath: string) => {
+      if (!activeSessionId || !directoryPath) return;
+      const command = buildTerminalCommandInput(`cd ${quoteCdPath(directoryPath)}`);
+      sendTextToTerminal(command);
+    },
+    [activeSessionId, quoteCdPath, sendTextToTerminal],
+  );
+
+  const handleCdCurrentPathInTerminal = () => {
+    sendCdCommandToTerminal(currentPath);
+  };
+
   const selectedRealFiles = useMemo(
     () => filteredSortedFiles.filter((file) => selectedFiles.has(file.name)),
     [filteredSortedFiles, selectedFiles],
@@ -2167,6 +2195,11 @@ function FileExplorerPane({
     else text = getEntryFullPath(entry);
 
     sendTextToTerminal(text);
+  };
+
+  const handleCdToDirectory = (entry: FileEntry) => {
+    const directoryPath = entry.is_dir ? getEntryFullPath(entry) : currentPath;
+    sendCdCommandToTerminal(directoryPath);
   };
 
   const buildDeleteItems = (entries: FileEntry[]): DeleteDialogItem[] => {
@@ -2853,6 +2886,7 @@ function FileExplorerPane({
                           onAddToFavorites={handleAddEntryToFavorites}
                           onCopyPath={handleCopyPath}
                           onSendToTerminal={handleSendToTerminal}
+                          onCdToDirectory={handleCdToDirectory}
                           onProperties={(entry) => {
                             if (activeSessionId) {
                               setPropertiesDialogData({
@@ -2940,6 +2974,10 @@ function FileExplorerPane({
             <ContextMenuItem onClick={handleSendCurrentPathToTerminal}>
               <LuClipboardPaste className="mr-2 h-4 w-4" />
               {t("fileExplorer.sendDirPathToTerminal")}
+            </ContextMenuItem>
+            <ContextMenuItem onClick={handleCdCurrentPathInTerminal}>
+              <MdOutlineSubdirectoryArrowRight className="mr-2 h-4 w-4" />
+              {t("fileExplorer.cdToDirectory")}
             </ContextMenuItem>
             <ContextMenuSeparator />
             <ContextMenuItem onClick={handleCurrentDirProperties}>

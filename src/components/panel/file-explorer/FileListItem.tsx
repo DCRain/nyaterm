@@ -17,6 +17,7 @@ import {
   MdKeyboardDoubleArrowRight,
   MdKeyboardReturn,
   MdOpenInNew,
+  MdOutlineSubdirectoryArrowRight,
   MdRefresh,
   MdSend,
   MdUpload,
@@ -73,6 +74,7 @@ interface FileListItemProps {
   onAddToFavorites: (entry: FileEntry) => void;
   onCopyPath: (entry: FileEntry, mode: "dir" | "name" | "full") => void;
   onSendToTerminal: (entry: FileEntry, mode: "dir" | "name" | "full") => void;
+  onCdToDirectory: (entry: FileEntry) => void;
   onProperties: (entry: FileEntry) => void;
   aiActions: AICustomActionConfig[];
   onAIAction: (entry: FileEntry, action: AICustomActionConfig) => void;
@@ -129,6 +131,7 @@ export function FileListItem({
   onAddToFavorites,
   onCopyPath,
   onSendToTerminal,
+  onCdToDirectory,
   onProperties,
   aiActions,
   onAIAction,
@@ -527,6 +530,10 @@ export function FileListItem({
             <ContextMenuItem onClick={() => onSendToTerminal(entry, "dir")}>
               <MdKeyboardDoubleArrowRight className="text-[0.875rem] text-muted-foreground mr-2" />
               {t("fileExplorer.cmTerminalDirPath")}
+            </ContextMenuItem>
+            <ContextMenuItem onClick={() => onCdToDirectory(entry)}>
+              <MdOutlineSubdirectoryArrowRight className="text-[0.875rem] text-muted-foreground mr-2" />
+              {t("fileExplorer.cmCdToDirectory")}
             </ContextMenuItem>
             <ContextMenuSeparator />
             {aiActions.length > 0 && (
