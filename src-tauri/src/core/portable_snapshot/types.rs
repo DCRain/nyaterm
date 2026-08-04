@@ -41,6 +41,8 @@ pub struct PortableSnapshot {
     pub master_key_token: Option<String>,
     #[serde(default)]
     pub known_hosts: String,
+    #[serde(default)]
+    pub notes: config::NotesSnapshot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +86,7 @@ struct SnapshotHashInput<'a> {
     history: &'a [crate::core::history::HistoryEntry],
     master_key_token: &'a Option<String>,
     known_hosts: &'a str,
+    notes: &'a config::NotesSnapshot,
 }
 
 #[derive(Serialize)]
@@ -102,6 +105,25 @@ struct SnapshotRawHashInput<'a> {
     history: &'a RawValue,
     master_key_token: &'a RawValue,
     known_hosts: &'a RawValue,
+}
+
+#[derive(Serialize)]
+struct SnapshotRawHashInputWithNotes<'a> {
+    settings: &'a RawValue,
+    sessions: &'a RawValue,
+    keys: &'a RawValue,
+    passwords: &'a RawValue,
+    credentials: &'a RawValue,
+    otp: &'a RawValue,
+    proxies: &'a RawValue,
+    proxy_groups: &'a RawValue,
+    tunnels: &'a RawValue,
+    tunnel_groups: &'a RawValue,
+    quick_commands: &'a RawValue,
+    history: &'a RawValue,
+    master_key_token: &'a RawValue,
+    known_hosts: &'a RawValue,
+    notes: &'a RawValue,
 }
 
 #[derive(Serialize)]
@@ -283,6 +305,8 @@ impl PortableAppSettings {
         current.ui.serial_send_height = ui_state.serial_send_height;
         current.ui.zoom_level = ui_state.zoom_level;
         current.ui.transfer_height = ui_state.transfer_height;
+        current.ui.notes_expanded_folder_ids = ui_state.notes_expanded_folder_ids;
+        current.ui.notes_last_selected_node_id = ui_state.notes_last_selected_node_id;
         current
     }
 }

@@ -122,6 +122,25 @@ pub(super) async fn cleanup_cancelled_upload(
     let _ = sftp.close().await;
     Ok(())
 }
+
+pub(super) async fn close_download_remote_file(
+    mut remote_file: russh_sftp::client::fs::File,
+    remote_path: &str,
+    local_path: &str,
+    offset: Option<u64>,
+) -> AppResult<()> {
+    use tokio::io::AsyncWriteExt;
+
+    remote_file.shutdown().await.map_err(|error| {
+        let offset_context = offset
+            .map(|offset| format!(", offset={offset}"))
+            .unwrap_or_default();
+        AppError::Channel(format!(
+            "Failed to close remote file handle for '{remote_path}' (local_path={local_path}{offset_context}): {error}"
+        ))
+    })
+}
+
 pub(super) async fn read_sftp_chunk(
     remote_file: russh_sftp::client::fs::File,
     offset: u64,
@@ -207,7 +226,8 @@ where
     let num_chunks = total_size.div_ceil(chunk_size) as usize;
     let concurrency = pipeline_depth
         .min(max_pipeline_depth.max(1))
-        .min(num_chunks);
+        .min(num_chunks)
+        .max(1);
 
     // Look up raw bytes path from cache for non-UTF-8 file names
     let cache = path_cache.read().await;
@@ -295,6 +315,8 @@ where
                 total_size,
                 chunk_size as usize,
             ));
+        } else {
+            close_download_remote_file(fh, remote_path, local_path, Some(chunk_offset)).await?;
         }
 
         if last_progress.elapsed() >= TRANSFER_PROGRESS_INTERVAL {
@@ -435,6 +457,8 @@ pub(super) async fn download_remote_file_inner_with_controller(
                     );
                 }
             }
+
+            close_download_remote_file(remote_file, remote_path, actual_path, None).await?;
         }
 
         local_file

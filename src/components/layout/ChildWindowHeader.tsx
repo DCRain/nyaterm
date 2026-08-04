@@ -7,6 +7,8 @@ import {
   VscChromeMaximize,
   VscChromeMinimize,
   VscChromeRestore,
+  VscPin,
+  VscPinned,
 } from "react-icons/vsc";
 import { isMacOS } from "@/lib/platform";
 
@@ -15,6 +17,7 @@ interface ChildWindowHeaderProps {
   onClose: () => void;
   icon?: ReactNode;
   windowControls?: boolean;
+  alwaysOnTopControl?: boolean;
 }
 
 export default function ChildWindowHeader({
@@ -22,38 +25,46 @@ export default function ChildWindowHeader({
   onClose,
   icon,
   windowControls = false,
+  alwaysOnTopControl = false,
 }: ChildWindowHeaderProps) {
   const { t } = useTranslation();
   const [appWindow] = useState(() => getCurrentWindow());
   const [isMaximized, setIsMaximized] = useState(false);
+  const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(false);
 
   useEffect(() => {
-    if (isMacOS || !windowControls) return;
+    if (isMacOS || (!windowControls && !alwaysOnTopControl)) return;
     let mounted = true;
     let unlistenResized: (() => void) | undefined;
 
-    const syncMaximizedState = async () => {
-      const maximized = await appWindow.isMaximized().catch(() => false);
+    const syncWindowState = async () => {
+      const [maximized, alwaysOnTop] = await Promise.all([
+        windowControls ? appWindow.isMaximized().catch(() => false) : Promise.resolve(false),
+        alwaysOnTopControl ? appWindow.isAlwaysOnTop().catch(() => false) : Promise.resolve(false),
+      ]);
       if (mounted) {
         setIsMaximized(maximized);
+        setIsAlwaysOnTop(alwaysOnTop);
       }
     };
 
-    void syncMaximizedState();
-    appWindow
-      .onResized(() => {
-        void syncMaximizedState();
-      })
-      .then((unlisten) => {
-        unlistenResized = unlisten;
-      })
-      .catch(() => {});
+    void syncWindowState();
+    if (windowControls) {
+      appWindow
+        .onResized(() => {
+          void syncWindowState();
+        })
+        .then((unlisten) => {
+          unlistenResized = unlisten;
+        })
+        .catch(() => {});
+    }
 
     return () => {
       mounted = false;
       unlistenResized?.();
     };
-  }, [appWindow, windowControls]);
+  }, [alwaysOnTopControl, appWindow, windowControls]);
 
   const handleMinimize = () => {
     appWindow.minimize().catch(() => {});
@@ -63,6 +74,13 @@ export default function ChildWindowHeader({
     await appWindow.toggleMaximize().catch(() => {});
     const maximized = await appWindow.isMaximized().catch(() => false);
     setIsMaximized(maximized);
+  };
+
+  const handleToggleAlwaysOnTop = async () => {
+    const next = !isAlwaysOnTop;
+    await appWindow.setAlwaysOnTop(next).catch(() => {});
+    const alwaysOnTop = await appWindow.isAlwaysOnTop().catch(() => next);
+    setIsAlwaysOnTop(alwaysOnTop);
   };
 
   return (
@@ -80,6 +98,24 @@ export default function ChildWindowHeader({
 
       {!isMacOS && (
         <div className="flex h-full shrink-0 items-center">
+          {alwaysOnTopControl && (
+            <button
+              type="button"
+              className={`flex h-10 w-[46px] items-center justify-center transition-colors hover:bg-[color-mix(in_srgb,var(--df-text)_10%,transparent)] hover:text-[var(--df-text)] ${
+                isAlwaysOnTop ? "text-[var(--df-primary)]" : "text-[var(--df-text-muted)]"
+              }`}
+              aria-label={isAlwaysOnTop ? t("menu.disableAlwaysOnTop") : t("menu.alwaysOnTop")}
+              title={isAlwaysOnTop ? t("menu.disableAlwaysOnTop") : t("menu.alwaysOnTop")}
+              aria-pressed={isAlwaysOnTop}
+              onClick={() => void handleToggleAlwaysOnTop()}
+            >
+              {isAlwaysOnTop ? (
+                <VscPinned className="text-base" />
+              ) : (
+                <VscPin className="text-base" />
+              )}
+            </button>
+          )}
           {windowControls && (
             <>
               <button

@@ -272,6 +272,56 @@ pub(crate) fn permissions_string_to_octal_mode(permissions: &str) -> Option<Stri
     Some(format!("{mode:04o}"))
 }
 
+pub(crate) fn scp_finalize_replace_command(
+    tmp_path: &str,
+    target_path: &str,
+    original: Option<&FileProperties>,
+) -> String {
+    let mut commands = Vec::new();
+    if let Some(props) = original {
+        if let Some(owner_group) = scp_owner_group_spec(props) {
+            commands.push(format!(
+                "chown {} -- {}",
+                sh_quote(&owner_group),
+                sh_quote(tmp_path)
+            ));
+        }
+        if let Some(mode) = permissions_string_to_octal_mode(&props.permissions) {
+            commands.push(format!(
+                "chmod {} -- {}",
+                sh_quote(&mode),
+                sh_quote(tmp_path)
+            ));
+        }
+    }
+    commands.push(format!(
+        "mv -f -- {} {}",
+        sh_quote(tmp_path),
+        sh_quote(target_path)
+    ));
+    commands.join(" && ")
+}
+
+fn scp_owner_group_spec(props: &FileProperties) -> Option<String> {
+    let uid = props.uid.trim();
+    let gid = props.gid.trim();
+    if is_numeric_id(uid) && is_numeric_id(gid) {
+        return Some(format!("{uid}:{gid}"));
+    }
+
+    let owner = props.owner.trim();
+    let group = props.group.trim();
+    if !owner.is_empty() && !group.is_empty() {
+        return Some(format!("{owner}:{group}"));
+    }
+
+    None
+}
+
+fn is_numeric_id(value: &str) -> bool {
+    !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 pub(crate) fn owner_or_id(owner: &Option<String>, uid: Option<u32>) -> String {
     owner
         .as_deref()
@@ -373,8 +423,8 @@ fn is_windows_reserved_device_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        RemotePathRef, decode_raw_path_token, permissions_string_to_octal_mode, raw_path_token,
-        sanitize_download_file_name_for_platform,
+        FileProperties, RemotePathRef, decode_raw_path_token, permissions_string_to_octal_mode,
+        raw_path_token, sanitize_download_file_name_for_platform, scp_finalize_replace_command,
     };
 
     #[test]
@@ -481,5 +531,68 @@ mod tests {
             Some("7644")
         );
         assert_eq!(permissions_string_to_octal_mode("bad"), None);
+    }
+
+    #[test]
+    fn scp_finalize_replace_prefers_numeric_uid_gid() {
+        let props = file_properties("-rwsr-sr-t", "kang", "kang", "1000", "1001");
+        let command = scp_finalize_replace_command("/tmp/new", "/etc/app.conf", Some(&props));
+
+        assert!(command.contains("chown '1000:1001' -- '/tmp/new'"));
+        assert!(command.contains("chmod '7755' -- '/tmp/new'"));
+        assert!(command.ends_with("mv -f -- '/tmp/new' '/etc/app.conf'"));
+    }
+
+    #[test]
+    fn scp_finalize_replace_falls_back_to_owner_group_names() {
+        let props = file_properties("-rw-r--r--", "kang", "staff", "kang", "staff");
+        let command = scp_finalize_replace_command("/tmp/new", "/home/kang/file", Some(&props));
+
+        assert!(command.contains("chown 'kang:staff' -- '/tmp/new'"));
+        assert!(command.contains("chmod '0644' -- '/tmp/new'"));
+    }
+
+    #[test]
+    fn scp_finalize_replace_orders_chown_before_chmod_before_mv() {
+        let props = file_properties("-rwSr-Sr-T", "kang", "staff", "1000", "1001");
+        let command = scp_finalize_replace_command("/tmp/new", "/home/kang/file", Some(&props));
+
+        let chown = command.find("chown").unwrap();
+        let chmod = command.find("chmod").unwrap();
+        let mv = command.find("mv -f").unwrap();
+        assert!(chown < chmod);
+        assert!(chmod < mv);
+    }
+
+    #[test]
+    fn scp_finalize_replace_skips_unparseable_mode() {
+        let props = file_properties("bad", "kang", "staff", "1000", "1001");
+        let command = scp_finalize_replace_command("/tmp/new", "/home/kang/file", Some(&props));
+
+        assert!(command.contains("chown '1000:1001' -- '/tmp/new'"));
+        assert!(!command.contains("chmod"));
+        assert!(command.ends_with("mv -f -- '/tmp/new' '/home/kang/file'"));
+    }
+
+    fn file_properties(
+        permissions: &str,
+        owner: &str,
+        group: &str,
+        uid: &str,
+        gid: &str,
+    ) -> FileProperties {
+        FileProperties {
+            name: "file".to_string(),
+            is_dir: false,
+            is_symlink: false,
+            size: 0,
+            permissions: permissions.to_string(),
+            owner: owner.to_string(),
+            group: group.to_string(),
+            uid: uid.to_string(),
+            gid: gid.to_string(),
+            mtime: 0,
+            atime: 0,
+        }
     }
 }

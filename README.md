@@ -99,8 +99,10 @@ NyaTerm is built for people who move between servers, local commands, devices, a
 - Saved connections with folders, icons, metadata, duplication, keyboard copy, reconnect, and import flows
 - Command Palette and session quick switcher for finding actions, open sessions, saved connections, and new-session entry points
 - Main-window `Background Image` customization with `cover` / `contain` / `stretch` / `tile` sizing and adjustable `Background Content Opacity`
-- Left and right activity bars for file explorer, network, Security/Auth, Sync & Backup, AI Assistant, saved connections, active sessions, command history, resource monitoring, GPU monitor, process manager, and Docker manager
-- Remote host monitoring panels for SSH sessions: resource monitor, NVIDIA GPU monitor, process manager (signal/renice), and Docker manager (containers, images, volumes, networks, Compose)
+- Left and right activity bars for file explorer, network, Security/Auth, Sync & Backup, AI Assistant, Notes, saved connections, active sessions, command history, asset monitoring, resource monitoring, GPU monitor, process manager, and Docker manager
+- Notes panel and editor with tree navigation, context menus, autosave, toolbar controls, and sync/backup-aware persistence
+- Asset monitoring workspace with grouped connection views, breadcrumb navigation, table/card layouts, and resource/GPU status integration
+- Remote host monitoring panels for SSH sessions: resource monitor, NVIDIA/Ascend GPU monitor, process manager (signal/renice), and Docker manager (containers, images, volumes, networks, Compose)
 - Session input sync groups to broadcast typed input and sent commands to multiple sessions at once
 - Temporary SSH links for one-off connections from a pasted `ssh://` URL or `ssh` command without saving a connection
 - Child windows for settings, new-session creation, quick-command editing, remote-file editing, and auto-upload prompts
@@ -126,11 +128,13 @@ NyaTerm is built for people who move between servers, local commands, devices, a
 
 - Built-in SFTP file explorer for SSH sessions
 - Upload, download, rename, move, delete, properties, new file/folder, and OpenSSH-compatible symlink actions
-- Folder upload, multi-select, editable path bar, and manual/automatic sync with terminal cwd
+- Folder upload/download, multi-select, editable path bar, and manual/automatic sync with terminal cwd
 - Transfer queue with speed display, pause, resume, cancel, retry, duplicate-target handling, timestamp preservation, and configurable concurrency
+- Enhanced SCP and directory-transfer handling with original-property preservation where available
 - Open remote files in a local editor and upload saved changes back through the watcher-driven auto-upload flow, with content fingerprinting so only real content changes trigger re-upload
 - SFTP channel concurrency limiting and automatic retry on transient channel-open failures
 - External drag-and-drop upload support on Windows
+- Zmodem transfers track local paths and can reveal completed files in the system file manager
 
 ## Security, Authentication, and Networking
 

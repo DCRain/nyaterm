@@ -245,6 +245,34 @@
   }
 }
 
+/* ── Start workspace asset view ────────────────────────────────────────── */
+.asset-table-container {
+  container-type: inline-size;
+}
+
+@container (max-width: 56rem) {
+  .asset-table-container .asset-col-accelerators {
+    display: none;
+  }
+}
+
+@container (max-width: 44rem) {
+  .asset-table-container .asset-col-storage {
+    display: none;
+  }
+
+  .asset-table-container table {
+    min-width: 42rem;
+  }
+}
+
+@container (max-width: 34rem) {
+  .asset-table-container .asset-col-cpu,
+  .asset-table-container .asset-col-memory {
+    display: none;
+  }
+}
+
 /* ── Active tab indicator ───────────────────────────────────────────────── */
 .active-tab {
   border-bottom: 2px solid var(--df-primary, #3b82f6);
@@ -456,4 +484,168 @@ body[data-window-transparency="true"] #root {
   body {
     @apply bg-background text-foreground;
   }
+}
+
+.nyaterm-note-editor-shell {
+  background: var(--df-bg-panel);
+}
+
+.nyaterm-note-editor-shell .mdxeditor {
+  min-height: 100%;
+}
+
+.mdxeditor.nyaterm-note-mdxeditor {
+  --basePageBg: var(--df-bg-panel);
+  --baseBase: var(--df-bg-panel);
+  --baseBgSubtle: var(--df-bg-section-header);
+  --baseBg: var(--df-bg-hover);
+  --baseBgHover: color-mix(in srgb, var(--df-text) 10%, transparent);
+  --baseBgActive: color-mix(in srgb, var(--df-primary) 18%, transparent);
+  --baseLine: var(--df-border);
+  --baseBorder: var(--df-border);
+  --baseBorderHover: color-mix(in srgb, var(--df-text-muted) 50%, var(--df-border));
+  --baseSolid: var(--df-text-muted);
+  --baseSolidHover: var(--df-text);
+  --baseText: var(--df-text-muted);
+  --baseTextContrast: var(--df-text);
+  --accentBase: color-mix(in srgb, var(--df-primary) 8%, transparent);
+  --accentBgSubtle: color-mix(in srgb, var(--df-primary) 10%, transparent);
+  --accentBg: color-mix(in srgb, var(--df-primary) 14%, transparent);
+  --accentBgHover: color-mix(in srgb, var(--df-primary) 18%, transparent);
+  --accentBgActive: color-mix(in srgb, var(--df-primary) 24%, transparent);
+  --accentLine: color-mix(in srgb, var(--df-primary) 42%, transparent);
+  --accentBorder: color-mix(in srgb, var(--df-primary) 55%, var(--df-border));
+  --accentBorderHover: var(--df-primary);
+  --accentSolid: var(--df-primary);
+  --accentSolidHover: color-mix(in srgb, var(--df-primary) 86%, white 14%);
+  --accentText: var(--df-primary);
+  --accentTextContrast: var(--df-text);
+  --admonitionTipBg: color-mix(in srgb, var(--df-primary) 12%, transparent);
+  --admonitionTipBorder: color-mix(in srgb, var(--df-primary) 55%, var(--df-border));
+  --admonitionInfoBg: color-mix(in srgb, #22c55e 13%, transparent);
+  --admonitionInfoBorder: color-mix(in srgb, #22c55e 55%, var(--df-border));
+  --admonitionCautionBg: color-mix(in srgb, #f59e0b 14%, transparent);
+  --admonitionCautionBorder: color-mix(in srgb, #f59e0b 58%, var(--df-border));
+  --admonitionDangerBg: color-mix(in srgb, #ef4444 13%, transparent);
+  --admonitionDangerBorder: color-mix(in srgb, #ef4444 58%, var(--df-border));
+  --admonitionNoteBg: var(--df-bg-hover);
+  --admonitionNoteBorder: var(--df-border);
+  --error-color: #ef4444;
+  background: var(--df-bg-panel);
+  color: var(--df-text);
+}
+
+.nyaterm-note-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  border-bottom: 1px solid var(--df-border);
+  background: var(--df-bg-section-header);
+  color: var(--df-text);
+  gap: 4px;
+}
+
+.nyaterm-note-toolbar button,
+.nyaterm-note-toolbar [role="button"],
+.nyaterm-note-toolbar [role="combobox"] {
+  color: var(--df-text);
+}
+
+.nyaterm-note-toolbar button:hover,
+.nyaterm-note-toolbar [role="button"]:hover,
+.nyaterm-note-toolbar [role="combobox"]:hover {
+  background: var(--df-bg-hover);
+}
+
+.nyaterm-note-toolbar [data-state="on"],
+.nyaterm-note-toolbar [data-state="open"] {
+  background: color-mix(in srgb, var(--df-primary) 16%, transparent);
+  color: var(--df-text);
+}
+
+.nyaterm-note-mdxeditor .cm-editor {
+  background: var(--df-bg-panel);
+  color: var(--df-text);
+}
+
+.nyaterm-note-mdxeditor .cm-gutters {
+  border-right-color: var(--df-border);
+  color: var(--df-text-dimmed);
+}
+
+.nyaterm-note-mdxeditor .cm-activeLine,
+.nyaterm-note-mdxeditor .cm-activeLineGutter {
+  background: var(--df-bg-hover);
+}
+
+.nyaterm-note-mdxeditor input,
+.nyaterm-note-mdxeditor textarea {
+  background: var(--df-bg-input);
+  color: var(--df-text);
+  border-color: var(--df-border);
+}
+
+.nyaterm-note-content {
+  max-width: 900px;
+  min-height: calc(100vh - 130px);
+  margin: 0 auto;
+  padding: 32px 28px 80px;
+  color: var(--df-text);
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+.nyaterm-note-content h1,
+.nyaterm-note-content h2,
+.nyaterm-note-content h3 {
+  margin-top: 1.25em;
+  margin-bottom: 0.55em;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.nyaterm-note-content p,
+.nyaterm-note-content ul,
+.nyaterm-note-content ol,
+.nyaterm-note-content blockquote,
+.nyaterm-note-content pre,
+.nyaterm-note-content table {
+  margin-top: 0.75em;
+  margin-bottom: 0.75em;
+}
+
+.nyaterm-note-content blockquote {
+  border-left: 3px solid var(--df-primary);
+  padding-left: 0.9rem;
+  color: var(--df-text-muted);
+}
+
+.nyaterm-note-content code {
+  border-radius: 4px;
+  background: var(--df-bg-hover);
+  padding: 0.1rem 0.25rem;
+  font-family: "JetBrains Mono", monospace;
+}
+
+.nyaterm-note-content pre code {
+  display: block;
+  overflow-x: auto;
+  padding: 0.9rem;
+}
+
+.nyaterm-note-content a {
+  color: var(--df-link);
+}
+
+.nyaterm-note-content table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.nyaterm-note-content th,
+.nyaterm-note-content td {
+  border: 1px solid var(--df-border);
+  padding: 0.4rem 0.55rem;
 }

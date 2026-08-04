@@ -38,6 +38,7 @@ pub fn build_portable_snapshot(
         history,
         master_key_token: crate::storage::load_master_key_token()?,
         known_hosts: crate::storage::render_known_hosts_export()?,
+        notes: crate::storage::load_notes_snapshot()?,
     };
     snapshot.payload_hash = calculate_payload_hash(&snapshot)?;
     Ok(snapshot)

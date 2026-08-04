@@ -415,6 +415,30 @@ fn parse_ls_line_to_properties(line: &str, path: &str) -> AppResult<FileProperti
     })
 }
 
+async fn stat_remote_properties(
+    ssh_handle: &Arc<SshConnectionHandles>,
+    path: &str,
+) -> AppResult<FileProperties> {
+    let result = exec_command(
+        ssh_handle,
+        &format!("LC_ALL=C ls -lad -- {}", sh_quote(path)),
+    )
+    .await?;
+    if result.exit_code != Some(0) {
+        let stderr_text = String::from_utf8_lossy(&result.stderr);
+        return Err(AppError::Channel(format!(
+            "Failed to stat remote file: {}",
+            stderr_text.trim()
+        )));
+    }
+    let line = String::from_utf8_lossy(&result.stdout)
+        .lines()
+        .find(|line| !line.trim().is_empty() && !line.starts_with("total "))
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| AppError::Channel(format!("No stat output for '{}'", path)))?;
+    parse_ls_line_to_properties(&line, path)
+}
+
 async fn download_file_inner(
     ssh_handle: &Arc<SshConnectionHandles>,
     app: &tauri::AppHandle,
@@ -573,6 +597,7 @@ async fn upload_file_inner(
         let local_meta = tokio::fs::metadata(local_path).await;
         let total_size = local_meta.as_ref().map(|m| m.len()).unwrap_or(0);
         controller.update_progress(0, total_size);
+        let original_props = stat_remote_properties(ssh_handle, remote_path).await.ok();
 
         let mut local_file = tokio::fs::File::open(local_path)
             .await
@@ -661,7 +686,7 @@ async fn upload_file_inner(
 
         let mv_result = exec_command(
             ssh_handle,
-            &format!("mv -f -- {} {}", sh_quote(&tmp_path), sh_quote(remote_path)),
+            &scp_finalize_replace_command(&tmp_path, remote_path, original_props.as_ref()),
         )
         .await?;
 
@@ -1073,17 +1098,10 @@ impl RemoteFs for ScpNormalBackend {
             path,
             uuid::Uuid::new_v4().to_string().replace('-', "")
         );
-        let original_mode = permissions_string_to_octal_mode(&props.permissions);
-        let restore_mode = original_mode
-            .as_deref()
-            .map(|mode| format!(" && chmod {} -- {}", sh_quote(mode), sh_quote(path)))
-            .unwrap_or_default();
         let cmd = format!(
-            "umask 077; cat > {} && mv -f -- {} {}{}",
+            "umask 077; cat > {} && {}",
             sh_quote(&tmp),
-            sh_quote(&tmp),
-            sh_quote(path),
-            restore_mode
+            scp_finalize_replace_command(&tmp, path, Some(&props))
         );
         let result = self.exec_with_stdin(&cmd, content.as_bytes()).await?;
         if result.exit_code != Some(0) {

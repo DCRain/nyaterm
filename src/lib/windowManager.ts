@@ -20,7 +20,8 @@ type ChildWindowStateKey =
   | "proxy"
   | "tunnel"
   | "file-editor"
-  | "file-preview";
+  | "file-preview"
+  | "note-editor";
 
 interface ChildWindowOptions {
   label: string;
@@ -39,6 +40,7 @@ const MAIN_WINDOW_PREFIX = "main-";
 const AUTO_UPLOAD_WINDOW_PREFIX = "auto-upload-";
 const FILE_EDITOR_WINDOW_PREFIX = "file-editor-";
 const FILE_PREVIEW_WINDOW_PREFIX = "file-preview-";
+const NOTE_EDITOR_WINDOW_PREFIX = "note-editor-";
 const AUTO_UPLOAD_OWNER_SEPARATOR = "--";
 const MODAL_CHILD_BASE_LABELS = new Set([
   "settings",
@@ -764,5 +766,22 @@ export function openFilePreview(data: FilePreviewWindowData) {
       emit("file-preview-open", payload);
     }, 120);
     return win;
+  });
+}
+
+export function openNoteEditor(noteId: string, noteTitle: string) {
+  const label = `${NOTE_EDITOR_WINDOW_PREFIX}${ownerToken()}-${noteId}`;
+  const title = `${noteTitle || i18n.t("notes.untitled")} - ${i18n.t("notes.title")} - NyaTerm`;
+  const url = `index.html?window=note-editor&noteId=${encodeURIComponent(noteId)}&owner=${encodeURIComponent(ownerMainWindowLabel)}`;
+  return openChildWindow({
+    label,
+    title,
+    url,
+    kind: "modeless",
+    parentLabel: ownerMainWindowLabel,
+    width: 980,
+    height: 760,
+    resizable: true,
+    stateKey: "note-editor",
   });
 }

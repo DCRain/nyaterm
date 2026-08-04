@@ -657,6 +657,35 @@ pub(super) async fn run_download_directory_workers(
     path_cache: Arc<RwLock<HashMap<String, Vec<u8>>>>,
 ) -> AppResult<DirectoryTransferSummary> {
     let worker_count = sftp_directory_file_concurrency(inventory.files.len(), concurrency);
+    let (_, requested_pipeline_depth, _) = sftp_pipeline_config(transfer_settings);
+    let effective_pipeline_depth = sftp_directory_download_pipeline_cap(
+        inventory.max_open_handles,
+        concurrency.session_pool_size,
+        worker_count,
+        requested_pipeline_depth,
+    );
+    let workers_per_session = worker_count
+        .div_ceil(concurrency.session_pool_size.max(1))
+        .max(1);
+    log_event(StructuredLog {
+        level: StructuredLogLevel::Info,
+        domain: "transfer.sftp".to_string(),
+        event: "sftp.directory.download.pipeline_budget".to_string(),
+        message: "SFTP directory download pipeline budget".to_string(),
+        ids: None,
+        data: Some(serde_json::json!({
+            "max_open_handles": inventory.max_open_handles,
+            "handle_reserve": SFTP_HANDLE_RESERVE,
+            "session_pool_size": concurrency.session_pool_size,
+            "worker_count": worker_count,
+            "workers_per_session": workers_per_session,
+            "requested_pipeline_depth": requested_pipeline_depth,
+            "effective_pipeline_depth": effective_pipeline_depth,
+        })),
+        error: None,
+        client_timestamp: None,
+    });
+
     let total_files = inventory.total_files;
     let total_size = inventory.total_size;
     let queue = Arc::new(StdMutex::new(VecDeque::from(inventory.files)));
@@ -701,7 +730,7 @@ pub(super) async fn run_download_directory_workers(
                     &transfer_settings,
                     &completed_bytes,
                     total_size,
-                    concurrency.small_file_concurrency,
+                    effective_pipeline_depth,
                     &path_cache,
                 )
                 .await?;

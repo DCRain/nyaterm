@@ -2447,9 +2447,18 @@ function FileExplorerPane({
     if (!target) return;
 
     try {
-      const localDir = await openDialog({ directory: true });
-      if (!localDir || typeof localDir !== "string") return;
-      await uploadLocalEntriesToTarget(target, [{ path: localDir, isDir: true }]);
+      const localDirs = await openDialog({ directory: true, multiple: true });
+      if (!localDirs) return;
+      const pathList = (Array.isArray(localDirs) ? localDirs : [localDirs]).filter(
+        (localDir): localDir is string => typeof localDir === "string",
+      );
+      await uploadLocalEntriesToTarget(
+        target,
+        pathList.map((path) => ({
+          path,
+          isDir: true,
+        })),
+      );
     } catch (error) {
       logger.error({
         domain: "transfer.lifecycle",

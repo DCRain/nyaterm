@@ -22,6 +22,7 @@ use std::sync::Arc;
 use crate::cmd::app::AppLockState;
 use crate::cmd::docker::DockerSudoManager;
 use crate::core::ai::AgentApprovalManager;
+use crate::core::monitoring::stats::RemoteStatsSampler;
 use crate::core::sftp::TransferDuplicateManager;
 use crate::core::ssh::{
     HostKeyVerifyManager, PendingAuthManager, PendingSshAuthManager, TunnelManager,
@@ -47,6 +48,7 @@ pub fn run() {
     let claude_code_runtime = Arc::new(core::ai::ClaudeCodeRuntime::new());
     let transfer_duplicate_manager = Arc::new(TransferDuplicateManager::new());
     let docker_sudo_manager = Arc::new(DockerSudoManager::new());
+    let remote_stats_sampler = Arc::new(RemoteStatsSampler::default());
     let app_lock_state = AppLockState::default();
     let external_open_state = external_open::ExternalOpenState::default();
     let portable_update_state = portable_updater::PortableUpdateState::default();
@@ -93,6 +95,7 @@ pub fn run() {
         .manage(claude_code_runtime.clone())
         .manage(transfer_duplicate_manager.clone())
         .manage(docker_sudo_manager.clone())
+        .manage(remote_stats_sampler.clone())
         .manage(app_lock_state)
         .manage(external_open_state)
         .manage(portable_update_state)
@@ -149,6 +152,14 @@ pub fn run() {
             cmd::clipboard::upload_clipboard_image_to_ssh,
             cmd::log::append_frontend_logs,
             cmd::log::export_diagnostics,
+            cmd::note::list_note_tree,
+            cmd::note::get_note,
+            cmd::note::create_note_folder,
+            cmd::note::create_note,
+            cmd::note::update_note,
+            cmd::note::rename_note_node,
+            cmd::note::move_note_node,
+            cmd::note::delete_note_node,
             cmd::settings::get_system_fonts,
             cmd::settings::get_system_font_infos,
             cmd::cloud_sync::test_cloud_sync_connection,
@@ -237,6 +248,7 @@ pub fn run() {
             cmd::connection::get_supported_ssh_algorithms,
             cmd::connection::save_connection,
             cmd::connection::update_connection_icon,
+            cmd::connection::update_connection_asset_from_monitoring,
             cmd::connection::delete_connection,
             cmd::connection::get_connection_password_value,
             cmd::connection::reorder_items,

@@ -39,18 +39,20 @@ function formatUptime(
   return t(days === 1 ? "resourceMonitor.day" : "resourceMonitor.days", { count: days });
 }
 
-function formatPct(value: number): string {
+function formatPct(value: number | null): string {
+  if (value == null) return "--";
   return `${Math.round(Math.min(100, Math.max(0, value)))}%`;
 }
 
-function usageColor(pct: number): string {
+function usageColor(pct: number | null): string {
+  if (pct == null) return "var(--df-text-dimmed)";
   if (pct >= 90) return "#ef4444";
   if (pct >= 70) return "#f59e0b";
   return "var(--df-primary)";
 }
 
-function ProgressBar({ value, color }: { value: number; color: string }) {
-  const pct = Math.min(100, Math.max(0, value));
+function ProgressBar({ value, color }: { value: number | null; color: string }) {
+  const pct = value == null ? 0 : Math.min(100, Math.max(0, value));
   const isHigh = pct >= 80;
   return (
     <div
@@ -75,12 +77,12 @@ function RingGauge({
   size = 56,
   strokeWidth = 5,
 }: {
-  value: number;
+  value: number | null;
   color: string;
   size?: number;
   strokeWidth?: number;
 }) {
-  const pct = Math.min(100, Math.max(0, value));
+  const pct = value == null ? 0 : Math.min(100, Math.max(0, value));
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
   const dashOffset = circumference * (1 - pct / 100);
@@ -111,8 +113,14 @@ function RingGauge({
       </svg>
       <div className="absolute inset-0 flex items-center justify-center">
         <span className="text-xs font-bold font-mono tabular-nums leading-none" style={{ color }}>
-          {Math.round(pct)}
-          <span className="text-[0.5625rem] font-normal">%</span>
+          {value == null ? (
+            "--"
+          ) : (
+            <>
+              {Math.round(pct)}
+              <span className="text-[0.5625rem] font-normal">%</span>
+            </>
+          )}
         </span>
       </div>
     </div>
@@ -175,6 +183,7 @@ export default function ResourceMonitor({
 
   const memTotal = stats ? stats.memory.used + stats.memory.available : 0;
   const memUsedPct = memTotal > 0 ? (stats!.memory.used / memTotal) * 100 : 0;
+  const cpuUsage = stats?.cpu.usage ?? null;
   return (
     <div
       className="nyaterm-wallpaper-transparent-surface h-full flex flex-col"
@@ -232,8 +241,8 @@ export default function ResourceMonitor({
                 {/* Ring gauge + average usage */}
                 <div className="flex items-center gap-3">
                   <RingGauge
-                    value={stats.cpu.usage}
-                    color={usageColor(stats.cpu.usage)}
+                    value={cpuUsage}
+                    color={usageColor(cpuUsage)}
                     size={56}
                     strokeWidth={5}
                   />
@@ -244,18 +253,18 @@ export default function ResourceMonitor({
                       </span>
                       <span
                         className="text-sm font-bold font-mono tabular-nums"
-                        style={{ color: usageColor(stats.cpu.usage) }}
+                        style={{ color: usageColor(cpuUsage) }}
                       >
-                        {stats.cpu.usage.toFixed(1)}%
+                        {cpuUsage == null ? "--" : `${cpuUsage.toFixed(1)}%`}
                       </span>
                     </div>
-                    <ProgressBar value={stats.cpu.usage} color={usageColor(stats.cpu.usage)} />
+                    <ProgressBar value={cpuUsage} color={usageColor(cpuUsage)} />
                     <div className="text-right">
                       <span
                         className="text-[0.625rem] font-mono"
                         style={{ color: "var(--df-text-dimmed)" }}
                       >
-                        {stats.cpu.cores}C
+                        {cpuUsage == null ? t("resourceMonitor.sampling") : `${stats.cpu.cores}C`}
                       </span>
                     </div>
                   </div>
@@ -303,13 +312,12 @@ export default function ResourceMonitor({
                       }}
                     >
                       <div className="pt-1.5 space-y-0.5">
-                        {stats.cpu.per_core.map((coreUsage, idx) => {
-                          const coreNumber = idx + 1;
+                        {stats.cpu.per_core.map((core) => {
                           return (
                             <CoreRow
-                              key={`cpu-core-${coreNumber}`}
-                              index={coreNumber}
-                              usage={coreUsage}
+                              key={`cpu-core-${core.id}`}
+                              id={core.id}
+                              usage={core.usage}
                             />
                           );
                         })}
@@ -502,15 +510,15 @@ function LoadBadge({ label, value }: { label: string; value: number }) {
   );
 }
 
-function CoreRow({ index, usage }: { index: number; usage: number }) {
+function CoreRow({ id, usage }: { id: number; usage: number }) {
   const color = usageColor(usage);
   return (
     <div className="flex items-center gap-1.5 h-[22px]">
       <span
-        className="w-4 text-right text-[0.625rem] font-mono tabular-nums shrink-0"
+        className="w-8 text-right text-[0.625rem] font-mono tabular-nums shrink-0"
         style={{ color: "var(--df-text-muted)" }}
       >
-        {index}
+        cpu{id}
       </span>
       <span
         className="inline-block w-1.5 h-1.5 rounded-full shrink-0"

@@ -22,6 +22,7 @@ const PROXY_WINDOW_KEY: &str = "proxy";
 const TUNNEL_WINDOW_KEY: &str = "tunnel";
 const FILE_EDITOR_WINDOW_KEY: &str = "file-editor";
 const FILE_PREVIEW_WINDOW_KEY: &str = "file-preview";
+const NOTE_EDITOR_WINDOW_KEY: &str = "note-editor";
 const AUTO_UPLOAD_WINDOW_PREFIX: &str = "auto-upload-";
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
 
@@ -113,6 +114,7 @@ pub enum ChildWindowStateKey {
     Tunnel,
     FileEditor,
     FilePreview,
+    NoteEditor,
 }
 
 impl ChildWindowStateKey {
@@ -125,6 +127,7 @@ impl ChildWindowStateKey {
             Self::Tunnel => TUNNEL_WINDOW_KEY,
             Self::FileEditor => FILE_EDITOR_WINDOW_KEY,
             Self::FilePreview => FILE_PREVIEW_WINDOW_KEY,
+            Self::NoteEditor => NOTE_EDITOR_WINDOW_KEY,
         }
     }
 
@@ -137,6 +140,7 @@ impl ChildWindowStateKey {
             Self::Tunnel => (680.0, 640.0),
             Self::FileEditor => (980.0, 720.0),
             Self::FilePreview => (1080.0, 760.0),
+            Self::NoteEditor => (980.0, 760.0),
         }
     }
 
@@ -255,6 +259,9 @@ pub fn child_window_state_key_for_label(label: &str) -> Option<ChildWindowStateK
     }
     if label.starts_with(&format!("{FILE_PREVIEW_WINDOW_KEY}-")) {
         return Some(ChildWindowStateKey::FilePreview);
+    }
+    if label.starts_with(&format!("{NOTE_EDITOR_WINDOW_KEY}-")) {
+        return Some(ChildWindowStateKey::NoteEditor);
     }
 
     None
@@ -673,6 +680,10 @@ mod tests {
         assert_eq!(
             child_window_state_key_for_label("file-preview-abc"),
             Some(ChildWindowStateKey::FilePreview)
+        );
+        assert_eq!(
+            child_window_state_key_for_label("note-editor-abc"),
+            Some(ChildWindowStateKey::NoteEditor)
         );
         assert_eq!(child_window_state_key_for_label("auto-upload-abc"), None);
         assert_eq!(child_window_state_key_for_label("main"), None);

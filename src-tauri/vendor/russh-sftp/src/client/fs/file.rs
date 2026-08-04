@@ -168,7 +168,10 @@ impl Drop for File {
             return;
         }
 
-        let _ = self.session.close_nowait(std::mem::take(&mut self.handle));
+        let handle = std::mem::take(&mut self.handle);
+        if !handle.is_empty() {
+            self.session.close_detached(handle);
+        }
     }
 }
 
@@ -358,6 +361,10 @@ impl AsyncWrite for File {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), io::Error>> {
+        if self.closed {
+            return Poll::Ready(Ok(()));
+        }
+
         ready!(poll_drain_writes(&mut self.state.write_acks, cx))?;
 
         let poll = Pin::new(match self.state.f_shutdown.as_mut() {
@@ -380,6 +387,7 @@ impl AsyncWrite for File {
         if poll.is_ready() {
             self.state.f_shutdown = None;
             self.closed = true;
+            self.handle.clear();
         }
 
         poll
@@ -390,7 +398,60 @@ impl AsyncWrite for File {
 mod tests {
     use super::*;
     use crate::client::{Config, RawSftpSession};
-    use tokio::io::AsyncWriteExt;
+    use crate::protocol::{FileAttributes, Handle, OpenFlags, Packet, StatusCode, Version};
+    use std::time::Duration;
+    use tokio::io::{AsyncWriteExt, DuplexStream};
+
+    async fn read_client_packet(server: &mut DuplexStream) -> Packet {
+        let mut bytes = crate::utils::read_packet(server, u32::MAX)
+            .await
+            .expect("server should read client packet");
+        Packet::try_from(&mut bytes).expect("client packet should decode")
+    }
+
+    async fn write_server_packet(server: &mut DuplexStream, packet: Packet) {
+        let bytes = bytes::Bytes::try_from(packet).expect("server packet should encode");
+        server
+            .write_all(&bytes)
+            .await
+            .expect("server should write packet");
+    }
+
+    async fn initialize_session(session: &RawSftpSession, server: &mut DuplexStream) {
+        let client = session.init();
+        let server = async {
+            match read_client_packet(server).await {
+                Packet::Init(_) => {}
+                packet => panic!("expected init packet, got {packet:?}"),
+            }
+            write_server_packet(server, Version::new().into()).await;
+        };
+
+        let (client_result, _) = tokio::join!(client, server);
+        client_result.expect("session should initialize");
+    }
+
+    async fn open_test_handle(session: &RawSftpSession, server: &mut DuplexStream) -> String {
+        let client = session.open("remote.txt", OpenFlags::READ, FileAttributes::empty());
+        let server = async {
+            let id = match read_client_packet(server).await {
+                Packet::Open(open) => open.id,
+                packet => panic!("expected open packet, got {packet:?}"),
+            };
+            write_server_packet(
+                server,
+                Handle {
+                    id,
+                    handle: "drop-handle".to_string(),
+                }
+                .into(),
+            )
+            .await;
+        };
+
+        let (client_result, _) = tokio::join!(client, server);
+        client_result.expect("open should succeed").handle
+    }
 
     fn test_features() -> Features {
         Features {
@@ -424,9 +485,47 @@ mod tests {
             .expect_err("shutdown should drain pending write ack and time out");
 
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-        assert_eq!(
-            error.to_string(),
-            "SFTP write acknowledgement timed out"
-        );
+        assert_eq!(error.to_string(), "SFTP write acknowledgement timed out");
+    }
+
+    #[tokio::test]
+    async fn drop_tracks_detached_close_until_status_is_consumed() {
+        let (client, mut server) = tokio::io::duplex(4096);
+        let session = Arc::new(RawSftpSession::new_with_config(
+            client,
+            Config {
+                request_timeout_secs: 10,
+                ..Config::default()
+            },
+        ));
+        initialize_session(&session, &mut server).await;
+        let handle = open_test_handle(&session, &mut server).await;
+        assert_eq!(session.open_handle_count(), 1);
+
+        let file = File::new(session.clone(), handle.clone(), test_features());
+        drop(file);
+
+        let close_id = match read_client_packet(&mut server).await {
+            Packet::Close(close) => {
+                assert_eq!(close.handle, handle);
+                close.id
+            }
+            packet => panic!("expected close packet, got {packet:?}"),
+        };
+        write_server_packet(
+            &mut server,
+            Packet::status(close_id, StatusCode::Ok, "Ok", "en-US"),
+        )
+        .await;
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while session.open_handle_count() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("detached close should consume status and release handle");
+
+        assert_eq!(session.open_handle_count(), 0);
     }
 }

@@ -20,6 +20,7 @@ pub async fn apply_portable_snapshot(
     config::save_tunnel_groups(app, &snapshot.tunnel_groups)?;
     config::save_quick_commands(app, &snapshot.quick_commands)?;
     crate::storage::replace_command_history_entries(&snapshot.history)?;
+    crate::storage::replace_notes_snapshot(&snapshot.notes)?;
 
     let merged = snapshot.settings.clone().apply_to(
         config::load_app_settings(app).unwrap_or_default(),
@@ -51,6 +52,17 @@ pub async fn apply_portable_snapshot(
     let _ = app.emit("quick-commands-changed", ());
     let _ = app.emit("settings-changed", ());
     let _ = app.emit("command-history-changed", ());
+    let _ = app.emit(
+        "notes-changed",
+        crate::config::NotesChangedEvent {
+            kind: "replaced".to_string(),
+            node_kind: None,
+            ids: Vec::new(),
+            folders: Vec::new(),
+            notes: Vec::new(),
+            tree_changed: Some(true),
+        },
+    );
 
     Ok(())
 }

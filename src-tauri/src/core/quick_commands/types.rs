@@ -55,6 +55,8 @@ struct ImportCommand {
     id: Option<String>,
     label: String,
     command: String,
+    #[serde(skip)]
+    preserve_command_text: bool,
     #[serde(default)]
     category_id: Option<String>,
     #[serde(default)]

@@ -210,6 +210,28 @@ pub fn load_app_settings(app: &AppHandle) -> AppResult<AppSettings> {
             .chain(&settings.ui.activity_bar_layout.right_bottom)
             .map(|s| s.as_str())
             .collect();
+        if !all_ids.contains(&"notes") {
+            let left_top = &mut settings.ui.activity_bar_layout.left_top;
+            if let Some(file_index) = left_top.iter().position(|id| id == "fileExplorer") {
+                left_top.insert(file_index + 1, "notes".to_string());
+            } else {
+                left_top.insert(0, "notes".to_string());
+            }
+            migrated = true;
+        }
+    }
+
+    {
+        let all_ids: Vec<&str> = settings
+            .ui
+            .activity_bar_layout
+            .left_top
+            .iter()
+            .chain(&settings.ui.activity_bar_layout.left_bottom)
+            .chain(&settings.ui.activity_bar_layout.right_top)
+            .chain(&settings.ui.activity_bar_layout.right_bottom)
+            .map(|s| s.as_str())
+            .collect();
         if !all_ids.contains(&"ascendNpuMonitor") {
             let right_top = &mut settings.ui.activity_bar_layout.right_top;
             if let Some(gpu_index) = right_top.iter().position(|id| id == "gpuMonitor") {

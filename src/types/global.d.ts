@@ -200,6 +200,52 @@ export interface ConnectionPostLogin {
   delay_ms: number;
 }
 
+export type AssetDeviceType =
+  | "physical"
+  | "virtual"
+  | "cloud"
+  | "network"
+  | "storage"
+  | "embedded"
+  | "other";
+
+export type AssetAcceleratorType = "gpu" | "npu" | "other";
+
+export interface AssetAccelerator {
+  type: AssetAcceleratorType;
+  vendor?: string;
+  model?: string;
+  count?: number;
+  memory_bytes?: number;
+}
+
+export interface AssetDisk {
+  kind?: "hdd" | "ssd" | "nvme" | "other";
+  model?: string;
+  capacity_bytes?: number;
+  count?: number;
+  purpose?: "system" | "data" | "cache" | "other";
+}
+
+export interface AssetMetadata {
+  device_type?: AssetDeviceType;
+  os_name?: string;
+  os_version?: string;
+  architecture?: string;
+  kernel_version?: string;
+  hostname?: string;
+  cpu_model?: string;
+  cpu_sockets?: number;
+  cpu_cores?: number;
+  cpu_threads?: number;
+  memory_bytes?: number;
+  accelerators?: AssetAccelerator[];
+  disks?: AssetDisk[];
+  tags?: string[];
+  notes?: string;
+  updated_at?: string;
+}
+
 export interface TelnetAutoLoginConfig {
   enabled?: boolean;
   send_wake_enter?: boolean;
@@ -269,6 +315,7 @@ export interface SavedConnection {
   post_login?: ConnectionPostLogin;
   ssh_algorithms?: SshAlgorithmPreferences;
   sftp?: SftpSettings;
+  asset?: AssetMetadata;
   /** SSH-specific fields (present when type === "ssh"). */
   host?: string;
   port?: number;
@@ -369,7 +416,12 @@ export interface RestorableTab {
   locked?: boolean;
 }
 
-export type LeftPanelId = "fileExplorer" | "network" | "securityAuth" | "syncBackupHistory";
+export type LeftPanelId =
+  | "fileExplorer"
+  | "notes"
+  | "network"
+  | "securityAuth"
+  | "syncBackupHistory";
 
 export type RightPanelId =
   | "savedConnections"
@@ -417,6 +469,7 @@ export type RestorableTerminalWindowNode =
 export interface UiConfig {
   open_tabs: RestorableTab[];
   terminal_window_layout: RestorableTerminalWindowNode | null;
+  start_workspace_mode?: "workbench" | "assets";
   left_width: number;
   right_width: number;
   quick_cmd_height: number;
@@ -442,6 +495,7 @@ export interface UiConfig {
   language?: string;
   header_status_mode?: HeaderStatusMode;
   header_status_visible?: boolean;
+  show_notes_panel: boolean;
   show_remote_stats: boolean;
   remote_stats_interval: number;
   show_gpu_monitor: boolean;
@@ -459,6 +513,8 @@ export interface UiConfig {
   file_explorer_show_hidden_files: boolean;
   file_explorer_auto_sync_cwd_connection_ids: string[];
   file_explorer_favorite_dirs_by_connection_id: Record<string, string[]>;
+  notes_expanded_folder_ids: string[];
+  notes_last_selected_node_id: string | null;
   activity_bar_layout: ActivityBarLayout;
 }
 
@@ -479,8 +535,10 @@ export interface RemoteStatsLoad {
 export interface RemoteStatsCpu {
   model: string;
   cores: number;
-  usage: number;
-  per_core: number[];
+  usage: number | null;
+  per_core: { id: number; usage: number }[];
+  sample_window_ms: number | null;
+  usage_source: "warming_up" | "aggregate" | "core_weighted_fallback";
 }
 
 export interface RemoteStatsMemory {

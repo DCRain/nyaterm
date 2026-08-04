@@ -7,6 +7,7 @@ mod cloud_sync;
 mod connection;
 mod credential;
 mod key;
+mod note;
 mod otp;
 mod password;
 mod proxy;
@@ -25,10 +26,11 @@ pub use cloud_sync::{
 };
 #[allow(unused_imports)]
 pub use connection::{
-    AiExecutionProfile, AppConfig, ConnectionAuth, ConnectionNetwork, ConnectionType, Group,
-    SavedConnection, SessionsConfig, SftpCwdFollowMode, SftpSettings, SshAlgorithmMode,
-    SshAlgorithmPreferences, TelnetAutoLoginConfig, load_config, load_connection_by_id,
-    load_sessions, resolve_connection_encoding, save_config, save_sessions,
+    AiExecutionProfile, AppConfig, AssetAccelerator, AssetAcceleratorType, AssetDeviceType,
+    AssetDisk, AssetDiskKind, AssetDiskPurpose, AssetMetadata, ConnectionAuth, ConnectionNetwork,
+    ConnectionType, Group, SavedConnection, SessionsConfig, SftpCwdFollowMode, SftpSettings,
+    SshAlgorithmMode, SshAlgorithmPreferences, TelnetAutoLoginConfig, load_config,
+    load_connection_by_id, load_sessions, resolve_connection_encoding, save_config, save_sessions,
 };
 #[allow(unused_imports)]
 pub use credential::{
@@ -38,6 +40,11 @@ pub use credential::{
 #[allow(unused_imports)]
 pub use key::{
     KeysConfig, SshKey, decrypt_key_cert, decrypt_key_pem, load_key_by_id, load_keys, save_keys,
+};
+#[allow(unused_imports)]
+pub use note::{
+    DeleteNoteNodeResult, NoteDocument, NoteFolder, NoteNodeChange, NoteSummary, NoteTreePayload,
+    NoteUpdateResult, NotesChangedEvent, NotesSnapshot,
 };
 #[allow(unused_imports)]
 pub use otp::{OtpConfig, OtpEntry, load_otp_entries, load_otp_entry_by_id, save_otp_entries};

@@ -1,4 +1,7 @@
-use crate::config::{self, Group, QuickCommandsConfig, SavedConnection, SavedPassword, SshKey};
+use crate::config::{
+    self, AssetAccelerator, AssetAcceleratorType, AssetMetadata, Group, QuickCommandsConfig,
+    SavedConnection, SavedPassword, SshKey,
+};
 use crate::core::{QuickCommandsImportResult, QuickCommandsImportSource, QuickCommandsStore};
 use crate::error::{AppError, AppResult};
 use crate::utils::crypto;
@@ -42,7 +45,7 @@ pub fn save_connection(
         connection.id = uuid::Uuid::new_v4().to_string();
     }
     let target_id = connection.id.clone();
-    let existing = cfg.connections.iter().find(|c| c.id == target_id);
+    let existing = cfg.connections.iter().find(|c| c.id == target_id).cloned();
 
     validate_proxy_jump_config(&connection, &cfg.connections)?;
     validate_local_terminal_config(&connection)?;
@@ -54,6 +57,7 @@ pub fn save_connection(
             Some("") => auth.password_id = None,
             None => {
                 auth.password_id = existing
+                    .as_ref()
                     .and_then(|e| e.auth.as_ref())
                     .and_then(|a| a.password_id.clone());
             }
@@ -65,11 +69,16 @@ pub fn save_connection(
             Some(plain) if !plain.is_empty() => Some(crypto::encrypt(plain)?),
             Some("") => None,
             None => existing
+                .as_ref()
                 .and_then(|e| e.auth.as_ref())
                 .and_then(|a| a.password.clone()),
             _ => None,
         };
         auth.has_password = false;
+    }
+
+    if let Some(existing_connection) = existing.as_ref() {
+        connection.asset = existing_connection.asset.clone();
     }
 
     if let Some(ex) = cfg.connections.iter_mut().find(|c| c.id == target_id) {
@@ -114,6 +123,105 @@ fn update_connection_icon_in_config(
     connection.icon = normalized_icon;
     connection.icon_auto_detect = next_auto_detect;
     Ok(true)
+}
+
+fn update_connection_asset_from_monitoring_in_config(
+    cfg: &mut config::AppConfig,
+    connection_id: &str,
+    asset_patch: AssetMetadata,
+) -> AppResult<bool> {
+    let connection = cfg
+        .connections
+        .iter_mut()
+        .find(|connection| connection.id == connection_id)
+        .ok_or_else(|| {
+            AppError::SessionNotFound(format!("Connection '{}' not found", connection_id))
+        })?;
+
+    let mut next_asset = connection.asset.clone().unwrap_or_default();
+    merge_monitoring_asset_patch(&mut next_asset, asset_patch);
+
+    if connection.asset.as_ref() == Some(&next_asset) {
+        return Ok(false);
+    }
+
+    connection.asset = Some(next_asset);
+    Ok(true)
+}
+
+fn merge_monitoring_asset_patch(target: &mut AssetMetadata, patch: AssetMetadata) {
+    if patch.hostname.is_some() {
+        target.hostname = patch.hostname;
+    }
+    if patch.os_name.is_some() {
+        target.os_name = patch.os_name;
+    }
+    if patch.architecture.is_some() {
+        target.architecture = patch.architecture;
+    }
+    if patch.cpu_model.is_some() {
+        target.cpu_model = patch.cpu_model;
+    }
+    if patch.cpu_cores.is_some() {
+        target.cpu_cores = patch.cpu_cores;
+    }
+    if patch.memory_bytes.is_some() {
+        target.memory_bytes = patch.memory_bytes;
+    }
+    if patch.disks.is_some() {
+        target.disks = patch.disks;
+    }
+    if patch.updated_at.is_some() {
+        target.updated_at = patch.updated_at;
+    }
+    if let Some(accelerators) = patch.accelerators {
+        target.accelerators = Some(merge_monitoring_accelerators(
+            target.accelerators.clone(),
+            accelerators,
+        ));
+    }
+}
+
+fn merge_monitoring_accelerators(
+    current: Option<Vec<AssetAccelerator>>,
+    patch: Vec<AssetAccelerator>,
+) -> Vec<AssetAccelerator> {
+    if patch.is_empty() {
+        return current.unwrap_or_default();
+    }
+
+    let patch_types = patch
+        .iter()
+        .map(|accelerator| accelerator.r#type.clone())
+        .collect::<Vec<AssetAcceleratorType>>();
+    let mut merged = current.unwrap_or_default();
+    merged.retain(|accelerator| {
+        !patch_types
+            .iter()
+            .any(|patch_type| patch_type == &accelerator.r#type)
+    });
+    merged.extend(patch);
+    merged
+}
+
+#[tauri::command]
+pub fn update_connection_asset_from_monitoring(
+    app: tauri::AppHandle,
+    connection_id: String,
+    asset_patch: AssetMetadata,
+) -> AppResult<()> {
+    let mut cfg = config::load_config(&app)?;
+    let changed =
+        update_connection_asset_from_monitoring_in_config(&mut cfg, &connection_id, asset_patch)?;
+
+    if !changed {
+        return Ok(());
+    }
+
+    config::save_config(&app, &cfg)?;
+    let _ = app.emit("connections-changed", ());
+    schedule_cloud_sync_notify(app.clone());
+    Ok(())
 }
 
 #[tauri::command]
@@ -359,11 +467,13 @@ fn find_connection_for_proxy_jump<'a>(
 mod tests {
     use super::{
         delete_group_from_config, resolve_private_key_for_save, resolve_text_secret_input,
-        update_connection_icon_in_config, validate_certificate_content,
-        validate_local_terminal_config, validate_private_key_content, validate_proxy_jump_config,
+        update_connection_asset_from_monitoring_in_config, update_connection_icon_in_config,
+        validate_certificate_content, validate_local_terminal_config, validate_private_key_content,
+        validate_proxy_jump_config,
     };
     use crate::config::{
-        AiExecutionProfile, ConnectionNetwork, ConnectionType, Group, SavedConnection,
+        AiExecutionProfile, AssetAccelerator, AssetAcceleratorType, AssetDisk, AssetDiskPurpose,
+        AssetMetadata, ConnectionAuth, ConnectionNetwork, ConnectionType, Group, SavedConnection,
         SessionsConfig, SftpSettings, SshKey,
     };
     use std::fs;
@@ -407,6 +517,7 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
             post_login: None,
             ssh_algorithms: None,
             sftp: SftpSettings::default(),
+            asset: None,
             created_at_ms: None,
             updated_at_ms: None,
             last_used_at_ms: None,
@@ -446,6 +557,7 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
             post_login: None,
             ssh_algorithms: None,
             sftp: SftpSettings::default(),
+            asset: None,
             created_at_ms: None,
             updated_at_ms: None,
             last_used_at_ms: None,
@@ -473,6 +585,7 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
             post_login: None,
             ssh_algorithms: None,
             sftp: SftpSettings::default(),
+            asset: None,
             created_at_ms: None,
             updated_at_ms: None,
             last_used_at_ms: None,
@@ -788,6 +901,132 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
                 .unwrap();
 
         assert!(!unchanged);
+    }
+
+    #[test]
+    fn update_connection_asset_from_monitoring_changes_only_asset_fields() {
+        let mut target = ssh_connection("target", Some("proxy"));
+        target.group_id = Some("group".to_string());
+        target.description = Some("keep description".to_string());
+        target.sort_order = 42;
+        target.auth = Some(ConnectionAuth {
+            mode: "key".to_string(),
+            password_id: Some("password-id".to_string()),
+            password: Some("encrypted".to_string()),
+            has_password: true,
+            key_id: Some("key-id".to_string()),
+            otp_id: Some("otp-id".to_string()),
+            auto_fill_otp: true,
+        });
+        target.asset = Some(AssetMetadata {
+            hostname: Some("old-host".to_string()),
+            os_name: Some("Debian".to_string()),
+            architecture: Some("x86_64".to_string()),
+            cpu_model: Some("Old CPU".to_string()),
+            cpu_cores: Some(8),
+            memory_bytes: Some(8 * 1024 * 1024 * 1024),
+            accelerators: Some(vec![
+                AssetAccelerator {
+                    r#type: AssetAcceleratorType::Gpu,
+                    vendor: Some("NVIDIA".to_string()),
+                    model: Some("A100".to_string()),
+                    count: Some(2),
+                    memory_bytes: Some(40 * 1024 * 1024 * 1024),
+                },
+                AssetAccelerator {
+                    r#type: AssetAcceleratorType::Npu,
+                    vendor: Some("Huawei".to_string()),
+                    model: Some("Ascend 910B".to_string()),
+                    count: Some(1),
+                    memory_bytes: Some(32 * 1024 * 1024 * 1024),
+                },
+            ]),
+            disks: Some(vec![AssetDisk {
+                kind: None,
+                model: Some("/dev/sda".to_string()),
+                capacity_bytes: Some(100 * 1024 * 1024 * 1024),
+                count: Some(1),
+                purpose: Some(AssetDiskPurpose::System),
+            }]),
+            tags: Some(vec!["preserve".to_string()]),
+            notes: Some("preserve notes".to_string()),
+            updated_at: Some("2026-08-03T01:00:00.000Z".to_string()),
+            ..Default::default()
+        });
+        let original = target.clone();
+        let mut config = SessionsConfig {
+            groups: vec![group("group", None)],
+            connections: vec![target, ssh_connection("other", None)],
+        };
+
+        let changed = update_connection_asset_from_monitoring_in_config(
+            &mut config,
+            "target",
+            AssetMetadata {
+                hostname: Some("new-host".to_string()),
+                os_name: Some("Ubuntu".to_string()),
+                cpu_model: Some("New CPU".to_string()),
+                cpu_cores: Some(16),
+                memory_bytes: Some(64 * 1024 * 1024 * 1024),
+                accelerators: Some(vec![AssetAccelerator {
+                    r#type: AssetAcceleratorType::Gpu,
+                    vendor: Some("NVIDIA".to_string()),
+                    model: Some("H100".to_string()),
+                    count: Some(4),
+                    memory_bytes: Some(80 * 1024 * 1024 * 1024),
+                }]),
+                tags: Some(vec!["ignored".to_string()]),
+                notes: Some("ignored".to_string()),
+                updated_at: Some("2026-08-03T02:00:00.000Z".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(changed);
+        let updated = &config.connections[0];
+        assert_eq!(updated.name, original.name);
+        assert_eq!(updated.config, original.config);
+        assert_eq!(updated.group_id, original.group_id);
+        assert_eq!(updated.description, original.description);
+        assert_eq!(updated.sort_order, original.sort_order);
+        assert_eq!(
+            updated.auth.as_ref().unwrap().key_id,
+            Some("key-id".to_string())
+        );
+        assert_eq!(
+            updated
+                .network
+                .as_ref()
+                .and_then(|network| network.proxy_jump_id.as_deref()),
+            original
+                .network
+                .as_ref()
+                .and_then(|network| network.proxy_jump_id.as_deref())
+        );
+
+        let asset = updated.asset.as_ref().expect("asset");
+        assert_eq!(asset.hostname.as_deref(), Some("new-host"));
+        assert_eq!(asset.os_name.as_deref(), Some("Ubuntu"));
+        assert_eq!(asset.cpu_model.as_deref(), Some("New CPU"));
+        assert_eq!(asset.cpu_cores, Some(16));
+        assert_eq!(asset.memory_bytes, Some(64 * 1024 * 1024 * 1024));
+        assert_eq!(asset.tags.as_deref(), Some(&["preserve".to_string()][..]));
+        assert_eq!(asset.notes.as_deref(), Some("preserve notes"));
+        assert_eq!(
+            asset.updated_at.as_deref(),
+            Some("2026-08-03T02:00:00.000Z")
+        );
+
+        let accelerators = asset.accelerators.as_ref().expect("accelerators");
+        assert_eq!(accelerators.len(), 2);
+        assert!(accelerators.iter().any(|accelerator| accelerator.r#type
+            == AssetAcceleratorType::Gpu
+            && accelerator.model.as_deref() == Some("H100")));
+        assert!(accelerators.iter().any(|accelerator| accelerator.r#type
+            == AssetAcceleratorType::Npu
+            && accelerator.model.as_deref() == Some("Ascend 910B")));
+        assert!(config.connections[1].asset.is_none());
     }
 }
 

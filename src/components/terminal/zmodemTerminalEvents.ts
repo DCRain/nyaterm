@@ -27,6 +27,8 @@ export type ZmodemEventPayload =
       bytes_transferred?: number;
       totalSize?: number;
       total_size?: number;
+      localPath?: string;
+      local_path?: string;
       direction: ZmodemWireDirection;
     }
   | { type: "complete"; direction: ZmodemWireDirection; fileCount?: number; file_count?: number }
@@ -47,6 +49,7 @@ export interface ZmodemTransferProgressSink {
     direction: ZmodemDirection;
     bytesTransferred: number;
     totalSize: number;
+    localPath?: string;
   }) => void;
   complete: (id: string) => void;
   fail: (id: string, reason: string) => void;
@@ -97,6 +100,7 @@ export function createZmodemEventHandler(
   let uploadFileName = "";
   let uploadToastId: string | number | null = null;
   let currentTransferFile: CurrentZmodemTransferFile | null = null;
+  let lastDownloadLocalPath = "";
   let transferFileSequence = 0;
   let disposed = false;
 
@@ -186,6 +190,25 @@ export function createZmodemEventHandler(
     return `zmodem-${sessionId}-${direction}-${transferFileSequence}-${encodeURIComponent(fileName)}`;
   };
 
+  const revealDownloadedFile = async (localPath: string) => {
+    try {
+      const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
+      await revealItemInDir(localPath);
+    } catch {
+      try {
+        const [{ openPath }, { dirname }] = await Promise.all([
+          import("@tauri-apps/plugin-opener"),
+          import("@tauri-apps/api/path"),
+        ]);
+        const parentPath = await dirname(localPath);
+        if (!parentPath) return;
+        await openPath(parentPath);
+      } catch {
+        // Best-effort convenience only; the transfer itself has already completed.
+      }
+    }
+  };
+
   const syncTransferProgress = (
     payload: Extract<NormalizedZmodemPayload, { type: "progress" }>,
   ) => {
@@ -195,6 +218,10 @@ export function createZmodemEventHandler(
     const fileName = payloadFileName || uploadFileName || "zmodem_file";
     const bytesTransferred = payload.bytesTransferred ?? payload.bytes_transferred ?? 0;
     const totalSize = payload.totalSize ?? payload.total_size ?? 0;
+    const localPath = payload.localPath ?? payload.local_path;
+    if (payload.direction === "download" && localPath) {
+      lastDownloadLocalPath = localPath;
+    }
     const changedFile =
       !currentTransferFile ||
       currentTransferFile.fileName !== fileName ||
@@ -221,6 +248,7 @@ export function createZmodemEventHandler(
       direction: payload.direction,
       bytesTransferred,
       totalSize,
+      localPath,
     });
   };
 
@@ -348,10 +376,14 @@ export function createZmodemEventHandler(
             completePendingZmodemUpload(sessionId);
           } else {
             terminal.write(`\r\n\x1b[32m[ZMODEM] ${getT()("zmodem.complete")}\x1b[0m\r\n`);
+            if (lastDownloadLocalPath) {
+              void revealDownloadedFile(lastDownloadLocalPath);
+            }
           }
           uploadStarted = false;
           uploadFileName = "";
           uploadToastId = null;
+          lastDownloadLocalPath = "";
           break;
         }
         case "failed": {
@@ -381,6 +413,7 @@ export function createZmodemEventHandler(
           uploadStarted = false;
           uploadFileName = "";
           uploadToastId = null;
+          lastDownloadLocalPath = "";
           break;
         }
       }
@@ -392,6 +425,7 @@ export function createZmodemEventHandler(
       uploadFileName = "";
       uploadToastId = null;
       currentTransferFile = null;
+      lastDownloadLocalPath = "";
       clearProgressRaf();
       clearProgressTimer();
     },

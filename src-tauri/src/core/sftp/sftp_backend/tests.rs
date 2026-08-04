@@ -203,6 +203,57 @@ fn directory_concurrency_keeps_at_least_one_worker() {
 }
 
 #[test]
+fn directory_pipeline_keeps_existing_depth_without_server_limit() {
+    assert_eq!(sftp_directory_download_pipeline_cap(None, 2, 16, 16), 16);
+}
+
+#[test]
+fn directory_pipeline_respects_server_handle_budget() {
+    assert_eq!(
+        sftp_directory_download_pipeline_cap(Some(128), 2, 16, 16),
+        15
+    );
+}
+
+#[test]
+fn directory_pipeline_never_returns_zero() {
+    assert_eq!(sftp_directory_download_pipeline_cap(Some(2), 2, 16, 16), 1);
+}
+
+#[test]
+fn directory_pipeline_uses_actual_file_worker_count() {
+    assert_eq!(
+        sftp_directory_download_pipeline_cap(Some(128), 2, 3, 16),
+        16
+    );
+}
+
+#[test]
+fn directory_pipeline_handles_single_session_pool() {
+    assert_eq!(
+        sftp_directory_download_pipeline_cap(Some(128), 1, 16, 16),
+        7
+    );
+}
+
+#[test]
+fn directory_pipeline_rounds_up_non_even_workers_per_session() {
+    assert_eq!(
+        sftp_directory_download_pipeline_cap(Some(128), 3, 10, 16),
+        16
+    );
+    assert_eq!(
+        sftp_directory_download_pipeline_cap(Some(64), 3, 10, 16),
+        14
+    );
+}
+
+#[test]
+fn directory_pipeline_keeps_requested_depth_below_budget() {
+    assert_eq!(sftp_directory_download_pipeline_cap(Some(128), 2, 16, 4), 4);
+}
+
+#[test]
 fn directory_progress_accumulates_chunk_deltas_without_completion_double_count() {
     let controller = create_directory_transfer_controller(
         Some("directory-progress-test".to_string()),

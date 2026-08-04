@@ -1,4 +1,4 @@
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, Criterion};
 
 fn upload_benchmark(c: &mut Criterion) {
     c.bench_function("upload_benchmark_placeholder", |b| b.iter(|| ()));

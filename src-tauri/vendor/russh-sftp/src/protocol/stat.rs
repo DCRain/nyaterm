@@ -50,8 +50,12 @@ impl<'de> Deserialize<'de> for Stat {
             where
                 A: SeqAccess<'de>,
             {
-                let id: u32 = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(0, &self))?;
-                let path_bytes: Vec<u8> = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let id: u32 = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+                let path_bytes: Vec<u8> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
                 let path = String::from_utf8_lossy(&path_bytes).into_owned();
 
                 Ok(Stat {

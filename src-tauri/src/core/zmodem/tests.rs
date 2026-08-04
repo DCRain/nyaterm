@@ -53,6 +53,7 @@ mod tests {
             file_name: "sample.bin".to_string(),
             bytes_transferred: 128,
             total_size: 256,
+            local_path: None,
             direction: ZmodemDirection::Upload,
         })
         .expect("progress event json");
@@ -63,7 +64,28 @@ mod tests {
                 "fileName": "sample.bin",
                 "bytesTransferred": 128,
                 "totalSize": 256,
+                "localPath": null,
                 "direction": "upload",
+            })
+        );
+
+        let download_progress = serde_json::to_value(ZmodemEvent::Progress {
+            file_name: "download.log".to_string(),
+            bytes_transferred: 512,
+            total_size: 512,
+            local_path: Some("/tmp/download.log".to_string()),
+            direction: ZmodemDirection::Download,
+        })
+        .expect("download progress event json");
+        assert_eq!(
+            download_progress,
+            json!({
+                "type": "progress",
+                "fileName": "download.log",
+                "bytesTransferred": 512,
+                "totalSize": 512,
+                "localPath": "/tmp/download.log",
+                "direction": "download",
             })
         );
 

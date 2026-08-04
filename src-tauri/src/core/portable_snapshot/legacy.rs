@@ -80,6 +80,7 @@ fn decode_v2_snapshot(
         history,
         master_key_token: text_docs.get("master.key").cloned(),
         known_hosts: text_docs.get("known_hosts").cloned().unwrap_or_default(),
+        notes: config::NotesSnapshot::default(),
     };
     snapshot.payload_hash = calculate_payload_hash(&snapshot)?;
     Ok(snapshot)

@@ -17,6 +17,7 @@ const TunnelPage = lazy(() => import("./pages/TunnelPage"));
 const AutoUploadPage = lazy(() => import("./pages/FileUploadPage"));
 const RemoteFileEditorPage = lazy(() => import("./pages/RemoteFileEditorPage"));
 const FilePreviewPage = lazy(() => import("./pages/FilePreviewPage"));
+const NoteEditorPage = lazy(() => import("./pages/NoteEditorPage"));
 
 const PAGES: Record<string, React.ComponentType> = {
   settings: SettingsPage,
@@ -27,6 +28,7 @@ const PAGES: Record<string, React.ComponentType> = {
   "auto-upload": AutoUploadPage,
   "file-editor": RemoteFileEditorPage,
   "file-preview": FilePreviewPage,
+  "note-editor": NoteEditorPage,
 };
 
 function ReadyContent({ children }: { children: ReactNode }) {

@@ -20,6 +20,8 @@ export function useRemoteStats(
   const [error, setError] = useState(false);
   const [isManualRefreshing, setIsManualRefreshing] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const warmupRefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const warmupRetrySessionRef = useRef<string | null>(null);
   const fetchingRef = useRef(false);
   const failCountRef = useRef(0);
   const pollIntervalMs = Math.max(1, intervalSeconds) * 1000;
@@ -34,6 +36,21 @@ export function useRemoteStats(
       setStats(data);
       setError(false);
       failCountRef.current = 0;
+
+      if (warmupRefreshRef.current) {
+        clearTimeout(warmupRefreshRef.current);
+        warmupRefreshRef.current = null;
+      }
+
+      if (data.cpu.usage_source === "warming_up" && warmupRetrySessionRef.current !== sessionId) {
+        warmupRetrySessionRef.current = sessionId;
+        warmupRefreshRef.current = setTimeout(() => {
+          warmupRefreshRef.current = null;
+          void fetchStats(sessionId);
+        }, 1000);
+      } else if (data.cpu.usage_source !== "warming_up") {
+        warmupRetrySessionRef.current = null;
+      }
     } catch {
       failCountRef.current += 1;
       setError(true);
@@ -56,11 +73,16 @@ export function useRemoteStats(
       clearInterval(pollRef.current);
       pollRef.current = null;
     }
+    if (warmupRefreshRef.current) {
+      clearTimeout(warmupRefreshRef.current);
+      warmupRefreshRef.current = null;
+    }
 
     if (!enabled || !activeSessionId) {
       setStats(null);
       setError(false);
       failCountRef.current = 0;
+      warmupRetrySessionRef.current = null;
       return;
     }
 
@@ -69,6 +91,11 @@ export function useRemoteStats(
 
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
+      if (warmupRefreshRef.current) {
+        clearTimeout(warmupRefreshRef.current);
+        warmupRefreshRef.current = null;
+      }
+      warmupRetrySessionRef.current = null;
     };
   }, [activeSessionId, enabled, fetchStats, pollIntervalMs]);
 

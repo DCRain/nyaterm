@@ -10,6 +10,48 @@ export type ChangelogRelease = {
 
 const changelogReleasesEn: ChangelogRelease[] = [
   {
+    version: '[1.1.19] - 2026-08-04',
+    sections: [
+      {
+        title: 'Added',
+        items: [
+          '**notes:** Add a Notes panel and note editor with autosave, toolbar/status UI, tree navigation, context menus, persistent storage, migrations, and sync/backup snapshot support.',
+          '**asset-monitoring:** Add an asset monitoring workspace with grouped connection views, breadcrumb navigation, table/card layouts, formatters, and resource/GPU monitor integration.',
+          '**sftp:** Enhance directory downloads and transfer handling, including improved pipeline behavior and SCP original-property handling.',
+          '**zmodem:** Add local path tracking for Zmodem transfers and reveal-in-file-manager support.',
+          '**quick-commands:** Add import preservation options for merging quick commands.',
+          '**ai:** Add native tool-call mode with error handling for agent workflows.',
+          '**import:** Improve WindTerm session import, including master-password prompts and merge handling.',
+          '**external-open:** Enhance SSH URL parsing and external connection handling.',
+          '**capabilities:** Allow hidden files in the temporary directory capability.',
+        ],
+      },
+      {
+        title: 'Changed',
+        items: [
+          '**monitoring:** Improve system information collection in the remote stats script.',
+          '**ui:** Simplify the Asset toolbar by removing unused title/count display.',
+          '**i18n:** Add and update localization for notes, asset monitoring, WindTerm master-password prompts, CPU sampling, and external inline-password guidance.',
+        ],
+      },
+      {
+        title: 'Fixed',
+        items: [
+          '**monitoring:** Handle `null` values in CPU usage and percentage formatting.',
+          '**terminal:** Refocus the search input when Find is triggered while the search bar is already open.',
+        ],
+      },
+      {
+        title: 'Performance',
+        items: ['**notes:** Refactor the Notes panel and tree components for better performance and usability.'],
+      },
+      {
+        title: 'Documentation',
+        items: ['**ssh:** Clarify SSH connection guidance around inline password usage.'],
+      },
+    ],
+  },
+  {
     version: '[1.1.18] - 2026-07-29',
     sections: [
       {
@@ -1724,6 +1766,48 @@ const changelogReleasesEn: ChangelogRelease[] = [
 ];
 
 const changelogReleasesZhCN: ChangelogRelease[] = [
+  {
+    version: '[1.1.19] - 2026-08-04',
+    sections: [
+      {
+        title: '新增',
+        items: [
+          '**notes:** 新增 Notes 面板和笔记编辑器，支持自动保存、工具栏 / 状态 UI、树形导航、右键菜单、持久化存储、迁移以及同步 / 备份快照。',
+          '**asset-monitoring:** 新增资产监控工作区，支持连接分组视图、面包屑导航、表格 / 卡片布局、格式化展示，并集成资源与 GPU 监控。',
+          '**sftp:** 增强目录下载与传输处理，包括更完善的 pipeline 行为和 SCP 原始属性处理。',
+          '**zmodem:** 新增 Zmodem 传输的本地路径跟踪和在文件管理器中显示的能力。',
+          '**quick-commands:** 为快捷命令导入新增保留选项，改进合并流程。',
+          '**ai:** 为 Agent 工作流新增原生工具调用模式和错误处理。',
+          '**import:** 改进 WindTerm 会话导入，包括主密码提示和合并处理。',
+          '**external-open:** 增强 SSH URL 解析与外部连接处理。',
+          '**capabilities:** 允许临时目录中的隐藏文件访问能力。',
+        ],
+      },
+      {
+        title: '变更',
+        items: [
+          '**monitoring:** 改进远程统计脚本中的系统信息采集。',
+          '**ui:** 简化 Asset 工具栏，移除未使用的标题和数量显示。',
+          '**i18n:** 新增并更新 Notes、资产监控、WindTerm 主密码提示、CPU 采样和外部连接内联密码指引相关本地化文案。',
+        ],
+      },
+      {
+        title: '修复',
+        items: [
+          '**monitoring:** 修复 CPU 使用率和百分比格式化中的 `null` 值处理。',
+          '**terminal:** 修复搜索栏已打开时再次触发查找后搜索输入框未重新聚焦的问题。',
+        ],
+      },
+      {
+        title: '性能',
+        items: ['**notes:** 重构 Notes 面板和树组件，提升性能与可用性。'],
+      },
+      {
+        title: '文档',
+        items: ['**ssh:** 明确 SSH 连接中内联密码用法的说明。'],
+      },
+    ],
+  },
   {
     version: '[1.1.18] - 2026-07-29',
     sections: [

@@ -67,6 +67,8 @@
     "tunnel-*",
     "auto-upload-*",
     "file-editor-*",
-    "file-preview-*"
+    "file-preview-*",
+    "note-editor",
+    "note-editor-*"
   ]
 }

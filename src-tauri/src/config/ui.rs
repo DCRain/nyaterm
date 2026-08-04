@@ -180,6 +180,7 @@ impl Default for ActivityBarLayout {
 fn default_left_top() -> Vec<String> {
     vec![
         "fileExplorer".to_string(),
+        "notes".to_string(),
         "network".to_string(),
         "securityAuth".to_string(),
     ]
@@ -219,6 +220,8 @@ pub struct UiConfig {
     pub open_tabs: Vec<RestorableTab>,
     #[serde(default)]
     pub terminal_window_layout: Option<RestorableTerminalWindowNode>,
+    #[serde(default = "default_start_workspace_mode")]
+    pub start_workspace_mode: String,
     #[serde(default = "default_left_width")]
     pub left_width: f64,
     #[serde(default = "default_right_width")]
@@ -260,6 +263,8 @@ pub struct UiConfig {
     #[serde(default = "default_true_fn")]
     pub header_status_visible: bool,
     #[serde(default = "default_true_fn")]
+    pub show_notes_panel: bool,
+    #[serde(default = "default_true_fn")]
     pub show_remote_stats: bool,
     #[serde(default = "default_remote_stats_interval")]
     pub remote_stats_interval: u32,
@@ -294,6 +299,10 @@ pub struct UiConfig {
     #[serde(default)]
     pub file_explorer_favorite_dirs_by_connection_id: HashMap<String, Vec<String>>,
     #[serde(default)]
+    pub notes_expanded_folder_ids: Vec<String>,
+    #[serde(default)]
+    pub notes_last_selected_node_id: Option<String>,
+    #[serde(default)]
     pub activity_bar_layout: ActivityBarLayout,
 }
 
@@ -319,6 +328,10 @@ fn default_quick_cmd_sort_mode() -> String {
 
 fn default_quick_cmd_selected_category() -> String {
     "all".to_string()
+}
+
+fn default_start_workspace_mode() -> String {
+    "workbench".to_string()
 }
 
 fn default_active_left_panel() -> Option<String> {
@@ -390,6 +403,7 @@ impl Default for UiConfig {
         Self {
             open_tabs: vec![],
             terminal_window_layout: None,
+            start_workspace_mode: default_start_workspace_mode(),
             left_width: default_left_width(),
             right_width: default_right_width(),
             quick_cmd_height: default_quick_cmd_height(),
@@ -410,6 +424,7 @@ impl Default for UiConfig {
             language: default_language(),
             header_status_mode: default_header_status_mode(),
             header_status_visible: true,
+            show_notes_panel: true,
             show_remote_stats: true,
             remote_stats_interval: default_remote_stats_interval(),
             show_gpu_monitor: false,
@@ -427,6 +442,8 @@ impl Default for UiConfig {
             file_explorer_show_hidden_files: true,
             file_explorer_auto_sync_cwd_connection_ids: vec![],
             file_explorer_favorite_dirs_by_connection_id: HashMap::new(),
+            notes_expanded_folder_ids: vec![],
+            notes_last_selected_node_id: None,
             activity_bar_layout: ActivityBarLayout::default(),
         }
     }

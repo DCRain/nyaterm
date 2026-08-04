@@ -13,6 +13,7 @@ import {
   MdListAlt,
   MdLock,
   MdOutlineMonitorHeart,
+  MdOutlineStickyNote2,
   MdSend,
   MdSettings,
 } from "react-icons/md";
@@ -106,6 +107,10 @@ function normalizeActivityBarState(uiConfig: UiConfig): Partial<UiConfig> | null
   if (!seen.has("syncBackupHistory")) {
     layout.left_bottom = insertBeforeOrPush(layout.left_bottom, "settings", "syncBackupHistory");
     seen.add("syncBackupHistory");
+  }
+  if (!seen.has("notes")) {
+    layout.left_top = insertAfter(layout.left_top, "fileExplorer", "notes");
+    seen.add("notes");
   }
   if (!seen.has("aiAssistant")) {
     layout.right_top = insertAfter(layout.right_top, "savedConnections", "aiAssistant");
@@ -225,6 +230,7 @@ export function useActivityBarController({
   const itemRegistry = useMemo<Record<string, { icon: ReactNode; tooltip: string }>>(
     () => ({
       fileExplorer: { icon: <FaRegFolder />, tooltip: t("panel.fileExplorer") },
+      notes: { icon: <MdOutlineStickyNote2 />, tooltip: t("panel.notes") },
       network: { icon: <MdLan />, tooltip: t("panel.network") },
       securityAuth: { icon: <LuKeyRound />, tooltip: t("securityAuth.title") },
       syncBackupHistory: { icon: <MdBackup />, tooltip: t("panel.syncBackupHistory") },

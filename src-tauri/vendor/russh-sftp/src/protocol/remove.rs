@@ -50,8 +50,12 @@ impl<'de> Deserialize<'de> for Remove {
             where
                 A: SeqAccess<'de>,
             {
-                let id: u32 = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(0, &self))?;
-                let filename_bytes: Vec<u8> = seq.next_element()?.ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let id: u32 = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+                let filename_bytes: Vec<u8> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
                 let filename = String::from_utf8_lossy(&filename_bytes).into_owned();
 
                 Ok(Remove {

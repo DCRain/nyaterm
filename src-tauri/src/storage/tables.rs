@@ -25,6 +25,10 @@ pub(super) const TUNNEL_PREFIX: &str = "tunnels/";
 pub(super) const KNOWN_HOST_PREFIX: &str = "known_hosts/";
 pub(super) const KNOWN_HOST_RAW_PREFIX: &str = "known_hosts/raw/";
 pub(super) const COMMAND_HISTORY_PREFIX: &str = "command_history/";
+pub(super) const NOTE_FOLDER_PREFIX: &str = "note_folders/";
+pub(super) const NOTE_DOCUMENT_PREFIX: &str = "notes/";
+pub(super) const NOTE_SUMMARY_PREFIX: &str = "note_summaries/";
+pub(super) const META_NOTE_SUMMARY_INDEX_VERSION: &str = "notes/summary_index_version";
 
 pub(super) const JSON_DOCS_TABLE: TableDefinition<&str, &str> = TableDefinition::new("json_docs");
 pub(super) const TEXT_DOCS_TABLE: TableDefinition<&str, &str> = TableDefinition::new("text_docs");
@@ -39,6 +43,10 @@ pub const TUNNELS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("tu
 pub const KNOWN_HOSTS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("known_hosts");
 pub const COMMAND_HISTORY_TABLE: TableDefinition<&str, &[u8]> =
     TableDefinition::new("command_history");
+pub const NOTE_FOLDERS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("note_folders");
+pub const NOTES_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("notes");
+pub const NOTE_SUMMARIES_TABLE: TableDefinition<&str, &[u8]> =
+    TableDefinition::new("note_summaries");
 pub const IDX_CONNECTIONS_BY_GROUP_TABLE: TableDefinition<&str, &str> =
     TableDefinition::new("idx_connections_by_group");
 pub const IDX_CONNECTIONS_BY_LAST_USED_TABLE: TableDefinition<&str, &str> =

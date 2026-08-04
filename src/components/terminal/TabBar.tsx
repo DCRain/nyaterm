@@ -1027,6 +1027,7 @@ function TabBar({
     const conn = getTabConnection(tab, savedConnections);
     const canCopyIp = !!getTabServerIp(tab, savedConnections);
     const host = canCopyIp ? conn?.host : undefined;
+    const groupPath = buildGroupPath(conn?.group_id);
     const doubleClickAction = normalizeTabMouseAction(
       appSettings.interaction.tab_double_click_action,
     );
@@ -1062,7 +1063,7 @@ function TabBar({
     );
 
     const tooltipContent =
-      tab.locked || host || sshAddress || isDisconnected || showUnreadIndicator ? (
+      tab.locked || host || sshAddress || groupPath || isDisconnected || showUnreadIndicator ? (
         <div className="flex max-w-[260px] min-w-0 flex-col gap-1">
           {isDisconnected && (
             <div className="flex min-w-0 items-center gap-2 text-[var(--df-danger)]">
@@ -1080,6 +1081,14 @@ function TabBar({
             <div className="flex min-w-0 items-center gap-2 text-[var(--df-text-muted)]">
               <MdLock className="text-[12px] shrink-0" />
               <span className="min-w-0 truncate">{t("tabCtx.locked")}</span>
+            </div>
+          )}
+          {groupPath && (
+            <div className="flex min-w-0 items-center gap-2 text-[var(--df-text-muted)]">
+              <MdFolder className="text-[12px] shrink-0 text-amber-500/80" />
+              <span className="min-w-0 truncate">
+                {t("tabCtx.group")}: {groupPath}
+              </span>
             </div>
           )}
           {host && renderTooltipCopyRow(host, t("tabCtx.copyIp"), t("tabCtx.ipCopied"))}

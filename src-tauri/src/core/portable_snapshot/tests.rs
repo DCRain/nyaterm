@@ -265,6 +265,7 @@ mod tests {
             history: Vec::new(),
             master_key_token: Some("wrapped".to_string()),
             known_hosts: "example.com ssh-ed25519 AAAA\n".to_string(),
+            notes: config::NotesSnapshot::default(),
         };
         snapshot.payload_hash = calculate_payload_hash(&snapshot).expect("hash snapshot");
         snapshot
@@ -296,6 +297,7 @@ mod tests {
                     post_login: None,
                     ssh_algorithms: None,
                     sftp: config::SftpSettings::default(),
+                    asset: None,
                     created_at_ms: None,
                     updated_at_ms: None,
                     last_used_at_ms: None,
@@ -323,6 +325,7 @@ mod tests {
                     post_login: None,
                     ssh_algorithms: None,
                     sftp: config::SftpSettings::default(),
+                    asset: None,
                     created_at_ms: None,
                     updated_at_ms: None,
                     last_used_at_ms: None,
@@ -331,11 +334,104 @@ mod tests {
         }
     }
 
+    fn sample_sessions_with_asset_metadata() -> config::SessionsConfig {
+        config::SessionsConfig {
+            groups: Vec::new(),
+            connections: vec![config::SavedConnection {
+                id: "asset-1".to_string(),
+                name: "Asset Host".to_string(),
+                config: config::ConnectionType::Ssh {
+                    host: "10.0.0.2".to_string(),
+                    port: 22,
+                    username: "root".to_string(),
+                    backspace_mode: "del".to_string(),
+                    x11_forwarding: false,
+                    encoding: String::new(),
+                },
+                group_id: None,
+                description: None,
+                sort_order: 0,
+                icon: None,
+                icon_auto_detect: None,
+                auth: None,
+                network: None,
+                post_login: None,
+                ssh_algorithms: None,
+                sftp: config::SftpSettings::default(),
+                asset: Some(config::AssetMetadata {
+                    device_type: Some(config::AssetDeviceType::Physical),
+                    os_name: Some("Ubuntu".to_string()),
+                    os_version: Some("24.04".to_string()),
+                    architecture: Some("x86_64".to_string()),
+                    kernel_version: Some("6.8.0".to_string()),
+                    hostname: Some("gpu-node-01".to_string()),
+                    cpu_model: Some("AMD EPYC 9654".to_string()),
+                    cpu_sockets: Some(2),
+                    cpu_cores: Some(192),
+                    cpu_threads: Some(384),
+                    memory_bytes: Some(1_099_511_627_776),
+                    accelerators: Some(vec![config::AssetAccelerator {
+                        r#type: config::AssetAcceleratorType::Gpu,
+                        vendor: Some("NVIDIA".to_string()),
+                        model: Some("H100".to_string()),
+                        count: Some(8),
+                        memory_bytes: Some(85_899_345_920),
+                    }]),
+                    disks: Some(Vec::new()),
+                    tags: Some(vec!["training".to_string(), "production".to_string()]),
+                    notes: Some("Static asset metadata".to_string()),
+                    updated_at: Some("2026-08-03T12:00:00.000Z".to_string()),
+                }),
+                created_at_ms: None,
+                updated_at_ms: None,
+                last_used_at_ms: None,
+            }],
+        }
+    }
+
+    fn assert_asset_metadata_preserved(sessions: &config::SessionsConfig) {
+        let asset = sessions.connections[0].asset.as_ref().expect("asset");
+        assert_eq!(asset.device_type, Some(config::AssetDeviceType::Physical));
+        assert_eq!(asset.hostname.as_deref(), Some("gpu-node-01"));
+        assert_eq!(asset.cpu_threads, Some(384));
+        assert_eq!(
+            asset.updated_at.as_deref(),
+            Some("2026-08-03T12:00:00.000Z")
+        );
+        assert_eq!(
+            asset.accelerators
+                .as_ref()
+                .and_then(|items| items.first())
+                .map(|item| &item.r#type),
+            Some(&config::AssetAcceleratorType::Gpu)
+        );
+        assert_eq!(asset.disks.as_ref(), Some(&Vec::new()));
+    }
+
     #[test]
     fn portable_snapshot_hash_changes_when_entity_changes() {
         let left = sample_snapshot();
         let mut right = sample_snapshot();
         right.master_key_token = Some("different".to_string());
+        right.payload_hash = calculate_payload_hash(&right).expect("right hash");
+
+        assert_ne!(left.payload_hash, right.payload_hash);
+    }
+
+    #[test]
+    fn portable_snapshot_hash_changes_when_note_markdown_changes() {
+        let left = sample_snapshot();
+        let mut right = sample_snapshot();
+        right.notes.notes.push(config::NoteDocument {
+            id: "note-1".to_string(),
+            parent_id: None,
+            title: "Note".to_string(),
+            markdown: "first".to_string(),
+            sort_order: 0,
+            revision: 1,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        });
         right.payload_hash = calculate_payload_hash(&right).expect("right hash");
 
         assert_ne!(left.payload_hash, right.payload_hash);
@@ -352,6 +448,20 @@ mod tests {
         assert_eq!(decoded.payload_hash, snapshot.payload_hash);
         assert_eq!(decoded.master_key_token, snapshot.master_key_token);
         assert_eq!(decoded.known_hosts, snapshot.known_hosts);
+        assert_eq!(decoded.notes, snapshot.notes);
+    }
+
+    #[test]
+    fn portable_backup_snapshot_zip_preserves_asset_metadata() {
+        let mut snapshot = sample_snapshot();
+        snapshot.snapshot_kind = PortableSnapshotKind::Backup;
+        snapshot.sessions = sample_sessions_with_asset_metadata();
+        snapshot.payload_hash = calculate_payload_hash(&snapshot).expect("hash snapshot");
+
+        let encoded = encode_portable_snapshot(&snapshot).expect("encode snapshot");
+        let decoded = super::decode_portable_snapshot(&encoded).expect("decode snapshot");
+
+        assert_asset_metadata_preserved(&decoded.sessions);
     }
 
     #[test]
@@ -392,6 +502,19 @@ mod tests {
         assert_eq!(decoded.payload_hash, snapshot.payload_hash);
         assert_eq!(decoded.master_key_token, snapshot.master_key_token);
         assert_eq!(decoded.known_hosts, snapshot.known_hosts);
+    }
+
+    #[test]
+    fn portable_sync_snapshot_redb_preserves_asset_metadata() {
+        let mut snapshot = sample_snapshot();
+        snapshot.snapshot_kind = PortableSnapshotKind::Sync;
+        snapshot.sessions = sample_sessions_with_asset_metadata();
+        snapshot.payload_hash = calculate_payload_hash(&snapshot).expect("hash snapshot");
+
+        let encoded = encode_portable_snapshot_redb(&snapshot).expect("encode legacy snapshot");
+        let decoded = super::decode_portable_snapshot(&encoded).expect("decode snapshot");
+
+        assert_asset_metadata_preserved(&decoded.sessions);
     }
 
     #[test]
@@ -461,6 +584,8 @@ mod tests {
 
         assert_eq!(decoded.revision_id, snapshot.revision_id);
         assert!(!decoded.settings.appearance.panel_multi_open);
+        assert!(decoded.notes.folders.is_empty());
+        assert!(decoded.notes.notes.is_empty());
         assert_eq!(decoded.payload_hash, snapshot.payload_hash);
         assert_ne!(decoded.payload_hash, legacy_hash);
     }

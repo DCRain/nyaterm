@@ -8,6 +8,7 @@ export const NON_PANEL_IDS = new Set(["settings", "lock", "quickCmdBar", "serial
 export const EXCLUSIVE_PANEL_IDS = new Set(["aiAssistant"]);
 
 const MONITOR_PANEL_VISIBILITY: Record<string, (ui: UiConfig) => boolean> = {
+  notes: (ui) => ui.show_notes_panel ?? true,
   resourceMonitor: (ui) => ui.show_remote_stats ?? true,
   gpuMonitor: (ui) => ui.show_gpu_monitor ?? false,
   ascendNpuMonitor: (ui) => ui.show_ascend_npu_monitor ?? false,

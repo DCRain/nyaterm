@@ -20,9 +20,10 @@ import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useApp } from "@/context/AppContext";
 import { useVirtualList } from "@/hooks/useVirtualList";
+import { buildAssetPatchFromGpuOverview } from "@/lib/assetMonitoring";
 import { invoke } from "@/lib/invoke";
 import { cn } from "@/lib/utils";
-import type { RemoteGpu, RemoteGpuOverview, RemoteGpuProcess } from "@/types/global";
+import type { AssetMetadata, RemoteGpu, RemoteGpuOverview, RemoteGpuProcess } from "@/types/global";
 
 const MAX_CONSECUTIVE_FAILURES = 3;
 const GPU_PROCESS_ROW_HEIGHT = 56;
@@ -30,9 +31,10 @@ const GPU_PROCESS_LIST_MAX_HEIGHT = 320;
 
 interface GpuMonitorProps {
   activeSessionId: string | null;
+  onAssetPatch?: (sessionId: string, patch: AssetMetadata) => void;
 }
 
-export default function GpuMonitor({ activeSessionId }: GpuMonitorProps) {
+export default function GpuMonitor({ activeSessionId, onAssetPatch }: GpuMonitorProps) {
   const { t } = useTranslation();
   const { appSettings } = useApp();
   const [overview, setOverview] = useState<RemoteGpuOverview | null>(null);
@@ -46,27 +48,34 @@ export default function GpuMonitor({ activeSessionId }: GpuMonitorProps) {
   const enabled = appSettings.ui.show_gpu_monitor ?? false;
   const pollIntervalMs = Math.max(3, appSettings.ui.gpu_monitor_interval ?? 3) * 1000;
 
-  const fetchOverview = useCallback(async (sessionId: string, manual = false) => {
-    if (fetchingRef.current) return;
-    fetchingRef.current = true;
-    if (manual) setIsManualRefreshing(true);
+  const fetchOverview = useCallback(
+    async (sessionId: string, manual = false) => {
+      if (fetchingRef.current) return;
+      fetchingRef.current = true;
+      if (manual) setIsManualRefreshing(true);
 
-    try {
-      const data = await invoke<RemoteGpuOverview>("get_remote_gpu_overview", { sessionId });
-      setOverview(data);
-      setError(false);
-      failCountRef.current = 0;
-    } catch {
-      failCountRef.current += 1;
-      setError(true);
-      if (failCountRef.current >= MAX_CONSECUTIVE_FAILURES) {
-        setOverview(null);
+      try {
+        const data = await invoke<RemoteGpuOverview>("get_remote_gpu_overview", { sessionId });
+        setOverview(data);
+        const patch = buildAssetPatchFromGpuOverview(data);
+        if (patch) {
+          onAssetPatch?.(sessionId, patch);
+        }
+        setError(false);
+        failCountRef.current = 0;
+      } catch {
+        failCountRef.current += 1;
+        setError(true);
+        if (failCountRef.current >= MAX_CONSECUTIVE_FAILURES) {
+          setOverview(null);
+        }
+      } finally {
+        fetchingRef.current = false;
+        if (manual) setIsManualRefreshing(false);
       }
-    } finally {
-      fetchingRef.current = false;
-      if (manual) setIsManualRefreshing(false);
-    }
-  }, []);
+    },
+    [onAssetPatch],
+  );
 
   const refresh = useCallback(() => {
     if (!enabled || !activeSessionId) return;

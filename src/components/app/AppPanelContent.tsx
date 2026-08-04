@@ -9,6 +9,7 @@ import FileExplorer from "@/components/panel/file-explorer";
 import FileTransfer from "@/components/panel/file-explorer/FileTransfer";
 import GpuMonitor from "@/components/panel/GpuMonitor";
 import NetworkPanel from "@/components/panel/NetworkPanel";
+import NotesPanel from "@/components/panel/notes/NotesPanel";
 import ProcessManager from "@/components/panel/ProcessManager";
 import RecordingPanel from "@/components/panel/RecordingPanel";
 import ResourceMonitor from "@/components/panel/ResourceMonitor";
@@ -18,7 +19,7 @@ import SecurityAuthPanel from "@/components/panel/security-auth";
 import type { RemoteStatsState } from "@/hooks/useRemoteStats";
 import type { AIOpenIntent } from "@/lib/aiEvents";
 import type { NewSessionTarget } from "@/lib/windowManager";
-import type { SavedConnection, SessionInfo, SessionPane } from "@/types/global";
+import type { AssetMetadata, SavedConnection, SessionInfo, SessionPane } from "@/types/global";
 
 interface AppPanelContentProps {
   panelId: string | null;
@@ -47,6 +48,7 @@ interface AppPanelContentProps {
   onCommandSend: (command: string, execute?: boolean) => void;
   onToggleSessionRecording: (session: SessionInfo) => Promise<void> | void;
   onSaveSessionTranscript: (session: SessionInfo) => Promise<void> | void;
+  onAssetMonitoringPatch: (sessionId: string, patch: AssetMetadata) => void;
 }
 
 export default function AppPanelContent({
@@ -72,6 +74,7 @@ export default function AppPanelContent({
   onCommandSend,
   onToggleSessionRecording,
   onSaveSessionTranscript,
+  onAssetMonitoringPatch,
 }: AppPanelContentProps) {
   const liveActivePane =
     activePane && !activePane.connecting && !activePane.connectError ? activePane : null;
@@ -100,6 +103,8 @@ export default function AppPanelContent({
         );
       case "network":
         return <NetworkPanel />;
+      case "notes":
+        return <NotesPanel />;
       case "securityAuth":
         return <SecurityAuthPanel activeSessionId={activeSessionId} />;
       case "syncBackupHistory":
@@ -143,9 +148,16 @@ export default function AppPanelContent({
           />
         );
       case "gpuMonitor":
-        return <GpuMonitor activeSessionId={activeSshSessionId} />;
+        return (
+          <GpuMonitor activeSessionId={activeSshSessionId} onAssetPatch={onAssetMonitoringPatch} />
+        );
       case "ascendNpuMonitor":
-        return <AscendNpuMonitor activeSessionId={activeSshSessionId} />;
+        return (
+          <AscendNpuMonitor
+            activeSessionId={activeSshSessionId}
+            onAssetPatch={onAssetMonitoringPatch}
+          />
+        );
       case "processManager":
         return <ProcessManager activeSessionId={activeSshSessionId} />;
       case "dockerManager":

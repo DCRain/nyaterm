@@ -18,9 +18,10 @@ import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useApp } from "@/context/AppContext";
 import { useVirtualList } from "@/hooks/useVirtualList";
+import { buildAssetPatchFromNpuOverview } from "@/lib/assetMonitoring";
 import { invoke } from "@/lib/invoke";
 import { cn } from "@/lib/utils";
-import type { RemoteNpu, RemoteNpuOverview, RemoteNpuProcess } from "@/types/global";
+import type { AssetMetadata, RemoteNpu, RemoteNpuOverview, RemoteNpuProcess } from "@/types/global";
 
 const MAX_CONSECUTIVE_FAILURES = 3;
 const NPU_PROCESS_ROW_HEIGHT = 56;
@@ -28,6 +29,7 @@ const NPU_PROCESS_LIST_MAX_HEIGHT = 320;
 
 interface AscendNpuMonitorProps {
   activeSessionId: string | null;
+  onAssetPatch?: (sessionId: string, patch: AssetMetadata) => void;
 }
 
 function AscendBrandIcon({ className }: { className?: string }) {
@@ -43,7 +45,7 @@ function AscendBrandIcon({ className }: { className?: string }) {
   );
 }
 
-export default function AscendNpuMonitor({ activeSessionId }: AscendNpuMonitorProps) {
+export default function AscendNpuMonitor({ activeSessionId, onAssetPatch }: AscendNpuMonitorProps) {
   const { t } = useTranslation();
   const { appSettings } = useApp();
   const [overview, setOverview] = useState<RemoteNpuOverview | null>(null);
@@ -57,29 +59,36 @@ export default function AscendNpuMonitor({ activeSessionId }: AscendNpuMonitorPr
   const enabled = appSettings.ui.show_ascend_npu_monitor ?? false;
   const pollIntervalMs = Math.max(3, appSettings.ui.ascend_npu_monitor_interval ?? 3) * 1000;
 
-  const fetchOverview = useCallback(async (sessionId: string, manual = false) => {
-    if (fetchingRef.current) return;
-    fetchingRef.current = true;
-    if (manual) setIsManualRefreshing(true);
+  const fetchOverview = useCallback(
+    async (sessionId: string, manual = false) => {
+      if (fetchingRef.current) return;
+      fetchingRef.current = true;
+      if (manual) setIsManualRefreshing(true);
 
-    try {
-      const data = await invoke<RemoteNpuOverview>("get_remote_ascend_npu_overview", {
-        sessionId,
-      });
-      setOverview(data);
-      setError(false);
-      failCountRef.current = 0;
-    } catch {
-      failCountRef.current += 1;
-      setError(true);
-      if (failCountRef.current >= MAX_CONSECUTIVE_FAILURES) {
-        setOverview(null);
+      try {
+        const data = await invoke<RemoteNpuOverview>("get_remote_ascend_npu_overview", {
+          sessionId,
+        });
+        setOverview(data);
+        const patch = buildAssetPatchFromNpuOverview(data);
+        if (patch) {
+          onAssetPatch?.(sessionId, patch);
+        }
+        setError(false);
+        failCountRef.current = 0;
+      } catch {
+        failCountRef.current += 1;
+        setError(true);
+        if (failCountRef.current >= MAX_CONSECUTIVE_FAILURES) {
+          setOverview(null);
+        }
+      } finally {
+        fetchingRef.current = false;
+        if (manual) setIsManualRefreshing(false);
       }
-    } finally {
-      fetchingRef.current = false;
-      if (manual) setIsManualRefreshing(false);
-    }
-  }, []);
+    },
+    [onAssetPatch],
+  );
 
   const refresh = useCallback(() => {
     if (!enabled || !activeSessionId) return;
@@ -158,17 +167,32 @@ export default function AscendNpuMonitor({ activeSessionId }: AscendNpuMonitorPr
 
       <div className="flex-1 min-h-0 overflow-y-auto terminal-scroll p-2.5">
         {!activeSessionId ? (
-          <EmptyState icon={<AscendBrandIcon className="h-7 w-7" />} text={t("ascendNpuMonitor.noSession")} />
+          <EmptyState
+            icon={<AscendBrandIcon className="h-7 w-7" />}
+            text={t("ascendNpuMonitor.noSession")}
+          />
         ) : !enabled ? (
-          <EmptyState icon={<AscendBrandIcon className="h-7 w-7" />} text={t("ascendNpuMonitor.disabled")} />
+          <EmptyState
+            icon={<AscendBrandIcon className="h-7 w-7" />}
+            text={t("ascendNpuMonitor.disabled")}
+          />
         ) : error && !overview ? (
-          <EmptyState icon={<AscendBrandIcon className="h-7 w-7" />} text={t("ascendNpuMonitor.error")} />
+          <EmptyState
+            icon={<AscendBrandIcon className="h-7 w-7" />}
+            text={t("ascendNpuMonitor.error")}
+          />
         ) : !overview ? (
           <LoadingState label={t("common.loading")} />
         ) : !overview.available ? (
-          <EmptyState icon={<AscendBrandIcon className="h-7 w-7" />} text={t("ascendNpuMonitor.unavailable")} />
+          <EmptyState
+            icon={<AscendBrandIcon className="h-7 w-7" />}
+            text={t("ascendNpuMonitor.unavailable")}
+          />
         ) : overview.npus.length === 0 ? (
-          <EmptyState icon={<AscendBrandIcon className="h-7 w-7" />} text={t("ascendNpuMonitor.noNpus")} />
+          <EmptyState
+            icon={<AscendBrandIcon className="h-7 w-7" />}
+            text={t("ascendNpuMonitor.noNpus")}
+          />
         ) : (
           <div className="space-y-2.5">
             <SummaryGrid summary={summary} />

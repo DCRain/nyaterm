@@ -1,4 +1,5 @@
 use crate::config;
+use crate::core::monitoring::stats::RemoteStatsSampler;
 use crate::core::ssh::{
     self, HostKeyVerifyManager, PendingAuthManager, PendingSshAuthManager, SshAuthResponse,
 };
@@ -830,6 +831,7 @@ pub async fn detach_session_renderer(
 pub async fn close_session(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<SessionManager>>,
+    stats_sampler: tauri::State<'_, Arc<RemoteStatsSampler>>,
     session_id: String,
 ) -> AppResult<()> {
     let session_id_clone = session_id.clone();
@@ -849,6 +851,8 @@ pub async fn close_session(
         Err(AppError::SessionNotFound(_)) => Ok(()),
         other => other,
     };
+
+    stats_sampler.clear_session(&session_id).await;
 
     // Concurrently tidy up any downloaded/watcher temporary files stored in the OS temp directory
     tauri::async_runtime::spawn(async move {

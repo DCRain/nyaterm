@@ -37,6 +37,7 @@ enum TransferState {
 
 struct ReceiveFile {
     name: String,
+    path: PathBuf,
     size: u64,
     file: BufWriter<std::fs::File>,
     written: u64,
@@ -429,6 +430,7 @@ impl ZmodemTransfer {
                                 self.progress_throttle.reset();
                                 *current_file = Some(ReceiveFile {
                                     name: name.clone(),
+                                    path: file_path.clone(),
                                     size,
                                     file: BufWriter::with_capacity(
                                         ZMODEM_FILE_WRITE_BUFFER_SIZE,
@@ -441,6 +443,7 @@ impl ZmodemTransfer {
                                         file_name: name,
                                         bytes_transferred: 0,
                                         total_size: size,
+                                        local_path: Some(file_path.to_string_lossy().to_string()),
                                         direction: ZmodemDirection::Download,
                                     }));
                                 }
@@ -466,6 +469,7 @@ impl ZmodemTransfer {
                                     file_name: rf.name.clone(),
                                     bytes_transferred: rf.written,
                                     total_size: rf.size,
+                                    local_path: Some(rf.path.to_string_lossy().to_string()),
                                     direction: ZmodemDirection::Download,
                                 }));
                             }
@@ -509,6 +513,7 @@ impl ZmodemTransfer {
                             file_name: rf.name.clone(),
                             bytes_transferred: rf.written,
                             total_size: rf.size,
+                            local_path: Some(rf.path.to_string_lossy().to_string()),
                             direction: ZmodemDirection::Download,
                         }));
                     }
@@ -598,6 +603,7 @@ impl ZmodemTransfer {
                                 file_name: sf.name.clone(),
                                 bytes_transferred: sf.sent,
                                 total_size: sf.size,
+                                local_path: None,
                                 direction: ZmodemDirection::Upload,
                             }));
                         }
@@ -621,6 +627,7 @@ impl ZmodemTransfer {
                                 file_name: sf.name.clone(),
                                 bytes_transferred: sf.sent,
                                 total_size: sf.size,
+                                local_path: None,
                                 direction: ZmodemDirection::Upload,
                             }));
                         }
@@ -643,6 +650,7 @@ impl ZmodemTransfer {
                                     file_name: sf.name.clone(),
                                     bytes_transferred: 0,
                                     total_size: sf.size,
+                                    local_path: None,
                                     direction: ZmodemDirection::Upload,
                                 }));
                             }
@@ -700,6 +708,7 @@ impl ZmodemTransfer {
                     file_name: sf.name.clone(),
                     bytes_transferred: 0,
                     total_size: sf.size,
+                    local_path: None,
                     direction: ZmodemDirection::Upload,
                 }));
             }

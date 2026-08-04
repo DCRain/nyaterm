@@ -9,6 +9,13 @@ mod tests {
         }
     }
 
+    fn import_windterm_commands(raw: &str) -> QuickCommandsConfig {
+        let import_config = parse_windterm_quickbar(raw).unwrap();
+        let mut config = empty_config();
+        merge_import(&mut config, import_config).unwrap();
+        config
+    }
+
     #[test]
     fn imports_nyaterm_config_json() {
         let raw = r#"{
@@ -73,6 +80,103 @@ mod tests {
         assert_eq!(config.commands[0].command, "echo install");
         assert_eq!(config.commands[0].execution_mode, "append");
         assert_eq!(config.categories[0].name, "快速");
+    }
+
+    #[test]
+    fn parses_windterm_command_terminator() {
+        assert_eq!(split_windterm_command("pwd"), ("pwd", false));
+        assert_eq!(split_windterm_command("pwd\n"), ("pwd", true));
+        assert_eq!(split_windterm_command("pwd\r"), ("pwd", true));
+        assert_eq!(split_windterm_command("pwd\r\n"), ("pwd", true));
+        assert_eq!(split_windterm_command("pwd\n\n"), ("pwd\n", true));
+    }
+
+    #[test]
+    fn imports_windterm_command_with_lf_as_execute() {
+        let config = import_windterm_commands(
+            r#"[{
+                "quick.label": "List",
+                "quick.text": "ls -la\n",
+                "quick.type": "Send Text"
+            }]"#,
+        );
+
+        assert_eq!(config.commands.len(), 1);
+        assert_eq!(config.commands[0].command, "ls -la");
+        assert_eq!(config.commands[0].execution_mode, "execute");
+    }
+
+    #[test]
+    fn imports_windterm_command_with_crlf_as_execute() {
+        let config = import_windterm_commands(
+            r#"[{
+                "quick.label": "List",
+                "quick.text": "ls -la\r\n",
+                "quick.type": "Send Text"
+            }]"#,
+        );
+
+        assert_eq!(config.commands.len(), 1);
+        assert_eq!(config.commands[0].command, "ls -la");
+        assert_eq!(config.commands[0].execution_mode, "execute");
+    }
+
+    #[test]
+    fn imports_windterm_command_with_cr_as_execute() {
+        let config = import_windterm_commands(
+            r#"[{
+                "quick.label": "Show Version",
+                "quick.text": "show version\r",
+                "quick.type": "Send Text"
+            }]"#,
+        );
+
+        assert_eq!(config.commands.len(), 1);
+        assert_eq!(config.commands[0].command, "show version");
+        assert_eq!(config.commands[0].execution_mode, "execute");
+    }
+
+    #[test]
+    fn imports_windterm_multiline_command_with_terminal_newline_as_execute() {
+        let config = import_windterm_commands(
+            r#"[{
+                "quick.label": "Two Lines",
+                "quick.text": "echo first\necho second\n",
+                "quick.type": "Send Text"
+            }]"#,
+        );
+
+        assert_eq!(config.commands.len(), 1);
+        assert_eq!(config.commands[0].command, "echo first\necho second");
+        assert_eq!(config.commands[0].execution_mode, "execute");
+    }
+
+    #[test]
+    fn imports_windterm_command_with_double_lf_by_removing_only_one() {
+        let config = import_windterm_commands(
+            r#"[{
+                "quick.label": "Double Enter",
+                "quick.text": "echo test\n\n",
+                "quick.type": "Send Text"
+            }]"#,
+        );
+
+        assert_eq!(config.commands.len(), 1);
+        assert_eq!(config.commands[0].command, "echo test\n");
+        assert_eq!(config.commands[0].execution_mode, "execute");
+    }
+
+    #[test]
+    fn windterm_ignores_whitespace_only_commands() {
+        let import_config = parse_windterm_quickbar(
+            r#"[
+                {"quick.label":"Blank CRLF","quick.text":"\r\n","quick.type":"Send Text"},
+                {"quick.label":"Blank Spaces","quick.text":"   \n","quick.type":"Send Text"}
+            ]"#,
+        )
+        .unwrap();
+
+        assert!(import_config.commands.is_empty());
     }
 
     #[test]

@@ -109,7 +109,8 @@ impl SftpSession {
 
     /// Opens a file using raw bytes for the filename (preserves original encoding).
     pub async fn open_bytes(&self, filename_bytes: Vec<u8>) -> SftpResult<File> {
-        self.open_with_flags_bytes(filename_bytes, OpenFlags::READ).await
+        self.open_with_flags_bytes(filename_bytes, OpenFlags::READ)
+            .await
     }
 
     /// Opens a file in write-only mode.
@@ -161,7 +162,11 @@ impl SftpSession {
         flags: OpenFlags,
         attributes: FileAttributes,
     ) -> SftpResult<File> {
-        let handle = self.session.open_bytes(filename_bytes, flags, attributes).await?.handle;
+        let handle = self
+            .session
+            .open_bytes(filename_bytes, flags, attributes)
+            .await?
+            .handle;
         Ok(File::new(self.session.clone(), handle, self.features))
     }
 
@@ -196,6 +201,7 @@ impl SftpSession {
         let mut buffer = Vec::new();
 
         file.read_to_end(&mut buffer).await?;
+        file.shutdown().await?;
 
         Ok(buffer)
     }
@@ -204,6 +210,8 @@ impl SftpSession {
     pub async fn write<P: Into<String>>(&self, path: P, data: &[u8]) -> SftpResult<()> {
         let mut file = self.open_with_flags(path, OpenFlags::WRITE).await?;
         file.write_all(data).await?;
+        file.flush().await?;
+        file.shutdown().await?;
         Ok(())
     }
 
@@ -362,10 +370,7 @@ impl SftpSession {
         T: Into<String>,
         L: Into<String>,
     {
-        self.session
-            .symlink_openssh(target, link)
-            .await
-            .map(|_| ())
+        self.session.symlink_openssh(target, link).await.map(|_| ())
     }
 
     /// Queries metadata about the remote file.

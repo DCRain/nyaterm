@@ -416,6 +416,7 @@ impl ScpEnhancedBackend {
             })?;
             let total_size = local_meta.len();
             controller.update_progress(0, total_size);
+            let original_props = self.stat(remote_path).await.ok();
 
             let cmd = format!("cat > {}", sh_quote(&tmp_path));
             let handle_mtx = self.ssh_handle.target_handle();
@@ -507,7 +508,8 @@ impl ScpEnhancedBackend {
                 )));
             }
 
-            let mv_cmd = format!("mv -f -- {} {}", sh_quote(&tmp_path), sh_quote(remote_path));
+            let mv_cmd =
+                scp_finalize_replace_command(&tmp_path, remote_path, original_props.as_ref());
             let mv_result = self.exec(&mv_cmd).await?;
             if mv_result.exit_code != 0 {
                 let _ = self
@@ -929,17 +931,10 @@ impl RemoteFs for ScpEnhancedBackend {
             path,
             uuid::Uuid::new_v4().to_string().replace('-', "")
         );
-        let original_mode = permissions_string_to_octal_mode(&props.permissions);
-        let restore_mode = original_mode
-            .as_deref()
-            .map(|mode| format!(" && chmod {} -- {}", sh_quote(mode), sh_quote(path)))
-            .unwrap_or_default();
         let cmd = format!(
-            "umask 077; cat > {} && mv -f -- {} {}{}",
+            "umask 077; cat > {} && {}",
             sh_quote(&tmp),
-            sh_quote(&tmp),
-            sh_quote(path),
-            restore_mode
+            scp_finalize_replace_command(&tmp, path, Some(&props))
         );
         let result = self.exec_with_stdin(&cmd, content.as_bytes()).await?;
         if result.exit_code != 0 {

@@ -672,6 +672,33 @@ enum AgentToolInvocation {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeToolCallMode {
+    Enabled,
+    DisabledForTurn,
+}
+
+impl NativeToolCallMode {
+    fn should_attempt(self) -> bool {
+        matches!(self, Self::Enabled)
+    }
+
+    fn disable_for_turn(&mut self) {
+        *self = Self::DisabledForTurn;
+    }
+}
+
+fn should_fallback_to_legacy_after_tool_error(
+    mode: &mut NativeToolCallMode,
+    error: &AppError,
+) -> bool {
+    if matches!(error, AppError::Cancelled(_)) {
+        return false;
+    }
+    mode.disable_for_turn();
+    true
+}
+
 fn deserialize_required_risk_level<'de, D>(deserializer: D) -> Result<RiskLevel, D::Error>
 where
     D: serde::de::Deserializer<'de>,
@@ -1650,6 +1677,43 @@ mod tests {
     }
 
     #[test]
+    fn native_tool_call_error_disables_native_calls_for_turn() {
+        let mut mode = NativeToolCallMode::Enabled;
+        let error =
+            AppError::Config("AI request failed: HTTP error. Status: 400 Bad Request".to_string());
+
+        assert!(should_fallback_to_legacy_after_tool_error(
+            &mut mode, &error
+        ));
+        assert_eq!(mode, NativeToolCallMode::DisabledForTurn);
+        assert!(!mode.should_attempt());
+    }
+
+    #[test]
+    fn disabled_native_tool_call_mode_skips_subsequent_attempts() {
+        let mut mode = NativeToolCallMode::Enabled;
+        let error = AppError::Config("AI stream ended without a tool call".to_string());
+
+        assert!(mode.should_attempt());
+        assert!(should_fallback_to_legacy_after_tool_error(
+            &mut mode, &error
+        ));
+        assert!(!mode.should_attempt());
+    }
+
+    #[test]
+    fn cancelled_native_tool_call_does_not_fallback_or_disable_native_calls() {
+        let mut mode = NativeToolCallMode::Enabled;
+        let error = AppError::Cancelled("AI stream cancelled".to_string());
+
+        assert!(!should_fallback_to_legacy_after_tool_error(
+            &mut mode, &error
+        ));
+        assert_eq!(mode, NativeToolCallMode::Enabled);
+        assert!(mode.should_attempt());
+    }
+
+    #[test]
     fn local_risk_rules_cover_expected_levels() {
         assert_eq!(assess_local_command_risk("ls -la").0, RiskLevel::Low);
         assert_eq!(
@@ -1875,6 +1939,7 @@ pub(super) async fn run_agent_stream(
 
     let mut final_answer: Option<String> = None;
     let mut all_steps: Vec<AgentStepPayload> = Vec::new();
+    let mut native_tool_call_mode = NativeToolCallMode::Enabled;
 
     for step_index in 0..max_steps {
         tracing::debug!(
@@ -1890,32 +1955,39 @@ pub(super) async fn run_agent_stream(
             return;
         }
 
-        let tool_invocation = match run_agent_tool_step(
-            &app,
-            &stream_id,
-            &session_id,
-            &resolved_model,
-            &conversation,
-            &settings,
-            &mut cancel_rx,
-        )
-        .await
-        {
-            Ok(invocation) => Some(invocation),
-            Err(error) => {
-                if matches!(error, AppError::Cancelled(_)) {
-                    emit_agent_error(&app, &stream_id, &session_id, "AI stream cancelled");
-                    return;
+        let tool_invocation = if native_tool_call_mode.should_attempt() {
+            match run_agent_tool_step(
+                &app,
+                &stream_id,
+                &session_id,
+                &resolved_model,
+                &conversation,
+                &settings,
+                &mut cancel_rx,
+            )
+            .await
+            {
+                Ok(invocation) => Some(invocation),
+                Err(error) => {
+                    if !should_fallback_to_legacy_after_tool_error(
+                        &mut native_tool_call_mode,
+                        &error,
+                    ) {
+                        emit_agent_error(&app, &stream_id, &session_id, "AI stream cancelled");
+                        return;
+                    }
+                    tracing::warn!(
+                        stream_id = %stream_id,
+                        session_id = %session_id,
+                        step_index,
+                        error = %error,
+                        "AI agent native tool call step failed; native tool calling disabled for this agent turn; falling back to legacy JSON protocol"
+                    );
+                    None
                 }
-                tracing::warn!(
-                    stream_id = %stream_id,
-                    session_id = %session_id,
-                    step_index,
-                    error = %error,
-                    "AI agent tool call step failed; falling back to legacy JSON protocol"
-                );
-                None
             }
+        } else {
+            None
         };
 
         let mut execute_tool_call: Option<ToolCall> = None;

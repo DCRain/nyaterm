@@ -122,3 +122,28 @@ pub(super) fn sftp_directory_concurrency(
         large_file_concurrency,
     }
 }
+
+pub(super) fn sftp_directory_download_pipeline_cap(
+    max_open_handles: Option<u64>,
+    session_pool_size: usize,
+    worker_count: usize,
+    requested_pipeline_depth: usize,
+) -> usize {
+    let requested_pipeline_depth = requested_pipeline_depth.max(1);
+
+    let Some(max_open_handles) = max_open_handles else {
+        return requested_pipeline_depth;
+    };
+
+    let available_per_session = max_open_handles
+        .saturating_sub(SFTP_HANDLE_RESERVE as u64)
+        .max(1) as usize;
+    let session_pool_size = session_pool_size.max(1);
+    let workers_per_session = worker_count.div_ceil(session_pool_size).max(1);
+    let budget_per_worker = available_per_session
+        .checked_div(workers_per_session)
+        .unwrap_or(1)
+        .max(1);
+
+    requested_pipeline_depth.min(budget_per_worker).max(1)
+}

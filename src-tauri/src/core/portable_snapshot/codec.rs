@@ -90,6 +90,7 @@ fn encode_portable_snapshot_redb(snapshot: &PortableSnapshot) -> AppResult<Vec<u
             &snapshot.master_key_token,
         )?;
         insert_entity(&mut entities, "known_hosts", &snapshot.known_hosts)?;
+        insert_entity(&mut entities, "notes", &snapshot.notes)?;
         drop(entities);
         txn.commit().map_err(storage_error)?;
     }

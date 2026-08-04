@@ -50,6 +50,8 @@ pub enum ZmodemEvent {
         bytes_transferred: u64,
         #[serde(rename = "totalSize")]
         total_size: u64,
+        #[serde(rename = "localPath")]
+        local_path: Option<String>,
         direction: ZmodemDirection,
     },
     /// The ZMODEM session completed successfully.

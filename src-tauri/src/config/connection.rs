@@ -305,6 +305,111 @@ fn default_post_login_delay_ms() -> u64 {
     1000
 }
 
+// ── Static asset metadata ─────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AssetDeviceType {
+    Physical,
+    Virtual,
+    Cloud,
+    Network,
+    Storage,
+    Embedded,
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AssetAcceleratorType {
+    Gpu,
+    Npu,
+    #[default]
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AssetAccelerator {
+    #[serde(default)]
+    pub r#type: AssetAcceleratorType,
+    #[serde(default)]
+    pub vendor: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub count: Option<u32>,
+    #[serde(default)]
+    pub memory_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AssetDiskKind {
+    Hdd,
+    Ssd,
+    Nvme,
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AssetDiskPurpose {
+    System,
+    Data,
+    Cache,
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AssetDisk {
+    #[serde(default)]
+    pub kind: Option<AssetDiskKind>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub capacity_bytes: Option<u64>,
+    #[serde(default)]
+    pub count: Option<u32>,
+    #[serde(default)]
+    pub purpose: Option<AssetDiskPurpose>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct AssetMetadata {
+    #[serde(default)]
+    pub device_type: Option<AssetDeviceType>,
+    #[serde(default)]
+    pub os_name: Option<String>,
+    #[serde(default)]
+    pub os_version: Option<String>,
+    #[serde(default)]
+    pub architecture: Option<String>,
+    #[serde(default)]
+    pub kernel_version: Option<String>,
+    #[serde(default)]
+    pub hostname: Option<String>,
+    #[serde(default)]
+    pub cpu_model: Option<String>,
+    #[serde(default)]
+    pub cpu_sockets: Option<u32>,
+    #[serde(default)]
+    pub cpu_cores: Option<u32>,
+    #[serde(default)]
+    pub cpu_threads: Option<u32>,
+    #[serde(default)]
+    pub memory_bytes: Option<u64>,
+    #[serde(default)]
+    pub accelerators: Option<Vec<AssetAccelerator>>,
+    #[serde(default)]
+    pub disks: Option<Vec<AssetDisk>>,
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
 // ── Saved connection ────────────────────────────────────────────────────────
 
 /// Unified saved connection: common fields + type-discriminated config.
@@ -338,6 +443,8 @@ pub struct SavedConnection {
     pub ssh_algorithms: Option<SshAlgorithmPreferences>,
     #[serde(default, skip_serializing_if = "is_default_sftp_settings")]
     pub sftp: SftpSettings,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset: Option<AssetMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -511,7 +618,10 @@ pub fn save_config(app: &AppHandle, config: &AppConfig) -> AppResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConnectionType, SavedConnection, SftpCwdFollowMode, SshAlgorithmMode};
+    use super::{
+        AssetAcceleratorType, AssetDeviceType, AssetDiskKind, AssetDiskPurpose, ConnectionType,
+        SavedConnection, SftpCwdFollowMode, SshAlgorithmMode,
+    };
 
     #[test]
     fn saved_connection_defaults_missing_post_login_to_none() {
@@ -562,6 +672,144 @@ mod tests {
         assert_eq!(
             connection.sftp.cwd_follow_mode,
             SftpCwdFollowMode::ShellIntegration
+        );
+    }
+
+    #[test]
+    fn saved_connection_defaults_missing_asset_to_none() {
+        let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "conn-1",
+            "name": "Test",
+            "type": "ssh",
+            "host": "example.com",
+            "port": 22,
+            "username": "root"
+        }))
+        .expect("connection");
+
+        assert!(connection.asset.is_none());
+    }
+
+    #[test]
+    fn saved_connection_roundtrips_complete_asset_metadata() {
+        let raw = serde_json::json!({
+            "id": "conn-1",
+            "name": "Asset Host",
+            "type": "ssh",
+            "host": "10.0.0.2",
+            "port": 22,
+            "username": "root",
+            "asset": {
+                "device_type": "physical",
+                "os_name": "Ubuntu",
+                "os_version": "24.04",
+                "architecture": "x86_64",
+                "kernel_version": "6.8.0",
+                "hostname": "gpu-node-01",
+                "cpu_model": "AMD EPYC 9654",
+                "cpu_sockets": 2,
+                "cpu_cores": 192,
+                "cpu_threads": 384,
+                "memory_bytes": 1099511627776u64,
+                "accelerators": [
+                    {
+                        "type": "gpu",
+                        "vendor": "NVIDIA",
+                        "model": "H100",
+                        "count": 8,
+                        "memory_bytes": 85899345920u64
+                    }
+                ],
+                "disks": [
+                    {
+                        "kind": "nvme",
+                        "model": "PM9A3",
+                        "capacity_bytes": 7680000000000u64,
+                        "count": 4,
+                        "purpose": "data"
+                    }
+                ],
+                "tags": ["training", "production"],
+                "notes": "Static asset metadata",
+                "updated_at": "2026-08-03T12:00:00.000Z"
+            }
+        });
+
+        let connection: SavedConnection = serde_json::from_value(raw).expect("connection");
+        let encoded = serde_json::to_value(&connection).expect("asset json");
+        let asset = connection.asset.expect("asset");
+
+        assert_eq!(asset.device_type, Some(AssetDeviceType::Physical));
+        assert_eq!(asset.os_name.as_deref(), Some("Ubuntu"));
+        assert_eq!(asset.cpu_threads, Some(384));
+        assert_eq!(
+            asset.updated_at.as_deref(),
+            Some("2026-08-03T12:00:00.000Z")
+        );
+        let accelerator = asset
+            .accelerators
+            .as_ref()
+            .and_then(|items| items.first())
+            .expect("accelerator");
+        assert_eq!(accelerator.r#type, AssetAcceleratorType::Gpu);
+        assert_eq!(accelerator.count, Some(8));
+        let disk = asset
+            .disks
+            .as_ref()
+            .and_then(|items| items.first())
+            .expect("disk");
+        assert_eq!(disk.kind, Some(AssetDiskKind::Nvme));
+        assert_eq!(disk.purpose, Some(AssetDiskPurpose::Data));
+        assert_eq!(encoded["asset"]["accelerators"][0]["type"], "gpu");
+        assert_eq!(encoded["asset"]["disks"][0]["kind"], "nvme");
+    }
+
+    #[test]
+    fn asset_accelerators_distinguish_missing_null_and_empty() {
+        let missing: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "conn-missing",
+            "name": "Missing",
+            "type": "ssh",
+            "host": "example.com",
+            "port": 22,
+            "username": "root",
+            "asset": {}
+        }))
+        .expect("missing");
+        let null_value: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "conn-null",
+            "name": "Null",
+            "type": "ssh",
+            "host": "example.com",
+            "port": 22,
+            "username": "root",
+            "asset": {
+                "accelerators": null
+            }
+        }))
+        .expect("null");
+        let empty: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "conn-empty",
+            "name": "Empty",
+            "type": "ssh",
+            "host": "example.com",
+            "port": 22,
+            "username": "root",
+            "asset": {
+                "accelerators": []
+            }
+        }))
+        .expect("empty");
+
+        assert!(missing.asset.expect("asset").accelerators.is_none());
+        assert!(null_value.asset.expect("asset").accelerators.is_none());
+        assert_eq!(
+            empty
+                .asset
+                .expect("asset")
+                .accelerators
+                .expect("accelerators"),
+            Vec::new()
         );
     }
 

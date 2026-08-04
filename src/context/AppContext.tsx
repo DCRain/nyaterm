@@ -314,6 +314,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   ui: {
     open_tabs: [],
     terminal_window_layout: null,
+    start_workspace_mode: "workbench",
     left_width: 256,
     right_width: 288,
     quick_cmd_height: 180,
@@ -334,6 +335,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     language: "en",
     header_status_mode: "session",
     header_status_visible: true,
+    show_notes_panel: true,
     show_remote_stats: true,
     remote_stats_interval: 3,
     show_gpu_monitor: false,
@@ -351,8 +353,10 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     file_explorer_show_hidden_files: true,
     file_explorer_auto_sync_cwd_connection_ids: [],
     file_explorer_favorite_dirs_by_connection_id: {},
+    notes_expanded_folder_ids: [],
+    notes_last_selected_node_id: null,
     activity_bar_layout: {
-      left_top: ["fileExplorer", "network", "securityAuth"],
+      left_top: ["fileExplorer", "notes", "network", "securityAuth"],
       left_bottom: ["syncBackupHistory", "settings"],
       right_top: [
         "savedConnections",

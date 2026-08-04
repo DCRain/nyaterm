@@ -29,7 +29,11 @@ fn merge_import(
 
     for command in import_config.commands {
         let label = require_text(&command.label, "command.label")?;
-        let command_text = require_text(&command.command, "command.command")?;
+        let command_text = if command.preserve_command_text {
+            require_preserved_text(&command.command, "command.command")?
+        } else {
+            require_text(&command.command, "command.command")?
+        };
         let id_input = command
             .id
             .unwrap_or_else(|| format!("cmd-{}", Uuid::new_v4()));
@@ -176,6 +180,13 @@ fn require_text(value: &str, field: &str) -> AppResult<String> {
         return Err(AppError::Config(format!("{field} cannot be empty")));
     }
     Ok(trimmed.to_string())
+}
+
+fn require_preserved_text(value: &str, field: &str) -> AppResult<String> {
+    if value.trim().is_empty() {
+        return Err(AppError::Config(format!("{field} cannot be empty")));
+    }
+    Ok(value.to_string())
 }
 
 fn normalize_id(value: &str, field: &str) -> AppResult<String> {

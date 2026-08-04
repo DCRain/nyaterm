@@ -25,6 +25,7 @@ import {
   MdMenuBook,
   MdMerge,
   MdOutlineMonitorHeart,
+  MdOutlineStickyNote2,
   MdPalette,
   MdRestartAlt,
   MdSearch,
@@ -151,6 +152,7 @@ const iconMap: Record<string, React.ElementType> = {
   memory: MdMemory,
   speed: MdSpeed,
   monitor_heart: MdOutlineMonitorHeart,
+  sticky_note: MdOutlineStickyNote2,
   nvidia: SiNvidia,
   ascend: AscendIcon,
   list_alt: MdListAlt,
@@ -200,7 +202,8 @@ function HeaderStatusDivider() {
   );
 }
 
-function formatPct(value: number): string {
+function formatPct(value: number | null): string {
+  if (value == null) return "--";
   return `${Math.round(Math.min(100, Math.max(0, value)))}%`;
 }
 
@@ -216,7 +219,8 @@ function formatRate(bytesPerSec: number): string {
   return `${formatBytes(bytesPerSec)}/s`;
 }
 
-function getPressureColor(usagePercent: number): string | undefined {
+function getPressureColor(usagePercent: number | null): string | undefined {
+  if (usagePercent == null) return undefined;
   if (usagePercent >= 90) return "#f87171";
   if (usagePercent >= 75) return "#f59e0b";
   return undefined;
@@ -422,6 +426,12 @@ export default function Header({
   };
 
   const monitorMenuItems: MenuItem[] = [
+    {
+      label: t("settings.showNotesPanel"),
+      icon: "sticky_note",
+      checked: appSettings.ui.show_notes_panel ?? true,
+      action: () => toggleUi("show_notes_panel", !(appSettings.ui.show_notes_panel ?? true)),
+    },
     {
       label: t("settings.showRemoteStats"),
       icon: "monitor_heart",

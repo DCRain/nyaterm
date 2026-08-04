@@ -20,14 +20,15 @@ fn parse_windterm_quickbar(raw: &str) -> AppResult<ImportConfig> {
             .and_then(Value::as_str)
             .map(str::trim)
             .unwrap_or("");
-        let command = entry
+        let raw_command = entry
             .get("quick.text")
             .and_then(Value::as_str)
-            .map(str::trim)
             .unwrap_or("");
-        if label.is_empty() || command.is_empty() {
+        if label.is_empty() || raw_command.trim().is_empty() {
             continue;
         }
+
+        let (command, has_terminal_newline) = split_windterm_command(raw_command);
 
         let id = entry
             .get("quick.uuid")
@@ -45,20 +46,25 @@ fn parse_windterm_quickbar(raw: &str) -> AppResult<ImportConfig> {
             .get("quick.icon")
             .and_then(Value::as_str)
             .and_then(map_windterm_icon);
-        let execution_mode = match entry
+        let quick_type = entry
             .get("quick.type")
             .and_then(Value::as_str)
             .unwrap_or("")
-            .trim()
-        {
-            value if value.eq_ignore_ascii_case("Send Text") => "append".to_string(),
-            _ => "execute".to_string(),
-        };
+            .trim();
+        let execution_mode = if has_terminal_newline {
+            "execute"
+        } else if quick_type.eq_ignore_ascii_case("Send Text") {
+            "append"
+        } else {
+            "execute"
+        }
+        .to_string();
 
         commands.push(ImportCommand {
             id,
             label: label.to_string(),
             command: command.to_string(),
+            preserve_command_text: true,
             category_id: None,
             category,
             description: None,
@@ -75,6 +81,22 @@ fn parse_windterm_quickbar(raw: &str) -> AppResult<ImportConfig> {
         commands,
         categories: Vec::new(),
     })
+}
+
+fn split_windterm_command(raw: &str) -> (&str, bool) {
+    if let Some(command) = raw.strip_suffix("\r\n") {
+        return (command, true);
+    }
+
+    if let Some(command) = raw.strip_suffix('\n') {
+        return (command, true);
+    }
+
+    if let Some(command) = raw.strip_suffix('\r') {
+        return (command, true);
+    }
+
+    (raw, false)
 }
 
 fn parse_xshell_xts_quick_buttons(path: &str) -> AppResult<ImportConfig> {
@@ -154,6 +176,7 @@ fn parse_xshell_quick_buttons_content(raw: &str) -> ImportConfig {
                 id: None,
                 label: label.to_string(),
                 command: command.to_string(),
+                preserve_command_text: false,
                 category_id: None,
                 category: None,
                 description: trim_optional(fields.get("Desc").cloned()),

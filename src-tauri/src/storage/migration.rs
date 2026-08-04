@@ -164,6 +164,17 @@ impl Storage {
         txn.open_table(CONNECTIONS_TABLE).map_err(storage_error)?;
         txn.open_table(CREDENTIALS_TABLE).map_err(storage_error)?;
         txn.open_table(KNOWN_HOSTS_TABLE).map_err(storage_error)?;
+        txn.open_table(NOTE_FOLDERS_TABLE).map_err(storage_error)?;
+        txn.open_table(NOTES_TABLE).map_err(storage_error)?;
+        txn.open_table(NOTE_SUMMARIES_TABLE)
+            .map_err(storage_error)?;
+        Ok(())
+    }
+
+    pub(super) fn ensure_current_v3_tables(&self) -> AppResult<()> {
+        let txn = self.db.begin_write().map_err(storage_error)?;
+        open_all_v3_tables(&txn)?;
+        txn.commit().map_err(storage_error)?;
         Ok(())
     }
 }
@@ -179,6 +190,10 @@ pub(super) fn open_all_v3_tables(txn: &redb::WriteTransaction) -> AppResult<()> 
     txn.open_table(TUNNELS_TABLE).map_err(storage_error)?;
     txn.open_table(KNOWN_HOSTS_TABLE).map_err(storage_error)?;
     txn.open_table(COMMAND_HISTORY_TABLE)
+        .map_err(storage_error)?;
+    txn.open_table(NOTE_FOLDERS_TABLE).map_err(storage_error)?;
+    txn.open_table(NOTES_TABLE).map_err(storage_error)?;
+    txn.open_table(NOTE_SUMMARIES_TABLE)
         .map_err(storage_error)?;
     txn.open_table(IDX_CONNECTIONS_BY_GROUP_TABLE)
         .map_err(storage_error)?;
