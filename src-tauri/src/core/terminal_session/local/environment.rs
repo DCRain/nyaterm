@@ -36,9 +36,14 @@ fn ensure_macos_interactive_path(cmd: &mut CommandBuilder) {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+/// Advertise a color-capable terminal to local shells and CLI tools.
+///
+/// Windows ConPTY sessions previously skipped this, so many programs (git, ls,
+/// ripgrep, Node CLIs, etc.) fell back to monochrome output. Match common
+/// emulators by setting both TERM and COLORTERM.
 fn configure_local_pty_environment(cmd: &mut CommandBuilder) {
     cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
     #[cfg(target_os = "macos")]
     {
         set_utf8_env_if_missing_or_non_utf8(cmd, "LANG", "en_US.UTF-8");

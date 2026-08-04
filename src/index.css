@@ -304,6 +304,16 @@ textarea,
   user-select: text;
 }
 
+/*
+ * xterm.js 6 DomRenderer injects `white-space: pre` without a trailing semicolon
+ * (`white-space: pre}`), so the declaration is discarded and consecutive spaces
+ * collapse. That breaks column alignment (e.g. `ls -al`) whenever WebGL is off.
+ */
+.xterm .xterm-rows,
+.xterm .xterm-rows span {
+  white-space: pre !important;
+}
+
 .nyaterm-wallpaper-shell[data-wallpaper-enabled="true"] .xterm,
 .nyaterm-wallpaper-shell[data-wallpaper-enabled="true"] .xterm .xterm-viewport,
 .nyaterm-wallpaper-shell[data-wallpaper-enabled="true"] .xterm .xterm-screen,

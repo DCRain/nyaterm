@@ -249,7 +249,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     keep_alive_interval: 60,
     font_size_delta: 0,
     x11_display: "",
-    hardware_acceleration: false,
+    hardware_acceleration: true,
     keyword_highlights_enabled: false,
     keyword_highlights_across_wrapped_lines: false,
     keyword_highlight_builtin_rules: {},

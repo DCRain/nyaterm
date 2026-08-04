@@ -238,6 +238,16 @@ pub(super) async fn open_shell_channel(
         .await
         .map_err(|error| AppError::Channel(format!("PTY request failed: {}", error)))?;
 
+    // Best-effort: many servers ignore env vars outside AcceptEnv.
+    // TERM is already advertised via the PTY type (xterm-256color).
+    if let Err(error) = channel.set_env(false, "COLORTERM", "truecolor").await {
+        tracing::debug!(
+            session_id = %session_id,
+            %error,
+            "Could not set COLORTERM on remote session"
+        );
+    }
+
     channel
         .request_shell(false)
         .await

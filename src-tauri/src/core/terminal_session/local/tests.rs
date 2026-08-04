@@ -1,6 +1,5 @@
 #[cfg(test)]
 mod tests {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     use super::configure_local_pty_environment;
     #[cfg(target_os = "macos")]
     use super::is_utf8_locale;
@@ -9,7 +8,6 @@ mod tests {
         should_emit_visible_output,
     };
     use crate::core::ssh::osc::build_ready_marker;
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     use portable_pty::CommandBuilder;
 
     fn ready_marker() -> String {
@@ -139,9 +137,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn local_pty_environment_sets_terminal() {
-        let shell = if cfg!(target_os = "macos") {
+        let shell = if cfg!(target_os = "windows") {
+            "powershell.exe"
+        } else if cfg!(target_os = "macos") {
             "/bin/zsh"
         } else {
             "/bin/bash"
@@ -152,6 +151,10 @@ mod tests {
         assert_eq!(
             cmd.get_env("TERM").and_then(|value| value.to_str()),
             Some("xterm-256color")
+        );
+        assert_eq!(
+            cmd.get_env("COLORTERM").and_then(|value| value.to_str()),
+            Some("truecolor")
         );
     }
 

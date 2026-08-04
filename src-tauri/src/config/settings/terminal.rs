@@ -64,7 +64,7 @@ pub struct TerminalSettings {
     pub font_size_delta: f64,
     #[serde(default)]
     pub x11_display: String,
-    #[serde(default = "default_false")]
+    #[serde(default = "default_true")]
     pub hardware_acceleration: bool,
     #[serde(default = "default_false")]
     pub keyword_highlights_enabled: bool,
@@ -143,7 +143,9 @@ impl Default for TerminalSettings {
             keep_alive_interval: default_keep_alive(),
             font_size_delta: 0.0,
             x11_display: String::new(),
-            hardware_acceleration: false,
+            // Prefer WebGL; DomRenderer in xterm 6 has a white-space CSS bug that
+            // collapses column padding when GPU acceleration is off.
+            hardware_acceleration: true,
             keyword_highlights_enabled: false,
             keyword_highlights_across_wrapped_lines: false,
             keyword_highlight_builtin_rules: BTreeMap::new(),
