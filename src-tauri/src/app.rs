@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::Manager;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -5,6 +6,11 @@ use tauri_plugin_deep_link::DeepLinkExt;
 
 use crate::core::{CloudSyncManager, QuickCommandsStore, SessionManager};
 use crate::runtime::AppRuntime;
+
+/// Whether the main window should be maximized after the first reveal.
+/// Maximizing during HWND creation / before the first paint causes a white flash
+/// on Windows transparent windows, so we defer it until after `show()`.
+static PENDING_MAIN_MAXIMIZE: AtomicBool = AtomicBool::new(false);
 
 fn main_window_config<R: tauri::Runtime>(
     manager: &impl Manager<R>,
@@ -27,15 +33,25 @@ fn apply_main_window_options<'a, R: tauri::Runtime, M: Manager<R>>(
     mut builder: tauri::WebviewWindowBuilder<'a, R, M>,
 ) -> tauri::WebviewWindowBuilder<'a, R, M> {
     let window_state = crate::window_state::load_main_window_state();
-    if label == crate::window_state::MAIN_WINDOW_LABEL
-        && let (Some(x), Some(y)) = (window_state.x, window_state.y)
-    {
-        builder = builder.position(x, y);
+    if label == crate::window_state::MAIN_WINDOW_LABEL {
+        PENDING_MAIN_MAXIMIZE.store(window_state.maximized, Ordering::SeqCst);
     }
 
     builder = builder
         .inner_size(window_state.width, window_state.height)
-        .maximized(window_state.maximized);
+        // Never maximize during create: on Windows + transparent this flashes white.
+        .maximized(false)
+        // Keep the window hidden until the frontend paints the first frame.
+        .visible(false)
+        .background_color(tauri::window::Color(0x0d, 0x11, 0x17, 255));
+
+    // Stage the first main window off-screen so any HWND creation flash is invisible.
+    // `reveal_main_window` restores the real position before show().
+    if label == crate::window_state::MAIN_WINDOW_LABEL {
+        builder = builder.position(-32000.0, -32000.0);
+    } else if let (Some(x), Some(y)) = (window_state.x, window_state.y) {
+        builder = builder.position(x, y);
+    }
 
     if let Some(runtime) = manager.try_state::<AppRuntime>() {
         if runtime.portable() {
@@ -98,6 +114,46 @@ fn install_main_window_bridges(window: &tauri::WebviewWindow) {
             error
         );
     }
+    // Intentionally do NOT apply window transparency here. Applying acrylic /
+    // composition effects before the first show causes a white flash on Windows
+    // transparent windows. Transparency is applied in `reveal_main_window`.
+}
+
+/// Show the main window after the frontend has painted. Restores maximize and
+/// transparency only after `show()` to avoid the Windows transparent-window flash.
+pub fn reveal_main_window(window: &tauri::WebviewWindow) {
+    let is_main = crate::window_state::is_main_window_label(window.label());
+    let should_maximize = is_main && PENDING_MAIN_MAXIMIZE.swap(false, Ordering::SeqCst);
+
+    if is_main {
+        let window_state = crate::window_state::load_main_window_state();
+        if let (Some(x), Some(y)) = (window_state.x, window_state.y) {
+            let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
+        } else {
+            let _ = window.center();
+        }
+        let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
+            width: window_state.width,
+            height: window_state.height,
+        }));
+        ensure_restored_main_window_visible(window, true);
+    }
+
+    let _ = window.show();
+    let _ = window.set_focus();
+
+    if should_maximize {
+        let app = window.app_handle().clone();
+        let label = window.label().to_string();
+        tauri::async_runtime::spawn(async move {
+            // Let the first opaque frame present before maximizing.
+            tokio::time::sleep(std::time::Duration::from_millis(32)).await;
+            if let Some(window) = app.get_webview_window(&label) {
+                let _ = window.maximize();
+            }
+        });
+    }
+
     apply_window_transparency_for_window(window);
 }
 
@@ -178,7 +234,8 @@ fn create_main_window_with_label(
     config.label = label.to_string();
     let builder = tauri::WebviewWindowBuilder::from_config(app, &config)?;
     let window = apply_main_window_options(app, label, builder).build()?;
-    ensure_restored_main_window_visible(&window, label == crate::window_state::MAIN_WINDOW_LABEL);
+    // Skip on-screen centering while the window is still staged off-screen.
+    // `reveal_main_window` restores position/monitor placement before show().
     install_main_window_bridges(&window);
     Ok(window)
 }
@@ -193,6 +250,7 @@ pub fn create_additional_main_window(
     let window = apply_main_window_options(app, &config.label, builder).build()?;
     install_main_window_bridges(&window);
     focus_window(&window);
+    apply_window_transparency_for_window(&window);
     crate::tray::schedule_refresh(app);
     Ok(window)
 }

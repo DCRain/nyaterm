@@ -19,7 +19,10 @@
         "transparent": true,
         "visible": false,
         "decorations": false,
-        "create": false
+        "create": false,
+        "backgroundColor": "#0d1117",
+        "shadow": true,
+        "noRedirectionBitmap": true
       }
     ],
     "security": {

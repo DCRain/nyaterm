@@ -367,11 +367,38 @@ function App() {
 
   useEffect(() => {
     if (!settingsLoaded) return;
-    import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
+
+    let cancelled = false;
+
+    const waitForPaint = () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => resolve());
+        });
+      });
+
+    void (async () => {
+      // Paint the shell chrome first; don't wait for session restore (that was
+      // making startup feel like a 1s blank pause before anything appeared).
+      await waitForPaint();
+      if (cancelled) return;
+
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      if (cancelled) return;
+
       const currentWindow = getCurrentWindow();
       setOwnerMainWindowLabel(currentWindow.label);
-      currentWindow.show();
-    });
+      try {
+        await invoke("reveal_main_window");
+      } catch {
+        await currentWindow.show().catch(() => {});
+        await currentWindow.setFocus().catch(() => {});
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [settingsLoaded]);
 
   useEffect(() => {

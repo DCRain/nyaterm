@@ -77,6 +77,12 @@ pub fn open_devtools(window: tauri::WebviewWindow) -> AppResult<()> {
 }
 
 #[tauri::command]
+pub fn reveal_main_window(window: tauri::WebviewWindow) -> AppResult<()> {
+    crate::app::reveal_main_window(&window);
+    Ok(())
+}
+
+#[tauri::command]
 pub fn open_download_dir(app: tauri::AppHandle) -> AppResult<()> {
     let path = resolve_download_dir(&app)?;
 
