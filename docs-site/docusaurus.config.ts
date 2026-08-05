@@ -10,7 +10,7 @@ const config: Config = {
   url: 'https://nyaterm.app',
   baseUrl: '/',
 
-  organizationName: 'CoderKang',
+  organizationName: 'NyaKang',
   projectName: 'nyaterm',
 
   onBrokenLinks: 'throw',
@@ -163,7 +163,7 @@ const config: Config = {
           ],
         },
       ],
-      copyright: `Copyright &copy; ${new Date().getFullYear()} CoderKang. Built with Docusaurus.`,
+      copyright: `Copyright &copy; ${new Date().getFullYear()} NyaKang. Built with Docusaurus.`,
     },
     prism: {
       theme: prismThemes.github,

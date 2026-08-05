@@ -16,10 +16,12 @@ import ResourceMonitor from "@/components/panel/ResourceMonitor";
 import SyncBackupHistoryPanel from "@/components/panel/SyncBackupHistoryPanel";
 import SavedConnections from "@/components/panel/saved-connections";
 import SecurityAuthPanel from "@/components/panel/security-auth";
+import type { RemoteGpuOverviewState } from "@/hooks/useRemoteGpuOverview";
+import type { RemoteNpuOverviewState } from "@/hooks/useRemoteNpuOverview";
 import type { RemoteStatsState } from "@/hooks/useRemoteStats";
 import type { AIOpenIntent } from "@/lib/aiEvents";
 import type { NewSessionTarget } from "@/lib/windowManager";
-import type { AssetMetadata, SavedConnection, SessionInfo, SessionPane } from "@/types/global";
+import type { SavedConnection, SessionInfo, SessionPane } from "@/types/global";
 
 interface AppPanelContentProps {
   panelId: string | null;
@@ -29,6 +31,10 @@ interface AppPanelContentProps {
   activeSshSessionId: string | null;
   remoteStatsEnabled: boolean;
   remoteStats: RemoteStatsState;
+  gpuMonitorEnabled: boolean;
+  gpuOverviewState: RemoteGpuOverviewState;
+  npuMonitorEnabled: boolean;
+  npuOverviewState: RemoteNpuOverviewState;
   recordingSessions: Set<string>;
   aiIntent: AIOpenIntent | null;
   transferHeight: number;
@@ -48,7 +54,6 @@ interface AppPanelContentProps {
   onCommandSend: (command: string, execute?: boolean) => void;
   onToggleSessionRecording: (session: SessionInfo) => Promise<void> | void;
   onSaveSessionTranscript: (session: SessionInfo) => Promise<void> | void;
-  onAssetMonitoringPatch: (sessionId: string, patch: AssetMetadata) => void;
 }
 
 export default function AppPanelContent({
@@ -59,6 +64,10 @@ export default function AppPanelContent({
   activeSshSessionId,
   remoteStatsEnabled,
   remoteStats,
+  gpuMonitorEnabled,
+  gpuOverviewState,
+  npuMonitorEnabled,
+  npuOverviewState,
   recordingSessions,
   aiIntent,
   transferHeight,
@@ -74,7 +83,6 @@ export default function AppPanelContent({
   onCommandSend,
   onToggleSessionRecording,
   onSaveSessionTranscript,
-  onAssetMonitoringPatch,
 }: AppPanelContentProps) {
   const liveActivePane =
     activePane && !activePane.connecting && !activePane.connectError ? activePane : null;
@@ -149,13 +157,18 @@ export default function AppPanelContent({
         );
       case "gpuMonitor":
         return (
-          <GpuMonitor activeSessionId={activeSshSessionId} onAssetPatch={onAssetMonitoringPatch} />
+          <GpuMonitor
+            activeSessionId={activeSshSessionId}
+            enabled={gpuMonitorEnabled}
+            gpuOverviewState={gpuOverviewState}
+          />
         );
       case "ascendNpuMonitor":
         return (
           <AscendNpuMonitor
             activeSessionId={activeSshSessionId}
-            onAssetPatch={onAssetMonitoringPatch}
+            enabled={npuMonitorEnabled}
+            npuOverviewState={npuOverviewState}
           />
         );
       case "processManager":

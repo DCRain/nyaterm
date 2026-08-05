@@ -19,6 +19,7 @@ import {
   MdFitScreen,
   MdInfo,
   MdKeyboardArrowDown,
+  MdKeyboardArrowUp,
   MdListAlt,
   MdMemory,
   MdMenu,
@@ -69,6 +70,8 @@ import {
 import { useApp } from "@/context/AppContext";
 import { useTheme } from "@/context/ThemeContext";
 import { useConfigTransfer } from "@/hooks/useConfigTransfer";
+import type { RemoteGpuOverviewState } from "@/hooks/useRemoteGpuOverview";
+import type { RemoteNpuOverviewState } from "@/hooks/useRemoteNpuOverview";
 import type { RemoteStatsState } from "@/hooks/useRemoteStats";
 import { resolveDisplayKeys } from "@/hooks/useShortcutMap";
 import { AVAILABLE_LANGUAGES } from "@/i18n";
@@ -82,7 +85,13 @@ import {
   resetTerminalFontSizeDelta,
 } from "@/lib/terminalFontSize";
 import { getActivePane, getTabDisplayName } from "@/lib/workspaceTabs";
-import type { AppearanceSettings, SavedConnection, Tab } from "@/types/global";
+import type {
+  AppearanceSettings,
+  RemoteGpuOverview,
+  RemoteNpuOverview,
+  SavedConnection,
+  Tab,
+} from "@/types/global";
 import ImportDialog from "../dialog/connections/ImportDialog";
 import { resolveConnectionIcon } from "../icons";
 import NyaTermLogo from "../NyaTermLogo";
@@ -219,11 +228,34 @@ function formatRate(bytesPerSec: number): string {
   return `${formatBytes(bytesPerSec)}/s`;
 }
 
+function formatMemoryMbCompact(value: number): string {
+  if (value >= 1024) {
+    const gib = value / 1024;
+    const rounded = Math.round(gib * 10) / 10;
+    if (rounded < 10 && !Number.isInteger(rounded)) {
+      return `${rounded.toFixed(1)}G`;
+    }
+    return `${Math.round(gib)}G`;
+  }
+  return `${Math.round(value)}M`;
+}
+
 function getPressureColor(usagePercent: number | null): string | undefined {
   if (usagePercent == null) return undefined;
   if (usagePercent >= 90) return "#f87171";
   if (usagePercent >= 75) return "#f59e0b";
   return undefined;
+}
+
+function getHardwareCardLimit(width: number): number {
+  if (width >= 1180) return 4;
+  if (width >= 920) return 3;
+  if (width >= 700) return 2;
+  return 1;
+}
+
+function getHardwareStatusCompact(visibleCardCount: number, hiddenCount: number, cardLimit: number): boolean {
+  return cardLimit <= 1 || (cardLimit <= 2 && visibleCardCount >= 2) || visibleCardCount >= 3 || hiddenCount > 0;
 }
 
 function formatUptimeShort(
@@ -239,6 +271,278 @@ function formatUptimeShort(
   return t("headerStatus.uptimeMinutes", { count: Math.max(1, Math.floor(seconds / 60)) });
 }
 
+interface HeaderHardwareCard {
+  id: string;
+  indexLabel: string;
+  title: string;
+  utilizationPercent: number | null;
+  memoryPercent: number | null;
+  memoryText: string;
+  temperatureText: string;
+  powerText: string;
+}
+
+function clampPercent(value: number): number {
+  return Math.min(100, Math.max(0, value));
+}
+
+function formatOptionalPct(value: number | null): string {
+  return value == null ? "--" : `${Math.round(clampPercent(value))}%`;
+}
+
+function formatOptionalTemperature(value?: number | null): string {
+  return value == null ? "-" : `${Math.round(value)} C`;
+}
+
+function formatOptionalWatts(value?: number | null): string {
+  if (value == null) return "-";
+  return `${value < 100 ? value.toFixed(1) : Math.round(value)} W`;
+}
+
+function sortHardwareCardsByIndex(cards: HeaderHardwareCard[]): HeaderHardwareCard[] {
+  return [...cards].sort(
+    (left, right) =>
+      Number(left.indexLabel.split(":")[0]) - Number(right.indexLabel.split(":")[0]) ||
+      left.indexLabel.localeCompare(right.indexLabel),
+  );
+}
+
+function buildGpuHardwareCards(overview: RemoteGpuOverview): HeaderHardwareCard[] {
+  return overview.gpus.map((gpu) => {
+    const memoryPercent =
+      gpu.memory_total_mb > 0 ? (gpu.memory_used_mb / gpu.memory_total_mb) * 100 : null;
+    const memoryText =
+      gpu.memory_total_mb > 0
+        ? `${formatMemoryMbCompact(gpu.memory_used_mb)}/${formatMemoryMbCompact(gpu.memory_total_mb)}`
+        : "-";
+
+    return {
+      id: gpu.uuid || `gpu-${gpu.index}`,
+      indexLabel: gpu.index.toString(),
+      title: gpu.name || `GPU ${gpu.index}`,
+      utilizationPercent: gpu.utilization_gpu_percent ?? null,
+      memoryPercent,
+      memoryText,
+      temperatureText: formatOptionalTemperature(gpu.temperature_c),
+      powerText:
+        gpu.power_draw_w == null && gpu.power_limit_w == null
+          ? "-"
+          : gpu.power_limit_w == null
+            ? formatOptionalWatts(gpu.power_draw_w)
+            : `${formatOptionalWatts(gpu.power_draw_w)} / ${formatOptionalWatts(gpu.power_limit_w)}`,
+    };
+  });
+}
+
+function buildNpuHardwareCards(overview: RemoteNpuOverview): HeaderHardwareCard[] {
+  return overview.npus.map((npu) => {
+    const totalMb =
+      npu.hbm_total_mb != null && npu.hbm_total_mb > 0 ? npu.hbm_total_mb : npu.memory_total_mb;
+    const usedMb =
+      npu.hbm_total_mb != null && npu.hbm_total_mb > 0
+        ? (npu.hbm_used_mb ?? 0)
+        : npu.memory_used_mb;
+    const memoryPercent = totalMb > 0 ? (usedMb / totalMb) * 100 : null;
+    const memoryText =
+      totalMb > 0 ? `${formatMemoryMbCompact(usedMb)}/${formatMemoryMbCompact(totalMb)}` : "-";
+
+    return {
+      id: npu.device_key || `npu-${npu.index}-${npu.chip_id}`,
+      indexLabel: npu.index.toString(),
+      title: npu.name || `NPU ${npu.index}`,
+      utilizationPercent: npu.utilization_aicore_percent ?? null,
+      memoryPercent,
+      memoryText,
+      temperatureText: formatOptionalTemperature(npu.temperature_c),
+      powerText: formatOptionalWatts(npu.power_draw_w),
+    };
+  });
+}
+
+function buildHardwareTitle(
+  label: "GPU" | "NPU",
+  cards: HeaderHardwareCard[],
+  utilizationLabel: string,
+): string {
+  if (cards.length === 0) return label;
+  return cards
+    .map(
+      (card) =>
+        `${label} ${card.indexLabel} ${card.title} - ${utilizationLabel} ${formatOptionalPct(
+          card.utilizationPercent,
+        )} - MEM ${card.memoryText} - TEMP ${card.temperatureText} - POWER ${card.powerText}`,
+    )
+    .join("\n");
+}
+
+function HeaderHardwareStatus({
+  cards,
+  compact,
+  hiddenCount,
+  icon,
+  label,
+  onNextPage,
+  onPreviousPage,
+}: {
+  cards: HeaderHardwareCard[];
+  compact: boolean;
+  hiddenCount: number;
+  icon: React.ReactNode;
+  label: "GPU" | "NPU";
+  onNextPage: () => void;
+  onPreviousPage: () => void;
+}) {
+  return (
+    <span className="inline-flex min-w-0 items-center gap-2 font-mono tabular-nums leading-none">
+      <span className="inline-flex shrink-0 items-center gap-1 text-[0.6875rem] font-semibold text-[var(--df-text-muted)]">
+        <span className="inline-flex text-[0.875rem] text-[var(--df-text-dimmed)]">{icon}</span>
+        {label}
+      </span>
+      <span className="flex min-w-0 items-center">
+        {cards.map((card, index) => (
+          <span key={card.id} className="inline-flex shrink-0 items-center">
+            {index > 0 && <HeaderHardwareSeparator />}
+            <HeaderHardwareCardCell card={card} compact={compact} />
+          </span>
+        ))}
+        {hiddenCount > 0 && (
+          <span className="inline-flex shrink-0 items-center">
+            {cards.length > 0 && <HeaderHardwareSeparator />}
+            <HeaderHardwarePager
+              hiddenCount={hiddenCount}
+              label={label}
+              onNextPage={onNextPage}
+              onPreviousPage={onPreviousPage}
+            />
+          </span>
+        )}
+      </span>
+    </span>
+  );
+}
+
+function HeaderHardwarePager({
+  hiddenCount,
+  label,
+  onNextPage,
+  onPreviousPage,
+}: {
+  hiddenCount: number;
+  label: "GPU" | "NPU";
+  onNextPage: () => void;
+  onPreviousPage: () => void;
+}) {
+  const stopDrag = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+  };
+
+  return (
+    <span
+      className="pointer-events-auto grid h-[1.625rem] w-5 shrink-0 grid-rows-2 overflow-hidden rounded-sm border border-[var(--df-border)] text-[0.625rem] text-[var(--df-text-muted)]"
+      title={`${label} +${hiddenCount}`}
+    >
+      <button
+        type="button"
+        className="flex min-h-0 items-center justify-center border-b border-[var(--df-border)] leading-none transition-colors hover:bg-[color-mix(in_srgb,var(--df-text-muted)_10%,transparent)] hover:text-[var(--df-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--df-primary)]"
+        aria-label={`${label} previous cards`}
+        onClick={(event) => {
+          event.stopPropagation();
+          onPreviousPage();
+        }}
+        onMouseDown={stopDrag}
+      >
+        <MdKeyboardArrowUp className="text-[0.75rem]" />
+      </button>
+      <button
+        type="button"
+        className="flex min-h-0 items-center justify-center leading-none transition-colors hover:bg-[color-mix(in_srgb,var(--df-text-muted)_10%,transparent)] hover:text-[var(--df-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--df-primary)]"
+        aria-label={`${label} next cards`}
+        onClick={(event) => {
+          event.stopPropagation();
+          onNextPage();
+        }}
+        onMouseDown={stopDrag}
+      >
+        <MdKeyboardArrowDown className="text-[0.6875rem]" />
+      </button>
+    </span>
+  );
+}
+
+function HeaderHardwareSeparator() {
+  return (
+    <span
+      aria-hidden="true"
+      className="mx-1.5 inline-flex h-[1.625rem] shrink-0 items-center text-[0.6875rem] leading-none text-[var(--df-text-dimmed)] opacity-80"
+    >
+      |
+    </span>
+  );
+}
+
+function HeaderHardwareCardCell({
+  card,
+  compact,
+}: {
+  card: HeaderHardwareCard;
+  compact: boolean;
+}) {
+  return (
+    <span className="grid shrink-0 grid-rows-2 gap-y-0.5">
+      <HeaderHardwareCardRow card={card} compact={compact} row="utilization" />
+      <HeaderHardwareCardRow card={card} compact={compact} row="memory" />
+    </span>
+  );
+}
+
+function HeaderHardwareCardRow({
+  card,
+  compact,
+  row,
+}: {
+  card: HeaderHardwareCard;
+  compact: boolean;
+  row: "utilization" | "memory";
+}) {
+  const value = row === "utilization" ? card.utilizationPercent : card.memoryPercent;
+  const text = row === "utilization" ? formatOptionalPct(card.utilizationPercent) : card.memoryText;
+
+  return (
+    <span
+      className={`grid shrink-0 items-center gap-x-1 text-[0.625rem] ${
+        compact ? "w-[2.95rem] grid-cols-[1rem_1.75rem]" : "w-[7.45rem] grid-cols-[1rem_2.75rem_1fr]"
+      }`}
+    >
+      <span className="text-right text-[var(--df-text-muted)]">
+        {row === "utilization" ? card.indexLabel : ""}
+      </span>
+      <HeaderMiniProgress value={value} />
+      {!compact && <span className="truncate text-[var(--df-text-muted)]">{text}</span>}
+    </span>
+  );
+}
+
+function HeaderMiniProgress({ value }: { value: number | null }) {
+  const safeValue = value == null ? 0 : clampPercent(value);
+  const color = getPressureColor(value) ?? "var(--df-primary)";
+
+  return (
+    <span
+      className="block h-1 overflow-hidden rounded-full"
+      style={{ backgroundColor: "color-mix(in_srgb,var(--df-text-dimmed)_24%,transparent)" }}
+    >
+      <span
+        className="block h-full rounded-full transition-all duration-700"
+        style={{
+          width: `${safeValue}%`,
+          backgroundColor: color,
+          opacity: value == null ? 0.35 : 0.9,
+        }}
+      />
+    </span>
+  );
+}
+
 interface HeaderProps {
   onNewSession: () => void;
   onToggleLeft?: () => void;
@@ -252,6 +556,8 @@ interface HeaderProps {
   savedConnections?: SavedConnection[];
   remoteStatsEnabled?: boolean;
   remoteStats?: RemoteStatsState;
+  gpuOverviewState?: RemoteGpuOverviewState;
+  npuOverviewState?: RemoteNpuOverviewState;
   onSmartSplit?: (mode: "auto" | "horizontal" | "vertical") => void;
   onUnsplit?: () => void;
   canUnsplit?: boolean;
@@ -288,6 +594,8 @@ export default function Header({
   savedConnections,
   remoteStatsEnabled = true,
   remoteStats,
+  gpuOverviewState,
+  npuOverviewState,
   onSmartSplit,
   onUnsplit,
   canUnsplit,
@@ -306,6 +614,10 @@ export default function Header({
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [showHeaderStatusHideConfirm, setShowHeaderStatusHideConfirm] = useState(false);
   const [currentMinute, setCurrentMinute] = useState(() => new Date());
+  const [hardwareCardLimit, setHardwareCardLimit] = useState(() =>
+    typeof window === "undefined" ? 2 : getHardwareCardLimit(window.innerWidth),
+  );
+  const [hardwarePage, setHardwarePage] = useState({ gpu: 0, npu: 0 });
   const { t, i18n } = useTranslation();
   const { handleExport, passwordAlert } = useConfigTransfer();
 
@@ -369,6 +681,19 @@ export default function Header({
         clearInterval(intervalId);
       }
     };
+  }, [headerStatusMode, headerStatusVisible]);
+
+  useEffect(() => {
+    if (!headerStatusVisible || (headerStatusMode !== "gpu" && headerStatusMode !== "npu")) {
+      return;
+    }
+
+    const updateHardwareCardLimit = () => {
+      setHardwareCardLimit(getHardwareCardLimit(window.innerWidth));
+    };
+    updateHardwareCardLimit();
+    window.addEventListener("resize", updateHardwareCardLimit);
+    return () => window.removeEventListener("resize", updateHardwareCardLimit);
   }, [headerStatusMode, headerStatusVisible]);
 
   const changeLanguage = (lng: string) => {
@@ -935,6 +1260,122 @@ export default function Header({
       };
     }
 
+    if (headerStatusMode === "gpu") {
+      const overview = gpuOverviewState?.overview;
+      const fallback = !hasActiveStatsSession
+        ? t("gpuMonitor.noSession")
+        : gpuOverviewState?.error && !overview
+          ? t("gpuMonitor.error")
+          : !overview
+            ? t("common.loading")
+            : !overview.available
+              ? t("gpuMonitor.unavailable")
+              : overview.gpus.length === 0
+                ? t("gpuMonitor.noGpus")
+                : null;
+
+      if (fallback || !overview || !overview.available || overview.gpus.length === 0) {
+        return {
+          icon: <SiNvidia />,
+          text: fallback ?? t("common.loading"),
+          title: fallback ?? t("common.loading"),
+        };
+      }
+
+      const cards = sortHardwareCardsByIndex(buildGpuHardwareCards(overview));
+      const pageCount = Math.max(1, Math.ceil(cards.length / hardwareCardLimit));
+      const currentPage = Math.min(hardwarePage.gpu, pageCount - 1);
+      const visibleCards = cards.slice(
+        currentPage * hardwareCardLimit,
+        currentPage * hardwareCardLimit + hardwareCardLimit,
+      );
+      const hiddenCount = cards.length - visibleCards.length;
+      const compact = getHardwareStatusCompact(visibleCards.length, hiddenCount, hardwareCardLimit);
+      const title = buildHardwareTitle("GPU", cards, "GPU");
+
+      return {
+        icon: null,
+        interactive: true,
+        text: (
+          <HeaderHardwareStatus
+            cards={visibleCards}
+            compact={compact}
+            hiddenCount={hiddenCount}
+            icon={<SiNvidia />}
+            label="GPU"
+            onNextPage={() =>
+              setHardwarePage((current) => ({ ...current, gpu: (currentPage + 1) % pageCount }))
+            }
+            onPreviousPage={() =>
+              setHardwarePage((current) => ({
+                ...current,
+                gpu: (currentPage - 1 + pageCount) % pageCount,
+              }))
+            }
+          />
+        ),
+        title,
+      };
+    }
+
+    if (headerStatusMode === "npu") {
+      const overview = npuOverviewState?.overview;
+      const fallback = !hasActiveStatsSession
+        ? t("ascendNpuMonitor.noSession")
+        : npuOverviewState?.error && !overview
+          ? t("ascendNpuMonitor.error")
+          : !overview
+            ? t("common.loading")
+            : !overview.available
+              ? t("ascendNpuMonitor.unavailable")
+              : overview.npus.length === 0
+                ? t("ascendNpuMonitor.noNpus")
+                : null;
+
+      if (fallback || !overview || !overview.available || overview.npus.length === 0) {
+        return {
+          icon: <AscendIcon />,
+          text: fallback ?? t("common.loading"),
+          title: fallback ?? t("common.loading"),
+        };
+      }
+
+      const cards = sortHardwareCardsByIndex(buildNpuHardwareCards(overview));
+      const pageCount = Math.max(1, Math.ceil(cards.length / hardwareCardLimit));
+      const currentPage = Math.min(hardwarePage.npu, pageCount - 1);
+      const visibleCards = cards.slice(
+        currentPage * hardwareCardLimit,
+        currentPage * hardwareCardLimit + hardwareCardLimit,
+      );
+      const hiddenCount = cards.length - visibleCards.length;
+      const compact = getHardwareStatusCompact(visibleCards.length, hiddenCount, hardwareCardLimit);
+      const title = buildHardwareTitle("NPU", cards, "AI Core");
+
+      return {
+        icon: null,
+        interactive: true,
+        text: (
+          <HeaderHardwareStatus
+            cards={visibleCards}
+            compact={compact}
+            hiddenCount={hiddenCount}
+            icon={<AscendIcon />}
+            label="NPU"
+            onNextPage={() =>
+              setHardwarePage((current) => ({ ...current, npu: (currentPage + 1) % pageCount }))
+            }
+            onPreviousPage={() =>
+              setHardwarePage((current) => ({
+                ...current,
+                npu: (currentPage - 1 + pageCount) % pageCount,
+              }))
+            }
+          />
+        ),
+        title,
+      };
+    }
+
     const stats = remoteStats?.stats;
     if (remoteStatusFallback || !stats) {
       return {
@@ -1007,8 +1448,16 @@ export default function Header({
     };
   }, [
     currentMinute,
+    gpuOverviewState?.error,
+    gpuOverviewState?.overview,
+    hardwarePage.gpu,
+    hardwarePage.npu,
+    hardwareCardLimit,
     headerStatusMode,
+    hasActiveStatsSession,
     i18n.language,
+    npuOverviewState?.error,
+    npuOverviewState?.overview,
     remoteStats?.stats,
     remoteStatusFallback,
     sessionStatus,
@@ -1077,7 +1526,9 @@ export default function Header({
                 {headerStatus.icon}
               </span>
               <span
-                className="pointer-events-none flex min-w-0 items-center overflow-hidden whitespace-nowrap"
+                className={`flex min-w-0 items-center overflow-hidden whitespace-nowrap ${
+                  headerStatus.interactive ? "" : "pointer-events-none"
+                }`}
                 data-tauri-drag-region
               >
                 {headerStatus.text}

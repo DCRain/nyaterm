@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 This changelog is inferred from release bump commits in git history (for example `chore: bump version to vX.Y.Z`) and grouped by Conventional Commit type.
 
+## [1.2.0] - 2026-08-04
+
+### Added
+
+- **gpu-npu-monitor:** Add remote GPU and NPU overviews to the application header/status area, with shared overview hooks and compact hardware cards for active SSH sessions.
+- **ui:** Add a Notes panel toggle to settings and include Notes in the default workspace configuration.
+- **file-explorer:** Support selecting multiple directories for uploads.
+- **terminal:** Show the saved-connection group path in TabBar tooltips.
+
+### Changed
+
+- **monitoring:** Integrate remote GPU/NPU overview data with the existing GPU and Ascend NPU monitor panels.
+- **i18n:** Add localization strings for GPU/NPU overviews, Notes, and saved-connection group labels across supported languages.
+
 ## [1.1.19] - 2026-08-04
 
 ### Added

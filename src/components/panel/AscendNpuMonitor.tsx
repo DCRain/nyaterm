@@ -8,7 +8,7 @@ import {
   Zap,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import PanelHeader from "@/components/layout/PanelHeader";
 import { Badge } from "@/components/ui/badge";
@@ -16,20 +16,18 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useApp } from "@/context/AppContext";
+import type { RemoteNpuOverviewState } from "@/hooks/useRemoteNpuOverview";
 import { useVirtualList } from "@/hooks/useVirtualList";
-import { buildAssetPatchFromNpuOverview } from "@/lib/assetMonitoring";
-import { invoke } from "@/lib/invoke";
 import { cn } from "@/lib/utils";
-import type { AssetMetadata, RemoteNpu, RemoteNpuOverview, RemoteNpuProcess } from "@/types/global";
+import type { RemoteNpu, RemoteNpuOverview, RemoteNpuProcess } from "@/types/global";
 
-const MAX_CONSECUTIVE_FAILURES = 3;
 const NPU_PROCESS_ROW_HEIGHT = 56;
 const NPU_PROCESS_LIST_MAX_HEIGHT = 320;
 
 interface AscendNpuMonitorProps {
   activeSessionId: string | null;
-  onAssetPatch?: (sessionId: string, patch: AssetMetadata) => void;
+  enabled: boolean;
+  npuOverviewState: RemoteNpuOverviewState;
 }
 
 function AscendBrandIcon({ className }: { className?: string }) {
@@ -45,76 +43,14 @@ function AscendBrandIcon({ className }: { className?: string }) {
   );
 }
 
-export default function AscendNpuMonitor({ activeSessionId, onAssetPatch }: AscendNpuMonitorProps) {
+export default function AscendNpuMonitor({
+  activeSessionId,
+  enabled,
+  npuOverviewState,
+}: AscendNpuMonitorProps) {
   const { t } = useTranslation();
-  const { appSettings } = useApp();
-  const [overview, setOverview] = useState<RemoteNpuOverview | null>(null);
-  const [error, setError] = useState(false);
   const [query, setQuery] = useState("");
-  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const fetchingRef = useRef(false);
-  const failCountRef = useRef(0);
-
-  const enabled = appSettings.ui.show_ascend_npu_monitor ?? false;
-  const pollIntervalMs = Math.max(3, appSettings.ui.ascend_npu_monitor_interval ?? 3) * 1000;
-
-  const fetchOverview = useCallback(
-    async (sessionId: string, manual = false) => {
-      if (fetchingRef.current) return;
-      fetchingRef.current = true;
-      if (manual) setIsManualRefreshing(true);
-
-      try {
-        const data = await invoke<RemoteNpuOverview>("get_remote_ascend_npu_overview", {
-          sessionId,
-        });
-        setOverview(data);
-        const patch = buildAssetPatchFromNpuOverview(data);
-        if (patch) {
-          onAssetPatch?.(sessionId, patch);
-        }
-        setError(false);
-        failCountRef.current = 0;
-      } catch {
-        failCountRef.current += 1;
-        setError(true);
-        if (failCountRef.current >= MAX_CONSECUTIVE_FAILURES) {
-          setOverview(null);
-        }
-      } finally {
-        fetchingRef.current = false;
-        if (manual) setIsManualRefreshing(false);
-      }
-    },
-    [onAssetPatch],
-  );
-
-  const refresh = useCallback(() => {
-    if (!enabled || !activeSessionId) return;
-    void fetchOverview(activeSessionId, true);
-  }, [activeSessionId, enabled, fetchOverview]);
-
-  useEffect(() => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-
-    if (!enabled || !activeSessionId) {
-      setOverview(null);
-      setError(false);
-      failCountRef.current = 0;
-      return;
-    }
-
-    fetchOverview(activeSessionId);
-    pollRef.current = setInterval(() => fetchOverview(activeSessionId), pollIntervalMs);
-
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, [activeSessionId, enabled, fetchOverview, pollIntervalMs]);
+  const { error, isManualRefreshing, overview, refresh } = npuOverviewState;
 
   const normalizedQuery = query.trim().toLowerCase();
   const processes = useMemo(() => {

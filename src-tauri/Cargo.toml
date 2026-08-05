@@ -1,6 +1,6 @@
 [package]
 name = "nyaterm"
-version = "1.1.19"
+version = "1.2.0"
 description = "A modern remote terminal workspace built with Tauri, React, and Rust."
 authors = ["Kang"]
 edition = "2024"
@@ -193,9 +193,11 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
 ] }
 windows = { version = "0.61", features = [
+    "Wdk_System_SystemServices",
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_System_Threading",
+    "Win32_System_SystemInformation",
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_UI_Shell",

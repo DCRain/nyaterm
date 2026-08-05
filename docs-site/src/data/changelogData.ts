@@ -10,6 +10,27 @@ export type ChangelogRelease = {
 
 const changelogReleasesEn: ChangelogRelease[] = [
   {
+    version: '[1.2.0] - 2026-08-04',
+    sections: [
+      {
+        title: 'Added',
+        items: [
+          '**gpu-npu-monitor:** Add remote GPU and NPU overviews to the application header/status area, with shared overview hooks and compact hardware cards for active SSH sessions.',
+          '**ui:** Add a Notes panel toggle to settings and include Notes in the default workspace configuration.',
+          '**file-explorer:** Support selecting multiple directories for uploads.',
+          '**terminal:** Show the saved-connection group path in TabBar tooltips.',
+        ],
+      },
+      {
+        title: 'Changed',
+        items: [
+          '**monitoring:** Integrate remote GPU/NPU overview data with the existing GPU and Ascend NPU monitor panels.',
+          '**i18n:** Add localization strings for GPU/NPU overviews, Notes, and saved-connection group labels across supported languages.',
+        ],
+      },
+    ],
+  },
+  {
     version: '[1.1.19] - 2026-08-04',
     sections: [
       {
@@ -1766,6 +1787,27 @@ const changelogReleasesEn: ChangelogRelease[] = [
 ];
 
 const changelogReleasesZhCN: ChangelogRelease[] = [
+  {
+    version: '[1.2.0] - 2026-08-04',
+    sections: [
+      {
+        title: '新增',
+        items: [
+          '**gpu-npu-monitor:** 在应用 header / 状态区域新增远程 GPU 和 NPU 总览，通过共享 overview hooks 和紧凑硬件卡片展示活跃 SSH 会话的硬件状态。',
+          '**ui:** 在设置中新增 Notes 面板开关，并将 Notes 纳入默认工作区配置。',
+          '**file-explorer:** 支持选择多个目录进行上传。',
+          '**terminal:** 在 TabBar tooltip 中显示已保存连接的分组路径。',
+        ],
+      },
+      {
+        title: '变更',
+        items: [
+          '**monitoring:** 将远程 GPU / NPU overview 数据整合进现有 GPU 和 Ascend NPU 监控面板。',
+          '**i18n:** 为 GPU / NPU 总览、Notes 和已保存连接分组标签补充多语言文案。',
+        ],
+      },
+    ],
+  },
   {
     version: '[1.1.19] - 2026-08-04',
     sections: [
