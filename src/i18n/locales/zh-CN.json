@@ -1,8 +1,20 @@
 {
   "about": {
+    "architecture": "应用架构",
     "close": "关闭",
+    "copySupportInfo": "复制全部",
     "description": "用于 SSH、串口和本地命令行工作的桌面终端客户端。",
+    "installed": "安装版",
     "issues": "问题反馈",
+    "operatingSystem": "操作系统",
+    "portable": "便携版",
+    "runtime": "运行环境",
+    "supportInfo": "支持信息",
+    "supportInfoCopied": "支持信息已复制",
+    "supportInfoCopiedShort": "已复制",
+    "supportInfoCopyFailed": "支持信息复制失败",
+    "unknown": "未知",
+    "version": "软件版本",
     "website": "官网"
   },
   "activeSessions": {

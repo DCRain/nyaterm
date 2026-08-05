@@ -1,8 +1,20 @@
 {
   "about": {
+    "architecture": "애플리케이션 아키텍처",
     "close": "닫기",
+    "copySupportInfo": "전체 복사",
     "description": "SSH 중심 작업과 다양한 터미널 워크플로를 위한 데스크톱 클라이언트입니다.",
+    "installed": "설치 버전",
     "issues": "이슈",
+    "operatingSystem": "운영 체제",
+    "portable": "포터블 버전",
+    "runtime": "실행 환경",
+    "supportInfo": "지원 정보",
+    "supportInfoCopied": "지원 정보가 복사되었습니다",
+    "supportInfoCopiedShort": "복사됨",
+    "supportInfoCopyFailed": "지원 정보를 복사하지 못했습니다",
+    "unknown": "알 수 없음",
+    "version": "소프트웨어 버전",
     "website": "웹사이트"
   },
   "activeSessions": {

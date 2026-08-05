@@ -1,8 +1,20 @@
 {
   "about": {
+    "architecture": "Application architecture",
     "close": "Close",
+    "copySupportInfo": "Copy all",
     "description": "A desktop client for SSH-centric operations and mixed terminal workflows.",
+    "installed": "Installed",
     "issues": "Issues",
+    "operatingSystem": "Operating system",
+    "portable": "Portable",
+    "runtime": "Runtime",
+    "supportInfo": "Support information",
+    "supportInfoCopied": "Support information copied",
+    "supportInfoCopiedShort": "Copied",
+    "supportInfoCopyFailed": "Failed to copy support information",
+    "unknown": "Unknown",
+    "version": "Version",
     "website": "Website"
   },
   "activeSessions": {

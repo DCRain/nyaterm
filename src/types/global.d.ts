@@ -12,6 +12,12 @@ export interface AppRuntimeInfo {
   portableMarkerPath?: string | null;
 }
 
+export interface AppSupportInfo {
+  os: string;
+  architecture: string;
+  runtime: "portable" | "installed";
+}
+
 /** AI Agent command execution wrapper profile. */
 export type AIExecutionProfile =
   | "auto"
