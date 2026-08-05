@@ -76,6 +76,8 @@ interface FileListItemProps {
   onSendToTerminal: (entry: FileEntry, mode: "dir" | "name" | "full") => void;
   onCdToDirectory: (entry: FileEntry) => void;
   onProperties: (entry: FileEntry) => void;
+  onPathDragStart?: (entry: FileEntry, event: React.DragEvent) => void;
+  onPathDragEnd?: () => void;
   aiActions: AICustomActionConfig[];
   onAIAction: (entry: FileEntry, action: AICustomActionConfig) => void;
   inlineRename?: {
@@ -133,6 +135,8 @@ export function FileListItem({
   onSendToTerminal,
   onCdToDirectory,
   onProperties,
+  onPathDragStart,
+  onPathDragEnd,
   aiActions,
   onAIAction,
   inlineRename,
@@ -234,6 +238,7 @@ export function FileListItem({
       <ContextMenuTrigger asChild>
         <li
           className="group relative grid h-[30px] items-center rounded transition-colors cursor-pointer select-none"
+          draggable={!isParentDirectoryEntry && !isRenaming && !!activeSessionId}
           style={{
             gridTemplateColumns: columnTemplate,
             width: rowWidth,
@@ -258,6 +263,17 @@ export function FileListItem({
               return;
             }
             onSelectionStart(entry, e);
+          }}
+          onDragStart={(e) => {
+            clearPendingRenameClick();
+            if (isParentDirectoryEntry || isRenaming || !activeSessionId) {
+              e.preventDefault();
+              return;
+            }
+            onPathDragStart?.(entry, e);
+          }}
+          onDragEnd={() => {
+            onPathDragEnd?.();
           }}
           onDoubleClick={() => {
             clearPendingRenameClick();

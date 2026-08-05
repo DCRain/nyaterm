@@ -8,7 +8,7 @@ function quoteLocalPath(path: string): string {
   if (!/[\s'"\\]/.test(path)) {
     return path;
   }
-  if (path.includes("\\")) {
+  if (path.includes("\\") || /^[A-Za-z]:/.test(path)) {
     return `"${path.replace(/"/g, '\\"')}"`;
   }
   return `'${path.replace(/'/g, `'\\''`)}'`;
@@ -21,7 +21,15 @@ export function formatLocalTerminalDropInput(paths: string[]): string {
 export function getTerminalDropOverlayCopy(
   sessionType: SessionType,
   t: (key: string) => string,
+  options?: { source?: "external" | "explorer" },
 ): { title: string; hint: string } {
+  if (options?.source === "explorer") {
+    return {
+      title: t("terminal.dropOverlayTitleExplorer"),
+      hint: t("terminal.dropOverlayHintExplorer"),
+    };
+  }
+
   switch (sessionType) {
     case "Local":
       return {
@@ -54,13 +62,9 @@ export async function handleTerminalFileDrop(params: {
   const hasDirectories = entries.some((entry) => entry.isDir);
 
   if (sessionType === "Local") {
-    if (fileEntries.length === 0) {
-      toast.message(t("terminal.dropFoldersNotSupportedLocal"));
-      return;
-    }
     await sendSessionInput(
       sessionId,
-      formatLocalTerminalDropInput(fileEntries.map((entry) => entry.path)),
+      formatLocalTerminalDropInput(entries.map((entry) => entry.path)),
     );
     return;
   }

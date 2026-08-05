@@ -4,6 +4,7 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import { openPath } from "@tauri-apps/plugin-opener";
 import {
   type CSSProperties,
+  type DragEvent as ReactDragEvent,
   memo,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
@@ -70,6 +71,7 @@ import { useTransfer } from "@/context/TransferContext";
 import { resolveShortcutKeys } from "@/hooks/useShortcutMap";
 import { openAIAssistant } from "@/lib/aiEvents";
 import { getErrorMessage } from "@/lib/errors";
+import { writeExplorerPathDragData } from "@/lib/explorerPathDrag";
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
 import {
@@ -2224,6 +2226,33 @@ function FileExplorerPane({
     [filteredSortedFiles, selectedFiles],
   );
 
+  const handlePathDragStart = useCallback(
+    (entry: FileEntry, event: ReactDragEvent) => {
+      if (isParentDirectoryEntry(entry)) {
+        event.preventDefault();
+        return;
+      }
+
+      dragSelectionRef.current = null;
+      const entries = getContextMenuEntries(entry);
+      const paths = entries.map((item) => getEntryFullPath(item));
+      if (paths.length === 0) {
+        event.preventDefault();
+        return;
+      }
+
+      writeExplorerPathDragData(event.dataTransfer, {
+        paths,
+        backend: explorerBackend,
+      });
+    },
+    [explorerBackend, getContextMenuEntries, getEntryFullPath],
+  );
+
+  const handlePathDragEnd = useCallback(() => {
+    dragSelectionRef.current = null;
+  }, []);
+
   const handleSendToPeer = useCallback(
     (entry: FileEntry) => {
       if (!activeSessionId || isParentDirectoryEntry(entry)) return;
@@ -2896,6 +2925,8 @@ function FileExplorerPane({
                           onCopyPath={handleCopyPath}
                           onSendToTerminal={handleSendToTerminal}
                           onCdToDirectory={handleCdToDirectory}
+                          onPathDragStart={handlePathDragStart}
+                          onPathDragEnd={handlePathDragEnd}
                           onProperties={(entry) => {
                             if (activeSessionId) {
                               setPropertiesDialogData({
