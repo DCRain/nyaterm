@@ -1,6 +1,13 @@
 import type { TFunction } from "i18next";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MdContentCopy, MdDelete, MdDriveFileRenameOutline, MdEdit, MdLink } from "react-icons/md";
+import {
+  MdContentCopy,
+  MdDelete,
+  MdDriveFileRenameOutline,
+  MdEdit,
+  MdLink,
+  MdPlayCircleOutline,
+} from "react-icons/md";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -265,6 +272,7 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
     handleConnectOnly,
     handleConnectSelected,
     handleCopyConnection,
+    handleToggleOpenOnStartup,
     requestMoveConnectionToGroup,
     handleConnectionSelectionStart,
     handleConnectionContextMenu,
@@ -465,6 +473,13 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
                   >
                     {conn.name}
                   </span>
+                  {conn.open_on_startup ? (
+                    <MdPlayCircleOutline
+                      className="shrink-0 text-sm"
+                      style={{ color: "var(--df-primary)" }}
+                      title={t("connection.openOnStartup")}
+                    />
+                  ) : null}
                 </span>
               </TooltipTrigger>
               <ConnectionDetailsTooltip conn={conn} savedConnections={savedConnections} t={t} />
@@ -566,6 +581,19 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
           <MdContentCopy className="text-[0.875rem] text-muted-foreground mr-2" />
           {t("savedConnections.copy")}
         </ContextMenuItem>
+        {conn.type !== "rdp" && conn.type !== "vnc" ? (
+          <ContextMenuItem
+            onClick={() => {
+              closeAndSuppressDetails();
+              handleToggleOpenOnStartup(conn);
+            }}
+          >
+            <MdPlayCircleOutline className="text-[0.875rem] text-muted-foreground mr-2" />
+            {conn.open_on_startup
+              ? t("savedConnections.disableOpenOnStartup")
+              : t("savedConnections.enableOpenOnStartup")}
+          </ContextMenuItem>
+        ) : null}
         <MoveToGroupContextMenu
           groups={savedGroups}
           onMove={(groupId) => {

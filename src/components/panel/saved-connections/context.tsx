@@ -43,6 +43,7 @@ export interface SavedConnectionsContextValue {
   handleConnectOnly: (conn: SavedConnection) => void;
   handleConnectSelected: () => void;
   handleCopyConnection: (conn: SavedConnection) => void;
+  handleToggleOpenOnStartup: (conn: SavedConnection) => void;
   requestMoveConnectionToGroup: (conn: SavedConnection, groupId: string | null) => void;
   requestMoveSelectedConnectionsToGroup: (groupId: string | null) => void;
   handleConnectionSelectionStart: (conn: SavedConnection, event: ReactMouseEvent) => void;

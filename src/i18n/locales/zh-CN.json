@@ -397,7 +397,9 @@
   },
   "connection": {
     "encoding": "终端编码",
-    "encodingFollowGlobal": "跟随全局设置"
+    "encodingFollowGlobal": "跟随全局设置",
+    "openOnStartup": "启动时打开",
+    "openOnStartupDesc": "应用启动后打开此连接（在恢复上次标签之后；已在工作区中则不会重复打开）。"
   },
   "credentialAutofill": {
     "dismiss": "关闭",
@@ -1596,7 +1598,9 @@
     "deleteSelected": "删除所选",
     "deleteSelectedConfirm": "确定要删除选中的 {{count}} 个连接吗？此操作不可撤销。",
     "description": "描述",
+    "disableOpenOnStartup": "取消启动时打开",
     "edit": "编辑",
+    "enableOpenOnStartup": "启动时打开",
     "filter": "筛选...",
     "filterAll": "全部",
     "filterLocal": "本地",
@@ -2236,7 +2240,7 @@
     "showWorkspacePaddingDesc": "在终端内容左侧增加一点空白区域。",
     "startupBehavior": "启动行为",
     "startupRestore": "启动时恢复先前的会话标签",
-    "startupRestoreDesc": "自动重新打开在应用程序上次关闭时处于活动状态的终端会话。",
+    "startupRestoreDesc": "自动重新打开在应用程序上次关闭时处于活动状态的终端会话。标记为「启动时打开」的连接会在恢复后补开（工作区中已有则不重复）。",
     "startupRestoreWindowLayout": "恢复标签窗口分屏布局",
     "startupRestoreWindowLayoutDesc": "恢复上次关闭前的左右或上下标签窗口布局。",
     "storedCertificate": "已保存证书",

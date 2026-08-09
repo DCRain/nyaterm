@@ -398,7 +398,9 @@
   },
   "connection": {
     "encoding": "Terminal Encoding",
-    "encodingFollowGlobal": "Follow Global Settings"
+    "encodingFollowGlobal": "Follow Global Settings",
+    "openOnStartup": "Open on Startup",
+    "openOnStartupDesc": "Open this connection after the app starts (after restoring previous tabs)."
   },
   "credentialAutofill": {
     "dismiss": "Dismiss",
@@ -1597,7 +1599,9 @@
     "deleteSelected": "Delete Selected",
     "deleteSelectedConfirm": "Delete {{count}} selected connections? This can't be undone.",
     "description": "Description",
+    "disableOpenOnStartup": "Don't Open on Startup",
     "edit": "Edit",
+    "enableOpenOnStartup": "Open on Startup",
     "filter": "Filter...",
     "filterAll": "All",
     "filterLocal": "Local",
@@ -2237,7 +2241,7 @@
     "showWorkspacePaddingDesc": "Add a little blank space on the left side of terminal content.",
     "startupBehavior": "Startup",
     "startupRestore": "Restore tabs on startup",
-    "startupRestoreDesc": "Reopen terminal sessions active before last close.",
+    "startupRestoreDesc": "Reopen terminal sessions active before last close. Connections marked Open on Startup are opened afterward if they are not already in the workspace.",
     "startupRestoreWindowLayout": "Restore split tab layout",
     "startupRestoreWindowLayoutDesc": "Restore the left/right or top/bottom tab windows from the last close.",
     "storedCertificate": "Saved certificate",

@@ -1,6 +1,6 @@
 ﻿import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
+import { type ComponentType, useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MdAdd, MdChevronLeft, MdExpandMore, MdLan, MdMonitor, MdTerminal } from "react-icons/md";
 import { TbNetwork, TbPlugConnected, TbServer } from "react-icons/tb";
@@ -27,8 +27,8 @@ import {
   RdpForm,
   type RdpRedirectSettings,
   type RdpResolutionPreset,
-  resolveRdpResolutionPreset,
   rdpRedirectSettingsFromSaved,
+  resolveRdpResolutionPreset,
   starOrOffToStored,
 } from "@/components/sessions/RdpForm";
 import { SerialForm } from "@/components/sessions/SerialForm";
@@ -191,6 +191,7 @@ export default function NewSessionPage() {
   const [groupId, setGroupId] = useState(initialGroupId);
   const [newGroupNamePending, setNewGroupNamePending] = useState("");
   const [description, setDescription] = useState("");
+  const [openOnStartup, setOpenOnStartup] = useState(false);
   const [host, setHost] = useState("");
   const [sshPort, setSshPort] = useState(22);
   const [telnetPort, setTelnetPort] = useState(23);
@@ -305,6 +306,7 @@ export default function NewSessionPage() {
         setName(found.name);
         setGroupId(found.group_id || "");
         setDescription(found.description || "");
+        setOpenOnStartup(Boolean(found.open_on_startup));
         setIconKey(found.icon || "");
         setIconAutoDetect(found.icon_auto_detect ?? !found.icon);
 
@@ -412,6 +414,7 @@ export default function NewSessionPage() {
     setGroupId("");
     setNewGroupNamePending("");
     setDescription("");
+    setOpenOnStartup(false);
     setHost("");
     setSshPort(22);
     setTelnetPort(23);
@@ -837,6 +840,7 @@ export default function NewSessionPage() {
         group_id: finalGroupId || undefined,
         description: normalizedDescription || undefined,
         sort_order: sortOrder,
+        open_on_startup: currentTab === "rdp" || currentTab === "vnc" ? false : openOnStartup,
         icon: iconKey || undefined,
         icon_auto_detect: currentTab === "ssh" ? iconAutoDetect : false,
         encoding: encoding === "global" ? undefined : encoding,
@@ -960,11 +964,7 @@ export default function NewSessionPage() {
   };
 
   const formatTestResultMessage = useCallback(
-    (
-      code: string,
-      params?: Record<string, string | number | undefined>,
-      detail?: string,
-    ) => {
+    (code: string, params?: Record<string, string | number | undefined>, detail?: string) => {
       const detailSuffix = detail?.trim() ? `: ${detail.trim()}` : "";
       const key = `dialog.testResult.${code}`;
       const translated = t(key, {
@@ -991,7 +991,12 @@ export default function NewSessionPage() {
     setTestResult(null);
     setError("");
 
-    const showResult = (ok: boolean, code: string, params?: Record<string, string | number | undefined>, detail?: string) => {
+    const showResult = (
+      ok: boolean,
+      code: string,
+      params?: Record<string, string | number | undefined>,
+      detail?: string,
+    ) => {
       const message = formatTestResultMessage(code, params, detail);
       setTestResult({ ok, code, params, message });
       if (ok) {
@@ -1015,7 +1020,12 @@ export default function NewSessionPage() {
           showResult(false, "username_required", { host: host.trim(), port: sshPort });
           return;
         }
-        if (authType === "password" && !password.trim() && !passwordId && !(editId && hasPassword)) {
+        if (
+          authType === "password" &&
+          !password.trim() &&
+          !passwordId &&
+          !(editId && hasPassword)
+        ) {
           showResult(false, "credentials_required", {
             host: host.trim(),
             port: sshPort,
@@ -1072,9 +1082,7 @@ export default function NewSessionPage() {
               ? password
               : undefined,
           passwordId:
-            currentTab === "ssh" && authType === "password" && passwordId
-              ? passwordId
-              : undefined,
+            currentTab === "ssh" && authType === "password" && passwordId ? passwordId : undefined,
           keyId: currentTab === "ssh" && authType === "key" ? keyId || undefined : undefined,
           otpId: currentTab === "ssh" ? otpId || undefined : undefined,
           autoFillOtp: currentTab === "ssh" ? Boolean(otpId && autoFillOtp) : undefined,
@@ -1140,476 +1148,494 @@ export default function NewSessionPage() {
           </div>
         </div>
       ) : (
-      <Tabs
-        value={currentTab}
-        onValueChange={(value) => {
-          selectProtocol(value as ProtocolTab);
-        }}
-        className="flex-1 min-h-0 flex flex-col overflow-hidden"
-      >
-        <div className="shrink-0 flex items-center gap-2 px-4 pt-3 sm:px-5">
-          {!editId ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-8 gap-1 px-2 text-xs"
-              onClick={() => {
-                setWizardStep("pick");
-                setTestResult(null);
-              }}
-            >
-              <MdChevronLeft className="size-4" />
-              {t("dialog.changeProtocol", "Change type")}
-            </Button>
-          ) : null}
-          <div className="text-xs text-muted-foreground">
-            <span className="font-medium text-foreground">{selectedProtocolLabel}</span>
-            {editId ? (
-              <span className="ml-2 rounded border border-border/60 px-1.5 py-0.5 text-[0.6875rem]">
-                {t("dialog.protocolLocked", "Type locked")}
-              </span>
-            ) : null}
-          </div>
-        </div>
-
-        <div className="flex-1 min-h-0 w-full space-y-3 overflow-y-auto p-4 pb-20 sm:p-5 sm:pb-20">
-          <div className="flex flex-wrap items-end gap-3">
-            {/* Name + Group */}
-            <div className="shrink-0">
-              <Label className="mb-1 block text-xs font-medium text-foreground/80">
-                {t("dialog.icon")}
-              </Label>
-              <Popover open={showIconPicker} onOpenChange={setShowIconPicker}>
-                <PopoverTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="flex h-8 w-8 items-center justify-center p-0"
-                    title={iconKey || t("dialog.none")}
-                  >
-                    {(() => {
-                      const def = resolveConnectionIcon(iconKey);
-                      const IconComp = def.icon;
-                      return <IconComp style={{ color: def.color }} className="text-sm" />;
-                    })()}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent
-                  align="start"
-                  side="bottom"
-                  collisionPadding={16}
-                  className="w-56 max-w-[calc(100vw-2rem)] p-2"
-                >
-                  <div className="grid grid-cols-7 gap-0.5">
-                    {Object.entries(SERVER_ICONS).map(([key, def]) => {
-                      const IconComp = def.icon;
-                      const activeKey = iconKey || DEFAULT_CONNECTION_ICON;
-                      return (
-                        <button
-                          key={key}
-                          type="button"
-                          className={`flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-accent ${activeKey === key ? "bg-primary/15 ring-1 ring-primary/40" : ""}`}
-                          title={key === DEFAULT_CONNECTION_ICON ? t("dialog.none") : key}
-                          onClick={() => {
-                            setIconKey(key);
-                            setIconAutoDetect(false);
-                            setShowIconPicker(false);
-                          }}
-                        >
-                          <IconComp style={{ color: def.color }} className="text-sm" />
-                        </button>
-                      );
-                    })}
-                    {Object.entries(LINUX_ICONS).map(([key, def]) => {
-                      const IconComp = def.icon;
-                      return (
-                        <button
-                          key={key}
-                          type="button"
-                          className={`flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-accent ${iconKey === key ? "bg-primary/15 ring-1 ring-primary/40" : ""}`}
-                          title={key}
-                          onClick={() => {
-                            setIconKey(key);
-                            setIconAutoDetect(false);
-                            setShowIconPicker(false);
-                          }}
-                        >
-                          <IconComp style={{ color: def.color }} className="text-sm" />
-                        </button>
-                      );
-                    })}
-                    {Object.entries(SYSTEM_ICONS).map(([key, def]) => {
-                      const IconComp = def.icon;
-                      return (
-                        <button
-                          key={key}
-                          type="button"
-                          className={`flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-accent ${iconKey === key ? "bg-primary/15 ring-1 ring-primary/40" : ""}`}
-                          title={key}
-                          onClick={() => {
-                            setIconKey(key);
-                            setIconAutoDetect(false);
-                            setShowIconPicker(false);
-                          }}
-                        >
-                          <IconComp style={{ color: def.color }} className="text-sm" />
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {currentTab === "ssh" && (
-                    <div className="mt-2 border-t pt-2">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <div
-                            className={`flex items-center justify-between gap-3 rounded px-1.5 py-1 ${
-                              iconAutoDetectDisabled ? "cursor-not-allowed opacity-70" : ""
-                            }`}
-                          >
-                            <div className="min-w-0">
-                              <div className="truncate text-xs font-medium">
-                                {t("dialog.iconAutoDetect")}
-                              </div>
-                            </div>
-                            <Switch
-                              size="sm"
-                              checked={iconAutoDetect}
-                              disabled={iconAutoDetectDisabled}
-                              onCheckedChange={setIconAutoDetect}
-                              aria-label={t("dialog.iconAutoDetect")}
-                            />
-                          </div>
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom">{iconAutoDetectTooltip}</TooltipContent>
-                      </Tooltip>
-                    </div>
-                  )}
-                </PopoverContent>
-              </Popover>
-            </div>
-            <div className="min-w-48 flex-1">
-              <Label className="text-xs font-medium text-foreground/80">
-                {t("dialog.connectionName")}
-              </Label>
-              <Input
-                className="mt-1 text-xs h-8"
-                placeholder={t("dialog.serverPlaceholder")}
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </div>
-            <div className="min-w-48 flex-1 sm:max-w-[18rem]">
-              <Label className="text-xs font-medium text-foreground/80">{t("dialog.group")}</Label>
-              <Popover
-                open={showGroupDropdown}
-                onOpenChange={(open) => {
-                  setShowGroupDropdown(open);
-                  if (!open) {
-                    setNewGroupName("");
-                  }
+        <Tabs
+          value={currentTab}
+          onValueChange={(value) => {
+            selectProtocol(value as ProtocolTab);
+          }}
+          className="flex-1 min-h-0 flex flex-col overflow-hidden"
+        >
+          <div className="shrink-0 flex items-center gap-2 px-4 pt-3 sm:px-5">
+            {!editId ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 gap-1 px-2 text-xs"
+                onClick={() => {
+                  setWizardStep("pick");
+                  setTestResult(null);
                 }}
               >
-                <PopoverTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="mt-1 h-8 w-full justify-between text-xs font-normal"
-                  >
-                    <span className={`truncate ${groupId ? "" : "text-muted-foreground"}`}>
-                      {selectedGroupLabel}
-                    </span>
-                    <MdExpandMore className="shrink-0 text-xs text-muted-foreground" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent
-                  align="start"
-                  side="bottom"
-                  sideOffset={4}
-                  collisionPadding={16}
-                  className="w-(--radix-popover-trigger-width) min-w-48 overflow-hidden p-0"
-                >
-                  <div className="max-h-48 overflow-y-auto">
-                    <button
+                <MdChevronLeft className="size-4" />
+                {t("dialog.changeProtocol", "Change type")}
+              </Button>
+            ) : null}
+            <div className="text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">{selectedProtocolLabel}</span>
+              {editId ? (
+                <span className="ml-2 rounded border border-border/60 px-1.5 py-0.5 text-[0.6875rem]">
+                  {t("dialog.protocolLocked", "Type locked")}
+                </span>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="flex-1 min-h-0 w-full space-y-3 overflow-y-auto p-4 pb-20 sm:p-5 sm:pb-20">
+            <div className="flex flex-wrap items-end gap-3">
+              {/* Name + Group */}
+              <div className="shrink-0">
+                <Label className="mb-1 block text-xs font-medium text-foreground/80">
+                  {t("dialog.icon")}
+                </Label>
+                <Popover open={showIconPicker} onOpenChange={setShowIconPicker}>
+                  <PopoverTrigger asChild>
+                    <Button
                       type="button"
-                      className={`w-full px-3 py-1.5 text-left text-xs transition-colors hover:bg-accent ${!groupId ? "bg-primary/15 text-primary" : "text-muted-foreground"}`}
-                      onClick={() => {
-                        setGroupId("");
-                        setNewGroupNamePending("");
-                        setNewGroupParentId("");
-                        setShowGroupDropdown(false);
-                      }}
+                      variant="outline"
+                      className="flex h-8 w-8 items-center justify-center p-0"
+                      title={iconKey || t("dialog.none")}
                     >
-                      {t("dialog.none")}
-                    </button>
-                    {(() => {
-                      const getDepth = (g: Group): number => {
-                        let d = 0;
-                        let cur: string | undefined = g.parent_id;
-                        while (cur) {
-                          d++;
-                          const parent = groups.find((x) => x.id === cur);
-                          cur = parent?.parent_id;
-                        }
-                        return d;
-                      };
-                      const sorted = [...groups].sort((a, b) => a.sort_order - b.sort_order);
-                      const buildTree = (parentId: string | undefined): Group[] => {
-                        const children = sorted.filter(
-                          (g) => (g.parent_id || undefined) === parentId,
-                        );
-                        return children.flatMap((g) => [g, ...buildTree(g.id)]);
-                      };
-                      const ordered = buildTree(undefined);
-                      return ordered.map((g) => {
-                        const depth = getDepth(g);
+                      {(() => {
+                        const def = resolveConnectionIcon(iconKey);
+                        const IconComp = def.icon;
+                        return <IconComp style={{ color: def.color }} className="text-sm" />;
+                      })()}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    align="start"
+                    side="bottom"
+                    collisionPadding={16}
+                    className="w-56 max-w-[calc(100vw-2rem)] p-2"
+                  >
+                    <div className="grid grid-cols-7 gap-0.5">
+                      {Object.entries(SERVER_ICONS).map(([key, def]) => {
+                        const IconComp = def.icon;
+                        const activeKey = iconKey || DEFAULT_CONNECTION_ICON;
                         return (
                           <button
-                            key={g.id}
+                            key={key}
                             type="button"
-                            className={`w-full py-1.5 text-left text-xs transition-colors hover:bg-accent ${groupId === g.id ? "bg-primary/15 text-primary" : ""}`}
-                            style={{ paddingLeft: `${12 + depth * 16}px`, paddingRight: "12px" }}
+                            className={`flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-accent ${activeKey === key ? "bg-primary/15 ring-1 ring-primary/40" : ""}`}
+                            title={key === DEFAULT_CONNECTION_ICON ? t("dialog.none") : key}
                             onClick={() => {
-                              setGroupId(g.id);
-                              setNewGroupNamePending("");
-                              setNewGroupParentId("");
-                              setShowGroupDropdown(false);
+                              setIconKey(key);
+                              setIconAutoDetect(false);
+                              setShowIconPicker(false);
                             }}
                           >
-                            {g.name}
+                            <IconComp style={{ color: def.color }} className="text-sm" />
                           </button>
                         );
-                      });
-                    })()}
-                  </div>
-                  <div className="border-t p-1.5">
-                    <div className="flex items-center gap-1.5">
-                      <Input
-                        className="flex-1 min-w-0 h-7 text-xs"
-                        placeholder={t("dialog.newGroupPlaceholder")}
-                        value={newGroupName}
-                        onChange={(e) => setNewGroupName(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && newGroupName.trim()) {
-                            setGroupId("new");
-                            setNewGroupNamePending(newGroupName.trim());
-                            setNewGroupParentId(groupId && groupId !== "new" ? groupId : "");
-                            setNewGroupName("");
-                            setShowGroupDropdown(false);
-                          }
-                        }}
-                      />
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        disabled={!newGroupName.trim()}
+                      })}
+                      {Object.entries(LINUX_ICONS).map(([key, def]) => {
+                        const IconComp = def.icon;
+                        return (
+                          <button
+                            key={key}
+                            type="button"
+                            className={`flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-accent ${iconKey === key ? "bg-primary/15 ring-1 ring-primary/40" : ""}`}
+                            title={key}
+                            onClick={() => {
+                              setIconKey(key);
+                              setIconAutoDetect(false);
+                              setShowIconPicker(false);
+                            }}
+                          >
+                            <IconComp style={{ color: def.color }} className="text-sm" />
+                          </button>
+                        );
+                      })}
+                      {Object.entries(SYSTEM_ICONS).map(([key, def]) => {
+                        const IconComp = def.icon;
+                        return (
+                          <button
+                            key={key}
+                            type="button"
+                            className={`flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-accent ${iconKey === key ? "bg-primary/15 ring-1 ring-primary/40" : ""}`}
+                            title={key}
+                            onClick={() => {
+                              setIconKey(key);
+                              setIconAutoDetect(false);
+                              setShowIconPicker(false);
+                            }}
+                          >
+                            <IconComp style={{ color: def.color }} className="text-sm" />
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {currentTab === "ssh" && (
+                      <div className="mt-2 border-t pt-2">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <div
+                              className={`flex items-center justify-between gap-3 rounded px-1.5 py-1 ${
+                                iconAutoDetectDisabled ? "cursor-not-allowed opacity-70" : ""
+                              }`}
+                            >
+                              <div className="min-w-0">
+                                <div className="truncate text-xs font-medium">
+                                  {t("dialog.iconAutoDetect")}
+                                </div>
+                              </div>
+                              <Switch
+                                size="sm"
+                                checked={iconAutoDetect}
+                                disabled={iconAutoDetectDisabled}
+                                onCheckedChange={setIconAutoDetect}
+                                aria-label={t("dialog.iconAutoDetect")}
+                              />
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom">{iconAutoDetectTooltip}</TooltipContent>
+                        </Tooltip>
+                      </div>
+                    )}
+                  </PopoverContent>
+                </Popover>
+              </div>
+              <div className="min-w-48 flex-1">
+                <Label className="text-xs font-medium text-foreground/80">
+                  {t("dialog.connectionName")}
+                </Label>
+                <Input
+                  className="mt-1 text-xs h-8"
+                  placeholder={t("dialog.serverPlaceholder")}
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </div>
+              <div className="min-w-48 flex-1 sm:max-w-[18rem]">
+                <Label className="text-xs font-medium text-foreground/80">
+                  {t("dialog.group")}
+                </Label>
+                <Popover
+                  open={showGroupDropdown}
+                  onOpenChange={(open) => {
+                    setShowGroupDropdown(open);
+                    if (!open) {
+                      setNewGroupName("");
+                    }
+                  }}
+                >
+                  <PopoverTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="mt-1 h-8 w-full justify-between text-xs font-normal"
+                    >
+                      <span className={`truncate ${groupId ? "" : "text-muted-foreground"}`}>
+                        {selectedGroupLabel}
+                      </span>
+                      <MdExpandMore className="shrink-0 text-xs text-muted-foreground" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    align="start"
+                    side="bottom"
+                    sideOffset={4}
+                    collisionPadding={16}
+                    className="w-(--radix-popover-trigger-width) min-w-48 overflow-hidden p-0"
+                  >
+                    <div className="max-h-48 overflow-y-auto">
+                      <button
+                        type="button"
+                        className={`w-full px-3 py-1.5 text-left text-xs transition-colors hover:bg-accent ${!groupId ? "bg-primary/15 text-primary" : "text-muted-foreground"}`}
                         onClick={() => {
-                          if (newGroupName.trim()) {
-                            setGroupId("new");
-                            setNewGroupNamePending(newGroupName.trim());
-                            setNewGroupParentId(groupId && groupId !== "new" ? groupId : "");
-                            setNewGroupName("");
-                            setShowGroupDropdown(false);
-                          }
+                          setGroupId("");
+                          setNewGroupNamePending("");
+                          setNewGroupParentId("");
+                          setShowGroupDropdown(false);
                         }}
                       >
-                        <MdAdd className="text-sm" />
-                      </Button>
+                        {t("dialog.none")}
+                      </button>
+                      {(() => {
+                        const getDepth = (g: Group): number => {
+                          let d = 0;
+                          let cur: string | undefined = g.parent_id;
+                          while (cur) {
+                            d++;
+                            const parent = groups.find((x) => x.id === cur);
+                            cur = parent?.parent_id;
+                          }
+                          return d;
+                        };
+                        const sorted = [...groups].sort((a, b) => a.sort_order - b.sort_order);
+                        const buildTree = (parentId: string | undefined): Group[] => {
+                          const children = sorted.filter(
+                            (g) => (g.parent_id || undefined) === parentId,
+                          );
+                          return children.flatMap((g) => [g, ...buildTree(g.id)]);
+                        };
+                        const ordered = buildTree(undefined);
+                        return ordered.map((g) => {
+                          const depth = getDepth(g);
+                          return (
+                            <button
+                              key={g.id}
+                              type="button"
+                              className={`w-full py-1.5 text-left text-xs transition-colors hover:bg-accent ${groupId === g.id ? "bg-primary/15 text-primary" : ""}`}
+                              style={{ paddingLeft: `${12 + depth * 16}px`, paddingRight: "12px" }}
+                              onClick={() => {
+                                setGroupId(g.id);
+                                setNewGroupNamePending("");
+                                setNewGroupParentId("");
+                                setShowGroupDropdown(false);
+                              }}
+                            >
+                              {g.name}
+                            </button>
+                          );
+                        });
+                      })()}
                     </div>
-                    <p className="px-1 pt-1 text-[0.6875rem] leading-snug text-muted-foreground">
-                      {newGroupParentLabel
-                        ? t("dialog.newGroupParentHint", { group: newGroupParentLabel })
-                        : t("dialog.newGroupRootHint")}
-                    </p>
-                  </div>
-                </PopoverContent>
-              </Popover>
-            </div>
-          </div>
-
-          <TabsContent value="ssh" className="space-y-3 m-0 border-0 outline-none w-full">
-            <SshForm
-              host={host}
-              setHost={setHost}
-              port={sshPort}
-              setPort={setSshPort}
-              username={username}
-              setUsername={setUsername}
-              authType={authType}
-              setAuthType={(value) => setAuthType(value)}
-              passwordId={passwordId}
-              setPasswordId={setPasswordId}
-              password={password}
-              setPassword={setPassword}
-              hasPassword={hasPassword}
-              setHasPassword={setHasPassword}
-              keyId={keyId}
-              setKeyId={setKeyId}
-              proxyId={proxyId}
-              setProxyId={setProxyId}
-              proxies={proxies}
-              jumpHostId={jumpHostId}
-              setJumpHostId={setJumpHostId}
-              jumpHostOptions={jumpHostOptions}
-              otpId={otpId}
-              setOtpId={setOtpId}
-              autoFillOtp={autoFillOtp}
-              setAutoFillOtp={setAutoFillOtp}
-              otpEntries={otpEntries}
-              postLoginEnabled={postLoginEnabled}
-              setPostLoginEnabled={setPostLoginEnabled}
-              postLoginCommand={postLoginCommand}
-              setPostLoginCommand={setPostLoginCommand}
-              postLoginDelayMs={postLoginDelayMs}
-              setPostLoginDelayMs={setPostLoginDelayMs}
-              minPostLoginDelayMs={MIN_POST_LOGIN_DELAY_MS}
-              maxPostLoginDelayMs={MAX_POST_LOGIN_DELAY_MS}
-              backspaceMode={sshBackspaceMode}
-              setBackspaceMode={setSshBackspaceMode}
-              x11Forwarding={x11Forwarding}
-              setX11Forwarding={setX11Forwarding}
-              sshAlgorithms={sshAlgorithms}
-              setSshAlgorithms={setSshAlgorithms}
-              sftpSettings={sftpSettings}
-              setSftpSettings={setSftpSettings}
-              connectionId={initialData?.id || editId}
-              encoding={encoding}
-              setEncoding={setEncoding}
-              passwordSecretsUnlocked={passwordSecretsUnlocked}
-              onUnlockPasswordSecrets={() => setPasswordSecretsUnlocked(true)}
-              onLockPasswordSecrets={() => setPasswordSecretsUnlocked(false)}
-            />
-          </TabsContent>
-
-          <TabsContent value="local" className="space-y-3 m-0 border-0 outline-none w-full">
-            <LocalTerminal
-              shellPath={shellPath}
-              setShellPath={setShellPath}
-              shellArgs={shellArgs}
-              setShellArgs={setShellArgs}
-              workingDir={workingDir}
-              setWorkingDir={setWorkingDir}
-              encoding={encoding}
-              setEncoding={setEncoding}
-            />
-          </TabsContent>
-
-          <TabsContent value="telnet" className="space-y-3 m-0 border-0 outline-none w-full">
-            <TelnetForm
-              host={host}
-              setHost={setHost}
-              port={telnetPort}
-              setPort={setTelnetPort}
-              username={username}
-              setUsername={setUsername}
-              authType={authType === "none" ? "none" : "password"}
-              setAuthType={(value) => setAuthType(value)}
-              passwordId={passwordId}
-              setPasswordId={setPasswordId}
-              password={password}
-              setPassword={setPassword}
-              hasPassword={hasPassword}
-              setHasPassword={setHasPassword}
-              backspaceMode={telnetBackspaceMode}
-              setBackspaceMode={setTelnetBackspaceMode}
-              rawTcpCli={telnetRawTcpCli}
-              setRawTcpCli={setTelnetRawTcpCli}
-              enterMode={telnetEnterMode}
-              setEnterMode={setTelnetEnterMode}
-              localEcho={telnetLocalEcho}
-              setLocalEcho={setTelnetLocalEcho}
-              localLineEdit={telnetLocalLineEdit}
-              setLocalLineEdit={setTelnetLocalLineEdit}
-              forceCharacterAtATime={telnetForceCharacterAtATime}
-              setForceCharacterAtATime={setTelnetForceCharacterAtATime}
-              sendNaws={telnetSendNaws}
-              setSendNaws={setTelnetSendNaws}
-              sendSga={telnetSendSga}
-              setSendSga={setTelnetSendSga}
-              connectionId={initialData?.id || editId}
-              encoding={encoding}
-              setEncoding={setEncoding}
-              passwordSecretsUnlocked={passwordSecretsUnlocked}
-              onUnlockPasswordSecrets={() => setPasswordSecretsUnlocked(true)}
-              onLockPasswordSecrets={() => setPasswordSecretsUnlocked(false)}
-            />
-          </TabsContent>
-
-          <TabsContent value="serial" className="space-y-3 m-0 border-0 outline-none w-full">
-            <SerialForm
-              serialPortName={serialPortName}
-              setSerialPortName={setSerialPortName}
-              serialPortOptions={serialPortOptions}
-              serialPortsLoading={serialPortsLoading}
-              serialPortsError={serialPortsError}
-              onSerialPortDropdownOpen={() => {
-                void loadSerialPorts();
-              }}
-              baudRate={baudRate}
-              setBaudRate={setBaudRate}
-              dataBits={dataBits}
-              setDataBits={setDataBits}
-              parity={parity}
-              setParity={setParity}
-              stopBits={stopBits}
-              setStopBits={setStopBits}
-              backspaceMode={serialBackspaceMode}
-              setBackspaceMode={setSerialBackspaceMode}
-              encoding={encoding}
-              setEncoding={setEncoding}
-            />
-          </TabsContent>
-
-          <TabsContent value="rdp" className="space-y-3 m-0 border-0 outline-none w-full">
-            <RdpForm
-              host={host}
-              setHost={setHost}
-              port={rdpPort}
-              setPort={setRdpPort}
-              username={username}
-              setUsername={setUsername}
-              displayMode={rdpDisplayMode}
-              setDisplayMode={setRdpDisplayMode}
-              resolutionPreset={rdpResolutionPreset}
-              setResolutionPreset={setRdpResolutionPreset}
-              width={rdpWidth}
-              setWidth={setRdpWidth}
-              height={rdpHeight}
-              setHeight={setRdpHeight}
-              preferredClient={rdpPreferredClient}
-              setPreferredClient={setRdpPreferredClient}
-              redirects={rdpRedirects}
-              setRedirects={(patch) =>
-                setRdpRedirects((prev) => normalizeRdpRedirectSettings({ ...prev, ...patch }))
-              }
-            />
-          </TabsContent>
-
-          <TabsContent value="vnc" className="space-y-3 m-0 border-0 outline-none w-full">
-            <VncForm host={host} setHost={setHost} port={vncPort} setPort={setVncPort} />
-          </TabsContent>
-
-          <div className="mt-5 space-y-3">
-            <div>
-              <Label className="text-xs font-medium text-foreground/80">
-                {t("dialog.description")}
-              </Label>
-              <Textarea
-                rows={2}
-                placeholder={t("dialog.descriptionPlaceholder")}
-                className="mt-1 text-xs resize-none"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-              />
-            </div>
-            {error ? (
-              <div className="rounded border border-destructive/30 bg-destructive/10 p-2 text-xs text-red-400">
-                {error}
+                    <div className="border-t p-1.5">
+                      <div className="flex items-center gap-1.5">
+                        <Input
+                          className="flex-1 min-w-0 h-7 text-xs"
+                          placeholder={t("dialog.newGroupPlaceholder")}
+                          value={newGroupName}
+                          onChange={(e) => setNewGroupName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && newGroupName.trim()) {
+                              setGroupId("new");
+                              setNewGroupNamePending(newGroupName.trim());
+                              setNewGroupParentId(groupId && groupId !== "new" ? groupId : "");
+                              setNewGroupName("");
+                              setShowGroupDropdown(false);
+                            }
+                          }}
+                        />
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          disabled={!newGroupName.trim()}
+                          onClick={() => {
+                            if (newGroupName.trim()) {
+                              setGroupId("new");
+                              setNewGroupNamePending(newGroupName.trim());
+                              setNewGroupParentId(groupId && groupId !== "new" ? groupId : "");
+                              setNewGroupName("");
+                              setShowGroupDropdown(false);
+                            }
+                          }}
+                        >
+                          <MdAdd className="text-sm" />
+                        </Button>
+                      </div>
+                      <p className="px-1 pt-1 text-[0.6875rem] leading-snug text-muted-foreground">
+                        {newGroupParentLabel
+                          ? t("dialog.newGroupParentHint", { group: newGroupParentLabel })
+                          : t("dialog.newGroupRootHint")}
+                      </p>
+                    </div>
+                  </PopoverContent>
+                </Popover>
               </div>
-            ) : null}
+            </div>
+
+            <TabsContent value="ssh" className="space-y-3 m-0 border-0 outline-none w-full">
+              <SshForm
+                host={host}
+                setHost={setHost}
+                port={sshPort}
+                setPort={setSshPort}
+                username={username}
+                setUsername={setUsername}
+                authType={authType}
+                setAuthType={(value) => setAuthType(value)}
+                passwordId={passwordId}
+                setPasswordId={setPasswordId}
+                password={password}
+                setPassword={setPassword}
+                hasPassword={hasPassword}
+                setHasPassword={setHasPassword}
+                keyId={keyId}
+                setKeyId={setKeyId}
+                proxyId={proxyId}
+                setProxyId={setProxyId}
+                proxies={proxies}
+                jumpHostId={jumpHostId}
+                setJumpHostId={setJumpHostId}
+                jumpHostOptions={jumpHostOptions}
+                otpId={otpId}
+                setOtpId={setOtpId}
+                autoFillOtp={autoFillOtp}
+                setAutoFillOtp={setAutoFillOtp}
+                otpEntries={otpEntries}
+                postLoginEnabled={postLoginEnabled}
+                setPostLoginEnabled={setPostLoginEnabled}
+                postLoginCommand={postLoginCommand}
+                setPostLoginCommand={setPostLoginCommand}
+                postLoginDelayMs={postLoginDelayMs}
+                setPostLoginDelayMs={setPostLoginDelayMs}
+                minPostLoginDelayMs={MIN_POST_LOGIN_DELAY_MS}
+                maxPostLoginDelayMs={MAX_POST_LOGIN_DELAY_MS}
+                backspaceMode={sshBackspaceMode}
+                setBackspaceMode={setSshBackspaceMode}
+                x11Forwarding={x11Forwarding}
+                setX11Forwarding={setX11Forwarding}
+                sshAlgorithms={sshAlgorithms}
+                setSshAlgorithms={setSshAlgorithms}
+                sftpSettings={sftpSettings}
+                setSftpSettings={setSftpSettings}
+                connectionId={initialData?.id || editId}
+                encoding={encoding}
+                setEncoding={setEncoding}
+                passwordSecretsUnlocked={passwordSecretsUnlocked}
+                onUnlockPasswordSecrets={() => setPasswordSecretsUnlocked(true)}
+                onLockPasswordSecrets={() => setPasswordSecretsUnlocked(false)}
+              />
+            </TabsContent>
+
+            <TabsContent value="local" className="space-y-3 m-0 border-0 outline-none w-full">
+              <LocalTerminal
+                shellPath={shellPath}
+                setShellPath={setShellPath}
+                shellArgs={shellArgs}
+                setShellArgs={setShellArgs}
+                workingDir={workingDir}
+                setWorkingDir={setWorkingDir}
+                encoding={encoding}
+                setEncoding={setEncoding}
+              />
+            </TabsContent>
+
+            <TabsContent value="telnet" className="space-y-3 m-0 border-0 outline-none w-full">
+              <TelnetForm
+                host={host}
+                setHost={setHost}
+                port={telnetPort}
+                setPort={setTelnetPort}
+                username={username}
+                setUsername={setUsername}
+                authType={authType === "none" ? "none" : "password"}
+                setAuthType={(value) => setAuthType(value)}
+                passwordId={passwordId}
+                setPasswordId={setPasswordId}
+                password={password}
+                setPassword={setPassword}
+                hasPassword={hasPassword}
+                setHasPassword={setHasPassword}
+                backspaceMode={telnetBackspaceMode}
+                setBackspaceMode={setTelnetBackspaceMode}
+                rawTcpCli={telnetRawTcpCli}
+                setRawTcpCli={setTelnetRawTcpCli}
+                enterMode={telnetEnterMode}
+                setEnterMode={setTelnetEnterMode}
+                localEcho={telnetLocalEcho}
+                setLocalEcho={setTelnetLocalEcho}
+                localLineEdit={telnetLocalLineEdit}
+                setLocalLineEdit={setTelnetLocalLineEdit}
+                forceCharacterAtATime={telnetForceCharacterAtATime}
+                setForceCharacterAtATime={setTelnetForceCharacterAtATime}
+                sendNaws={telnetSendNaws}
+                setSendNaws={setTelnetSendNaws}
+                sendSga={telnetSendSga}
+                setSendSga={setTelnetSendSga}
+                connectionId={initialData?.id || editId}
+                encoding={encoding}
+                setEncoding={setEncoding}
+                passwordSecretsUnlocked={passwordSecretsUnlocked}
+                onUnlockPasswordSecrets={() => setPasswordSecretsUnlocked(true)}
+                onLockPasswordSecrets={() => setPasswordSecretsUnlocked(false)}
+              />
+            </TabsContent>
+
+            <TabsContent value="serial" className="space-y-3 m-0 border-0 outline-none w-full">
+              <SerialForm
+                serialPortName={serialPortName}
+                setSerialPortName={setSerialPortName}
+                serialPortOptions={serialPortOptions}
+                serialPortsLoading={serialPortsLoading}
+                serialPortsError={serialPortsError}
+                onSerialPortDropdownOpen={() => {
+                  void loadSerialPorts();
+                }}
+                baudRate={baudRate}
+                setBaudRate={setBaudRate}
+                dataBits={dataBits}
+                setDataBits={setDataBits}
+                parity={parity}
+                setParity={setParity}
+                stopBits={stopBits}
+                setStopBits={setStopBits}
+                backspaceMode={serialBackspaceMode}
+                setBackspaceMode={setSerialBackspaceMode}
+                encoding={encoding}
+                setEncoding={setEncoding}
+              />
+            </TabsContent>
+
+            <TabsContent value="rdp" className="space-y-3 m-0 border-0 outline-none w-full">
+              <RdpForm
+                host={host}
+                setHost={setHost}
+                port={rdpPort}
+                setPort={setRdpPort}
+                username={username}
+                setUsername={setUsername}
+                displayMode={rdpDisplayMode}
+                setDisplayMode={setRdpDisplayMode}
+                resolutionPreset={rdpResolutionPreset}
+                setResolutionPreset={setRdpResolutionPreset}
+                width={rdpWidth}
+                setWidth={setRdpWidth}
+                height={rdpHeight}
+                setHeight={setRdpHeight}
+                preferredClient={rdpPreferredClient}
+                setPreferredClient={setRdpPreferredClient}
+                redirects={rdpRedirects}
+                setRedirects={(patch) =>
+                  setRdpRedirects((prev) => normalizeRdpRedirectSettings({ ...prev, ...patch }))
+                }
+              />
+            </TabsContent>
+
+            <TabsContent value="vnc" className="space-y-3 m-0 border-0 outline-none w-full">
+              <VncForm host={host} setHost={setHost} port={vncPort} setPort={setVncPort} />
+            </TabsContent>
+
+            <div className="mt-5 space-y-3">
+              <div>
+                <Label className="text-xs font-medium text-foreground/80">
+                  {t("dialog.description")}
+                </Label>
+                <Textarea
+                  rows={2}
+                  placeholder={t("dialog.descriptionPlaceholder")}
+                  className="mt-1 text-xs resize-none"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                />
+              </div>
+              {currentTab !== "rdp" && currentTab !== "vnc" ? (
+                <div className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium">{t("connection.openOnStartup")}</div>
+                    <div className="text-[0.6875rem] text-muted-foreground">
+                      {t("connection.openOnStartupDesc")}
+                    </div>
+                  </div>
+                  <Switch
+                    size="sm"
+                    checked={openOnStartup}
+                    onCheckedChange={setOpenOnStartup}
+                    aria-label={t("connection.openOnStartup")}
+                  />
+                </div>
+              ) : null}
+              {error ? (
+                <div className="rounded border border-destructive/30 bg-destructive/10 p-2 text-xs text-red-400">
+                  {error}
+                </div>
+              ) : null}
+            </div>
           </div>
-        </div>
-      </Tabs>
+        </Tabs>
       )}
 
       {!showPickStep && (testing || testResult) ? (
@@ -1623,9 +1649,7 @@ export default function NewSessionPage() {
                   : "border-destructive/30 bg-destructive/10 text-red-400"
             }`}
           >
-            {testing
-              ? t("dialog.testingConnection", "Testing…")
-              : testResult?.message}
+            {testing ? t("dialog.testingConnection", "Testing…") : testResult?.message}
           </div>
         </div>
       ) : null}

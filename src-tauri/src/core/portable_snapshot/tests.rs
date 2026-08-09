@@ -301,6 +301,7 @@ mod tests {
                     created_at_ms: None,
                     updated_at_ms: None,
                     last_used_at_ms: None,
+                    open_on_startup: false,
                 },
                 config::SavedConnection {
                     id: "serial-1".to_string(),
@@ -329,6 +330,7 @@ mod tests {
                     created_at_ms: None,
                     updated_at_ms: None,
                     last_used_at_ms: None,
+                    open_on_startup: false,
                 },
             ],
         }
@@ -385,6 +387,7 @@ mod tests {
                 created_at_ms: None,
                 updated_at_ms: None,
                 last_used_at_ms: None,
+                open_on_startup: false,
             }],
         }
     }

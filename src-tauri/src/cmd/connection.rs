@@ -541,6 +541,7 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
             created_at_ms: None,
             updated_at_ms: None,
             last_used_at_ms: None,
+            open_on_startup: false,
         }
     }
 
@@ -581,6 +582,7 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
             created_at_ms: None,
             updated_at_ms: None,
             last_used_at_ms: None,
+            open_on_startup: false,
         }
     }
 
@@ -609,6 +611,7 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
             created_at_ms: None,
             updated_at_ms: None,
             last_used_at_ms: None,
+            open_on_startup: false,
         }
     }
 

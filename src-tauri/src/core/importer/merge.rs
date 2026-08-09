@@ -116,6 +116,7 @@ fn import_legacy_sessions(
             created_at_ms: None,
             updated_at_ms: None,
             last_used_at_ms: None,
+            open_on_startup: false,
         });
     }
 
@@ -163,6 +164,7 @@ fn import_prepared_nyaterm_json(
             created_at_ms: None,
             updated_at_ms: None,
             last_used_at_ms: None,
+            open_on_startup: false,
         });
     }
 

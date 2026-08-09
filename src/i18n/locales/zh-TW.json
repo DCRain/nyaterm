@@ -397,7 +397,9 @@
   },
   "connection": {
     "encoding": "終端編碼",
-    "encodingFollowGlobal": "跟隨全域設定"
+    "encodingFollowGlobal": "跟隨全域設定",
+    "openOnStartup": "啟動時開啟",
+    "openOnStartupDesc": "應用程式啟動後開啟此連線（在還原上次標籤之後；工作區中已有則不會重複開啟）。"
   },
   "credentialAutofill": {
     "dismiss": "關閉",
@@ -1596,7 +1598,9 @@
     "deleteSelected": "刪除所選",
     "deleteSelectedConfirm": "確定要刪除選取的 {{count}} 個連線嗎？此操作不可撤銷。",
     "description": "描述",
+    "disableOpenOnStartup": "取消啟動時開啟",
     "edit": "編輯",
+    "enableOpenOnStartup": "啟動時開啟",
     "filter": "篩選...",
     "filterAll": "全部",
     "filterLocal": "本機",
@@ -2231,7 +2235,7 @@
     "showWorkspacePaddingDesc": "在終端內容左側增加一點空白區域。",
     "startupBehavior": "啟動行為",
     "startupRestore": "啟動時恢復先前的工作階段標籤",
-    "startupRestoreDesc": "自動重新開啟在應用程式上次關閉時處於活動狀態的終端工作階段。",
+    "startupRestoreDesc": "自動重新開啟在應用程式上次關閉時處於活動狀態的終端工作階段。標記為「啟動時開啟」的連線會在還原後補開（工作區中已有則不重複）。",
     "startupRestoreWindowLayout": "恢復標籤視窗分屏佈局",
     "startupRestoreWindowLayoutDesc": "恢復上次關閉前的左右或上下標籤視窗布局。",
     "storedCertificate": "已儲存憑證",

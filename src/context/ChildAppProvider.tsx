@@ -396,6 +396,7 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
       updateUi,
       savedConnections: emptyConnections,
       savedGroups: emptyGroups,
+      connectionsLoaded: true,
       refreshConnections: noopAsync,
       recordRecentConnection: noop,
       showNewSession: false,

@@ -128,6 +128,7 @@ interface AppContextType {
   // Data
   savedConnections: SavedConnection[];
   savedGroups: Group[];
+  connectionsLoaded: boolean;
   refreshConnections: () => Promise<void>;
   recordRecentConnection: (connectionId: string) => void;
 
@@ -517,6 +518,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Data State
   const [savedConnections, setSavedConnections] = useState<SavedConnection[]>([]);
   const [savedGroups, setSavedGroups] = useState<Group[]>([]);
+  const [connectionsLoaded, setConnectionsLoaded] = useState(false);
 
   // Dialog State
   const [showNewSession, setShowNewSession] = useState(false);
@@ -687,6 +689,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         message: "Failed to fetch connections",
         error: e,
       });
+    } finally {
+      setConnectionsLoaded(true);
     }
   }, []);
 
@@ -1277,6 +1281,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateUi,
       savedConnections,
       savedGroups,
+      connectionsLoaded,
       refreshConnections,
       recordRecentConnection,
       showNewSession,
@@ -1324,6 +1329,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateUi,
       savedConnections,
       savedGroups,
+      connectionsLoaded,
       refreshConnections,
       recordRecentConnection,
       showNewSession,

@@ -332,6 +332,8 @@ export interface SavedConnection {
   group_id?: string;
   description?: string;
   sort_order?: number;
+  /** When true, open this connection after startup restore (terminal session types only). */
+  open_on_startup?: boolean;
   icon?: string;
   icon_auto_detect?: boolean;
   auth?: ConnectionAuth;

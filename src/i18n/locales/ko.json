@@ -397,7 +397,9 @@
   },
   "connection": {
     "encoding": "인코딩",
-    "encodingFollowGlobal": "전역 설정 따르기"
+    "encodingFollowGlobal": "전역 설정 따르기",
+    "openOnStartup": "시작 시 열기",
+    "openOnStartupDesc": "앱 시작 후 이 연결을 엽니다(이전 탭 복원 이후; 워크스페이스에 이미 있으면 중복 열지 않음)."
   },
   "credentialAutofill": {
     "dismiss": "닫기",
@@ -1593,7 +1595,9 @@
     "deleteSelected": "선택 항목 삭제",
     "deleteSelectedConfirm": "선택한 연결 {{count}}개를 삭제할까요? 되돌릴 수 없습니다.",
     "description": "설명",
+    "disableOpenOnStartup": "시작 시 열지 않기",
     "edit": "편집",
+    "enableOpenOnStartup": "시작 시 열기",
     "filter": "필터...",
     "filterAll": "전체",
     "filterLocal": "로컬",
@@ -2233,7 +2237,7 @@
     "showWorkspacePaddingDesc": "터미널 콘텐츠 왼쪽에 약간의 여백을 추가합니다.",
     "startupBehavior": "시작",
     "startupRestore": "시작 시 탭 복원",
-    "startupRestoreDesc": "마지막으로 닫기 전에 활성 상태였던 터미널 세션을 다시 엽니다.",
+    "startupRestoreDesc": "마지막으로 닫기 전에 활성 상태였던 터미널 세션을 다시 엽니다. 「시작 시 열기」로 표시된 연결은 복원 후 추가로 열리며, 워크스페이스에 이미 있으면 중복으로 열지 않습니다.",
     "startupRestoreWindowLayout": "분할 탭 레이아웃 복원",
     "startupRestoreWindowLayoutDesc": "마지막으로 닫을 때의 좌/우 또는 상/하 탭 창 배치를 복원합니다.",
     "storedCertificate": "저장된 인증서",

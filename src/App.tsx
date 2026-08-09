@@ -120,6 +120,7 @@ import { setBackendTransferDuplicatePrompt } from "./lib/transferDuplicatePrompt
 import { checkForUpdate, type UpdateInfo } from "./lib/updater";
 import {
   getOwnerMainWindowLabel,
+  isPrimaryMainWindow,
   type NewSessionTarget,
   openNewSession,
   openNewSessionWithTarget,
@@ -152,6 +153,17 @@ const CONNECTION_SESSION_TYPES: Partial<Record<SavedConnection["type"], SessionT
   telnet: "Telnet",
   serial: "Serial",
 };
+
+const STARTUP_OPEN_CONNECTION_TYPES = new Set<SavedConnection["type"]>([
+  "ssh",
+  "local_terminal",
+  "telnet",
+  "serial",
+]);
+
+function isStartupOpenConnection(connection: SavedConnection) {
+  return Boolean(connection.open_on_startup) && STARTUP_OPEN_CONNECTION_TYPES.has(connection.type);
+}
 
 function getConnectionSessionType(
   connection: Pick<SavedConnection, "type"> | null | undefined,
@@ -364,6 +376,7 @@ function App() {
     closeTabs,
     savedConnections,
     savedGroups,
+    connectionsLoaded,
     recordRecentConnection,
     syncGroups,
     setSyncGroups,
@@ -1287,6 +1300,68 @@ function App() {
     ready: settingsLoaded && startupRestoreComplete && !isLocked,
     onRequest: handleExternalOpenRequest,
   });
+
+  const hasOpenedStartupConnectionsRef = useRef(false);
+
+  useEffect(() => {
+    if (
+      !settingsLoaded ||
+      !startupRestoreComplete ||
+      !connectionsLoaded ||
+      isLocked ||
+      !isPrimaryMainWindow()
+    ) {
+      return;
+    }
+    if (hasOpenedStartupConnectionsRef.current) return;
+    hasOpenedStartupConnectionsRef.current = true;
+
+    const existingConnectionIds = new Set<string>();
+    for (const tab of tabs) {
+      for (const pane of collectSessionPanes(tab.root)) {
+        if (pane.connectionId) existingConnectionIds.add(pane.connectionId);
+      }
+    }
+
+    const toOpen = savedConnections
+      .filter(
+        (connection) =>
+          isStartupOpenConnection(connection) && !existingConnectionIds.has(connection.id),
+      )
+      .sort((a, b) => {
+        const orderDiff = (a.sort_order ?? 0) - (b.sort_order ?? 0);
+        if (orderDiff !== 0) return orderDiff;
+        return a.name.localeCompare(b.name);
+      });
+
+    if (toOpen.length === 0) return;
+
+    void (async () => {
+      for (const connection of toOpen) {
+        try {
+          await connectSavedConnection(connection, {
+            failureContext: "Connection failed from startup open",
+          });
+        } catch (error) {
+          logger.error({
+            domain: "session.lifecycle",
+            event: "session.startup_open_failed",
+            message: "Failed to open startup connection",
+            ids: { connection_id: connection.id },
+            error,
+          });
+        }
+      }
+    })();
+  }, [
+    connectSavedConnection,
+    connectionsLoaded,
+    isLocked,
+    savedConnections,
+    settingsLoaded,
+    startupRestoreComplete,
+    tabs,
+  ]);
 
   const persistTerminalWindowLayout = useCallback(
     (layout: TerminalWindowNode | null, nextTabs: Tab[] = tabsRef.current) => {

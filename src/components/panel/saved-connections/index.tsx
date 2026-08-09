@@ -1,4 +1,12 @@
-import { type ComponentProps, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ComponentProps,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { BiExport, BiImport } from "react-icons/bi";
 import {
@@ -729,6 +737,31 @@ export default function SavedConnections({
     }
   };
 
+  const handleToggleOpenOnStartup = useCallback(
+    async (conn: SavedConnection) => {
+      if (
+        conn.type === "rdp" ||
+        conn.type === "vnc" ||
+        !["ssh", "local_terminal", "telnet", "serial"].includes(conn.type)
+      ) {
+        return;
+      }
+      try {
+        await invoke("save_connection", {
+          connection: {
+            ...conn,
+            open_on_startup: !conn.open_on_startup,
+            password: undefined,
+          },
+        });
+        refreshConnections();
+      } catch (e) {
+        toast.error(String(e));
+      }
+    },
+    [refreshConnections],
+  );
+
   const handleCopyConnections = useCallback(
     async (connections: SavedConnection[]) => {
       if (connections.length === 0) return;
@@ -1423,6 +1456,7 @@ export default function SavedConnections({
     handleConnectOnly,
     handleConnectSelected,
     handleCopyConnection,
+    handleToggleOpenOnStartup,
     requestMoveConnectionToGroup,
     requestMoveSelectedConnectionsToGroup,
     handleConnectionSelectionStart,
@@ -1614,19 +1648,14 @@ export default function SavedConnections({
             backgroundColor: "var(--df-bg-section-header)",
           }}
         >
-          <TypeFilterChip
-            active={typeFilter === "all"}
-            onClick={() => setTypeFilter("all")}
-          >
+          <TypeFilterChip active={typeFilter === "all"} onClick={() => setTypeFilter("all")}>
             {t("savedConnections.filterAll", "All")}
           </TypeFilterChip>
           {CONNECTION_TYPE_FILTERS.map((item) => (
             <TypeFilterChip
               key={item.id}
               active={typeFilter === item.id}
-              onClick={() =>
-                setTypeFilter((prev) => (prev === item.id ? "all" : item.id))
-              }
+              onClick={() => setTypeFilter((prev) => (prev === item.id ? "all" : item.id))}
             >
               {t(item.labelKey, item.labelFallback)}
             </TypeFilterChip>
