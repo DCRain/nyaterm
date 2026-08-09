@@ -173,6 +173,8 @@ opendal = { version = "0.58", default-features = false, features = [
 ] }
 redb = "4.1.0"
 zmodem2 = { path = "vendor/zmodem2" }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json"] }
+tower-http = { version = "0.6", default-features = false, features = ["cors"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = { version = "2", default-features = false, features = [

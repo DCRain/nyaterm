@@ -196,6 +196,7 @@ export default function AppPanelContent({
             activePane={liveActivePane}
             activeConnection={activeConnection}
             intent={aiIntent}
+            isActive={isAiActive}
           />
         </div>
       )}

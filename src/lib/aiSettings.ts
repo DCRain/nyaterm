@@ -636,6 +636,15 @@ export const DEFAULT_AI_SETTINGS: AISettings = {
     permission_mode: "confirm",
     tool_integration_mode: "nyaterm_mcp",
   },
+  opencode: {
+    enabled: false,
+    executable_path: null,
+    runtime: "run_json_cli",
+    default_model: null,
+    config_directory: null,
+    permission_mode: "confirm",
+    tool_integration_mode: "nyaterm_mcp",
+  },
 };
 
 function normalizeLocaleTag(value?: string | null): string | null {

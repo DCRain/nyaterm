@@ -44,8 +44,10 @@ pub fn run() {
     let quick_commands_store = Arc::new(QuickCommandsStore::new());
     let cloud_sync_manager = Arc::new(CloudSyncManager::new());
     let agent_approval_manager = Arc::new(AgentApprovalManager::new());
+    let nyaterm_mcp_runtime = Arc::new(core::ai::NyaTermMcpRuntime::new());
     let codex_app_server_manager = Arc::new(core::ai::CodexAppServerManager::new());
     let claude_code_runtime = Arc::new(core::ai::ClaudeCodeRuntime::new());
+    let opencode_runtime = Arc::new(core::ai::OpenCodeRuntime::new());
     let transfer_duplicate_manager = Arc::new(TransferDuplicateManager::new());
     let docker_sudo_manager = Arc::new(DockerSudoManager::new());
     let remote_stats_sampler = Arc::new(RemoteStatsSampler::default());
@@ -91,8 +93,10 @@ pub fn run() {
         .manage(quick_commands_store.clone())
         .manage(cloud_sync_manager.clone())
         .manage(agent_approval_manager.clone())
+        .manage(nyaterm_mcp_runtime.clone())
         .manage(codex_app_server_manager.clone())
         .manage(claude_code_runtime.clone())
+        .manage(opencode_runtime.clone())
         .manage(transfer_duplicate_manager.clone())
         .manage(docker_sudo_manager.clone())
         .manage(remote_stats_sampler.clone())
@@ -139,6 +143,9 @@ pub fn run() {
             cmd::ai::logout_codex,
             cmd::ai::detect_claude_code_cli,
             cmd::ai::get_claude_code_account_status,
+            cmd::ai::detect_opencode_cli,
+            cmd::ai::get_opencode_account_status,
+            cmd::ai::list_opencode_models,
             cmd::ai::respond_agent_step,
             cmd::ai::get_ai_sessions,
             cmd::ai::get_ai_messages,

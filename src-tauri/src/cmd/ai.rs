@@ -4,6 +4,7 @@ use crate::core::ai::{
     self, AgentApprovalManager, AiAuditLog, AiChatRequest, AiMessage, AiSession, AiSessionScope,
     AiStreamStart, AppendAiAuditRequest, ClaudeCodeAccountStatus, ClaudeCodeCliStatus,
     ClaudeCodeRuntime, CodexAccountStatus, CodexCliStatus, CodexLoginFlow, CodexLoginStart,
+    OpenCodeAccountStatus, OpenCodeCliStatus, OpenCodeModelInfo, OpenCodeRuntime,
 };
 use crate::error::AppResult;
 use std::sync::Arc;
@@ -183,6 +184,29 @@ pub async fn get_claude_code_account_status(
     let settings = config::load_app_settings(&app)?;
     let runtime = app.state::<Arc<ClaudeCodeRuntime>>().inner().clone();
     runtime.auth_status(&settings.ai).await
+}
+
+#[tauri::command]
+pub async fn detect_opencode_cli(app: tauri::AppHandle) -> AppResult<OpenCodeCliStatus> {
+    let settings = config::load_app_settings(&app)?;
+    Ok(ai::OpenCodeRuntime::detect_cli(settings.ai.opencode.executable_path).await)
+}
+
+#[tauri::command]
+pub async fn get_opencode_account_status(
+    app: tauri::AppHandle,
+) -> AppResult<OpenCodeAccountStatus> {
+    use tauri::Manager;
+
+    let settings = config::load_app_settings(&app)?;
+    let runtime = app.state::<Arc<OpenCodeRuntime>>().inner().clone();
+    runtime.auth_status(&settings.ai).await
+}
+
+#[tauri::command]
+pub async fn list_opencode_models(app: tauri::AppHandle) -> AppResult<Vec<OpenCodeModelInfo>> {
+    let settings = config::load_app_settings(&app)?;
+    OpenCodeRuntime::list_models(settings.ai.opencode.executable_path).await
 }
 
 #[tauri::command]

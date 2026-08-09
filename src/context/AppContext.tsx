@@ -514,6 +514,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const appSettingsLoaded = useRef(false);
   const appSettingsSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const uiSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Skip settings-changed → replaceAppSettings for saves this window just issued.
+  // Reloading masked settings after every local save caused update loops (and DevTools thrash).
+  const ignoreSettingsChangedCountRef = useRef(0);
 
   // Data State
   const [savedConnections, setSavedConnections] = useState<SavedConnection[]>([]);
@@ -598,20 +601,41 @@ export function AppProvider({ children }: { children: ReactNode }) {
     (updates: Partial<AppSettings> | ((prev: AppSettings) => Partial<AppSettings>)) => {
       setAppSettings((prev) => {
         const nextUpdates = typeof updates === "function" ? updates(prev) : updates;
+        if (Object.keys(nextUpdates).length === 0 || nextUpdates === prev) {
+          return prev;
+        }
         const next = { ...prev, ...nextUpdates };
+        const changed = Object.keys(nextUpdates).some(
+          (key) =>
+            !areSettingsValuesEqual(
+              prev[key as keyof AppSettings],
+              next[key as keyof AppSettings],
+            ),
+        );
+        if (!changed) {
+          return prev;
+        }
         appSettingsRef.current = next;
         setLoggerLevel(next.diagnostics.level);
         if (appSettingsLoaded.current) {
           if (appSettingsSaveTimerRef.current) clearTimeout(appSettingsSaveTimerRef.current);
+          // Always persist the latest ref snapshot. Capturing `next` in the timeout
+          // races with later updateUi() calls and can rewrite closed panels open again
+          // via settings-changed.
           appSettingsSaveTimerRef.current = setTimeout(() => {
-            invoke("save_app_settings", { settings: next }).catch((e) =>
+            ignoreSettingsChangedCountRef.current += 1;
+            invoke("save_app_settings", { settings: appSettingsRef.current }).catch((e) => {
+              ignoreSettingsChangedCountRef.current = Math.max(
+                0,
+                ignoreSettingsChangedCountRef.current - 1,
+              );
               logger.error({
                 domain: "settings.persistence",
                 event: "settings.save_failed",
                 message: "Failed to save app settings",
                 error: e,
-              }),
-            );
+              });
+            });
           }, 500);
         }
         return next;
@@ -621,12 +645,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   const replaceAppSettings = useCallback((next: AppSettings) => {
+    if (ignoreSettingsChangedCountRef.current > 0) {
+      ignoreSettingsChangedCountRef.current -= 1;
+      return;
+    }
     if (appSettingsSaveTimerRef.current) {
       clearTimeout(appSettingsSaveTimerRef.current);
       appSettingsSaveTimerRef.current = null;
     }
+    // Keep pending UI flushes; clearing them lets a concurrent full settings save
+    // resurrect stale open panels before save_app_ui_settings runs.
     setAppSettings((current) => {
-      const normalized = preserveAppSettingsReferences(current, next);
+      const localUi = appSettingsRef.current.ui;
+      const mergedNext: AppSettings = {
+        ...next,
+        ui: {
+          ...next.ui,
+          // Panel chrome is owned by the main window via updateUi / save_app_ui_settings.
+          // settings-changed reloads must not clobber in-memory open/closed state.
+          active_left_panel: localUi.active_left_panel,
+          active_right_panel: localUi.active_right_panel,
+          left_open_panels: localUi.left_open_panels,
+          right_open_panels: localUi.right_open_panels,
+          panel_stack_sizes: localUi.panel_stack_sizes,
+        },
+      };
+      const normalized = preserveAppSettingsReferences(current, mergedNext);
       appSettingsRef.current = normalized;
       setLoggerLevel(normalized.diagnostics.level);
       return normalized;
@@ -638,13 +682,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
     (updates: Partial<UiConfig> | ((prev: UiConfig) => Partial<UiConfig>)) => {
       setAppSettings((prev) => {
         const nextUpdates = typeof updates === "function" ? updates(prev.ui) : updates;
+        // Callers sometimes `return prev` intending a no-op; that is the full UiConfig,
+        // not an empty patch — treat same-reference and deep-equal merges as no-ops.
+        if (
+          Object.keys(nextUpdates).length === 0 ||
+          nextUpdates === prev.ui ||
+          areSettingsValuesEqual(prev.ui, { ...prev.ui, ...nextUpdates })
+        ) {
+          return prev;
+        }
         const nextUi = { ...prev.ui, ...nextUpdates };
         const next = { ...prev, ui: nextUi };
         appSettingsRef.current = next;
         if (appSettingsLoaded.current) {
           if (uiSaveTimerRef.current) clearTimeout(uiSaveTimerRef.current);
           uiSaveTimerRef.current = setTimeout(() => {
-            invoke("save_app_ui_settings", { ui: nextUi }).catch((e) =>
+            invoke("save_app_ui_settings", { ui: appSettingsRef.current.ui }).catch((e) =>
               logger.error({
                 domain: "settings.persistence",
                 event: "ui_settings.save_failed",

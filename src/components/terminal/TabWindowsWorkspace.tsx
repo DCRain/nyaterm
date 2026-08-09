@@ -263,6 +263,9 @@ function LeafWindow({
   const dropZone = dropState?.leafId === leaf.id ? dropState.zone : null;
 
   useEffect(() => {
+    let frame = 0;
+    let idleTimer = 0;
+
     const updateRect = () => {
       const content = contentRef.current;
       const workspace = workspaceRef.current;
@@ -279,7 +282,12 @@ function LeafWindow({
     };
 
     const scheduleUpdate = () => {
-      requestAnimationFrame(updateRect);
+      // Debounce leaf rect React updates — resize oscillation otherwise floods DevTools.
+      window.clearTimeout(idleTimer);
+      idleTimer = window.setTimeout(() => {
+        cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(updateRect);
+      }, 100);
     };
 
     scheduleUpdate();
@@ -292,6 +300,8 @@ function LeafWindow({
 
     return () => {
       observer.disconnect();
+      window.clearTimeout(idleTimer);
+      cancelAnimationFrame(frame);
       window.removeEventListener("resize", scheduleUpdate);
       window.removeEventListener("nyaterm:refresh-terminals", scheduleUpdate);
       onLeafContentRectChange(leaf.id, null);

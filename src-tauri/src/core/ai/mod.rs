@@ -2,6 +2,7 @@ mod agent;
 mod codex;
 pub(crate) mod external;
 mod history;
+pub(crate) mod mcp;
 mod model;
 mod parser;
 mod prompt;
@@ -10,12 +11,17 @@ pub(crate) mod stream;
 mod types;
 
 pub use agent::AgentApprovalManager;
+pub use mcp::NyaTermMcpRuntime;
 pub use codex::{
     CodexAccountStatus, CodexAppServerManager, CodexCliStatus, CodexLoginFlow, CodexLoginStart,
     manager_from_app, run_codex_stream,
 };
 pub use external::claude_code::{
     ClaudeCodeAccountStatus, ClaudeCodeCliStatus, ClaudeCodeRuntime, run_claude_code_stream,
+};
+pub use external::opencode::{
+    OpenCodeAccountStatus, OpenCodeCliStatus, OpenCodeModelInfo, OpenCodeRuntime,
+    run_opencode_stream,
 };
 pub use history::{
     append_ai_audit, clear_ai_history, delete_ai_session, get_ai_audit_logs, get_ai_messages,

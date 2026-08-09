@@ -72,7 +72,8 @@ interface TerminalFitSchedulerOptions {
 }
 
 const OBSERVED_SIZE_EPSILON_PX = 0.1;
-const OSCILLATION_SUPPRESS_MS = 160;
+/** Hold geometry after A-B-A-B detection; short settles re-ignite the flip and flood React commits. */
+const OSCILLATION_SUPPRESS_MS = 2_000;
 const OSCILLATION_WARN_INTERVAL_MS = 1_000;
 
 function dimensionsEqual(
@@ -435,12 +436,16 @@ export class TerminalFitScheduler {
     if (this.oscillationSettleTimer !== null) {
       this.clearTimer(this.oscillationSettleTimer);
     }
+    // After the quiet period, re-measure once from the latest container size.
+    // Do not force the suppressed alternate size — that continues A↔B flipping.
     this.oscillationSettleTimer = this.setTimer(() => {
       this.oscillationSettleTimer = null;
+      const container = this.options.getContainer();
+      const rect = container?.getBoundingClientRect();
       this.schedule({
-        ...request,
         reason: "oscillation-settle",
-        force: true,
+        observedWidth: rect?.width ?? request.observedWidth,
+        observedHeight: rect?.height ?? request.observedHeight,
       });
     }, OSCILLATION_SUPPRESS_MS);
   }

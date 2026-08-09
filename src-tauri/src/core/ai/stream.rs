@@ -128,10 +128,36 @@ pub fn start_chat_stream(
         AiAgentKind::ClaudeCode => {
             use tauri::Manager;
             let claude_runtime = app.state::<Arc<super::ClaudeCodeRuntime>>().inner().clone();
+            let approval_manager = app.state::<Arc<AgentApprovalManager>>().inner().clone();
+            let mcp_runtime = app.state::<Arc<super::NyaTermMcpRuntime>>().inner().clone();
             tauri::async_runtime::spawn(async move {
                 super::run_claude_code_stream(
                     task_app,
                     claude_runtime,
+                    session_manager,
+                    approval_manager,
+                    mcp_runtime,
+                    task_stream_id,
+                    task_session_id,
+                    request,
+                    settings.ai,
+                    cancel_rx,
+                )
+                .await;
+            });
+        }
+        AiAgentKind::OpenCode => {
+            use tauri::Manager;
+            let opencode_runtime = app.state::<Arc<super::OpenCodeRuntime>>().inner().clone();
+            let approval_manager = app.state::<Arc<AgentApprovalManager>>().inner().clone();
+            let mcp_runtime = app.state::<Arc<super::NyaTermMcpRuntime>>().inner().clone();
+            tauri::async_runtime::spawn(async move {
+                super::run_opencode_stream(
+                    task_app,
+                    opencode_runtime,
+                    session_manager,
+                    approval_manager,
+                    mcp_runtime,
                     task_stream_id,
                     task_session_id,
                     request,

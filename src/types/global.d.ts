@@ -1141,7 +1141,7 @@ export interface DiagnosticsSettings {
 export type RiskLevel = "low" | "medium" | "high" | "critical";
 export type AIMode = "ask" | "agent";
 export type AIAgentCommandExecutionMode = "confirm_each" | "smart" | "auto";
-export type AIAgentKind = "nyaterm" | "codex" | "claude_code";
+export type AIAgentKind = "nyaterm" | "codex" | "claude_code" | "opencode";
 export type AIPermissionMode = "observer" | "confirm" | "auto";
 export type AIReasoningEffort =
   | "auto"
@@ -1191,6 +1191,16 @@ export interface CodexIntegrationSettings {
 }
 
 export interface ClaudeCodeIntegrationSettings {
+  enabled: boolean;
+  executable_path?: string | null;
+  runtime?: string | null;
+  default_model?: string | null;
+  config_directory?: string | null;
+  permission_mode?: AIPermissionMode;
+  tool_integration_mode?: string | null;
+}
+
+export interface OpenCodeIntegrationSettings {
   enabled: boolean;
   executable_path?: string | null;
   runtime?: string | null;
@@ -1255,6 +1265,7 @@ export interface AISettings {
   agent_smart_auto_execute_max_risk: RiskLevel;
   codex: CodexIntegrationSettings;
   claude_code: ClaudeCodeIntegrationSettings;
+  opencode: OpenCodeIntegrationSettings;
 }
 
 export interface AIContext {

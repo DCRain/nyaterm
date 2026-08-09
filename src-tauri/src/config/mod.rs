@@ -71,6 +71,7 @@ pub use settings::{
     AiPermissionMode, AiProviderCredential, AiProviderKind, AiProviderProfile, AiReasoningEffort,
     AiSettings, AppSettings, AppearanceSettings, ClaudeCodeIntegrationSettings,
     CodexIntegrationSettings, CodexThreadMode, DiagnosticsLogLevel, DiagnosticsSettings,
+    OpenCodeIntegrationSettings,
     GeneralSettings, InteractionSettings, KeywordHighlightRule, ProxySettings, RiskLevel,
     SearchEngine, SearchSettings, SecuritySettings, TerminalColorsConfig, TerminalSettings,
     ThemeColorsConfig, ThemeConfig, TransferSettings, TranslationSettings,

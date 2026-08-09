@@ -42,6 +42,9 @@ pub enum AiAgentKind {
     Nyaterm,
     Codex,
     ClaudeCode,
+    /// Keep wire format as `opencode` (not snake_case `open_code`) to match product naming.
+    #[serde(rename = "opencode", alias = "open_code")]
+    OpenCode,
 }
 
 impl Default for AiAgentKind {
@@ -239,6 +242,38 @@ impl Default for ClaudeCodeIntegrationSettings {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OpenCodeIntegrationSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub executable_path: Option<String>,
+    #[serde(default)]
+    pub runtime: Option<String>,
+    #[serde(default)]
+    pub default_model: Option<String>,
+    #[serde(default)]
+    pub config_directory: Option<String>,
+    #[serde(default)]
+    pub permission_mode: AiPermissionMode,
+    #[serde(default)]
+    pub tool_integration_mode: Option<String>,
+}
+
+impl Default for OpenCodeIntegrationSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            executable_path: None,
+            runtime: Some("run_json_cli".to_string()),
+            default_model: None,
+            config_directory: None,
+            permission_mode: AiPermissionMode::Confirm,
+            tool_integration_mode: Some("nyaterm_mcp".to_string()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiProviderCredential {
     pub id: String,
@@ -319,6 +354,8 @@ pub struct AiSettings {
     pub codex: CodexIntegrationSettings,
     #[serde(default)]
     pub claude_code: ClaudeCodeIntegrationSettings,
+    #[serde(default)]
+    pub opencode: OpenCodeIntegrationSettings,
 }
 
 fn default_schema_version() -> u32 {
@@ -601,6 +638,7 @@ impl Default for AiSettings {
             agent_smart_auto_execute_max_risk: default_agent_smart_auto_execute_max_risk(),
             codex: CodexIntegrationSettings::default(),
             claude_code: ClaudeCodeIntegrationSettings::default(),
+            opencode: OpenCodeIntegrationSettings::default(),
         }
     }
 }

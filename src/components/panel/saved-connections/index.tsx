@@ -178,7 +178,7 @@ export default function SavedConnections({
     const minWidth = 306;
     updateUi((prev) => {
       if (prev.saved_connections_filter_width_migrated) {
-        return prev;
+        return {};
       }
       return {
         left_width: Math.max(prev.left_width || 0, minWidth),

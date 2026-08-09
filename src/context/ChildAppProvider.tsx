@@ -225,6 +225,7 @@ const DEFAULT_RUNTIME_INFO: AppRuntimeInfo = {
 export function ChildAppProvider({ children }: { children: ReactNode }) {
   const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS);
   const loaded = useRef(false);
+  const appSettingsRef = useRef<AppSettings>(DEFAULT_APP_SETTINGS);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const { isLocked, setIsLocked, lockStateLoaded } = useAppLockState();
@@ -232,6 +233,7 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
   const loadAppSettings = useCallback(() => {
     invoke<AppSettings>("get_app_settings")
       .then((cfg) => {
+        appSettingsRef.current = cfg;
         setAppSettings(cfg);
         setLoggerLevel(cfg.diagnostics.level);
         loaded.current = true;
@@ -313,12 +315,23 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
     (updates: Partial<AppSettings> | ((prev: AppSettings) => Partial<AppSettings>)) => {
       setAppSettings((prev) => {
         const nextUpdates = typeof updates === "function" ? updates(prev) : updates;
+        if (Object.keys(nextUpdates).length === 0 || nextUpdates === prev) {
+          return prev;
+        }
         const next = { ...prev, ...nextUpdates };
+        const changed = Object.keys(nextUpdates).some((key) => {
+          const typedKey = key as keyof AppSettings;
+          return JSON.stringify(prev[typedKey]) !== JSON.stringify(next[typedKey]);
+        });
+        if (!changed) {
+          return prev;
+        }
+        appSettingsRef.current = next;
         setLoggerLevel(next.diagnostics.level);
         if (loaded.current) {
           if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
           saveTimerRef.current = setTimeout(() => {
-            invoke("save_app_settings", { settings: next }).catch((e) =>
+            invoke("save_app_settings", { settings: appSettingsRef.current }).catch((e) =>
               logger.error({
                 domain: "settings.persistence",
                 event: "settings.save_failed",
@@ -339,6 +352,7 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
       clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
     }
+    appSettingsRef.current = next;
     setLoggerLevel(next.diagnostics.level);
     setAppSettings(next);
   }, []);

@@ -43,7 +43,7 @@ import { useApp } from "@/context/AppContext";
 import { useTheme } from "@/context/ThemeContext";
 import type { AIErrorDetectedDetail } from "@/lib/aiEvents";
 import { AI_ERROR_DETECTED_EVENT } from "@/lib/aiEvents";
-import { getEnabledAIModels, resolveAILanguage, selectDefaultAIModel } from "@/lib/aiSettings";
+import { DEFAULT_AI_SETTINGS, getEnabledAIModels, resolveAILanguage, selectDefaultAIModel } from "@/lib/aiSettings";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import { getNextQuickCommandCategorySortOrder } from "@/lib/quickCommandCategories";
@@ -91,7 +91,7 @@ interface AIDraft {
 }
 
 type AIPanelView = { mode: "draft" } | { mode: "session"; sessionId: string };
-type AIRunMode = "ask" | "nyaterm_agent" | "codex_agent" | "claude_code_agent";
+type AIRunMode = "ask" | "nyaterm_agent" | "codex_agent" | "claude_code_agent" | "opencode_agent";
 
 interface AIStreamRuntime {
   streamId: string;
@@ -113,7 +113,25 @@ function resolveRunMode(mode: AIMode, agentKind: AIAgentKind | null | undefined)
   if (mode !== "agent") return "ask";
   if (agentKind === "codex") return "codex_agent";
   if (agentKind === "claude_code") return "claude_code_agent";
+  if (agentKind === "opencode") return "opencode_agent";
   return "nyaterm_agent";
+}
+
+function isClaudeCodeAgentMode(runMode: AIRunMode) {
+  return runMode === "claude_code_agent";
+}
+
+function isOpenCodeAgentMode(runMode: AIRunMode) {
+  return runMode === "opencode_agent";
+}
+
+function buildOpenCodeModelItem(name: string): AIModelConfigItem {
+  return {
+    id: `opencode:${name}`,
+    name,
+    enabled: true,
+    source: "manual",
+  };
 }
 
 function buildAIScopeKey(pane: SessionPane | null) {
@@ -130,7 +148,12 @@ function buildOwnerScope(pane: SessionPane | null): AISessionScope {
   };
 }
 
-function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantPanelProps) {
+function AIAssistantPanel({
+  activePane,
+  activeConnection,
+  intent,
+  isActive = true,
+}: AIAssistantPanelProps) {
   const { t } = useTranslation();
   const { appSettings, updateAppSettings, tabs, savedConnections } = useApp();
   const { theme } = useTheme();
@@ -162,6 +185,7 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
   const [autoModeDialogOpen, setAutoModeDialogOpen] = useState(false);
   const [pendingExecutionMode, setPendingExecutionMode] =
     useState<AIAgentCommandExecutionMode | null>(null);
+  const [openCodeModels, setOpenCodeModels] = useState<AIModelConfigItem[]>([]);
   const handledIntentIdRef = useRef<string | null>(null);
   const executionMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const executionMenuRef = useRef<HTMLDivElement | null>(null);
@@ -189,7 +213,19 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
     [enabledModels],
   );
   const selectedModel = useMemo(() => {
-    if (runMode === "claude_code_agent") return null;
+    if (isClaudeCodeAgentMode(runMode)) return null;
+    if (isOpenCodeAgentMode(runMode)) {
+      const configuredModel = aiSettings.opencode?.default_model?.trim() || null;
+      const matched =
+        (configuredModel
+          ? openCodeModels.find(
+              (model) => model.name === configuredModel || model.id === `opencode:${configuredModel}`,
+            )
+          : null) ?? null;
+      if (matched) return matched;
+      if (configuredModel) return buildOpenCodeModelItem(configuredModel);
+      return openCodeModels[0] ?? null;
+    }
     if (runMode === "codex_agent") {
       const configuredModel = aiSettings.codex?.default_model ?? null;
       return (
@@ -204,13 +240,29 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
     return (
       (isGenaiModel(storedSelectedModel) ? storedSelectedModel : null) ?? genaiModels[0] ?? null
     );
-  }, [aiSettings.codex?.default_model, codexModels, genaiModels, runMode, storedSelectedModel]);
-  const selectableModels =
-    runMode === "codex_agent" ? codexModels : runMode === "claude_code_agent" ? [] : genaiModels;
-  const externalModelLabel =
-    runMode === "claude_code_agent"
-      ? (aiSettings.claude_code?.default_model ?? "Claude Code")
-      : null;
+  }, [
+    aiSettings.codex?.default_model,
+    aiSettings.opencode?.default_model,
+    codexModels,
+    genaiModels,
+    openCodeModels,
+    runMode,
+    storedSelectedModel,
+  ]);
+  const selectableModels = isClaudeCodeAgentMode(runMode)
+    ? []
+    : isOpenCodeAgentMode(runMode)
+      ? openCodeModels.length > 0
+        ? openCodeModels
+        : selectedModel
+          ? [selectedModel]
+          : []
+      : runMode === "codex_agent"
+        ? codexModels
+        : genaiModels;
+  const externalModelLabel = isClaudeCodeAgentMode(runMode)
+    ? (aiSettings.claude_code?.default_model ?? "Claude Code")
+    : null;
   const agentExecutionMode = aiSettings.agent_command_execution_mode ?? "confirm_each";
   const agentBackgroundExecutionEnabled = aiSettings.agent_background_execution_enabled ?? false;
   const scopeKey = useMemo(() => buildAIScopeKey(activePane), [activePane]);
@@ -280,11 +332,6 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
     effectivePanes.length > 1 && activePane
       ? t("ai.panelMetaMultiTarget", { target: activePane.name, count: effectivePanes.length - 1 })
       : (activePane?.name ?? selectedModel?.name ?? externalModelLabel ?? t("ai.notConfigured"));
-  useEffect(() => {
-    if (!selectedModel || selectedModel.id === aiSettings.default_model_id) return;
-    updateAppSettings({ ai: { ...aiSettings, default_model_id: selectedModel.id } });
-  }, [aiSettings, selectedModel, updateAppSettings]);
-
   const filteredSessions = useMemo(() => {
     const keyword = historyQuery.trim().toLowerCase();
     if (!keyword) return sessions;
@@ -352,6 +399,49 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
     window.addEventListener(AI_ERROR_DETECTED_EVENT, handler);
     return () => window.removeEventListener(AI_ERROR_DETECTED_EVENT, handler);
   }, [activePane?.sessionId, effectivePanes]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: avoid refetch loops when saving default_model
+  useEffect(() => {
+    if (!isActive || !isOpenCodeAgentMode(runMode)) {
+      return;
+    }
+
+    let cancelled = false;
+    void invoke<Array<{ id: string; name: string }>>("list_opencode_models")
+      .then((models) => {
+        if (cancelled) return;
+        const next = models
+          .map((model) => buildOpenCodeModelItem(model.name))
+          .filter((model) => !!model.name);
+        setOpenCodeModels(next);
+        const configured = aiSettings.opencode?.default_model?.trim();
+        if (!configured && next[0]) {
+          updateAppSettings((prev) => {
+            if (prev.ai.opencode?.default_model?.trim()) return {};
+            return {
+              ai: {
+                ...prev.ai,
+                opencode: {
+                  ...DEFAULT_AI_SETTINGS.opencode,
+                  ...prev.ai.opencode,
+                  enabled: true,
+                  default_model: next[0].name,
+                },
+              },
+            };
+          });
+        }
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setOpenCodeModels([]);
+        toast.error(getErrorMessage(error));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isActive, runMode, aiSettings.opencode?.executable_path]);
 
   const handleMessagesScroll = useCallback(() => {
     const el = scrollContainerRef.current;
@@ -452,6 +542,22 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
       if (nextMode === "claude_code_agent") {
         updateAppSettings({
           ai: { ...aiSettings, default_mode: "agent", default_agent_kind: "claude_code" },
+        });
+        return;
+      }
+
+      if (nextMode === "opencode_agent") {
+        updateAppSettings({
+          ai: {
+            ...aiSettings,
+            default_mode: "agent",
+            default_agent_kind: "opencode",
+            opencode: {
+              ...DEFAULT_AI_SETTINGS.opencode,
+              ...aiSettings.opencode,
+              enabled: true,
+            },
+          },
         });
         return;
       }
@@ -665,9 +771,13 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
           ? "codex"
           : runMode === "claude_code_agent"
             ? "claude_code"
-            : "nyaterm";
+            : runMode === "opencode_agent"
+              ? "opencode"
+              : "nyaterm";
       if (!requestModel && requestAgentKind !== "claude_code") {
-        toast.error(t("ai.noEnabledModels"));
+        toast.error(
+          requestAgentKind === "opencode" ? t("ai.noOpenCodeModel") : t("ai.noEnabledModels"),
+        );
         return;
       }
       const requestMode: AIMode = runMode === "ask" ? "ask" : "agent";
@@ -871,7 +981,11 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
                   ? (aiSettings.claude_code?.permission_mode ??
                     aiSettings.external_agent_permission_mode ??
                     "confirm")
-                  : "confirm",
+                  : requestAgentKind === "opencode"
+                    ? (aiSettings.opencode?.permission_mode ??
+                      aiSettings.external_agent_permission_mode ??
+                      "confirm")
+                    : "confirm",
             defaultTargetSessionId: panes[0]?.sessionId ?? null,
             existingExternalSessionId:
               currentSession?.agentKind === requestAgentKind
@@ -884,7 +998,13 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
             userInput,
             mode: requestMode,
             modelId: requestModel?.id ?? null,
-            modelName: requestModel?.name ?? null,
+            modelName:
+              requestModel?.name ??
+              (requestAgentKind === "claude_code"
+                ? (aiSettings.claude_code?.default_model ?? null)
+                : requestAgentKind === "opencode"
+                  ? (aiSettings.opencode?.default_model ?? null)
+                  : null),
             context,
             options: {
               maxOutputCommands: 2,
@@ -909,9 +1029,12 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
     [
       activeConnection,
       aiSettings.claude_code?.permission_mode,
+      aiSettings.claude_code?.default_model,
       aiSettings.codex?.permission_mode,
       aiSettings.enabled,
       aiSettings.external_agent_permission_mode,
+      aiSettings.opencode?.permission_mode,
+      aiSettings.opencode?.default_model,
       appSettings.ui.language,
       appendAudit,
       buildTargetContexts,
@@ -1592,7 +1715,7 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
                     <MdAutoAwesome className="text-3xl" />
                     <div>{t("ai.goToSettingsToEnable")}</div>
                   </>
-                ) : runMode !== "claude_code_agent" && !selectedModel ? (
+                ) : !isClaudeCodeAgentMode(runMode) && !selectedModel ? (
                   <div className="flex flex-col items-center gap-4 px-4">
                     <div className="flex size-12 items-center justify-center rounded-full border border-amber-500/30 bg-amber-500/10">
                       <MdErrorOutline className="text-2xl text-amber-500" />
@@ -1864,6 +1987,9 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
                       <SelectItem value="claude_code_agent">
                         {t("ai.modeClaudeCodeAgent")}
                       </SelectItem>
+                      <SelectItem value="opencode_agent">
+                        {t("ai.modeOpenCodeAgent")}
+                      </SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -1876,9 +2002,23 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
                     selectedReasoningEffort={aiSettings.default_reasoning_effort ?? "auto"}
                     open={modelPopoverOpen}
                     onOpenChange={setModelPopoverOpen}
-                    onSelect={(model) =>
-                      updateAppSettings({ ai: { ...aiSettings, default_model_id: model.id } })
-                    }
+                    onSelect={(model) => {
+                      if (isOpenCodeAgentMode(runMode)) {
+                        updateAppSettings({
+                          ai: {
+                            ...aiSettings,
+                            opencode: {
+                              ...DEFAULT_AI_SETTINGS.opencode,
+                              ...aiSettings.opencode,
+                              enabled: true,
+                              default_model: model.name,
+                            },
+                          },
+                        });
+                        return;
+                      }
+                      updateAppSettings({ ai: { ...aiSettings, default_model_id: model.id } });
+                    }}
                     onSelectReasoningEffort={(default_reasoning_effort) =>
                       updateAppSettings({ ai: { ...aiSettings, default_reasoning_effort } })
                     }
@@ -1898,7 +2038,7 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
                     onClick={submit}
                     disabled={
                       !input.trim() ||
-                      (!selectedModel && runMode !== "claude_code_agent") ||
+                      (!selectedModel && !isClaudeCodeAgentMode(runMode)) ||
                       !aiSettings.enabled
                     }
                   >

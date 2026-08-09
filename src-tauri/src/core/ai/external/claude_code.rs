@@ -14,6 +14,11 @@ use tokio::sync::{Mutex, oneshot};
 use tokio::time::timeout;
 
 use crate::config::{AiAgentKind, AiPermissionMode, AiSettings};
+use crate::core::ai::agent::AgentApprovalManager;
+use crate::core::ai::mcp::{
+    NyaTermMcpRuntime, RegisterMcpTurnRequest, is_nyaterm_mcp_enabled, write_claude_mcp_config,
+};
+use crate::core::session::SessionManager;
 use crate::error::{AppError, AppResult};
 use crate::utils::process::hide_window;
 
@@ -128,6 +133,9 @@ impl ClaudeCodeRuntime {
 pub async fn run_claude_code_stream(
     app: AppHandle,
     runtime: Arc<ClaudeCodeRuntime>,
+    session_manager: Arc<SessionManager>,
+    approval_manager: Arc<AgentApprovalManager>,
+    mcp_runtime: Arc<NyaTermMcpRuntime>,
     stream_id: String,
     session_id: String,
     mut request: AiChatRequest,
@@ -137,6 +145,9 @@ pub async fn run_claude_code_stream(
     let result = run_claude_code_stream_inner(
         app.clone(),
         runtime,
+        session_manager,
+        approval_manager,
+        mcp_runtime,
         stream_id.clone(),
         session_id.clone(),
         &mut request,
@@ -168,6 +179,9 @@ pub async fn run_claude_code_stream(
 async fn run_claude_code_stream_inner(
     app: AppHandle,
     runtime: Arc<ClaudeCodeRuntime>,
+    session_manager: Arc<SessionManager>,
+    approval_manager: Arc<AgentApprovalManager>,
+    mcp_runtime: Arc<NyaTermMcpRuntime>,
     stream_id: String,
     session_id: String,
     request: &mut AiChatRequest,
@@ -213,6 +227,46 @@ async fn run_claude_code_stream_inner(
         save_user_message(&app, &session_id, request)?;
     }
 
+    let mcp_enabled = should_attach_nyaterm_mcp_claude(request, &settings);
+    let mut mcp_token: Option<String> = None;
+    let mut mcp_config_path: Option<std::path::PathBuf> = None;
+    if mcp_enabled {
+        match mcp_runtime
+            .register_turn(RegisterMcpTurnRequest {
+                app: app.clone(),
+                session_manager: session_manager.clone(),
+                approval_manager: approval_manager.clone(),
+                stream_id: stream_id.clone(),
+                session_id: session_id.clone(),
+                request: request.clone(),
+                settings: settings.clone(),
+            })
+            .await
+        {
+            Ok(endpoint) => match write_claude_mcp_config(&endpoint.url, &endpoint.token) {
+                Ok(paths) => {
+                    mcp_token = Some(endpoint.token);
+                    mcp_config_path = Some(paths.config_path);
+                }
+                Err(error) => {
+                    mcp_runtime.unregister_turn(&endpoint.token).await;
+                    tracing::warn!(
+                        target: "nyaterm_mcp",
+                        error = %error,
+                        "Failed to write Claude MCP config; continuing without MCP"
+                    );
+                }
+            },
+            Err(error) => {
+                tracing::warn!(
+                    target: "nyaterm_mcp",
+                    error = %error,
+                    "Failed to register Claude MCP turn; continuing without MCP"
+                );
+            }
+        }
+    }
+
     let prompt = build_prompt(request, &settings);
     let mut child = Command::new(&executable);
     hide_window(&mut child);
@@ -224,7 +278,7 @@ async fn run_claude_code_stream_inner(
         .arg("--permission-mode")
         .arg(claude_permission_mode(&request.permission_mode))
         .arg("--append-system-prompt")
-        .arg(claude_system_context(request))
+        .arg(claude_system_context(request, mcp_token.is_some()))
         .arg(prompt);
 
     if let Some(model) = request
@@ -250,15 +304,25 @@ async fn run_claude_code_stream_inner(
     {
         child.env("CLAUDE_CONFIG_DIR", config_dir);
     }
+    if let Some(config_path) = mcp_config_path.as_ref() {
+        child.arg("--mcp-config").arg(config_path);
+    }
 
     child.stdin(Stdio::null());
     child.stdout(Stdio::piped());
     child.stderr(Stdio::piped());
     child.kill_on_drop(true);
 
-    let mut child = child
-        .spawn()
-        .map_err(|error| AppError::Config(format!("Failed to start Claude Code: {error}")))?;
+    let mut child = match child.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            cleanup_claude_mcp_turn(&mcp_runtime, mcp_token.as_deref(), mcp_config_path.as_ref())
+                .await;
+            return Err(AppError::Config(format!(
+                "Failed to start Claude Code: {error}"
+            )));
+        }
+    };
     let stdout = child
         .stdout
         .take()
@@ -344,6 +408,7 @@ async fn run_claude_code_stream_inner(
 
     runtime.active_turns.lock().await.remove(&turn_id);
     let status = child.wait().await.ok();
+    cleanup_claude_mcp_turn(&mcp_runtime, mcp_token.as_deref(), mcp_config_path.as_ref()).await;
     loop_result?;
     if status.as_ref().is_some_and(|status| !status.success()) {
         return Err(AppError::Config(format!(
@@ -392,15 +457,60 @@ fn claude_permission_mode(mode: &AiPermissionMode) -> &'static str {
     }
 }
 
-fn claude_system_context(request: &AiChatRequest) -> String {
+fn should_attach_nyaterm_mcp_claude(request: &AiChatRequest, settings: &AiSettings) -> bool {
+    if !is_nyaterm_mcp_enabled(settings.claude_code.tool_integration_mode.as_deref()) {
+        return false;
+    }
+    if request.permission_mode == AiPermissionMode::Observer {
+        return false;
+    }
+    request
+        .terminal_session_id
+        .as_deref()
+        .or(request.default_target_session_id.as_deref())
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+        || !request.targets.is_empty()
+}
+
+async fn cleanup_claude_mcp_turn(
+    mcp_runtime: &NyaTermMcpRuntime,
+    token: Option<&str>,
+    config_path: Option<&std::path::PathBuf>,
+) {
+    if let Some(token) = token {
+        mcp_runtime.unregister_turn(token).await;
+    }
+    if let Some(path) = config_path {
+        if let Some(parent) = path.parent() {
+            let _ = tokio::fs::remove_dir_all(parent).await;
+        } else {
+            let _ = tokio::fs::remove_file(path).await;
+        }
+    }
+}
+
+fn claude_system_context(request: &AiChatRequest, mcp_attached: bool) -> String {
     let default_target = request
         .default_target_session_id
         .as_deref()
         .or(request.terminal_session_id.as_deref())
         .unwrap_or("none");
-    format!(
-        "You are running inside NyaTerm. Use NyaTerm MCP tools for terminal sessions when available. Do not read SSH passwords, private keys, OAuth tokens, or internal app credentials. Do not create separate SSH connections to bypass NyaTerm SessionManager. Default terminal session: {default_target}."
-    )
+    if mcp_attached {
+        format!(
+            "You are running inside NyaTerm. NyaTerm MCP tools are available as nyaterm_terminal \
+(get_context, execute_command). For commands that must run in the user's NyaTerm terminal pane \
+(including changing cwd/drive), call nyaterm_terminal.execute_command instead of local Bash. \
+Do not read SSH passwords, private keys, OAuth tokens, or internal app credentials. \
+Do not create separate SSH connections to bypass NyaTerm SessionManager. Default terminal session: {default_target}."
+        )
+    } else {
+        format!(
+            "You are running inside NyaTerm. Use NyaTerm MCP tools for terminal sessions when available. \
+Do not read SSH passwords, private keys, OAuth tokens, or internal app credentials. \
+Do not create separate SSH connections to bypass NyaTerm SessionManager. Default terminal session: {default_target}."
+        )
+    }
 }
 
 fn extract_session_id(value: &Value) -> Option<String> {

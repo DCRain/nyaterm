@@ -11,6 +11,7 @@ use crate::core::ai::types::AiAttachment;
 use crate::error::AppResult;
 
 pub mod claude_code;
+pub mod opencode;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]

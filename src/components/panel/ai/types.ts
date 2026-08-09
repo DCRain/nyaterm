@@ -5,6 +5,8 @@ export interface AIAssistantPanelProps {
   activePane: SessionPane | null;
   activeConnection?: SavedConnection | null;
   intent: AIOpenIntent | null;
+  /** False when the panel is kept mounted but hidden; skip background settings churn. */
+  isActive?: boolean;
 }
 
 export type AICommandExecutionStatus =

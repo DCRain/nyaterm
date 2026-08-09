@@ -133,7 +133,7 @@ export default function TerminalGutter({
   });
 
   const computeLines = useCallback(() => {
-    if (suspended) return;
+    if (suspended || (!showLineNumbers && !showTimestamps)) return;
     const terminal = terminalRef.current;
     if (!terminal || !terminal.element) return;
 
@@ -196,13 +196,31 @@ export default function TerminalGutter({
       });
     }
 
-    setLayout({
-      lines: nextLines,
-      rowHeight,
-      topPadding,
-      fontFamily: String(terminal.options.fontFamily ?? "inherit"),
-      fontSize,
-      cellWidth,
+    setLayout((prev) => {
+      if (
+        prev.rowHeight === rowHeight &&
+        prev.topPadding === topPadding &&
+        prev.fontFamily === String(terminal.options.fontFamily ?? "inherit") &&
+        prev.fontSize === fontSize &&
+        prev.cellWidth === cellWidth &&
+        prev.lines.length === nextLines.length &&
+        prev.lines.every(
+          (line, index) =>
+            line.key === nextLines[index]?.key &&
+            line.lineNumber === nextLines[index]?.lineNumber &&
+            line.timestamp === nextLines[index]?.timestamp,
+        )
+      ) {
+        return prev;
+      }
+      return {
+        lines: nextLines,
+        rowHeight,
+        topPadding,
+        fontFamily: String(terminal.options.fontFamily ?? "inherit"),
+        fontSize,
+        cellWidth,
+      };
     });
   }, [
     suspended,
@@ -215,14 +233,15 @@ export default function TerminalGutter({
   ]);
 
   const scheduleUpdate = useCallback(() => {
+    if (suspended || (!showLineNumbers && !showTimestamps)) return;
     cancelAnimationFrame(rafRef.current);
     rafRef.current = requestAnimationFrame(() => {
       computeLines();
     });
-  }, [computeLines]);
+  }, [computeLines, showLineNumbers, showTimestamps, suspended]);
 
   useEffect(() => {
-    if (suspended) {
+    if (suspended || (!showLineNumbers && !showTimestamps)) {
       cancelAnimationFrame(rafRef.current);
       return;
     }
@@ -288,12 +307,12 @@ export default function TerminalGutter({
         window.removeEventListener("nyaterm:refresh-gutter", handleExternalRefresh);
       }
     };
-  }, [suspended, terminalRef, scheduleUpdate, sessionId]);
+  }, [suspended, terminalRef, scheduleUpdate, sessionId, showLineNumbers, showTimestamps]);
 
   useEffect(() => {
-    if (suspended) return;
+    if (suspended || (!showLineNumbers && !showTimestamps)) return;
     scheduleUpdate();
-  }, [scheduleUpdate, suspended]);
+  }, [scheduleUpdate, showLineNumbers, showTimestamps, suspended]);
 
   if (suspended || (!showLineNumbers && !showTimestamps)) {
     return null;

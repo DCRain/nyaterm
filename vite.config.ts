@@ -8,11 +8,19 @@ import { browserslistToTargets } from "lightningcss";
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 
-/** Inject standalone React DevTools bridge (http://localhost:8097) during Vite serve. */
+/**
+ * Inject standalone React DevTools bridge (http://localhost:8097) during Vite serve.
+ * Enabled by default so `pnpm devtools` can inspect components. Set
+ * NYATERM_REACT_DEVTOOLS=0 to disable the bridge.
+ */
 const reactDevTools = (): PluginOption => ({
   name: "react-devtools",
   apply: "serve",
   transformIndexHtml() {
+    // @ts-expect-error process is a nodejs global
+    if (process.env.NYATERM_REACT_DEVTOOLS === "0") {
+      return [];
+    }
     return [
       {
         tag: "script",

@@ -41,6 +41,7 @@ import type {
   AISettings,
   ClaudeCodeIntegrationSettings,
   CodexIntegrationSettings,
+  OpenCodeIntegrationSettings,
 } from "@/types/global";
 import {
   SettingFieldGrid,
@@ -136,6 +137,21 @@ interface ClaudeCodeAccountStatus {
   message?: string | null;
 }
 
+interface OpenCodeCliStatus {
+  installed: boolean;
+  path?: string | null;
+  version?: string | null;
+  error?: string | null;
+  source?: string | null;
+  checkedPaths?: string[];
+}
+
+interface OpenCodeAccountStatus {
+  connected: boolean;
+  authMode?: string | null;
+  message?: string | null;
+}
+
 function normalizeCodexSettings(
   value?: Partial<CodexIntegrationSettings>,
 ): CodexIntegrationSettings {
@@ -159,6 +175,20 @@ function normalizeClaudeCodeSettings(
     enabled: value?.enabled ?? false,
     executable_path: value?.executable_path ?? null,
     runtime: value?.runtime ?? "stream_json_cli",
+    default_model: value?.default_model ?? null,
+    config_directory: value?.config_directory ?? null,
+    permission_mode: value?.permission_mode ?? "confirm",
+    tool_integration_mode: value?.tool_integration_mode ?? "nyaterm_mcp",
+  };
+}
+
+function normalizeOpenCodeSettings(
+  value?: Partial<OpenCodeIntegrationSettings>,
+): OpenCodeIntegrationSettings {
+  return {
+    enabled: value?.enabled ?? false,
+    executable_path: value?.executable_path ?? null,
+    runtime: value?.runtime ?? "run_json_cli",
     default_model: value?.default_model ?? null,
     config_directory: value?.config_directory ?? null,
     permission_mode: value?.permission_mode ?? "confirm",
@@ -289,11 +319,15 @@ export function AiAgentsTab() {
   const ai = appSettings.ai;
   const codex = normalizeCodexSettings(ai.codex);
   const claudeCode = normalizeClaudeCodeSettings(ai.claude_code);
+  const openCode = normalizeOpenCodeSettings(ai.opencode);
   const [cliStatus, setCliStatus] = useState<CodexCliStatus | null>(null);
   const [accountStatus, setAccountStatus] = useState<CodexAccountStatus | null>(null);
   const [claudeCliStatus, setClaudeCliStatus] = useState<ClaudeCodeCliStatus | null>(null);
   const [claudeAccountStatus, setClaudeAccountStatus] =
     useState<ClaudeCodeAccountStatus | null>(null);
+  const [openCodeCliStatus, setOpenCodeCliStatus] = useState<OpenCodeCliStatus | null>(null);
+  const [openCodeAccountStatus, setOpenCodeAccountStatus] =
+    useState<OpenCodeAccountStatus | null>(null);
   const [deviceLogin, setDeviceLogin] = useState<CodexLoginStart | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -314,18 +348,19 @@ export function AiAgentsTab() {
     [ai, claudeCode, updateAppSettings],
   );
 
+  const updateOpenCode = useCallback(
+    (patch: Partial<OpenCodeIntegrationSettings>) =>
+      updateAppSettings({ ai: { ...ai, opencode: { ...openCode, ...patch } } }),
+    [ai, openCode, updateAppSettings],
+  );
+
   const detect = useCallback(
     async (options?: { silent?: boolean }) => {
       setBusy(true);
       try {
         const status = await invoke<CodexCliStatus>("detect_codex_cli");
         setCliStatus(status);
-        if (
-          status.installed &&
-          status.path &&
-          status.path !== codex.executable_path &&
-          (!codex.executable_path || !options?.silent)
-        ) {
+        if (status.installed && status.path && !codex.executable_path) {
           updateCodex({ executable_path: status.path });
         }
         if (!options?.silent) {
@@ -349,12 +384,7 @@ export function AiAgentsTab() {
       try {
         const status = await invoke<ClaudeCodeCliStatus>("detect_claude_code_cli");
         setClaudeCliStatus(status);
-        if (
-          status.installed &&
-          status.path &&
-          status.path !== claudeCode.executable_path &&
-          (!claudeCode.executable_path || !options?.silent)
-        ) {
+        if (status.installed && status.path && !claudeCode.executable_path) {
           updateClaudeCode({ executable_path: status.path });
         }
         if (!options?.silent) {
@@ -370,6 +400,30 @@ export function AiAgentsTab() {
       }
     },
     [claudeCode.executable_path, t, updateClaudeCode],
+  );
+
+  const detectOpenCode = useCallback(
+    async (options?: { silent?: boolean }) => {
+      setBusy(true);
+      try {
+        const status = await invoke<OpenCodeCliStatus>("detect_opencode_cli");
+        setOpenCodeCliStatus(status);
+        if (status.installed && status.path && !openCode.executable_path) {
+          updateOpenCode({ executable_path: status.path });
+        }
+        if (!options?.silent) {
+          if (status.installed) toast.success(t("ai.opencodeDetected"));
+          else toast.error(status.error || t("ai.opencodeNotInstalled"));
+        }
+      } catch (error) {
+        if (!options?.silent) {
+          toast.error(getErrorMessage(error));
+        }
+      } finally {
+        setBusy(false);
+      }
+    },
+    [openCode.executable_path, t, updateOpenCode],
   );
 
   const refreshAccount = useCallback(
@@ -400,6 +454,26 @@ export function AiAgentsTab() {
         setClaudeAccountStatus(status);
         if (!options?.silent) {
           toast.success(t("ai.claudeCodeStatusRefreshed"));
+        }
+      } catch (error) {
+        if (!options?.silent) {
+          toast.error(getErrorMessage(error));
+        }
+      } finally {
+        setBusy(false);
+      }
+    },
+    [t],
+  );
+
+  const refreshOpenCodeAccount = useCallback(
+    async (options?: { silent?: boolean }) => {
+      setBusy(true);
+      try {
+        const status = await invoke<OpenCodeAccountStatus>("get_opencode_account_status");
+        setOpenCodeAccountStatus(status);
+        if (!options?.silent) {
+          toast.success(t("ai.opencodeStatusRefreshed"));
         }
       } catch (error) {
         if (!options?.silent) {
@@ -450,9 +524,21 @@ export function AiAgentsTab() {
     bootstrappedRef.current = true;
     void detect({ silent: true });
     void detectClaudeCode({ silent: true });
+    void detectOpenCode({ silent: true });
     if (codex.enabled) void refreshAccount({ silent: true });
     if (claudeCode.enabled) void refreshClaudeAccount({ silent: true });
-  }, [claudeCode.enabled, codex.enabled, detect, detectClaudeCode, refreshAccount, refreshClaudeAccount]);
+    if (openCode.enabled) void refreshOpenCodeAccount({ silent: true });
+  }, [
+    claudeCode.enabled,
+    codex.enabled,
+    detect,
+    detectClaudeCode,
+    detectOpenCode,
+    openCode.enabled,
+    refreshAccount,
+    refreshClaudeAccount,
+    refreshOpenCodeAccount,
+  ]);
 
   const connectedLabel = accountStatus?.connected
     ? t("ai.codexConnected")
@@ -602,6 +688,9 @@ export function AiAgentsTab() {
               <div className="mt-1 text-xs text-muted-foreground">
                 {t("ai.claudeCodeDesc")}
               </div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                {t("ai.claudeCodeMcpHint")}
+              </div>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
               <Badge variant={claudeCliStatus?.installed ? "default" : "outline"}>
@@ -684,6 +773,102 @@ export function AiAgentsTab() {
                 variant="outline"
                 disabled={busy}
                 onClick={() => void refreshClaudeAccount()}
+              >
+                <MdRefresh className={busy ? "animate-spin" : ""} />
+                {t("ai.refreshStatus")}
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-md border border-border/70 bg-background/75 p-4">
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium">OpenCode</div>
+              <div className="mt-1 text-xs text-muted-foreground">{t("ai.opencodeDesc")}</div>
+              <div className="mt-1 text-xs text-muted-foreground">{t("ai.opencodeMcpHint")}</div>
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <Badge variant={openCodeCliStatus?.installed ? "default" : "outline"}>
+                {openCodeCliStatus?.installed ? t("ai.installed") : t("ai.notInstalled")}
+              </Badge>
+              <Badge variant={openCodeAccountStatus?.connected ? "default" : "outline"}>
+                {openCodeAccountStatus?.connected
+                  ? t("ai.opencodeConnected")
+                  : t("ai.opencodeNotLoggedIn")}
+              </Badge>
+              <SettingSwitch
+                aria-label={t("ai.opencodeEnabled")}
+                checked={openCode.enabled}
+                onChange={(enabled) => updateOpenCode({ enabled })}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <SettingFieldGrid>
+              <SettingInput
+                label={t("ai.opencodePath")}
+                value={openCode.executable_path ?? ""}
+                placeholder="opencode"
+                onChange={(event) =>
+                  updateOpenCode({ executable_path: event.target.value || null })
+                }
+                fieldClassName="lg:col-span-2"
+              />
+              <SettingInput
+                label={t("ai.opencodeConfigDirectory")}
+                value={openCode.config_directory ?? ""}
+                placeholder="~/.config/opencode"
+                onChange={(event) =>
+                  updateOpenCode({ config_directory: event.target.value || null })
+                }
+              />
+              <SettingInput
+                label={t("ai.opencodeDefaultModel")}
+                value={openCode.default_model ?? ""}
+                placeholder="provider/model"
+                onChange={(event) =>
+                  updateOpenCode({ default_model: event.target.value || null })
+                }
+              />
+              <SettingSelect
+                label={t("ai.permissionMode")}
+                value={openCode.permission_mode ?? "confirm"}
+                onValueChange={(permission_mode) =>
+                  updateOpenCode({ permission_mode: permission_mode as AIPermissionMode })
+                }
+              >
+                <SelectItem value="observer">{t("ai.permissionObserver")}</SelectItem>
+                <SelectItem value="confirm">{t("ai.permissionConfirm")}</SelectItem>
+                <SelectItem value="auto">{t("ai.permissionAuto")}</SelectItem>
+              </SettingSelect>
+            </SettingFieldGrid>
+
+            <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
+              <div>
+                {t("ai.opencodeVersion")}: {openCodeCliStatus?.version || "-"}
+              </div>
+              <div>
+                {t("ai.opencodeAuthMode")}: {openCodeAccountStatus?.authMode || "-"}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={() => void detectOpenCode()}
+              >
+                <MdRefresh className={busy ? "animate-spin" : ""} />
+                {t("ai.detect")}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={() => void refreshOpenCodeAccount()}
               >
                 <MdRefresh className={busy ? "animate-spin" : ""} />
                 {t("ai.refreshStatus")}

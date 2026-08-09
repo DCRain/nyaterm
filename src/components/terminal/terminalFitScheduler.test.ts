@@ -194,7 +194,7 @@ describe("TerminalFitScheduler", () => {
     expect(fitAddon.fit).not.toHaveBeenCalled();
   });
 
-  it("suppresses A-B-A-B oscillation and applies a final settle fit", () => {
+  it("suppresses A-B-A-B oscillation and settles from the latest container size", () => {
     const { advance, fitAddon, flushFrame, scheduler, setProposal, terminal } = createHarness();
 
     setProposal({ cols: 120, rows: 32 });
@@ -213,11 +213,13 @@ describe("TerminalFitScheduler", () => {
     expect(fitAddon.fit).toHaveBeenCalledTimes(3);
     expect(terminal.cols).toBe(120);
 
-    advance(160);
+    // Quiet period keeps the current geometry instead of forcing the alternate size.
+    advance(2_000);
+    setProposal({ cols: 120, rows: 32 });
     flushFrame();
 
-    expect(fitAddon.fit).toHaveBeenCalledTimes(4);
-    expect(terminal.cols).toBe(121);
+    expect(fitAddon.fit).toHaveBeenCalledTimes(3);
+    expect(terminal.cols).toBe(120);
   });
 });
 
