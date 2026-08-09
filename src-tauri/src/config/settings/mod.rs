@@ -137,6 +137,10 @@ pub fn load_app_settings(app: &AppHandle) -> AppResult<AppSettings> {
         migrated = true;
     }
 
+    if migrate_activity_bar_show_labels(&raw_settings, &mut settings.ui.activity_bar_layout) {
+        migrated = true;
+    }
+
     for list in [
         &mut settings.ui.activity_bar_layout.left_top,
         &mut settings.ui.activity_bar_layout.left_bottom,
@@ -435,6 +439,39 @@ fn migrate_terminal_timestamp_format(
         terminal::DEFAULT_TIMESTAMP_FORMAT.to_string()
     };
     true
+}
+
+fn migrate_activity_bar_show_labels(
+    raw_settings: &serde_json::Value,
+    layout: &mut crate::config::ui::ActivityBarLayout,
+) -> bool {
+    let Some(raw_layout) = raw_settings
+        .pointer("/ui/activity_bar_layout")
+        .and_then(|value| value.as_object())
+    else {
+        return false;
+    };
+
+    let has_left = raw_layout.contains_key("show_labels_left");
+    let has_right = raw_layout.contains_key("show_labels_right");
+    if has_left && has_right {
+        return false;
+    }
+
+    let Some(legacy) = raw_layout.get("show_labels").and_then(|value| value.as_bool()) else {
+        return false;
+    };
+
+    let mut changed = false;
+    if !has_left {
+        layout.show_labels_left = legacy;
+        changed = true;
+    }
+    if !has_right {
+        layout.show_labels_right = legacy;
+        changed = true;
+    }
+    changed
 }
 
 fn persist_migrated_app_settings(app: &AppHandle, settings: &AppSettings) {

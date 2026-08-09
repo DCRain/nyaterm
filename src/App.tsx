@@ -2987,7 +2987,8 @@ function App() {
     leftBottomItems,
     rightTopItems,
     rightBottomItems,
-    showLabels,
+    showLabelsLeft,
+    showLabelsRight,
     toggleActiveIds,
     handleItemSelect,
     handleReorder,
@@ -3401,8 +3402,8 @@ function App() {
           onSelect: handleItemSelect,
           onReorder: (zoneKey, ids) => handleReorder("left", zoneKey, ids),
           onMoveItem: handleMoveItem,
-          onToggleLabel: handleToggleLabel,
-          showLabels,
+          onToggleLabel: () => handleToggleLabel("left"),
+          showLabels: showLabelsLeft,
         }}
         rightActivityBar={{
           items: rightTopItems,
@@ -3413,8 +3414,8 @@ function App() {
           onSelect: handleItemSelect,
           onReorder: (zoneKey, ids) => handleReorder("right", zoneKey, ids),
           onMoveItem: handleMoveItem,
-          onToggleLabel: handleToggleLabel,
-          showLabels,
+          onToggleLabel: () => handleToggleLabel("right"),
+          showLabels: showLabelsRight,
         }}
         onLeftResize={handleLeftResize}
         onRightResize={handleRightResize}

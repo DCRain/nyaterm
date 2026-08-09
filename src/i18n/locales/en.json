@@ -23,6 +23,8 @@
     "searchPlaceholder": "Search by name, type, or session ID..."
   },
   "activityBar": {
+    "collapse": "Collapse",
+    "expand": "Expand",
     "leftBottom": "Left Bottom",
     "leftTop": "Left Top",
     "moveTo": "Move to",

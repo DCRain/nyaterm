@@ -15,6 +15,7 @@ import {
   HiMiniArrowTurnRightDown,
   HiMiniArrowTurnRightUp,
 } from "react-icons/hi2";
+import { MdChevronLeft, MdChevronRight } from "react-icons/md";
 import {
   ContextMenu,
   ContextMenuCheckboxItem,
@@ -34,6 +35,10 @@ export interface ActivityBarItem {
   icon: ReactNode;
   tooltip: string;
 }
+
+/** Collapsed (icon-only) and expanded (icon + label) widths in px. */
+export const ACTIVITY_BAR_COLLAPSED_WIDTH = 40;
+export const ACTIVITY_BAR_EXPANDED_WIDTH = 136;
 
 const DRAG_MIME = "application/x-nyaterm-activity";
 const POINTER_DRAG_THRESHOLD_PX = 4;
@@ -120,14 +125,25 @@ export default function ActivityBar({
   side,
   zone,
 }: ActivityBarProps) {
+  const { t } = useTranslation();
   const indicatorSide = side === "left" ? "left-0" : "right-0";
   const tooltipSide = side === "left" ? "right" : "left";
+  const barWidth = showLabels ? ACTIVITY_BAR_EXPANDED_WIDTH : ACTIVITY_BAR_COLLAPSED_WIDTH;
+  const ExpandIcon =
+    side === "left"
+      ? showLabels
+        ? MdChevronLeft
+        : MdChevronRight
+      : showLabels
+        ? MdChevronRight
+        : MdChevronLeft;
 
   return (
     <TooltipProvider delayDuration={400}>
       <div
-        className="flex flex-col shrink-0 w-10 select-none"
+        className="flex flex-col shrink-0 select-none transition-[width] duration-200"
         style={{
+          width: barWidth,
           backgroundColor: "var(--df-bg)",
           borderColor: "var(--df-border)",
           borderRightWidth: side === "left" ? 1 : 0,
@@ -147,8 +163,9 @@ export default function ActivityBar({
           showLabels={showLabels}
           indicatorSide={indicatorSide}
           tooltipSide={tooltipSide}
-          className="flex flex-col items-center gap-0.5 pt-1"
+          className={`flex flex-col gap-0.5 pt-1 ${showLabels ? "items-stretch px-1" : "items-center"}`}
         />
+        <div className="min-h-0 flex-1" />
         {bottomItems && bottomItems.length > 0 && (
           <DropZone
             items={bottomItems}
@@ -164,9 +181,45 @@ export default function ActivityBar({
             showLabels={showLabels}
             indicatorSide={indicatorSide}
             tooltipSide={tooltipSide}
-            className="mt-auto flex flex-col items-center gap-0.5 pb-1"
+            className={`flex flex-col gap-0.5 pb-0.5 ${showLabels ? "items-stretch px-1" : "items-center"}`}
           />
         )}
+
+        <div
+          className={`shrink-0 border-t ${showLabels ? "px-1 py-1" : "py-1"}`}
+          style={{ borderColor: "color-mix(in srgb, var(--df-border) 50%, transparent)" }}
+        >
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-pressed={showLabels}
+                aria-label={
+                  showLabels
+                    ? t("activityBar.collapse", "Collapse")
+                    : t("activityBar.expand", "Expand")
+                }
+                className={`flex h-8 w-full items-center rounded-md transition-colors hover:bg-[var(--df-bg-hover)] ${
+                  showLabels ? "justify-start gap-2 px-2" : "justify-center"
+                }`}
+                style={{ color: "var(--df-text-muted)" }}
+                onClick={onToggleLabel}
+              >
+                <ExpandIcon className="text-base shrink-0" />
+                {showLabels ? (
+                  <span className="truncate text-[0.6875rem]">
+                    {t("activityBar.collapse", "Collapse")}
+                  </span>
+                ) : null}
+              </button>
+            </TooltipTrigger>
+            {!showLabels ? (
+              <TooltipContent side={tooltipSide} sideOffset={4}>
+                <span className="text-xs">{t("activityBar.expand", "Expand")}</span>
+              </TooltipContent>
+            ) : null}
+          </Tooltip>
+        </div>
       </div>
     </TooltipProvider>
   );
@@ -503,10 +556,17 @@ function ActivityBarButton({
               onPointerMove={onPointerMove}
               onPointerUp={onPointerEnd}
               onPointerCancel={onPointerCancel}
-              className={`relative flex flex-col items-center justify-center w-full transition-colors ${showLabel ? "min-h-12 gap-0.5 py-1" : "h-9"}`}
+              className={`relative flex w-full transition-colors ${
+                showLabel
+                  ? "h-9 flex-row items-center justify-start gap-2 rounded-md px-2 hover:bg-[var(--df-bg-hover)]"
+                  : "h-9 flex-col items-center justify-center"
+              }`}
               style={{
                 color: active ? "var(--df-primary)" : "var(--df-text-muted)",
                 cursor: "default",
+                backgroundColor: active && showLabel
+                  ? "color-mix(in srgb, var(--df-primary) 10%, transparent)"
+                  : undefined,
               }}
               onClick={() => {
                 if (suppressClickRef.current) {
@@ -524,17 +584,13 @@ function ActivityBarButton({
               )}
               {active && (
                 <span
-                  className={`absolute ${indicatorSide} top-1 bottom-1 w-[2px] rounded-full`}
+                  className={`absolute ${indicatorSide} top-1.5 bottom-1.5 w-[2px] rounded-full`}
                   style={{ backgroundColor: "var(--df-primary)" }}
                 />
               )}
               <span className="text-[1.125rem] shrink-0">{item.icon}</span>
               {showLabel && (
-                <span
-                  className="text-[0.5rem] leading-tight w-full text-center break-words hyphens-auto"
-                  lang="zh"
-                  style={{ wordBreak: "break-word", overflowWrap: "break-word" }}
-                >
+                <span className="min-w-0 flex-1 truncate text-left text-[0.6875rem] leading-tight">
                   {item.tooltip}
                 </span>
               )}

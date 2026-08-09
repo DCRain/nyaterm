@@ -23,6 +23,8 @@
     "searchPlaceholder": "이름, 유형, 세션 ID로 검색..."
   },
   "activityBar": {
+    "collapse": "접기",
+    "expand": "펼치기",
     "leftBottom": "왼쪽 아래",
     "leftTop": "왼쪽 위",
     "moveTo": "이동",

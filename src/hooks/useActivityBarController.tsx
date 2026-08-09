@@ -95,6 +95,20 @@ function normalizeActivityBarState(uiConfig: UiConfig): Partial<UiConfig> | null
     right_bottom: [],
   };
 
+  const legacyShowLabels = (
+    uiConfig.activity_bar_layout as ActivityBarLayout & { show_labels?: boolean }
+  ).show_labels;
+  const originalShowLabelsLeft =
+    typeof uiConfig.activity_bar_layout.show_labels_left === "boolean"
+      ? uiConfig.activity_bar_layout.show_labels_left
+      : (legacyShowLabels ?? false);
+  const originalShowLabelsRight =
+    typeof uiConfig.activity_bar_layout.show_labels_right === "boolean"
+      ? uiConfig.activity_bar_layout.show_labels_right
+      : (legacyShowLabels ?? false);
+  layout.show_labels_left = originalShowLabelsLeft;
+  layout.show_labels_right = originalShowLabelsRight;
+
   for (const zone of ACTIVITY_LAYOUT_ZONES) {
     for (const id of uiConfig.activity_bar_layout[zone]) {
       if (id === "fileTransfer") continue;
@@ -177,11 +191,14 @@ function normalizeActivityBarState(uiConfig: UiConfig): Partial<UiConfig> | null
       ? uiConfig.active_right_panel
       : null;
 
-  const layoutChanged = ACTIVITY_LAYOUT_ZONES.some(
-    (zone) =>
-      layout[zone].length !== uiConfig.activity_bar_layout[zone].length ||
-      layout[zone].some((id, index) => id !== uiConfig.activity_bar_layout[zone][index]),
-  );
+  const layoutChanged =
+    ACTIVITY_LAYOUT_ZONES.some(
+      (zone) =>
+        layout[zone].length !== uiConfig.activity_bar_layout[zone].length ||
+        layout[zone].some((id, index) => id !== uiConfig.activity_bar_layout[zone][index]),
+    ) ||
+    layout.show_labels_left !== uiConfig.activity_bar_layout.show_labels_left ||
+    layout.show_labels_right !== uiConfig.activity_bar_layout.show_labels_right;
   const leftOpenChanged =
     leftOpenPanels.length !== originalLeftOpenPanels.length ||
     leftOpenPanels.some((id, index) => id !== originalLeftOpenPanels[index]);
@@ -379,21 +396,27 @@ export function useActivityBarController({
     [updateUi],
   );
 
-  const handleToggleLabel = useCallback(() => {
-    updateUi((prev) => ({
-      activity_bar_layout: {
-        ...prev.activity_bar_layout,
-        show_labels: !prev.activity_bar_layout.show_labels,
-      },
-    }));
-  }, [updateUi]);
+  const handleToggleLabel = useCallback(
+    (side: "left" | "right") => {
+      updateUi((prev) => ({
+        activity_bar_layout: {
+          ...prev.activity_bar_layout,
+          ...(side === "left"
+            ? { show_labels_left: !prev.activity_bar_layout.show_labels_left }
+            : { show_labels_right: !prev.activity_bar_layout.show_labels_right }),
+        },
+      }));
+    },
+    [updateUi],
+  );
 
   return {
     leftTopItems,
     leftBottomItems,
     rightTopItems,
     rightBottomItems,
-    showLabels: layout.show_labels,
+    showLabelsLeft: layout.show_labels_left,
+    showLabelsRight: layout.show_labels_right,
     toggleActiveIds,
     handleItemSelect,
     handleReorder,

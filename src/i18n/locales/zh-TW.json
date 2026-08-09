@@ -23,6 +23,8 @@
     "searchPlaceholder": "按名稱、類型或工作階段 ID 搜尋..."
   },
   "activityBar": {
+    "collapse": "收合",
+    "expand": "展開",
     "leftBottom": "左側底部",
     "leftTop": "左側頂部",
     "moveTo": "移動至",

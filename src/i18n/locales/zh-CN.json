@@ -23,6 +23,8 @@
     "searchPlaceholder": "按名称、类型或会话 ID 搜索..."
   },
   "activityBar": {
+    "collapse": "收缩",
+    "expand": "展开",
     "leftBottom": "左侧底部",
     "leftTop": "左侧顶部",
     "moveTo": "移动至",

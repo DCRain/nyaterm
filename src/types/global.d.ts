@@ -499,8 +499,10 @@ export interface ActivityBarLayout {
   left_bottom: string[];
   right_top: string[];
   right_bottom: string[];
-  /** When true every activity bar icon shows its name below the icon. */
-  show_labels: boolean;
+  /** Expanded (icon + label) state for the left activity bar. */
+  show_labels_left: boolean;
+  /** Expanded (icon + label) state for the right activity bar. */
+  show_labels_right: boolean;
 }
 
 /** Layout preferences: panel widths, active panels, theme. */

@@ -162,7 +162,9 @@ pub struct ActivityBarLayout {
     #[serde(default = "default_right_bottom")]
     pub right_bottom: Vec<String>,
     #[serde(default)]
-    pub show_labels: bool,
+    pub show_labels_left: bool,
+    #[serde(default)]
+    pub show_labels_right: bool,
 }
 
 impl Default for ActivityBarLayout {
@@ -172,7 +174,8 @@ impl Default for ActivityBarLayout {
             left_bottom: default_left_bottom(),
             right_top: default_right_top(),
             right_bottom: default_right_bottom(),
-            show_labels: false,
+            show_labels_left: false,
+            show_labels_right: false,
         }
     }
 }

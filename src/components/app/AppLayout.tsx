@@ -17,7 +17,10 @@ import DockerSudoPasswordDialog, {
 } from "@/components/dialog/docker/DockerSudoPasswordDialog";
 import { TransferDuplicateDialog } from "@/components/dialog/file-explorer/TransferDuplicateDialog";
 import SyncGroupDialog from "@/components/dialog/terminal/SyncGroupDialog";
-import ActivityBar from "@/components/layout/ActivityBar";
+import ActivityBar, {
+  ACTIVITY_BAR_COLLAPSED_WIDTH,
+  ACTIVITY_BAR_EXPANDED_WIDTH,
+} from "@/components/layout/ActivityBar";
 import Header from "@/components/layout/Header";
 import ResizeHandle from "@/components/layout/ResizeHandle";
 import QuickCommands from "@/components/panel/QuickCommands";
@@ -207,6 +210,12 @@ export default function AppLayout({
     leftActivityBar.items.length > 0 || (leftActivityBar.bottomItems?.length ?? 0) > 0;
   const hasRightActivityItems =
     rightActivityBar.items.length > 0 || (rightActivityBar.bottomItems?.length ?? 0) > 0;
+  const leftActivityBarWidth = leftActivityBar.showLabels
+    ? ACTIVITY_BAR_EXPANDED_WIDTH
+    : ACTIVITY_BAR_COLLAPSED_WIDTH;
+  const rightActivityBarWidth = rightActivityBar.showLabels
+    ? ACTIVITY_BAR_EXPANDED_WIDTH
+    : ACTIVITY_BAR_COLLAPSED_WIDTH;
   const leftPanelOpen =
     hasLeftActivityItems && (leftPanelIds.length > 0 || Boolean(leftOverlayPanelId));
   const rightPanelOpen =
@@ -297,17 +306,22 @@ export default function AppLayout({
           {leftPanelOpen && (
             <>
               <div
-                style={{ width: uiConfig.left_width, backgroundColor: "var(--df-bg-panel)" }}
+                style={{
+                  width: uiConfig.left_width,
+                  backgroundColor: "var(--df-bg-panel)",
+                  ["--activity-bar-offset" as string]: `${leftActivityBarWidth}px`,
+                }}
                 className={
                   isMacOS
                     ? "relative flex flex-col"
                     : `
-                    fixed inset-y-0 left-10 z-40 flex flex-col shadow-xl transition-transform duration-200
-                    lg:relative lg:left-0 lg:translate-x-0 lg:z-0 lg:shadow-none
+                    fixed inset-y-0 z-40 flex flex-col shadow-xl transition-transform duration-200
+                    left-[var(--activity-bar-offset)]
+                    lg:relative lg:left-auto lg:translate-x-0 lg:z-0 lg:shadow-none
                     ${
                       leftMobileOpen
                         ? "translate-x-0"
-                        : "-translate-x-[calc(100%+2.5rem)] lg:translate-x-0"
+                        : "-translate-x-[calc(100%+var(--activity-bar-offset))] lg:translate-x-0"
                     }
                   `
                 }
@@ -436,17 +450,19 @@ export default function AppLayout({
                   width: rightPanelOpen ? uiConfig.right_width : 0,
                   backgroundColor: "var(--df-bg-panel)",
                   borderColor: "var(--df-border)",
+                  ["--activity-bar-offset" as string]: `${rightActivityBarWidth}px`,
                 }}
                 className={
                   isMacOS
                     ? `relative flex flex-col overflow-hidden ${rightPanelOpen ? "border-l" : "hidden"}`
                     : `
-                    fixed inset-y-0 right-10 z-50 flex flex-col overflow-hidden shadow-xl transition-transform duration-200 border-l
-                    md:relative md:right-0 md:translate-x-0 md:z-0 md:shadow-none
+                    fixed inset-y-0 z-50 flex flex-col overflow-hidden shadow-xl transition-transform duration-200 border-l
+                    right-[var(--activity-bar-offset)]
+                    md:relative md:right-auto md:translate-x-0 md:z-0 md:shadow-none
                     ${
                       rightPanelOpen && rightMobileOpen
                         ? "translate-x-0"
-                        : "translate-x-[calc(100%+2.5rem)] md:translate-x-0"
+                        : "translate-x-[calc(100%+var(--activity-bar-offset))] md:translate-x-0"
                     }
                     ${rightPanelOpen ? "" : "hidden"}
                   `
