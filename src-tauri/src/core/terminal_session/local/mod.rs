@@ -33,5 +33,6 @@ include!("windows_terminal.rs");
 include!("args.rs");
 include!("environment.rs");
 include!("startup.rs");
+include!("discover.rs");
 include!("session.rs");
 include!("tests.rs");

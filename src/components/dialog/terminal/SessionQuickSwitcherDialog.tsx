@@ -59,6 +59,7 @@ interface FuzzySearchResult {
 
 interface SessionQuickSwitcherProps {
   open: boolean;
+  scope?: "all" | "connections";
   activeSessionId: string | null;
   workspaceSessions: QuickSwitcherSession[];
   savedConnections: SavedConnection[];
@@ -94,6 +95,7 @@ function stringifySearchParts(parts: unknown[]) {
 
 export default function SessionQuickSwitcher({
   open,
+  scope = "all",
   activeSessionId,
   workspaceSessions,
   savedConnections,
@@ -103,6 +105,7 @@ export default function SessionQuickSwitcher({
   onNewSshSession,
 }: SessionQuickSwitcherProps) {
   const { t } = useTranslation();
+  const connectionsOnly = scope === "connections";
   const searchRef = useRef<HTMLInputElement | null>(null);
   const searchRequestIdRef = useRef(0);
   const lastMatchedItemIdsRef = useRef<string[] | null>(null);
@@ -122,34 +125,36 @@ export default function SessionQuickSwitcher({
   }, [open]);
 
   const items = useMemo<QuickSwitcherItem[]>(() => {
-    const sessionItems = workspaceSessions.map((session, index) => {
-      const status = session.connecting
-        ? t("savedConnections.connecting", { name: session.name })
-        : session.connectError
-          ? t("terminal.connectionFailed")
-          : session.sessionType;
-      const subtitle = [status, session.connectionName, session.tabName]
-        .filter(Boolean)
-        .join(" - ");
+    const sessionItems = connectionsOnly
+      ? []
+      : workspaceSessions.map((session, index) => {
+          const status = session.connecting
+            ? t("savedConnections.connecting", { name: session.name })
+            : session.connectError
+              ? t("terminal.connectionFailed")
+              : session.sessionType;
+          const subtitle = [status, session.connectionName, session.tabName]
+            .filter(Boolean)
+            .join(" - ");
 
-      return {
-        kind: "session" as const,
-        id: `session:${session.id}`,
-        title: session.name,
-        subtitle,
-        display: stringifySearchParts([
-          session.name,
-          session.sessionType,
-          session.connectionName,
-          session.tabName,
-          session.id,
-          session.connectError,
-          status,
-        ]),
-        order: index,
-        session,
-      };
-    });
+          return {
+            kind: "session" as const,
+            id: `session:${session.id}`,
+            title: session.name,
+            subtitle,
+            display: stringifySearchParts([
+              session.name,
+              session.sessionType,
+              session.connectionName,
+              session.tabName,
+              session.id,
+              session.connectError,
+              status,
+            ]),
+            order: index,
+            session,
+          };
+        });
     const connectionItems = savedConnections.map((connection, index) => {
       const subtitle = getConnectionSubtitle(connection);
       return {
@@ -170,13 +175,13 @@ export default function SessionQuickSwitcher({
           connection.working_dir,
           subtitle,
         ]),
-        order: workspaceSessions.length + index,
+        order: sessionItems.length + index,
         connection,
       };
     });
 
     return [...sessionItems, ...connectionItems];
-  }, [savedConnections, t, workspaceSessions]);
+  }, [connectionsOnly, savedConnections, t, workspaceSessions]);
 
   const candidates = useMemo<FuzzySearchCandidate[]>(
     () =>
@@ -270,9 +275,15 @@ export default function SessionQuickSwitcher({
         onOpenAutoFocus={(event) => event.preventDefault()}
       >
         <DialogHeader className="sr-only">
-          <DialogTitle>{t("sessionQuickSwitcher.title")}</DialogTitle>
+          <DialogTitle>
+            {connectionsOnly
+              ? t("sessionQuickSwitcher.connectionsTitle")
+              : t("sessionQuickSwitcher.title")}
+          </DialogTitle>
           <DialogDescription className="sr-only">
-            {t("sessionQuickSwitcher.searchPlaceholder")}
+            {connectionsOnly
+              ? t("sessionQuickSwitcher.connectionsSearchPlaceholder")
+              : t("sessionQuickSwitcher.searchPlaceholder")}
           </DialogDescription>
         </DialogHeader>
 
@@ -309,7 +320,11 @@ export default function SessionQuickSwitcher({
                 onClose();
               }
             }}
-            placeholder={t("sessionQuickSwitcher.searchPlaceholder")}
+            placeholder={
+              connectionsOnly
+                ? t("sessionQuickSwitcher.connectionsSearchPlaceholder")
+                : t("sessionQuickSwitcher.searchPlaceholder")
+            }
             className="h-11 rounded-none border-0 bg-transparent pl-10 pr-3 text-sm shadow-none focus-visible:ring-0"
           />
         </div>
@@ -359,7 +374,9 @@ export default function SessionQuickSwitcher({
           {filteredItems.length === 0 ? (
             <div className="px-3 py-6 text-center text-xs text-muted-foreground">
               {items.length === 0
-                ? t("sessionQuickSwitcher.noSessions")
+                ? connectionsOnly
+                  ? t("sessionQuickSwitcher.noConnections")
+                  : t("sessionQuickSwitcher.noSessions")
                 : t("sessionQuickSwitcher.noMatches")}
             </div>
           ) : null}
@@ -369,9 +386,11 @@ export default function SessionQuickSwitcher({
           <span className="text-xs text-muted-foreground">
             Enter {t("sessionQuickSwitcher.open")} / Esc {t("sessionQuickSwitcher.close")}
           </span>
-          <Button size="sm" className="h-7 px-2 text-xs" onClick={onNewSshSession}>
-            {t("sessionQuickSwitcher.newSsh")}
-          </Button>
+          {connectionsOnly ? null : (
+            <Button size="sm" className="h-7 px-2 text-xs" onClick={onNewSshSession}>
+              {t("sessionQuickSwitcher.newSsh")}
+            </Button>
+          )}
         </div>
       </DialogContent>
     </Dialog>

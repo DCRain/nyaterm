@@ -5,6 +5,7 @@ pub struct LocalSessionConfig {
     pub working_dir: Option<String>,
     pub name: String,
     pub encoding: String,
+    pub elevated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

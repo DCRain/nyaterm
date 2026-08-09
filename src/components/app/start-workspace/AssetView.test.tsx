@@ -251,6 +251,9 @@ function startWorkspaceElement() {
       openChatShortcut="Ctrl+I"
       showCommandsShortcut="Ctrl+Shift+P"
       switchTerminalShortcut="Ctrl+Tab"
+      onNewConnection={vi.fn()}
+      onNewLocalTerminal={vi.fn()}
+      onQuickOpenConnection={vi.fn()}
       onTemporarySshLink={vi.fn()}
       onOpenChat={vi.fn()}
       onShowCommands={vi.fn()}
@@ -336,6 +339,10 @@ const translations: Record<string, string> = {
   "assets.updatedOn": "Updated {{date}}",
   "assets.windows": "Windows",
   "assets.workbench": "Workbench",
+  "app.workbenchNewConnection": "New Connection",
+  "app.workbenchLocalTerminal": "Local Terminal",
+  "app.workbenchQuickOpen": "Quick Open",
+  "app.workbenchTemporaryLink": "Temporary Link",
   "savedConnections.connect": "Connect",
   "savedConnections.edit": "Edit",
 };

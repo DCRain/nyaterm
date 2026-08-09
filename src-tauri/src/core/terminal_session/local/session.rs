@@ -16,7 +16,7 @@ pub async fn create_local_session(
 
     let (_, shell_name) = match &config {
         Some(cfg) if !cfg.shell_path.trim().is_empty() => {
-            build_shell_command(&cfg.shell_path, &cfg.shell_args)
+            build_shell_command(&cfg.shell_path, &cfg.shell_args, cfg.elevated)
                 .map_err(crate::error::AppError::Config)?
         }
         _ => platform_default_shell(),
@@ -116,7 +116,7 @@ fn pty_session_thread(
 
     let (mut cmd, _) = match &config {
         Some(cfg) if !cfg.shell_path.trim().is_empty() => {
-            match build_shell_command(&cfg.shell_path, &cfg.shell_args) {
+            match build_shell_command(&cfg.shell_path, &cfg.shell_args, cfg.elevated) {
                 Ok(command) => command,
                 Err(error) => {
                     tracing::error!("Failed to build shell command: {}", error);

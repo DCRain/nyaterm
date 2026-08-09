@@ -14,6 +14,9 @@ interface StartWorkspaceProps {
   openChatShortcut: string;
   showCommandsShortcut: string;
   switchTerminalShortcut: string;
+  onNewConnection: () => void;
+  onNewLocalTerminal: () => void;
+  onQuickOpenConnection: () => void;
   onTemporarySshLink: () => void;
   onOpenChat: () => void;
   onShowCommands: () => void;
@@ -29,6 +32,9 @@ export default function StartWorkspace({
   openChatShortcut,
   showCommandsShortcut,
   switchTerminalShortcut,
+  onNewConnection,
+  onNewLocalTerminal,
+  onQuickOpenConnection,
   onTemporarySshLink,
   onOpenChat,
   onShowCommands,
@@ -74,6 +80,9 @@ export default function StartWorkspace({
           openChatShortcut={openChatShortcut}
           showCommandsShortcut={showCommandsShortcut}
           switchTerminalShortcut={switchTerminalShortcut}
+          onNewConnection={onNewConnection}
+          onNewLocalTerminal={onNewLocalTerminal}
+          onQuickOpenConnection={onQuickOpenConnection}
           onTemporarySshLink={onTemporarySshLink}
           onOpenChat={onOpenChat}
           onShowCommands={onShowCommands}

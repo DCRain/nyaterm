@@ -166,6 +166,11 @@ pub async fn create_local_session(
     recording_state: tauri::State<'_, Arc<RecordingManager>>,
     connection_id: Option<String>,
     create_request_id: Option<String>,
+    shell_path: Option<String>,
+    shell_args: Option<String>,
+    working_dir: Option<String>,
+    name: Option<String>,
+    elevated: Option<bool>,
 ) -> AppResult<String> {
     let pending_creation = state.begin_session_creation(create_request_id).await;
     let (guard, _cancel_rx) = match pending_creation {
@@ -187,9 +192,27 @@ pub async fn create_local_session(
                 working_dir,
                 name: conn.name,
                 encoding,
+                elevated: false,
             }),
             _ => None,
         }
+    } else if shell_path
+        .as_ref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        let encoding = config::load_app_settings(&app)
+            .map(|settings| settings.interaction.default_encoding)
+            .unwrap_or_else(|_| "UTF-8".to_string());
+        Some(core::LocalSessionConfig {
+            shell_path: shell_path.unwrap_or_default(),
+            shell_args: shell_args.unwrap_or_default(),
+            working_dir: working_dir.filter(|value| !value.trim().is_empty()),
+            name: name
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| "Local Terminal".to_string()),
+            encoding,
+            elevated: elevated.unwrap_or(false),
+        })
     } else {
         None
     };
@@ -214,6 +237,11 @@ pub async fn create_local_session(
     )
     .await;
     Ok(session_id)
+}
+
+#[tauri::command]
+pub fn list_local_shells() -> AppResult<Vec<core::LocalShellOption>> {
+    Ok(core::list_local_shells())
 }
 
 #[tauri::command]

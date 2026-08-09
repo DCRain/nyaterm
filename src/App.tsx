@@ -13,6 +13,9 @@ import RemoteDesktopClientMissingDialog from "./components/dialog/connections/Re
 import type { SshAuthRequest } from "./components/dialog/connections/SshAuthDialog";
 import TemporarySshLinkDialog from "./components/dialog/connections/TemporarySshLinkDialog";
 import type { DockerSudoPasswordRequest } from "./components/dialog/docker/DockerSudoPasswordDialog";
+import LocalShellPickerDialog, {
+  type LocalShellSelection,
+} from "./components/dialog/terminal/LocalShellPickerDialog";
 import SessionQuickSwitcher, {
   type QuickSwitcherSession,
 } from "./components/dialog/terminal/SessionQuickSwitcherDialog";
@@ -442,6 +445,8 @@ function App() {
   const [helpDotVisible, setHelpDotVisible] = useState(false);
   const [sendCommandDraft, setSendCommandDraft] = useState<SendCommandPanelDraft | null>(null);
   const [showSessionQuickSwitcher, setShowSessionQuickSwitcher] = useState(false);
+  const [sessionSwitcherScope, setSessionSwitcherScope] = useState<"all" | "connections">("all");
+  const [showLocalShellPicker, setShowLocalShellPicker] = useState(false);
   const [showTemporarySshLink, setShowTemporarySshLink] = useState(false);
   const [externalMatchDialog, setExternalMatchDialog] = useState<ExternalMatchDialogState | null>(
     null,
@@ -1811,20 +1816,10 @@ function App() {
   // --- Shortcut callbacks ---
 
   const handleNewLocalTerminal = useCallback(() => {
-    invoke<string>("create_local_session")
-      .then((sessionId) => {
-        addTab(sessionId, t("menu.newLocalTerminal"), "Local");
-      })
-      .catch((e) =>
-        logger.error({
-          domain: "session.lifecycle",
-          event: "session.create_failed",
-          message: "Failed to create local session",
-          data: { session_type: "Local" },
-          error: e,
-        }),
-      );
-  }, [addTab, t]);
+    if (!isLocked) {
+      setShowLocalShellPicker(true);
+    }
+  }, [isLocked]);
 
   const handleCloseActiveTab = useCallback(() => {
     if (!activeTab) return;
@@ -2799,6 +2794,14 @@ function App() {
 
   const handleOpenSessionSwitcher = useCallback(() => {
     if (!isLocked) {
+      setSessionSwitcherScope("all");
+      setShowSessionQuickSwitcher(true);
+    }
+  }, [isLocked]);
+
+  const handleOpenConnectionQuickOpen = useCallback(() => {
+    if (!isLocked) {
+      setSessionSwitcherScope("connections");
       setShowSessionQuickSwitcher(true);
     }
   }, [isLocked]);
@@ -3146,13 +3149,52 @@ function App() {
 
   const handleCloseSessionQuickSwitcher = useCallback(() => {
     setShowSessionQuickSwitcher(false);
+    setSessionSwitcherScope("all");
     focusTerminalSession(activeSessionId);
   }, [activeSessionId]);
+
+  const handleCloseLocalShellPicker = useCallback(() => {
+    setShowLocalShellPicker(false);
+    focusTerminalSession(activeSessionId);
+  }, [activeSessionId]);
+
+  const handleSelectLocalShell = useCallback(
+    (shell: LocalShellSelection) => {
+      setShowLocalShellPicker(false);
+      const tabName = shell.elevated
+        ? `${shell.name} (${t("localShellPicker.admin")})`
+        : shell.name || t("menu.newLocalTerminal");
+      invoke<string>("create_local_session", {
+        shellPath: shell.shellPath,
+        shellArgs: shell.shellArgs,
+        name: tabName,
+        elevated: shell.elevated,
+      })
+        .then((sessionId) => {
+          addTab(sessionId, tabName, "Local");
+        })
+        .catch((e) =>
+          logger.error({
+            domain: "session.lifecycle",
+            event: "session.create_failed",
+            message: "Failed to create local session",
+            data: {
+              session_type: "Local",
+              shell_path: shell.shellPath,
+              elevated: shell.elevated,
+            },
+            error: e,
+          }),
+        );
+    },
+    [addTab, t],
+  );
 
   const handleQuickSwitchSession = useCallback(
     (sessionId: string) => {
       handleSessionClick(sessionId);
       setShowSessionQuickSwitcher(false);
+      setSessionSwitcherScope("all");
       focusTerminalSession(sessionId);
     },
     [handleSessionClick],
@@ -3161,6 +3203,7 @@ function App() {
   const handleQuickOpenConnection = useCallback(
     async (connection: SavedConnection) => {
       setShowSessionQuickSwitcher(false);
+      setSessionSwitcherScope("all");
       await connectSavedConnection(connection, {
         failureContext: "Connection failed from quick switcher",
       });
@@ -3170,6 +3213,7 @@ function App() {
 
   const handleQuickSwitcherNewSshSession = useCallback(() => {
     setShowSessionQuickSwitcher(false);
+    setSessionSwitcherScope("all");
     openNewSession(undefined, true);
   }, []);
 
@@ -3466,6 +3510,9 @@ function App() {
           openChatShortcut,
           showCommandsShortcut,
           switchTerminalShortcut,
+          onNewConnection: () => handleNewSession(),
+          onNewLocalTerminal: handleNewLocalTerminal,
+          onQuickOpenConnection: handleOpenConnectionQuickOpen,
           onTemporarySshLink: handleOpenTemporarySshLink,
           onOpenChat: handleOpenChat,
           onShowCommands: handleShowAllCommands,
@@ -3522,6 +3569,7 @@ function App() {
       />
       <SessionQuickSwitcher
         open={showSessionQuickSwitcher}
+        scope={sessionSwitcherScope}
         activeSessionId={activePane?.sessionId ?? null}
         workspaceSessions={quickSwitcherSessions}
         savedConnections={savedConnections}
@@ -3529,6 +3577,11 @@ function App() {
         onSelectSession={handleQuickSwitchSession}
         onOpenConnection={handleQuickOpenConnection}
         onNewSshSession={handleQuickSwitcherNewSshSession}
+      />
+      <LocalShellPickerDialog
+        open={showLocalShellPicker}
+        onClose={handleCloseLocalShellPicker}
+        onSelect={handleSelectLocalShell}
       />
       <TemporarySshLinkDialog
         open={showTemporarySshLink}

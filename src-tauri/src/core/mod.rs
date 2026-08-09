@@ -37,7 +37,9 @@ pub(crate) use session::update_cwd_if_changed;
 pub use session::{
     SessionCommand, SessionHandle, SessionInfo, SessionManager, SessionType, SharedCwd,
 };
-pub use terminal_session::local::{LocalSessionConfig, create_local_session};
+pub use terminal_session::local::{
+    LocalSessionConfig, LocalShellOption, create_local_session, list_local_shells,
+};
 pub use terminal_session::serial::{SerialConfig, create_serial_session, list_serial_ports};
 pub use terminal_session::telnet::{
     TelnetAutoLoginConfig, TelnetEnterMode, TelnetSessionConfig, TelnetStartupCommand,
