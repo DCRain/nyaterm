@@ -1471,10 +1471,6 @@ export default function Header({
     >
       <div className={`flex items-center gap-2 shrink-0${isMacOS ? " pl-[70px]" : ""}`}>
         {!isMacOS && (
-          <NyaTermLogo className="h-5 w-5 shrink-0" onDoubleClick={handleToggleMaximizeWindow} />
-        )}
-
-        {!isMacOS && (
           <Button
             type="button"
             variant="ghost"

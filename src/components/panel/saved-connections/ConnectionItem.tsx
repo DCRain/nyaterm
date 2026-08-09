@@ -391,9 +391,9 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
             style={{
               ...(indented ? { paddingLeft: `${8 + depth * 16 + 16}px` } : undefined),
               backgroundColor: isSelected
-                ? "color-mix(in srgb, var(--df-primary) 10%, transparent)"
+                ? "color-mix(in srgb, var(--df-primary) 18%, var(--df-bg-panel-solid, var(--df-bg-panel)))"
                 : isKeyboardActive
-                  ? "color-mix(in srgb, var(--df-primary) 7%, transparent)"
+                  ? "color-mix(in srgb, var(--df-primary) 12%, var(--df-bg-panel-solid, var(--df-bg-panel)))"
                   : undefined,
               boxShadow: isKeyboardActive ? "inset 0 0 0 1px var(--df-primary)" : undefined,
             }}

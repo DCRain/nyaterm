@@ -4,7 +4,6 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import { openPath } from "@tauri-apps/plugin-opener";
 import {
   type CSSProperties,
-  type DragEvent as ReactDragEvent,
   memo,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
@@ -71,7 +70,10 @@ import { useTransfer } from "@/context/TransferContext";
 import { resolveShortcutKeys } from "@/hooks/useShortcutMap";
 import { openAIAssistant } from "@/lib/aiEvents";
 import { getErrorMessage } from "@/lib/errors";
-import { writeExplorerPathDragData } from "@/lib/explorerPathDrag";
+import {
+  beginExplorerPathPointerDrag,
+  cancelExplorerPathPointerDrag,
+} from "@/lib/explorerPathDrag";
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
 import {
@@ -657,6 +659,8 @@ function FileExplorerPane({
     DEFAULT_FILE_LIST_COLUMN_WIDTHS,
   );
   const lastSelectedRef = useRef<string | null>(null);
+  const selectedFilesRef = useRef(selectedFiles);
+  selectedFilesRef.current = selectedFiles;
   const [isEditingPath, setIsEditingPath] = useState(false);
   const [pathInputText, setPathInputText] = useState("");
   const [directoryLoading, setDirectoryLoading] = useState(false);
@@ -697,7 +701,10 @@ function FileExplorerPane({
     anchor: string;
     baseSelection: Set<string>;
     additive: boolean;
+    /** Skip range-select while waiting to start an HTML5 path drag. */
+    suppressRangeDrag?: boolean;
   } | null>(null);
+  const pathDragActiveRef = useRef(false);
 
   const sessionCacheRef = useRef(fileExplorerSessionCacheStore);
   const prevSessionIdRef = useRef<string | null>(null);
@@ -896,7 +903,9 @@ function FileExplorerPane({
 
   useEffect(() => {
     const handleMouseUp = () => {
+      // Do not collapse selection on mouseup — keeps multi-select after path drag.
       dragSelectionRef.current = null;
+      pathDragActiveRef.current = false;
     };
 
     window.addEventListener("mouseup", handleMouseUp);
@@ -1515,41 +1524,56 @@ function FileExplorerPane({
       listContainerRef.current?.focus();
       if (isParentDirectoryEntry(entry)) {
         dragSelectionRef.current = null;
+        pathDragActiveRef.current = false;
         lastSelectedRef.current = null;
         setSelectedFiles(new Set([PARENT_DIRECTORY_ENTRY_NAME]));
         return;
       }
 
       const additive = event.ctrlKey || event.metaKey;
-      setSelectedFiles((prev) => {
-        const hasRangeAnchor = event.shiftKey && !!lastSelectedRef.current;
-        const anchor = hasRangeAnchor ? (lastSelectedRef.current ?? entry.name) : entry.name;
-        const baseSelection = additive ? new Set(prev) : new Set<string>();
-        baseSelection.delete(PARENT_DIRECTORY_ENTRY_NAME);
-        let next: Set<string>;
+      const hasRangeAnchor = event.shiftKey && !!lastSelectedRef.current;
+      const rangeAnchor = lastSelectedRef.current ?? entry.name;
+      const prev = selectedFilesRef.current;
+      pathDragActiveRef.current = false;
 
-        if (hasRangeAnchor) {
-          next = getRangeSelection(anchor, entry.name, baseSelection, additive);
-        } else if (additive) {
-          next = new Set(prev);
-          next.delete(PARENT_DIRECTORY_ENTRY_NAME);
-          if (next.has(entry.name)) {
-            next.delete(entry.name);
-          } else {
-            next.add(entry.name);
-          }
-        } else {
-          next = new Set([entry.name]);
-        }
-
+      // Already selected + plain click: keep current selection so a following
+      // path-drag can move the whole selection.
+      if (!additive && !hasRangeAnchor && prev.has(entry.name)) {
         dragSelectionRef.current = {
-          anchor,
-          baseSelection,
-          additive,
+          anchor: lastSelectedRef.current ?? entry.name,
+          baseSelection: new Set(prev),
+          additive: false,
+          suppressRangeDrag: true,
         };
-        lastSelectedRef.current = entry.name;
-        return next;
-      });
+        return;
+      }
+
+      const anchor = hasRangeAnchor ? rangeAnchor : entry.name;
+      const baseSelection = additive ? new Set(prev) : new Set<string>();
+      baseSelection.delete(PARENT_DIRECTORY_ENTRY_NAME);
+      let next: Set<string>;
+
+      if (hasRangeAnchor) {
+        next = getRangeSelection(anchor, entry.name, baseSelection, additive);
+      } else if (additive) {
+        next = new Set(prev);
+        next.delete(PARENT_DIRECTORY_ENTRY_NAME);
+        if (next.has(entry.name)) {
+          next.delete(entry.name);
+        } else {
+          next.add(entry.name);
+        }
+      } else {
+        next = new Set([entry.name]);
+      }
+
+      dragSelectionRef.current = {
+        anchor,
+        baseSelection,
+        additive,
+      };
+      lastSelectedRef.current = entry.name;
+      setSelectedFiles(next);
     },
     [getRangeSelection],
   );
@@ -1562,6 +1586,9 @@ function FileExplorerPane({
 
       const dragSelection = dragSelectionRef.current;
       if (!dragSelection || (event.buttons & 1) !== 1) {
+        return;
+      }
+      if (dragSelection.suppressRangeDrag) {
         return;
       }
 
@@ -2226,31 +2253,86 @@ function FileExplorerPane({
     [filteredSortedFiles, selectedFiles],
   );
 
-  const handlePathDragStart = useCallback(
-    (entry: FileEntry, event: ReactDragEvent) => {
-      if (isParentDirectoryEntry(entry)) {
-        event.preventDefault();
+  const pathPointerDragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    entry: FileEntry;
+    active: boolean;
+  } | null>(null);
+
+  const handlePathPointerDown = useCallback(
+    (entry: FileEntry, event: React.PointerEvent) => {
+      if (event.button !== 0 || isParentDirectoryEntry(entry)) return;
+
+      pathPointerDragRef.current = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        entry,
+        active: false,
+      };
+      pathDragActiveRef.current = false;
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    },
+    [],
+  );
+
+  const handlePathPointerMove = useCallback(
+    (_entry: FileEntry, event: React.PointerEvent) => {
+      const state = pathPointerDragRef.current;
+      if (!state || state.pointerId !== event.pointerId) return;
+
+      const distance = Math.hypot(event.clientX - state.startX, event.clientY - state.startY);
+      if (!state.active) {
+        if (distance < 6) return;
+
+        const entries = getContextMenuEntries(state.entry);
+        const paths = entries.map((item) => getEntryFullPath(item));
+        if (paths.length === 0) {
+          pathPointerDragRef.current = null;
+          return;
+        }
+
+        state.active = true;
+        pathDragActiveRef.current = true;
+        if (dragSelectionRef.current) {
+          dragSelectionRef.current = {
+            ...dragSelectionRef.current,
+            suppressRangeDrag: true,
+          };
+        }
+        beginExplorerPathPointerDrag(
+          { paths, backend: explorerBackend },
+          event.clientX,
+          event.clientY,
+        );
         return;
       }
 
-      dragSelectionRef.current = null;
-      const entries = getContextMenuEntries(entry);
-      const paths = entries.map((item) => getEntryFullPath(item));
-      if (paths.length === 0) {
-        event.preventDefault();
-        return;
-      }
-
-      writeExplorerPathDragData(event.dataTransfer, {
-        paths,
-        backend: explorerBackend,
-      });
+      // Position updates are handled by window listeners in explorerPathDrag.
     },
     [explorerBackend, getContextMenuEntries, getEntryFullPath],
   );
 
-  const handlePathDragEnd = useCallback(() => {
-    dragSelectionRef.current = null;
+  const handlePathPointerUp = useCallback((_entry: FileEntry, event: React.PointerEvent) => {
+    const state = pathPointerDragRef.current;
+    if (!state || state.pointerId !== event.pointerId) return;
+    pathPointerDragRef.current = null;
+    pathDragActiveRef.current = false;
+    // Active drops are finished by the module's window pointerup listener.
+    // If we never crossed the drag threshold, ensure no stale session remains.
+    if (!state.active) {
+      cancelExplorerPathPointerDrag();
+    }
+  }, []);
+
+  const handlePathPointerCancel = useCallback((_entry: FileEntry, event: React.PointerEvent) => {
+    const state = pathPointerDragRef.current;
+    if (state && state.pointerId !== event.pointerId) return;
+    pathPointerDragRef.current = null;
+    pathDragActiveRef.current = false;
+    cancelExplorerPathPointerDrag();
   }, []);
 
   const handleSendToPeer = useCallback(
@@ -2925,8 +3007,10 @@ function FileExplorerPane({
                           onCopyPath={handleCopyPath}
                           onSendToTerminal={handleSendToTerminal}
                           onCdToDirectory={handleCdToDirectory}
-                          onPathDragStart={handlePathDragStart}
-                          onPathDragEnd={handlePathDragEnd}
+                          onPathPointerDown={handlePathPointerDown}
+                          onPathPointerMove={handlePathPointerMove}
+                          onPathPointerUp={handlePathPointerUp}
+                          onPathPointerCancel={handlePathPointerCancel}
                           onProperties={(entry) => {
                             if (activeSessionId) {
                               setPropertiesDialogData({

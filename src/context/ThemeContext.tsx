@@ -44,6 +44,7 @@ export function applyThemeToDOM(colors: ThemeColors) {
   root.setProperty("--df-bg-panel-solid", colors.bgPanel);
   root.setProperty("--df-bg-terminal", colors.bgTerminal);
   root.setProperty("--df-bg-hover", colors.bgHover);
+  root.setProperty("--df-bg-hover-solid", colors.bgHover);
   root.setProperty("--df-bg-input", colors.bgInput);
   root.setProperty("--df-bg-section-header", colors.bgSectionHeader);
   root.setProperty("--df-border", colors.border);

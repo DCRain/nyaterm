@@ -5,8 +5,11 @@ import type { ResolvedLocalDropPathEntry } from "@/components/panel/file-explore
 import { useTerminalFileDrop } from "@/hooks/useTerminalFileDrop";
 import {
   formatExplorerPathsForTerminal,
+  getExplorerPathPointerDrag,
   hasExplorerPathDrag,
   readExplorerPathDragData,
+  registerExplorerPathPointerDropTarget,
+  subscribeExplorerPathPointerDrag,
 } from "@/lib/explorerPathDrag";
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
@@ -116,6 +119,63 @@ export function useTerminalExternalDrop({
   }, [resetExplorerPathDropHover, visible]);
 
   useEffect(() => {
+    const pasteExplorerPaths = (payload: {
+      paths: string[];
+      backend: "local" | "remote";
+    }) => {
+      const text = formatExplorerPathsForTerminal(payload.paths, payload.backend);
+      if (!text) {
+        return;
+      }
+
+      void sendSessionInput(sessionId, text)
+        .then(() => emit(`focus-terminal-${sessionId}`))
+        .catch((error) => {
+          logger.error({
+            domain: "ui.error",
+            event: "terminal.explorer_path_drop_failed",
+            message: "Failed to paste explorer paths into terminal",
+            ids: { session_id: sessionId },
+            data: { path_count: payload.paths.length },
+            error,
+          });
+          toast.error(String(error));
+        });
+    };
+
+    const syncPointerDragHover = () => {
+      if (!visible) {
+        resetExplorerPathDropHover();
+        return;
+      }
+      const active = getExplorerPathPointerDrag();
+      if (!active) {
+        resetExplorerPathDropHover();
+        return;
+      }
+      const isOverDropTarget = isDropPositionInsideElement(
+        { x: active.x, y: active.y },
+        containerRef.current,
+      );
+      setIsExplorerPathDropActive(isOverDropTarget);
+    };
+
+    const handlePointerDrop = (
+      payload: { paths: string[]; backend: "local" | "remote" },
+      x: number,
+      y: number,
+    ) => {
+      if (!visible) return false;
+      const isOverDropTarget = isDropPositionInsideElement(
+        { x, y },
+        containerRef.current,
+      );
+      resetExplorerPathDropHover();
+      if (!isOverDropTarget) return false;
+      pasteExplorerPaths(payload);
+      return true;
+    };
+
     const updateExplorerDropState = (event: DragEvent) => {
       if (!visible || !hasExplorerPathDrag(event.dataTransfer)) {
         return;
@@ -179,30 +239,15 @@ export function useTerminalExternalDrop({
         return;
       }
 
-      const text = formatExplorerPathsForTerminal(payload.paths, payload.backend);
-      if (!text) {
-        return;
-      }
-
-      void sendSessionInput(sessionId, text)
-        .then(() => emit(`focus-terminal-${sessionId}`))
-        .catch((error) => {
-          logger.error({
-            domain: "ui.error",
-            event: "terminal.explorer_path_drop_failed",
-            message: "Failed to paste explorer paths into terminal",
-            ids: { session_id: sessionId },
-            data: { path_count: payload.paths.length },
-            error,
-          });
-          toast.error(String(error));
-        });
+      pasteExplorerPaths(payload);
     };
 
     const handleWindowBlur = () => {
       resetExplorerPathDropHover();
     };
 
+    const unsubscribePointerSession = subscribeExplorerPathPointerDrag(syncPointerDragHover);
+    const unregisterPointerDrop = registerExplorerPathPointerDropTarget(handlePointerDrop);
     window.addEventListener("dragenter", updateExplorerDropState, DRAG_EVENT_CAPTURE_OPTIONS);
     window.addEventListener("dragover", updateExplorerDropState, DRAG_EVENT_CAPTURE_OPTIONS);
     window.addEventListener("dragleave", handleWindowDragLeave, DRAG_EVENT_CAPTURE_OPTIONS);
@@ -211,6 +256,8 @@ export function useTerminalExternalDrop({
 
     return () => {
       resetExplorerPathDropHover();
+      unsubscribePointerSession();
+      unregisterPointerDrop();
       window.removeEventListener("dragenter", updateExplorerDropState, DRAG_EVENT_CAPTURE_OPTIONS);
       window.removeEventListener("dragover", updateExplorerDropState, DRAG_EVENT_CAPTURE_OPTIONS);
       window.removeEventListener("dragleave", handleWindowDragLeave, DRAG_EVENT_CAPTURE_OPTIONS);

@@ -446,6 +446,81 @@ body[data-window-transparency="true"] #root {
   background-color: color-mix(in srgb, var(--df-primary) 20%, transparent);
 }
 
+/*
+ * File explorer rows: avoid native HTML5 `draggable` (WebView2 paints a soft
+ * highlight band on Windows). Selection uses an opaque tint + left edge.
+ */
+.file-explorer-row {
+  border-left: 3px solid transparent;
+  background-image: none;
+  outline: none !important;
+  box-shadow: none !important;
+  filter: none !important;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-drag: none;
+}
+
+.file-explorer-row:hover:not(.file-explorer-row--selected) {
+  background-color: var(--df-bg-hover-solid, var(--df-bg-hover));
+}
+
+.file-explorer-row:focus,
+.file-explorer-row:focus-visible,
+.file-explorer-row:active,
+.file-explorer-row--selected:focus,
+.file-explorer-row--selected:focus-visible,
+.file-explorer-row--selected:active {
+  outline: none !important;
+  box-shadow: none !important;
+  filter: none !important;
+}
+
+.file-explorer-row--selected,
+.file-explorer-row--selected:hover {
+  /* Mix against opaque panel swatch so the fill stays solid and readable. */
+  background-color: color-mix(
+    in srgb,
+    var(--df-primary) 26%,
+    var(--df-bg-panel-solid, #161b22)
+  ) !important;
+  background-image: none !important;
+  border-left-color: var(--df-primary);
+  box-shadow: none !important;
+  filter: none !important;
+  opacity: 1 !important;
+}
+
+.file-explorer-row--path-draggable {
+  cursor: grab;
+}
+
+html.nyaterm-explorer-path-dragging,
+html.nyaterm-explorer-path-dragging * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+
+#nyaterm-explorer-path-drag-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 2147483000;
+  max-width: min(280px, 70vw);
+  padding: 6px 10px;
+  border: 1px solid var(--df-primary);
+  border-radius: 6px;
+  background: var(--df-bg-panel-solid, var(--df-bg-panel, #161b22));
+  color: var(--df-text, #e6edf3);
+  font-size: 12px;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+  will-change: transform;
+}
+
 @keyframes breathing {
   0%,
   100% {

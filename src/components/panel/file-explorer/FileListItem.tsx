@@ -24,7 +24,7 @@ import {
   MdVisibility,
 } from "react-icons/md";
 import { getFileIcon } from "@/components/icons";
-import { formatSize } from "@/lib/utils";
+import { cn, formatSize } from "@/lib/utils";
 import type { AICustomActionConfig, FileEntry } from "@/types/global";
 import {
   ContextMenu,
@@ -76,8 +76,10 @@ interface FileListItemProps {
   onSendToTerminal: (entry: FileEntry, mode: "dir" | "name" | "full") => void;
   onCdToDirectory: (entry: FileEntry) => void;
   onProperties: (entry: FileEntry) => void;
-  onPathDragStart?: (entry: FileEntry, event: React.DragEvent) => void;
-  onPathDragEnd?: () => void;
+  onPathPointerDown?: (entry: FileEntry, event: React.PointerEvent) => void;
+  onPathPointerMove?: (entry: FileEntry, event: React.PointerEvent) => void;
+  onPathPointerUp?: (entry: FileEntry, event: React.PointerEvent) => void;
+  onPathPointerCancel?: (entry: FileEntry, event: React.PointerEvent) => void;
   aiActions: AICustomActionConfig[];
   onAIAction: (entry: FileEntry, action: AICustomActionConfig) => void;
   inlineRename?: {
@@ -135,8 +137,10 @@ export function FileListItem({
   onSendToTerminal,
   onCdToDirectory,
   onProperties,
-  onPathDragStart,
-  onPathDragEnd,
+  onPathPointerDown,
+  onPathPointerMove,
+  onPathPointerUp,
+  onPathPointerCancel,
   aiActions,
   onAIAction,
   inlineRename,
@@ -237,22 +241,24 @@ export function FileListItem({
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <li
-          className="group relative grid h-[30px] items-center rounded transition-colors cursor-pointer select-none"
-          draggable={!isParentDirectoryEntry && !isRenaming && !!activeSessionId}
+          className={cn(
+            "file-explorer-row group relative grid h-[30px] items-center select-none",
+            !isParentDirectoryEntry && !isRenaming && !!activeSessionId
+              ? "file-explorer-row--path-draggable"
+              : "cursor-pointer",
+            isSelected && "file-explorer-row--selected",
+          )}
+          data-selected={isSelected ? "true" : undefined}
+          // Native HTML5 draggable paints a soft WebView2 highlight on Windows.
+          // Path drag uses pointer events instead (see explorerPathDrag session).
+          draggable={false}
           style={{
             gridTemplateColumns: columnTemplate,
             width: rowWidth,
-            backgroundColor: isSelected
-              ? "color-mix(in srgb, var(--df-primary) 10%, transparent)"
-              : undefined,
             color: isSelected ? "var(--df-primary)" : "var(--df-text)",
           }}
           onMouseEnter={(e) => {
-            if (!isSelected) e.currentTarget.style.backgroundColor = "var(--df-bg-hover)";
             onSelectionDrag(entry, e);
-          }}
-          onMouseLeave={(e) => {
-            if (!isSelected) e.currentTarget.style.backgroundColor = "";
           }}
           onMouseDown={(e) => {
             wasSingleSelectedOnMouseDownRef.current =
@@ -263,17 +269,29 @@ export function FileListItem({
               return;
             }
             onSelectionStart(entry, e);
-          }}
-          onDragStart={(e) => {
-            clearPendingRenameClick();
-            if (isParentDirectoryEntry || isRenaming || !activeSessionId) {
-              e.preventDefault();
-              return;
+            // Avoid WebView2 focus-band chrome on the row.
+            if (e.button === 0) {
+              const target = e.currentTarget;
+              queueMicrotask(() => {
+                if (document.activeElement === target) {
+                  target.blur();
+                }
+              });
             }
-            onPathDragStart?.(entry, e);
           }}
-          onDragEnd={() => {
-            onPathDragEnd?.();
+          onPointerDown={(e) => {
+            if (isParentDirectoryEntry || isRenaming || !activeSessionId) return;
+            clearPendingRenameClick();
+            onPathPointerDown?.(entry, e);
+          }}
+          onPointerMove={(e) => {
+            onPathPointerMove?.(entry, e);
+          }}
+          onPointerUp={(e) => {
+            onPathPointerUp?.(entry, e);
+          }}
+          onPointerCancel={(e) => {
+            onPathPointerCancel?.(entry, e);
           }}
           onDoubleClick={() => {
             clearPendingRenameClick();
