@@ -120,6 +120,12 @@ pub(crate) fn load_settings_doc<T: DeserializeOwned + Default>(
     Ok(storage()?.get_settings_doc(key)?.unwrap_or_default())
 }
 
+pub(crate) fn try_load_settings_doc<T: DeserializeOwned>(
+    key: SettingsDocKey,
+) -> AppResult<Option<T>> {
+    storage()?.get_settings_doc(key)
+}
+
 pub(crate) fn save_settings_doc<T: Serialize>(key: SettingsDocKey, value: &T) -> AppResult<()> {
     storage()?.save_settings_doc(key, value)
 }

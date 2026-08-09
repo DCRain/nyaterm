@@ -6,7 +6,7 @@ impl QuickCommandsStore {
     }
 
     pub fn load_from_disk(&self, app: &AppHandle) -> AppResult<()> {
-        let config = config::load_quick_commands(app)?;
+        let config = config::load_or_seed_quick_commands(app)?;
         self.replace(config);
         Ok(())
     }
@@ -110,6 +110,17 @@ impl QuickCommandsStore {
             total_categories: config.categories.len(),
         };
 
+        self.save_all(app, config)?;
+        Ok(result)
+    }
+
+    /// Re-add any missing built-in categories and commands without overwriting existing ids.
+    pub fn restore_builtins(
+        &self,
+        app: &AppHandle,
+    ) -> AppResult<crate::config::QuickCommandsRestoreResult> {
+        let mut config = self.snapshot();
+        let result = config::merge_missing_builtin_quick_commands(&mut config);
         self.save_all(app, config)?;
         Ok(result)
     }

@@ -1315,6 +1315,17 @@ pub fn import_quick_commands(
     Ok(result)
 }
 
+#[tauri::command]
+pub fn restore_builtin_quick_commands(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<QuickCommandsStore>>,
+) -> AppResult<config::QuickCommandsRestoreResult> {
+    let result = state.restore_builtins(&app)?;
+    let _ = app.emit("quick-commands-changed", ());
+    schedule_cloud_sync_notify(app.clone());
+    Ok(result)
+}
+
 // --- Password management ---
 
 #[tauri::command]

@@ -19,6 +19,7 @@ import {
   MdKeyboardArrowUp,
   MdKeyboardReturn,
   MdPushPin,
+  MdRestartAlt,
   MdSearch,
   MdSend,
   MdSort,
@@ -30,6 +31,7 @@ import { toast } from "sonner";
 import DeleteQuickCommandCategoryDialog from "@/components/dialog/quick-commands/DeleteQuickCommandCategoryDialog";
 import DeleteQuickCommandDialog from "@/components/dialog/quick-commands/DeleteQuickCommandDialog";
 import QuickCommandsImportDialog from "@/components/dialog/quick-commands/QuickCommandsImportDialog";
+import RestoreBuiltinQuickCommandsDialog from "@/components/dialog/quick-commands/RestoreBuiltinQuickCommandsDialog";
 import RenameQuickCommandCategoryDialog from "@/components/dialog/quick-commands/RenameQuickCommandCategoryDialog";
 import PanelHeader from "@/components/layout/PanelHeader";
 import ResizeHandle from "@/components/layout/ResizeHandle";
@@ -86,6 +88,7 @@ import type {
   QuickCommandImportResult,
   QuickCommandSortMode,
   QuickCommandsConfig,
+  QuickCommandsRestoreResult,
   QuickCommandViewMode,
 } from "@/types/global";
 import { openQuickCommand } from "../../lib/windowManager";
@@ -151,6 +154,8 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiPopoverOpen, setAiPopoverOpen] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
+  const [restoringBuiltins, setRestoringBuiltins] = useState(false);
   const [expandedCategoryIds, setExpandedCategoryIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -384,6 +389,40 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
     },
     [loadQuickCommands],
   );
+
+  const handleRestoreBuiltins = useCallback(async () => {
+    setRestoringBuiltins(true);
+    try {
+      const result = await invoke<QuickCommandsRestoreResult>(
+        "restore_builtin_quick_commands",
+      );
+      await loadQuickCommands();
+      setRestoreDialogOpen(false);
+      if (
+        result.added_commands === 0 &&
+        result.added_categories === 0 &&
+        result.updated_commands === 0
+      ) {
+        toast.message(t("quickCommands.restoreBuiltinsNone"));
+      } else {
+        toast.success(
+          t("quickCommands.restoreBuiltinsSuccess", {
+            commands: result.added_commands,
+            categories: result.added_categories,
+            updated: result.updated_commands,
+          }),
+        );
+      }
+    } catch (error) {
+      toast.error(
+        t("quickCommands.restoreBuiltinsFailed", {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    } finally {
+      setRestoringBuiltins(false);
+    }
+  }, [loadQuickCommands, t]);
 
   useEffect(() => {
     const unsub = listen("quick-commands-changed", () => {
@@ -1165,6 +1204,24 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
                     {t("quickCommands.import")}
                   </TooltipContent>
                 </Tooltip>
+
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      className="h-6 w-6 shrink-0 rounded-md p-0 transition-colors hover:bg-[var(--df-bg-hover)]"
+                      style={{ color: "var(--df-text-muted)" }}
+                      aria-label={t("quickCommands.restoreBuiltins")}
+                      onClick={() => setRestoreDialogOpen(true)}
+                    >
+                      <MdRestartAlt className="text-[1.05rem]" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    {t("quickCommands.restoreBuiltins")}
+                  </TooltipContent>
+                </Tooltip>
               </div>
 
               <span
@@ -1506,6 +1563,16 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
           open={importDialogOpen}
           onClose={() => setImportDialogOpen(false)}
           onImported={handleImported}
+        />
+        <RestoreBuiltinQuickCommandsDialog
+          open={restoreDialogOpen}
+          restoring={restoringBuiltins}
+          onCancel={() => {
+            if (!restoringBuiltins) setRestoreDialogOpen(false);
+          }}
+          onConfirm={() => {
+            void handleRestoreBuiltins();
+          }}
         />
         <DeleteQuickCommandDialog
           command={commandToDelete}

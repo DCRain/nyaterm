@@ -60,8 +60,9 @@ pub use proxy::{
 };
 #[allow(unused_imports)]
 pub use quick_command::{
-    QuickCommand, QuickCommandCategory, QuickCommandsConfig, load_quick_commands,
-    save_quick_commands,
+    QuickCommand, QuickCommandCategory, QuickCommandsConfig, QuickCommandsRestoreResult,
+    default_quick_commands_config, load_or_seed_quick_commands, load_quick_commands,
+    merge_missing_builtin_quick_commands, save_quick_commands,
 };
 #[allow(unused_imports)]
 pub use settings::{

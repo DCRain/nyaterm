@@ -871,6 +871,14 @@ export interface QuickCommandImportResult {
   total_categories: number;
 }
 
+export interface QuickCommandsRestoreResult {
+  added_commands: number;
+  added_categories: number;
+  updated_commands: number;
+  total_commands: number;
+  total_categories: number;
+}
+
 /** Fuzzy search result with matched command and highlight indices. */
 export interface FuzzyResult {
   command: string;
