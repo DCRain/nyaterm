@@ -150,6 +150,14 @@ function colorWithAlpha(color: string, opacity: number) {
   return `color-mix(in srgb, ${color} ${Math.round(opacity * 100)}%, transparent)`;
 }
 
+/** Soften opaque theme borders so they don't slice translucent / acrylic surfaces. */
+function softBorderColor(border: string, surfaceOpacity: number) {
+  if (surfaceOpacity >= 0.98) return border;
+  // Keep borders subtler than fills; opaque 1px lines look harsh on glass.
+  const borderOpacity = Math.min(0.42, Math.max(0.18, surfaceOpacity * 0.5));
+  return colorWithAlpha(border, borderOpacity);
+}
+
 export function buildSurfaceCssVariables(
   colors: ThemeColors,
   appearance: AppearanceSettings,
@@ -164,6 +172,7 @@ export function buildSurfaceCssVariables(
     const bgHover = colorWithAlpha(colors.bgHover, surfaceOpacity);
     const bgInput = colorWithAlpha(colors.bgInput, surfaceOpacity);
     const bgSectionHeader = colorWithAlpha(colors.bgSectionHeader, surfaceOpacity);
+    const border = softBorderColor(colors.border, surfaceOpacity);
     return {
       "--df-bg": bg,
       "--df-bg-panel": bgPanel,
@@ -173,13 +182,15 @@ export function buildSurfaceCssVariables(
       "--df-bg-hover-solid": colors.bgHover,
       "--df-bg-input": bgInput,
       "--df-bg-section-header": bgSectionHeader,
+      "--df-border": border,
       "--background": bg,
       "--card": bgPanel,
       "--popover": bgPanel,
       "--secondary": bgHover,
       "--muted": bgHover,
       "--accent": bgHover,
-      "--input": colors.border,
+      "--border": border,
+      "--input": border,
     };
   }
   const surfaceOpacity = isBackgroundImageEnabled(appearance)
@@ -191,6 +202,7 @@ export function buildSurfaceCssVariables(
   const bgHover = colorWithAlpha(colors.bgHover, surfaceOpacity);
   const bgInput = colorWithAlpha(colors.bgInput, surfaceOpacity);
   const bgSectionHeader = colorWithAlpha(colors.bgSectionHeader, surfaceOpacity);
+  const border = softBorderColor(colors.border, surfaceOpacity);
 
   return {
     "--df-bg": bg,
@@ -201,13 +213,15 @@ export function buildSurfaceCssVariables(
     "--df-bg-hover-solid": colors.bgHover,
     "--df-bg-input": bgInput,
     "--df-bg-section-header": bgSectionHeader,
+    "--df-border": border,
     "--background": bg,
     "--card": bgPanel,
     "--popover": bgPanel,
     "--secondary": bgHover,
     "--muted": bgHover,
     "--accent": bgHover,
-    "--input": colors.border,
+    "--border": border,
+    "--input": border,
   };
 }
 
