@@ -886,6 +886,7 @@
     "directoryHistory": "Directory History",
     "disconnected": "Disconnected",
     "downloadSelected": "Download",
+    "downloadToLocalDir": "Download",
     "dualPane": "Dual Pane",
     "editPath": "Click to edit path",
     "emptyDirectory": "Empty",
@@ -927,6 +928,7 @@
     "openAfterCreateFile": "Open after creating",
     "openAfterCreateFolder": "Open after creating",
     "openInternalFailed": "Failed to open the built-in editor.",
+    "openTerminalHere": "Open Terminal Here",
     "owner": "Owner",
     "ownerGroupRequired": "Owner and group cannot be empty.",
     "ownership": "Ownership",
@@ -979,7 +981,8 @@
     "upload": "Upload Files",
     "uploadFolder": "Upload Folder",
     "uploadOnce": "Upload Once",
-    "uploadPrompt": "Remote file changed. Upload changes?"
+    "uploadPrompt": "Remote file changed. Upload changes?",
+    "uploadToRemoteDir": "Upload"
   },
   "filePreview": {
     "clearSort": "Clear sort",
@@ -1634,6 +1637,9 @@
     "notSet": "Not set",
     "openAllConnections": "Open All",
     "openAllConnectionsConfirm": "Open all {{count}} connections in folder '{{name}}'?",
+    "openSftp": "Open SFTP",
+    "openSftpDisabled": "SFTP is disabled for this connection. Enable it in the connection settings.",
+    "openSftpSshOnly": "SFTP is only available for SSH connections.",
     "parity": "Parity",
     "port": "Port",
     "rename": "Rename",
@@ -2425,6 +2431,11 @@
     "x11Display": "Local X11 DISPLAY",
     "x11DisplayDesc": "Requires a local X server. Windows can use VcXsrv/Xming, macOS can use XQuartz, and Linux usually uses Xorg/Xwayland.",
     "x11DisplayPlaceholder": "Windows: localhost:0 / Linux/macOS: :0"
+  },
+  "sftpWorkspace": {
+    "local": "Local",
+    "remote": "Remote",
+    "tabTitle": "SFTP · {{name}}"
   },
   "sshAuth": {
     "addKey": "Add SSH key",

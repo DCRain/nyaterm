@@ -31,7 +31,11 @@ export type FileExplorerSessionCache = {
 export type LoadDirectoryOptions = {
   history?: "push" | "preserve";
   selectEntryName?: string;
+  /** Select multiple entries after load (e.g. transfer destinations). */
+  selectEntryNames?: string[];
   rawPathToken?: string;
+  /** Skip loading spinner and keep list scroll (same-directory refresh). */
+  silent?: boolean;
 };
 
 export type FileExplorerBackendKind = "remote" | "local";

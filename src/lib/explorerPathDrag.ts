@@ -7,6 +7,11 @@ export const EXPLORER_PATH_DRAG_MIME = "application/x-nyaterm-explorer-paths";
 export interface ExplorerPathDragPayload {
   paths: string[];
   backend: FileExplorerBackendKind;
+  /** When set, dual-pane explorers can enqueue a local↔remote copy on drop. */
+  transfer?: {
+    sessionId: string;
+    entries: Array<{ name: string; path: string; isDirectory: boolean }>;
+  };
 }
 
 export interface ExplorerPathPointerDragSession {
@@ -44,9 +49,21 @@ export function formatExplorerPathsForTerminal(
 function normalizePayload(payload: ExplorerPathDragPayload): ExplorerPathDragPayload | null {
   const paths = payload.paths.map((path) => path.trim()).filter(Boolean);
   if (paths.length === 0) return null;
+  const transferEntries = payload.transfer?.entries
+    ?.map((entry) => ({
+      name: entry.name.trim(),
+      path: entry.path.trim(),
+      isDirectory: Boolean(entry.isDirectory),
+    }))
+    .filter((entry) => entry.name && entry.path);
+  const sessionId = payload.transfer?.sessionId?.trim();
   return {
     paths,
     backend: payload.backend === "local" ? "local" : "remote",
+    transfer:
+      sessionId && transferEntries && transferEntries.length > 0
+        ? { sessionId, entries: transferEntries }
+        : undefined,
   };
 }
 

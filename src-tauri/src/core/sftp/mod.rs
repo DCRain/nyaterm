@@ -608,7 +608,9 @@ async fn ensure_local_session_kind(
         .get(session_id)
         .ok_or_else(|| AppError::SessionNotFound(format!("Session '{session_id}' not found")))?;
     let matches_kind = match kind {
-        CopyEndpointKind::Local => session.info.session_type == crate::core::SessionType::Local,
+        // Local host paths are independent of session type; any live session can
+        // anchor a local endpoint (e.g. dual-pane SFTP workspace with only SSH).
+        CopyEndpointKind::Local => true,
         CopyEndpointKind::Remote => session.info.session_type == crate::core::SessionType::SSH,
     };
     if matches_kind {

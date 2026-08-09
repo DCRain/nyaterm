@@ -24,6 +24,9 @@ pub enum RestorablePaneNode {
         title: String,
         session_type: String,
         connection_id: Option<String>,
+        /// Dual-pane SFTP workspace when Some("sftp"); omitted means terminal.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        view: Option<String>,
     },
     #[serde(rename = "split")]
     Split {
@@ -98,6 +101,7 @@ impl RestorableTab {
                 },
                 session_type: self.session_type.clone(),
                 connection_id: self.connection_id.clone(),
+                view: None,
             });
             if self.active_pane_id.is_none() {
                 self.active_pane_id = Some(leaf_id);

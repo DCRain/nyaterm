@@ -77,6 +77,7 @@ interface SavedConnectionsProps {
     target?: NewSessionTarget,
   ) => void;
   onConnectConnection: (connection: SavedConnection) => Promise<void> | void;
+  onOpenSftp?: (connection: SavedConnection) => Promise<void> | void;
 }
 
 type HeaderActionButtonProps = ComponentProps<typeof Button> & {
@@ -162,6 +163,7 @@ export default function SavedConnections({
   onNewConnection,
   onEditConnection,
   onConnectConnection,
+  onOpenSftp,
 }: SavedConnectionsProps) {
   const { savedConnections, savedGroups, refreshConnections, appSettings, updateUi } = useApp();
   const { t } = useTranslation();
@@ -689,6 +691,17 @@ export default function SavedConnections({
     }
 
     openConnections([conn]);
+  };
+
+  const handleOpenSftp = (conn: SavedConnection) => {
+    if (!onOpenSftp) return;
+    void (async () => {
+      try {
+        await onOpenSftp(conn);
+      } catch (e) {
+        toast.error(t("savedConnections.connectionFailed", { error: getErrorMessage(e) }));
+      }
+    })();
   };
 
   const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -1455,6 +1468,7 @@ export default function SavedConnections({
     handleConnect,
     handleConnectOnly,
     handleConnectSelected,
+    handleOpenSftp,
     handleCopyConnection,
     handleToggleOpenOnStartup,
     requestMoveConnectionToGroup,

@@ -115,7 +115,7 @@ export default function TabContextMenu({
     !activePane.connectError &&
     !!activePane.sessionId;
   const canDisconnect = !!activePane && !activePane.connecting && !activePane.connectError;
-  const canSplit = canSpawnSession;
+  const canSplit = canSpawnSession && activePane?.view !== "sftp";
   const canUseAI = !!activePane && !activePane.connecting && !activePane.connectError;
   const canCloseInactive = tabs.length > 1;
   const canCloseRight = tabIndex !== -1 && tabIndex < tabs.length - 1;

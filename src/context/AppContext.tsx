@@ -75,7 +75,7 @@ interface AppContextType {
     type: SessionType,
     connectionId?: string,
     extra?: Partial<Pick<Tab, "customName" | "tabColor">>,
-    options?: { afterTabId?: string },
+    options?: { afterTabId?: string; view?: SessionPane["view"] },
   ) => PendingTabCreation;
   /** Swap the active pane's temporary sessionId for the real one and clear the connecting flag. */
   updateTabSession: (tabId: string, sessionId: string) => void;
@@ -770,12 +770,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       type: SessionType,
       connectionId?: string,
       extra?: Partial<Pick<Tab, "customName" | "tabColor">>,
-      options?: { afterTabId?: string },
+      options?: { afterTabId?: string; view?: SessionPane["view"] },
     ): PendingTabCreation => {
       const createRequestId = createSessionRequestId();
       const pane = createSessionPane(name, type, connectionId, {
         connecting: true,
         createRequestId,
+        view: options?.view,
       });
       const newTab = createWorkspaceTab(pane, getNextPersistOrder(tabsRef.current), extra);
       const nextTabs = options?.afterTabId

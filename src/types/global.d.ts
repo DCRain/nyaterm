@@ -65,6 +65,9 @@ export interface SessionInfo {
 }
 
 /** Leaf node representing one terminal session inside a workspace tab. */
+/** Workspace leaf content mode. Default / omitted is the terminal. */
+export type SessionPaneView = "terminal" | "sftp";
+
 export interface SessionPane {
   id: string;
   kind: "leaf";
@@ -72,6 +75,8 @@ export interface SessionPane {
   name: string;
   type: SessionType;
   connectionId?: string;
+  /** Main-area content: terminal shell or dual-pane SFTP. Default is terminal. */
+  view?: SessionPaneView;
   /** True while the backend session is being established. XTerminal is not rendered yet. */
   connecting?: boolean;
   /** Backend creation request id used to cancel an in-flight session creation. */
@@ -442,6 +447,8 @@ export interface RestorableSessionPane {
   title: string;
   session_type: SessionType | "local";
   connection_id?: string;
+  /** Persist dual-pane SFTP workspace leaves; omitted means terminal. */
+  view?: SessionPaneView;
 }
 
 /** Saved split pane for startup restoration. */

@@ -37,6 +37,7 @@ export function createSessionPane(
     name,
     type,
     connectionId,
+    view: overrides?.view,
     connecting: overrides?.connecting,
     createRequestId: overrides?.createRequestId,
     connectError: overrides?.connectError,
@@ -111,6 +112,7 @@ export function updateSessionPane(
       | "name"
       | "type"
       | "connectionId"
+      | "view"
       | "connecting"
       | "connectError"
       | "createRequestId"
@@ -227,6 +229,7 @@ function serializePane(node: PaneNode): RestorablePaneNode {
       title: node.name,
       session_type: node.type,
       connection_id: node.connectionId,
+      view: node.view === "sftp" ? "sftp" : undefined,
     };
   }
 
@@ -294,6 +297,7 @@ function restorePane(node: RestorablePaneNode): PaneNode | null {
       name: node.title,
       type,
       connectionId: node.connection_id,
+      view: node.view === "sftp" ? "sftp" : undefined,
       connecting: true,
       createRequestId: crypto.randomUUID(),
     };

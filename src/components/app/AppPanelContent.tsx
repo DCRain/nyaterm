@@ -47,6 +47,7 @@ interface AppPanelContentProps {
     target?: NewSessionTarget,
   ) => void;
   onConnectConnection: (connection: SavedConnection) => Promise<void> | void;
+  onOpenSftp?: (connection: SavedConnection) => Promise<void> | void;
   onSessionClick: (sessionId: string) => void;
   onSessionReconnect: (sessionId: string) => Promise<void> | void;
   onSessionDisconnect: (sessionId: string) => Promise<void> | void;
@@ -76,6 +77,7 @@ export default function AppPanelContent({
   onNewConnection,
   onEditConnection,
   onConnectConnection,
+  onOpenSftp,
   onSessionClick,
   onSessionReconnect,
   onSessionDisconnect,
@@ -124,6 +126,7 @@ export default function AppPanelContent({
             onNewConnection={onNewConnection}
             onEditConnection={onEditConnection}
             onConnectConnection={onConnectConnection}
+            onOpenSftp={onOpenSftp}
           />
         );
       case "activeSessions":

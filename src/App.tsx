@@ -75,6 +75,7 @@ import {
 import { normalizeHeaderStatusMode } from "./lib/headerStatus";
 import { invoke } from "./lib/invoke";
 import { logger } from "./lib/logger";
+import { subscribeOpenSshTerminalAtPath } from "./lib/openSshTerminalAtPath";
 import {
   isRemoteDesktopConnection,
   launchSavedRemoteDesktop,
@@ -118,6 +119,7 @@ import {
 } from "./lib/terminalReconnectHistory";
 import { setBackendTransferDuplicatePrompt } from "./lib/transferDuplicatePrompt";
 import { checkForUpdate, type UpdateInfo } from "./lib/updater";
+import { shellQuote } from "./lib/utils";
 import {
   getOwnerMainWindowLabel,
   isPrimaryMainWindow,
@@ -257,7 +259,7 @@ async function createSessionForConnection(
       return invoke<string>("create_ssh_session", {
         connectionId: connection.id,
         createRequestId,
-        startupCommand: startupCommand ?? null,
+        startupCommand: buildStartupCommandPayload(startupCommand),
       });
   }
 }
@@ -1137,6 +1139,131 @@ function App() {
       updateUi,
     ],
   );
+
+  const openSftpWorkspace = useCallback(
+    async (connection: SavedConnection) => {
+      if (connection.type !== "ssh") {
+        toast.error(t("savedConnections.openSftpSshOnly"));
+        return;
+      }
+      if (connection.sftp?.enabled === false) {
+        toast.error(t("savedConnections.openSftpDisabled"));
+        return;
+      }
+
+      const tabName = t("sftpWorkspace.tabTitle", { name: connection.name });
+      const pending = addPendingTab(tabName, "SSH", connection.id, undefined, {
+        view: "sftp",
+      });
+      const { tabId, createRequestId } = pending;
+
+      try {
+        const sessionId = await createSessionForConnection(connection, createRequestId);
+        if (!hasTab(tabId)) {
+          await closeStaleCreatedSession(sessionId);
+          return;
+        }
+        updateTabSession(tabId, sessionId);
+        recordRecentConnection(connection.id);
+        updateUi({ saved_connections_last_opened_connection_id: connection.id });
+        updateAutoIconForSessionStart(connection.id, sessionId);
+      } catch (error) {
+        if (isSessionCreationCancelled(error) || !hasTab(tabId)) {
+          return;
+        }
+        const errorMessage = getErrorMessage(error);
+        logger.error({
+          domain: "session.lifecycle",
+          event: "sftp_workspace.open_failed",
+          message: "Open SFTP workspace failed",
+          ids: { connection_id: connection.id },
+          error,
+        });
+        markTabConnectionFailed(tabId, errorMessage);
+        maybePromptConnectionEdit(connection.id, errorMessage, { sourceTabId: tabId });
+        toast.error(t("savedConnections.connectionFailed", { error: errorMessage }));
+      }
+    },
+    [
+      addPendingTab,
+      hasTab,
+      markTabConnectionFailed,
+      maybePromptConnectionEdit,
+      recordRecentConnection,
+      t,
+      updateAutoIconForSessionStart,
+      updateTabSession,
+      updateUi,
+    ],
+  );
+
+  const openSshTerminalAtRemotePath = useCallback(
+    async (connectionId: string, path: string) => {
+      const connection = savedConnections.find((item) => item.id === connectionId);
+      if (!connection || connection.type !== "ssh") {
+        toast.error(t("savedConnections.openSftpSshOnly"));
+        return;
+      }
+
+      const directoryPath = path.trim();
+      if (!directoryPath) return;
+
+      const startupCommand = {
+        command: `cd ${shellQuote(directoryPath)}`,
+        delayMs: 800,
+      };
+      const pending = addPendingTab(connection.name, "SSH", connection.id);
+      const { tabId, createRequestId } = pending;
+
+      try {
+        const sessionId = await createSessionForConnection(
+          connection,
+          createRequestId,
+          startupCommand,
+        );
+        if (!hasTab(tabId)) {
+          await closeStaleCreatedSession(sessionId);
+          return;
+        }
+        updateTabSession(tabId, sessionId);
+        focusTerminalSession(sessionId);
+        recordRecentConnection(connection.id);
+        updateUi({ saved_connections_last_opened_connection_id: connection.id });
+        updateAutoIconForSessionStart(connection.id, sessionId);
+      } catch (error) {
+        if (isSessionCreationCancelled(error) || !hasTab(tabId)) {
+          return;
+        }
+        const errorMessage = getErrorMessage(error);
+        logger.error({
+          domain: "session.lifecycle",
+          event: "sftp_open_terminal_here_failed",
+          message: "Open SSH terminal at path failed",
+          ids: { connection_id: connection.id },
+          error,
+        });
+        markTabConnectionFailed(tabId, errorMessage);
+        toast.error(t("savedConnections.connectionFailed", { error: errorMessage }));
+      }
+    },
+    [
+      addPendingTab,
+      hasTab,
+      markTabConnectionFailed,
+      recordRecentConnection,
+      savedConnections,
+      t,
+      updateAutoIconForSessionStart,
+      updateTabSession,
+      updateUi,
+    ],
+  );
+
+  useEffect(() => {
+    return subscribeOpenSshTerminalAtPath((detail) => {
+      void openSshTerminalAtRemotePath(detail.connectionId, detail.path);
+    });
+  }, [openSshTerminalAtRemotePath]);
 
   const connectTemporaryConnection = useCallback(
     async (config: TemporaryLinkConfig) => {
@@ -2515,7 +2642,7 @@ function App() {
   const handleSplitSession = useCallback(
     async (tab: Tab, direction: PaneSplitDirection) => {
       const pane = getActivePane(tab);
-      if (!pane || !canCreateSessionFromPane(pane)) return;
+      if (!pane || pane.view === "sftp" || !canCreateSessionFromPane(pane)) return;
       const leaf = terminalWindows ? findTerminalWindowLeafByTabId(terminalWindows, tab.id) : null;
       if (!leaf) {
         toast.error(t("tabCtx.splitFailed"));
@@ -3401,6 +3528,7 @@ function App() {
         onNewConnection={handleNewSession}
         onEditConnection={handleEditConnection}
         onConnectConnection={connectSavedConnection}
+        onOpenSftp={openSftpWorkspace}
         onSessionClick={handleSessionClick}
         onSessionReconnect={handleReconnectSessionById}
         onSessionDisconnect={handleDisconnectSessionById}
@@ -3432,6 +3560,7 @@ function App() {
       handleToggleSessionRecording,
       handleTransferResize,
       connectSavedConnection,
+      openSftpWorkspace,
       recordingSessions,
       uiConfig.show_ascend_npu_monitor,
       uiConfig.show_gpu_monitor,

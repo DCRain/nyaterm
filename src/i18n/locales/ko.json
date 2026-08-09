@@ -882,6 +882,7 @@
     "directoryHistory": "디렉터리 기록",
     "disconnected": "연결 끊김",
     "downloadSelected": "다운로드",
+    "downloadToLocalDir": "다운로드",
     "dualPane": "이중 창",
     "editPath": "클릭하여 경로 편집",
     "emptyDirectory": "비어 있음",
@@ -923,6 +924,7 @@
     "openAfterCreateFile": "생성 후 열기",
     "openAfterCreateFolder": "생성 후 열기",
     "openInternalFailed": "내장 편집기를 열지 못했습니다.",
+    "openTerminalHere": "여기서 터미널 열기",
     "owner": "소유자",
     "ownerGroupRequired": "소유자와 그룹은 비워둘 수 없습니다.",
     "ownership": "소유권",
@@ -975,7 +977,8 @@
     "upload": "파일 업로드",
     "uploadFolder": "폴더 업로드",
     "uploadOnce": "한 번만 업로드",
-    "uploadPrompt": "원격 파일이 변경되었습니다. 변경 사항을 업로드할까요?"
+    "uploadPrompt": "원격 파일이 변경되었습니다. 변경 사항을 업로드할까요?",
+    "uploadToRemoteDir": "업로드"
   },
   "filePreview": {
     "clearSort": "정렬 지우기",
@@ -1630,6 +1633,9 @@
     "notSet": "설정되지 않음",
     "openAllConnections": "모두 열기",
     "openAllConnectionsConfirm": "폴더 '{{name}}' 안의 연결 {{count}}개를 모두 열까요?",
+    "openSftp": "SFTP 열기",
+    "openSftpDisabled": "이 연결에서 SFTP가 비활성화되어 있습니다. 연결 설정에서 켜세요.",
+    "openSftpSshOnly": "SFTP는 SSH 연결에서만 사용할 수 있습니다.",
     "parity": "패리티",
     "port": "포트",
     "rename": "이름 바꾸기",
@@ -2415,6 +2421,11 @@
     "x11Display": "로컬 X11 DISPLAY",
     "x11DisplayDesc": "로컬 X 서버가 필요합니다. Windows는 VcXsrv/Xming, macOS는 XQuartz, Linux는 보통 Xorg/Xwayland를 사용할 수 있습니다.",
     "x11DisplayPlaceholder": "Windows: localhost:0 / Linux/macOS: :0"
+  },
+  "sftpWorkspace": {
+    "local": "로컬",
+    "remote": "원격",
+    "tabTitle": "SFTP · {{name}}"
   },
   "sshAuth": {
     "addKey": "SSH 키 추가",

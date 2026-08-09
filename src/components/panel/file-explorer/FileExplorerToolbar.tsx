@@ -67,6 +67,7 @@ interface FileExplorerToolbarProps {
   onDeleteSelected: () => void;
   onGoUp: () => void;
   onRefresh: () => void;
+  isRefreshing?: boolean;
   onToggleHiddenFiles: () => void;
   onExpandSearch: () => void;
   onSearchQueryChange: (query: string) => void;
@@ -89,6 +90,7 @@ export function FileExplorerToolbar({
   onDeleteSelected,
   onGoUp,
   onRefresh,
+  isRefreshing = false,
   onToggleHiddenFiles,
   onExpandSearch,
   onSearchQueryChange,
@@ -192,8 +194,9 @@ export function FileExplorerToolbar({
         size="icon"
         className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
         onClick={onRefresh}
+        disabled={isRefreshing}
       >
-        <MdRefresh className="h-4 w-4" />
+        <MdRefresh className={cn("h-4 w-4", isRefreshing && "animate-spin")} />
       </ToolbarIconButton>
 
       <ToolbarDivider />

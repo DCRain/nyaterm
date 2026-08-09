@@ -885,6 +885,7 @@
     "directoryHistory": "目錄歷史",
     "disconnected": "已中斷",
     "downloadSelected": "下載選取",
+    "downloadToLocalDir": "下載",
     "dualPane": "雙欄",
     "editPath": "點選編輯路徑",
     "emptyDirectory": "空目錄",
@@ -926,6 +927,7 @@
     "openAfterCreateFile": "建立後開啟檔案",
     "openAfterCreateFolder": "建立後開啟目錄",
     "openInternalFailed": "開啟內建編輯器失敗。",
+    "openTerminalHere": "在此處開啟終端",
     "owner": "擁有者",
     "ownerGroupRequired": "擁有者和使用者群組不能為空。",
     "ownership": "所有權",
@@ -978,7 +980,8 @@
     "upload": "上傳檔案",
     "uploadFolder": "上傳資料夾",
     "uploadOnce": "上傳一次",
-    "uploadPrompt": "遠端檔案已修改，是否上傳變更？"
+    "uploadPrompt": "遠端檔案已修改，是否上傳變更？",
+    "uploadToRemoteDir": "上傳"
   },
   "filePreview": {
     "clearSort": "清除排序",
@@ -1631,6 +1634,9 @@
     "notSet": "未設定",
     "openAllConnections": "開啟全部連線",
     "openAllConnectionsConfirm": "確定要開啟資料夾「{{name}}」中的 {{count}} 個連線嗎？",
+    "openSftp": "開啟 SFTP",
+    "openSftpDisabled": "此連線已停用 SFTP，請在連線設定中開啟。",
+    "openSftpSshOnly": "僅 SSH 連線支援開啟 SFTP。",
     "parity": "校驗位",
     "port": "埠",
     "rename": "重新命名",
@@ -2419,6 +2425,11 @@
     "x11Display": "本機 X11 DISPLAY",
     "x11DisplayDesc": "需要本機已安裝並啟動 X server。Windows 可使用 VcXsrv/Xming，macOS 可使用 XQuartz，Linux 通常使用 Xorg/Xwayland。",
     "x11DisplayPlaceholder": "Windows: localhost:0 / Linux/macOS: :0"
+  },
+  "sftpWorkspace": {
+    "local": "本機",
+    "remote": "遠端",
+    "tabTitle": "SFTP · {{name}}"
   },
   "sshAuth": {
     "addKey": "新增 SSH 金鑰",

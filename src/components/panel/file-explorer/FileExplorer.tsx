@@ -33,6 +33,7 @@ import {
   MdOutlineSubdirectoryArrowRight,
   MdRefresh,
   MdSyncLock,
+  MdTerminal,
   MdUpload,
 } from "react-icons/md";
 import { PiColumnsPlusRightBold } from "react-icons/pi";
@@ -73,6 +74,7 @@ import { getErrorMessage } from "@/lib/errors";
 import {
   beginExplorerPathPointerDrag,
   cancelExplorerPathPointerDrag,
+  registerExplorerPathPointerDropTarget,
 } from "@/lib/explorerPathDrag";
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
@@ -170,7 +172,19 @@ interface FileExplorerPaneExtraProps {
     entries: FileExplorerCopyEntry[],
     targetSessionId: string,
   ) => void;
+  /** Force local/remote backend regardless of session type (dual-pane SFTP). */
+  forceBackend?: FileExplorerBackendKind;
+  /** Dropped onto this pane from a peer explorer drag (this pane is the target). */
+  onReceiveEntries?: (source: FileExplorerPaneEndpoint, entries: FileExplorerCopyEntry[]) => void;
+  /** Hide terminal path/CD context actions (SFTP workspace). Default true. */
+  showTerminalActions?: boolean;
+  /** Dual-pane SFTP: Upload (local→remote) or Download (remote→local) via peer send. */
+  peerTransferAction?: "upload" | "download";
+  /** Open a new SSH terminal and cd into a remote directory. */
+  onOpenTerminalHere?: (directoryPath: string) => void;
 }
+
+export type { FileExplorerCopyEntry, FileExplorerPaneEndpoint, FileExplorerSendTargetOption };
 
 function isFileBrowsableSession(session: SessionInfo) {
   return (
@@ -570,6 +584,11 @@ function FileExplorer(props: FileExplorerProps) {
                   enqueuePaneCopies(source, primaryEndpoint, entries);
                 }
               }}
+              onReceiveEntries={(source, entries) => {
+                if (secondaryEndpoint) {
+                  enqueuePaneCopies(source, secondaryEndpoint, entries);
+                }
+              }}
               sendTargetOptions={secondarySendTargetOptions}
               onSendEntriesToTarget={(source, entries, sessionId) => {
                 void enqueueEntriesToSessionCwd(source, entries, sessionId);
@@ -598,6 +617,11 @@ function FileExplorer(props: FileExplorerProps) {
             enqueuePaneCopies(source, secondaryEndpoint, entries);
           }
         }}
+        onReceiveEntries={(source, entries) => {
+          if (primaryEndpoint) {
+            enqueuePaneCopies(source, primaryEndpoint, entries);
+          }
+        }}
         sendTargetOptions={primarySendTargetOptions}
         onSendEntriesToTarget={(source, entries, sessionId) => {
           void enqueueEntriesToSessionCwd(source, entries, sessionId);
@@ -614,7 +638,7 @@ interface FileExplorerPaneProps extends FileExplorerProps, FileExplorerPaneExtra
 }
 
 /** Remote or local file browser pane. Lists dirs/files, supports navigation. */
-function FileExplorerPane({
+export function FileExplorerPane({
   activeSessionId,
   activeSessionType,
   activeConnectionId,
@@ -627,23 +651,37 @@ function FileExplorerPane({
   onSendEntries,
   sendTargetOptions = [],
   onSendEntriesToTarget,
+  forceBackend,
+  onReceiveEntries,
+  showTerminalActions = true,
+  peerTransferAction,
+  onOpenTerminalHere,
 }: FileExplorerPaneProps) {
   const { t } = useTranslation();
   const { appSettings, updateUi, savedConnections, tabs, syncGroups, broadcastToAll } = useApp();
   const { enqueueDownloads, enqueueUploads } = useTransfer();
   const hasSshSession = !!activeSessionId && activeSessionType === "SSH";
   const hasLocalSession = !!activeSessionId && activeSessionType === "Local";
-  const explorerBackend: FileExplorerBackendKind = hasLocalSession ? "local" : "remote";
-  const [remoteFileBrowserEnabled, setRemoteFileBrowserEnabled] = useState<boolean | null>(null);
-  const canBrowseFiles = hasLocalSession || (hasSshSession && remoteFileBrowserEnabled === true);
-  const canUseRemoteTransfer = hasSshSession && remoteFileBrowserEnabled === true;
+  const explorerBackend: FileExplorerBackendKind =
+    forceBackend ?? (hasLocalSession ? "local" : "remote");
+  const [remoteFileBrowserEnabled, setRemoteFileBrowserEnabled] = useState<boolean | null>(
+    explorerBackend === "local" ? true : null,
+  );
+  const canBrowseFiles =
+    explorerBackend === "local"
+      ? !!activeSessionId
+      : hasSshSession && remoteFileBrowserEnabled === true;
+  const canUseRemoteTransfer = explorerBackend === "remote" && canBrowseFiles;
   const hasUnsupportedSession =
+    !forceBackend &&
     !!activeSessionId &&
     !!activeSessionType &&
     activeSessionType !== "SSH" &&
     activeSessionType !== "Local";
-  const hasRemoteFileBrowserDisabled = hasSshSession && remoteFileBrowserEnabled === false;
-  const isResolvingRemoteFileBrowser = hasSshSession && remoteFileBrowserEnabled === null;
+  const hasRemoteFileBrowserDisabled =
+    explorerBackend === "remote" && hasSshSession && remoteFileBrowserEnabled === false;
+  const isResolvingRemoteFileBrowser =
+    explorerBackend === "remote" && hasSshSession && remoteFileBrowserEnabled === null;
 
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [currentPath, setCurrentPath] = useState("");
@@ -705,6 +743,9 @@ function FileExplorerPane({
     suppressRangeDrag?: boolean;
   } | null>(null);
   const pathDragActiveRef = useRef(false);
+  const pendingPreserveScrollRef = useRef<number | null>(null);
+  const pendingSelectAfterTransferRef = useRef<Set<string>>(new Set());
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
 
   const sessionCacheRef = useRef(fileExplorerSessionCacheStore);
   const prevSessionIdRef = useRef<string | null>(null);
@@ -740,11 +781,11 @@ function FileExplorerPane({
     );
   }, []);
   const autoSyncConnectionIds = appSettings.ui.file_explorer_auto_sync_cwd_connection_ids ?? [];
-  const autoSyncScopeId = activeConnectionId ?? (hasLocalSession ? "local" : null);
+  const autoSyncScopeId = explorerBackend === "local" ? "local" : (activeConnectionId ?? null);
   const autoSyncCwd = !!autoSyncScopeId && autoSyncConnectionIds.includes(autoSyncScopeId);
   const favoriteDirectoriesByConnection =
     appSettings.ui.file_explorer_favorite_dirs_by_connection_id ?? {};
-  const favoriteScopeId = activeConnectionId ?? (hasLocalSession ? "local" : null);
+  const favoriteScopeId = explorerBackend === "local" ? "local" : (activeConnectionId ?? null);
   const favoriteDirectories = favoriteScopeId
     ? (favoriteDirectoriesByConnection[favoriteScopeId] ?? [])
     : [];
@@ -854,6 +895,16 @@ function FileExplorerPane({
     setListScrollTop(0);
   }, [listFilterResetKey]);
 
+  useLayoutEffect(() => {
+    const preserved = pendingPreserveScrollRef.current;
+    if (preserved === null) return;
+    pendingPreserveScrollRef.current = null;
+    const container = listContainerRef.current;
+    if (!container) return;
+    container.scrollTop = preserved;
+    setListScrollTop(preserved);
+  }, [files]);
+
   useEffect(() => {
     if (!isFileSearchExpanded) {
       return;
@@ -945,26 +996,42 @@ function FileExplorerPane({
 
   // Resolve whether backend terminal-path tracking is available for this session.
   useEffect(() => {
+    if (explorerBackend === "local") {
+      setRemoteFileBrowserEnabled(true);
+      if (!activeSessionId) {
+        setCwdTrackingActive(false);
+        return;
+      }
+    }
+
     if ((!hasSshSession && !hasLocalSession) || !activeSessionId) {
       setCwdTrackingActive(false);
-      setRemoteFileBrowserEnabled(null);
+      if (explorerBackend !== "local") {
+        setRemoteFileBrowserEnabled(null);
+      }
       return;
     }
-    setRemoteFileBrowserEnabled(hasLocalSession ? true : null);
+    if (explorerBackend !== "local") {
+      setRemoteFileBrowserEnabled(hasLocalSession ? true : null);
+    }
     invoke<SessionInfo[]>("list_sessions")
       .then((sessions) => {
         const s = sessions.find((s) => s.id === activeSessionId);
         const active = s?.injection_active ?? false;
         setCwdTrackingActive(active);
-        setRemoteFileBrowserEnabled(
-          hasLocalSession ? true : (s?.remote_file_browser_enabled ?? true),
-        );
+        if (explorerBackend !== "local") {
+          setRemoteFileBrowserEnabled(
+            hasLocalSession ? true : (s?.remote_file_browser_enabled ?? true),
+          );
+        }
       })
       .catch(() => {
         setCwdTrackingActive(false);
-        setRemoteFileBrowserEnabled(true);
+        if (explorerBackend !== "local") {
+          setRemoteFileBrowserEnabled(true);
+        }
       });
-  }, [activeSessionId, hasLocalSession, hasSshSession]);
+  }, [activeSessionId, explorerBackend, hasLocalSession, hasSshSession]);
 
   useEffect(() => {
     const unlisten = listen<{ session_id: string; local_path: string; remote_path: string }>(
@@ -1036,12 +1103,27 @@ function FileExplorerPane({
       const normalizedPath = normalizeExplorerPath(path, backend);
       if (!normalizedPath) return false;
       const historyMode = options?.history ?? "push";
+      const pathUnchanged =
+        normalizeExplorerPath(currentPathRef.current, backend) === normalizedPath;
+      const requestedSelectNames = [
+        ...(options?.selectEntryNames ?? []),
+        ...(options?.selectEntryName ? [options.selectEntryName] : []),
+      ];
+      const hasSelectRequest = requestedSelectNames.length > 0;
+      const silentRefresh =
+        Boolean(options?.silent) || (pathUnchanged && filesRef.current.length > 0);
       const rawPathToken =
         options?.rawPathToken ??
-        (normalizeExplorerPath(currentPathRef.current, backend) === normalizedPath
-          ? currentPathRawTokenRef.current
-          : undefined);
-      setDirectoryLoading(true);
+        (pathUnchanged ? currentPathRawTokenRef.current : undefined);
+
+      if (silentRefresh && !hasSelectRequest) {
+        pendingPreserveScrollRef.current = listContainerRef.current?.scrollTop ?? 0;
+      } else {
+        pendingPreserveScrollRef.current = null;
+        if (!silentRefresh) {
+          setDirectoryLoading(true);
+        }
+      }
       setError(null);
 
       try {
@@ -1057,9 +1139,7 @@ function FileExplorerPane({
                 rawPathToken,
               });
 
-        const pathChanged =
-          normalizeExplorerPath(currentPathRef.current, backend) !== normalizedPath;
-        const selectEntryName = options?.selectEntryName;
+        const pathChanged = !pathUnchanged;
         if (historyMode === "push") {
           pushDirectoryHistory(normalizedPath);
         }
@@ -1071,31 +1151,30 @@ function FileExplorerPane({
         );
         visitedHistoryRef.current = nextVisitedHistory;
 
-        startTransition(() => {
+        const applyListing = () => {
           setFiles(entries);
           setCurrentPath(normalizedPath);
           currentPathRawTokenRef.current = rawPathToken;
           setVisitedHistory(nextVisitedHistory);
           setSelectedFiles((prev) => {
-            if (pathChanged) {
-              const shouldSelectEntry =
-                !!selectEntryName && entries.some((entry) => entry.name === selectEntryName);
-              if (shouldSelectEntry) {
-                lastSelectedRef.current = selectEntryName;
-                pendingRevealNameRef.current = selectEntryName;
-                return new Set([selectEntryName]);
+            const entryNames = new Set(entries.map((entry) => entry.name));
+            if (hasSelectRequest) {
+              const next = new Set(
+                requestedSelectNames.filter((name) => entryNames.has(name)),
+              );
+              if (next.size > 0) {
+                const revealName =
+                  requestedSelectNames.find((name) => next.has(name)) ?? [...next][0];
+                lastSelectedRef.current = revealName;
+                pendingRevealNameRef.current = revealName;
+                return next;
               }
+            }
 
+            if (pathChanged) {
               lastSelectedRef.current = null;
               pendingRevealNameRef.current = null;
               return new Set();
-            }
-
-            const entryNames = new Set(entries.map((entry) => entry.name));
-            if (selectEntryName && entryNames.has(selectEntryName)) {
-              lastSelectedRef.current = selectEntryName;
-              pendingRevealNameRef.current = selectEntryName;
-              return new Set([selectEntryName]);
             }
 
             const next = new Set([...prev].filter((name) => entryNames.has(name)));
@@ -1104,7 +1183,15 @@ function FileExplorerPane({
             }
             return next;
           });
-        });
+        };
+
+        // Keep same-directory refreshes synchronous so scroll restoration can run
+        // in the following layout effect without a loading flash.
+        if (silentRefresh) {
+          applyListing();
+        } else {
+          startTransition(applyListing);
+        }
 
         const cached = sessionCacheRef.current.get(activeSessionId);
         const snapshot = buildSessionCacheSnapshot(
@@ -1121,6 +1208,7 @@ function FileExplorerPane({
         }
         return true;
       } catch (e) {
+        pendingPreserveScrollRef.current = null;
         const msg = String(e);
         if (filesRef.current.length > 0) {
           toast.error(msg);
@@ -1129,21 +1217,47 @@ function FileExplorerPane({
         }
         return false;
       } finally {
-        setDirectoryLoading(false);
+        if (!silentRefresh) {
+          setDirectoryLoading(false);
+        }
       }
     },
     [activeSessionId, canBrowseFiles, pushDirectoryHistory],
   );
 
-  const refreshCurrentDirectory = useCallback(() => {
-    const backend = explorerBackendRef.current;
-    const targetPath =
-      normalizeExplorerPath(currentPathRef.current, backend) ||
-      normalizeExplorerPath(homeDirRef.current, backend);
-    if (!targetPath) return Promise.resolve(false);
-    clearDirectoryChildrenCacheForPath(activeSessionIdRef.current, backend, targetPath);
-    return loadDirectory(targetPath);
-  }, [loadDirectory]);
+  const refreshCurrentDirectory = useCallback(
+    (options?: Pick<LoadDirectoryOptions, "selectEntryName" | "selectEntryNames">) => {
+      const backend = explorerBackendRef.current;
+      const targetPath =
+        normalizeExplorerPath(currentPathRef.current, backend) ||
+        normalizeExplorerPath(homeDirRef.current, backend);
+      if (!targetPath) return Promise.resolve(false);
+      clearDirectoryChildrenCacheForPath(activeSessionIdRef.current, backend, targetPath);
+      return loadDirectory(targetPath, {
+        history: "preserve",
+        silent: true,
+        ...options,
+      });
+    },
+    [loadDirectory],
+  );
+
+  const handleManualRefresh = useCallback(async () => {
+    if (isManualRefreshing) return;
+    setIsManualRefreshing(true);
+    const startedAt = Date.now();
+    try {
+      await refreshCurrentDirectory();
+    } finally {
+      const remaining = Math.max(0, 400 - (Date.now() - startedAt));
+      if (remaining > 0) {
+        await new Promise<void>((resolve) => {
+          window.setTimeout(resolve, remaining);
+        });
+      }
+      setIsManualRefreshing(false);
+    }
+  }, [isManualRefreshing, refreshCurrentDirectory]);
 
   const uploadLocalEntriesToTarget = useCallback(
     (
@@ -1355,14 +1469,15 @@ function FileExplorerPane({
   useEffect(() => {
     const unlisten = listen<{
       session_id: string;
+      file_name?: string;
       remote_path: string;
+      local_path: string;
       direction: string;
       status: string;
       parent_id?: string;
     }>("transfer-event", (event) => {
       const payload = event.payload;
       if (
-        payload.direction !== "upload" ||
         payload.status !== "completed" ||
         payload.parent_id ||
         payload.session_id !== activeSessionIdRef.current
@@ -1370,9 +1485,31 @@ function FileExplorerPane({
         return;
       }
 
-      const visibleDir = normalizeExplorerPath(currentPathRef.current, "remote");
-      if (!visibleDir || getExplorerParentDirectory(payload.remote_path, "remote") !== visibleDir) {
+      const backend = explorerBackendRef.current;
+      const visibleDir = normalizeExplorerPath(currentPathRef.current, backend);
+      if (!visibleDir) return;
+
+      const pathForBackend = backend === "local" ? payload.local_path : payload.remote_path;
+      if (!pathForBackend) return;
+
+      const relevantDirection =
+        backend === "local"
+          ? payload.direction === "download" || payload.direction === "copy"
+          : payload.direction === "upload" || payload.direction === "copy";
+      if (!relevantDirection) return;
+
+      const parentDir = getExplorerParentDirectory(pathForBackend, backend);
+      const normalizedPath = normalizeExplorerPath(pathForBackend, backend);
+      if (parentDir !== visibleDir && normalizedPath !== visibleDir) {
         return;
+      }
+
+      if (parentDir === visibleDir) {
+        const entryName =
+          payload.file_name?.trim() || getLocalPathName(pathForBackend, "");
+        if (entryName) {
+          pendingSelectAfterTransferRef.current.add(entryName);
+        }
       }
 
       if (refreshUploadCompletionTimerRef.current) {
@@ -1380,8 +1517,12 @@ function FileExplorerPane({
       }
       refreshUploadCompletionTimerRef.current = setTimeout(() => {
         refreshUploadCompletionTimerRef.current = null;
-        clearDirectoryChildrenCacheForPath(activeSessionIdRef.current, "remote", visibleDir);
-        void refreshCurrentDirectory();
+        const selectEntryNames = Array.from(pendingSelectAfterTransferRef.current);
+        pendingSelectAfterTransferRef.current.clear();
+        clearDirectoryChildrenCacheForPath(activeSessionIdRef.current, backend, visibleDir);
+        void refreshCurrentDirectory(
+          selectEntryNames.length > 0 ? { selectEntryNames } : undefined,
+        );
       }, 250);
     });
 
@@ -2261,22 +2402,19 @@ function FileExplorerPane({
     active: boolean;
   } | null>(null);
 
-  const handlePathPointerDown = useCallback(
-    (entry: FileEntry, event: React.PointerEvent) => {
-      if (event.button !== 0 || isParentDirectoryEntry(entry)) return;
+  const handlePathPointerDown = useCallback((entry: FileEntry, event: React.PointerEvent) => {
+    if (event.button !== 0 || isParentDirectoryEntry(entry)) return;
 
-      pathPointerDragRef.current = {
-        pointerId: event.pointerId,
-        startX: event.clientX,
-        startY: event.clientY,
-        entry,
-        active: false,
-      };
-      pathDragActiveRef.current = false;
-      event.currentTarget.setPointerCapture?.(event.pointerId);
-    },
-    [],
-  );
+    pathPointerDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      entry,
+      active: false,
+    };
+    pathDragActiveRef.current = false;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }, []);
 
   const handlePathPointerMove = useCallback(
     (_entry: FileEntry, event: React.PointerEvent) => {
@@ -2303,7 +2441,20 @@ function FileExplorerPane({
           };
         }
         beginExplorerPathPointerDrag(
-          { paths, backend: explorerBackend },
+          {
+            paths,
+            backend: explorerBackend,
+            transfer: activeSessionId
+              ? {
+                  sessionId: activeSessionId,
+                  entries: entries.map((item) => ({
+                    name: item.name,
+                    path: getEntryFullPath(item),
+                    isDirectory: item.is_dir,
+                  })),
+                }
+              : undefined,
+          },
           event.clientX,
           event.clientY,
         );
@@ -2312,7 +2463,7 @@ function FileExplorerPane({
 
       // Position updates are handled by window listeners in explorerPathDrag.
     },
-    [explorerBackend, getContextMenuEntries, getEntryFullPath],
+    [activeSessionId, explorerBackend, getContextMenuEntries, getEntryFullPath],
   );
 
   const handlePathPointerUp = useCallback((_entry: FileEntry, event: React.PointerEvent) => {
@@ -2339,7 +2490,11 @@ function FileExplorerPane({
     (entry: FileEntry) => {
       if (!activeSessionId || isParentDirectoryEntry(entry)) return;
       if (!peerEndpoint) {
-        onOpenPeerSelector?.();
+        if (onOpenPeerSelector) {
+          onOpenPeerSelector();
+          return;
+        }
+        toast.error(t("fileExplorer.targetCwdUnavailable"));
         return;
       }
       const entries = getContextMenuEntries(entry).map((item) => ({
@@ -2366,8 +2521,31 @@ function FileExplorerPane({
       onOpenPeerSelector,
       onSendEntries,
       peerEndpoint,
+      t,
     ],
   );
+
+  // Accept explorer path-pointer drops onto this pane as the copy target.
+  useEffect(() => {
+    if (!onReceiveEntries || !canBrowseFiles || !activeSessionId || !currentPath) return;
+
+    return registerExplorerPathPointerDropTarget((payload, x, y) => {
+      const el = document.elementFromPoint(x, y);
+      if (!listContainerRef.current?.contains(el)) return false;
+      if (!payload.transfer || payload.backend === explorerBackend) return false;
+      if (payload.transfer.entries.length === 0) return false;
+
+      onReceiveEntries(
+        {
+          sessionId: payload.transfer.sessionId,
+          kind: payload.backend,
+          currentPath: "",
+        },
+        payload.transfer.entries,
+      );
+      return true;
+    });
+  }, [activeSessionId, canBrowseFiles, currentPath, explorerBackend, onReceiveEntries]);
 
   const handleSendToTarget = useCallback(
     (entry: FileEntry, targetSessionId: string) => {
@@ -2783,7 +2961,8 @@ function FileExplorerPane({
           onDownloadSelected={() => void handleDownloadSelected()}
           onDeleteSelected={handleDeleteSelected}
           onGoUp={handleGoUp}
-          onRefresh={() => void refreshCurrentDirectory()}
+          onRefresh={() => void handleManualRefresh()}
+          isRefreshing={isManualRefreshing}
           onToggleHiddenFiles={handleToggleHiddenFiles}
           onExpandSearch={() => setIsFileSearchExpanded(true)}
           onSearchQueryChange={setFileSearchQuery}
@@ -2982,12 +3161,19 @@ function FileExplorerPane({
                           onPreview={(entry) => void handlePreview(entry)}
                           onOpenInternal={handleOpenInternal}
                           onOpenExternal={handleOpenExternal}
-                          onRefresh={() => void refreshCurrentDirectory()}
-                          showTransferActions={canUseRemoteTransfer}
+                          onRefresh={() => void handleManualRefresh()}
+                          showTransferActions={canUseRemoteTransfer && !peerTransferAction}
                           onUpload={handleUploadFiles}
                           onUploadFolder={handleUploadFolder}
                           onDownload={handleDownloadFromContextMenu}
-                          showPeerSendAction={!!peerEndpoint && !!onSendEntries}
+                          showPeerSendAction={
+                            !!peerEndpoint && !!onSendEntries && !peerTransferAction
+                          }
+                          peerTransferAction={
+                            peerTransferAction && peerEndpoint && onSendEntries
+                              ? peerTransferAction
+                              : undefined
+                          }
                           onSendToPeer={handleSendToPeer}
                           sendTargetOptions={sendTargetOptions}
                           onSendToTarget={handleSendToTarget}
@@ -3005,8 +3191,19 @@ function FileExplorerPane({
                           onDelete={handleDeleteFromContextMenu}
                           onAddToFavorites={handleAddEntryToFavorites}
                           onCopyPath={handleCopyPath}
+                          showTerminalActions={showTerminalActions}
                           onSendToTerminal={handleSendToTerminal}
                           onCdToDirectory={handleCdToDirectory}
+                          onOpenTerminalHere={
+                            onOpenTerminalHere
+                              ? (entry) => {
+                                  const directoryPath = entry.is_dir
+                                    ? getEntryFullPath(entry)
+                                    : currentPath;
+                                  if (directoryPath) onOpenTerminalHere(directoryPath);
+                                }
+                              : undefined
+                          }
                           onPathPointerDown={handlePathPointerDown}
                           onPathPointerMove={handlePathPointerMove}
                           onPathPointerUp={handlePathPointerUp}
@@ -3051,11 +3248,11 @@ function FileExplorerPane({
         </ContextMenuTrigger>
         {canBrowseFiles && (
           <ContextMenuContent className="w-52">
-            <ContextMenuItem onClick={() => void refreshCurrentDirectory()}>
-              <MdRefresh className="mr-2 h-4 w-4" />
+            <ContextMenuItem onClick={() => void handleManualRefresh()}>
+              <MdRefresh className={cn("mr-2 h-4 w-4", isManualRefreshing && "animate-spin")} />
               {t("fileExplorer.refresh")}
             </ContextMenuItem>
-            {canUseRemoteTransfer && (
+            {canUseRemoteTransfer && !peerTransferAction && (
               <>
                 <ContextMenuSub>
                   <ContextMenuSubTrigger>
@@ -3091,18 +3288,28 @@ function FileExplorerPane({
               </ContextMenuItem>
             )}
             <ContextMenuSeparator />
+            {onOpenTerminalHere && explorerBackend === "remote" && currentPath && (
+              <ContextMenuItem onClick={() => onOpenTerminalHere(currentPath)}>
+                <MdTerminal className="mr-2 h-4 w-4" />
+                {t("fileExplorer.openTerminalHere")}
+              </ContextMenuItem>
+            )}
             <ContextMenuItem onClick={handleCopyCurrentPath}>
               <MdContentCopy className="mr-2 h-4 w-4" />
               {t("fileExplorer.copyDirPath")}
             </ContextMenuItem>
-            <ContextMenuItem onClick={handleSendCurrentPathToTerminal}>
-              <LuClipboardPaste className="mr-2 h-4 w-4" />
-              {t("fileExplorer.sendDirPathToTerminal")}
-            </ContextMenuItem>
-            <ContextMenuItem onClick={handleCdCurrentPathInTerminal}>
-              <MdOutlineSubdirectoryArrowRight className="mr-2 h-4 w-4" />
-              {t("fileExplorer.cdToDirectory")}
-            </ContextMenuItem>
+            {showTerminalActions && (
+              <>
+                <ContextMenuItem onClick={handleSendCurrentPathToTerminal}>
+                  <LuClipboardPaste className="mr-2 h-4 w-4" />
+                  {t("fileExplorer.sendDirPathToTerminal")}
+                </ContextMenuItem>
+                <ContextMenuItem onClick={handleCdCurrentPathInTerminal}>
+                  <MdOutlineSubdirectoryArrowRight className="mr-2 h-4 w-4" />
+                  {t("fileExplorer.cdToDirectory")}
+                </ContextMenuItem>
+              </>
+            )}
             <ContextMenuSeparator />
             <ContextMenuItem onClick={handleCurrentDirProperties}>
               <MdInfo className="mr-2 h-4 w-4" />
@@ -3136,69 +3343,73 @@ function FileExplorerPane({
             )}
           </div>
           <div className="flex items-center gap-0.5">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="inline-flex">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6 rounded-md text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed"
-                    onClick={handleSyncCwd}
-                    disabled={!cwdTrackingActive}
-                  >
-                    <LuFolderSync className="h-[0.875rem] w-[0.875rem]" />
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="top">
-                {cwdTrackingActive
-                  ? t("fileExplorer.syncTerminalPath")
-                  : t("fileExplorer.cwdTrackingUnavailable")}
-              </TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="inline-flex">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className={`h-6 w-6 rounded-md disabled:opacity-40 disabled:cursor-not-allowed ${
-                      cwdTrackingActive
-                        ? autoSyncCwd
-                          ? "text-primary"
-                          : "text-muted-foreground hover:text-foreground"
-                        : "text-muted-foreground"
-                    }`}
-                    onClick={handleToggleAutoSyncCwd}
-                    disabled={!cwdTrackingActive || !autoSyncScopeId}
-                  >
-                    <MdSyncLock className="h-[0.875rem] w-[0.875rem]" />
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="top">
-                {cwdTrackingActive
-                  ? t("fileExplorer.autoSyncTerminalPath")
-                  : t("fileExplorer.cwdTrackingUnavailable")}
-              </TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="inline-flex">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6 rounded-md text-muted-foreground hover:text-foreground"
-                    onClick={() => {
-                      sendTextToTerminal(currentPath);
-                    }}
-                  >
-                    <LuClipboardPaste className="h-[0.875rem] w-[0.875rem]" />
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="top">{t("fileExplorer.sendToTerminal")}</TooltipContent>
-            </Tooltip>
+            {showTerminalActions && (
+              <>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 rounded-md text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed"
+                        onClick={handleSyncCwd}
+                        disabled={!cwdTrackingActive}
+                      >
+                        <LuFolderSync className="h-[0.875rem] w-[0.875rem]" />
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    {cwdTrackingActive
+                      ? t("fileExplorer.syncTerminalPath")
+                      : t("fileExplorer.cwdTrackingUnavailable")}
+                  </TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className={`h-6 w-6 rounded-md disabled:opacity-40 disabled:cursor-not-allowed ${
+                          cwdTrackingActive
+                            ? autoSyncCwd
+                              ? "text-primary"
+                              : "text-muted-foreground hover:text-foreground"
+                            : "text-muted-foreground"
+                        }`}
+                        onClick={handleToggleAutoSyncCwd}
+                        disabled={!cwdTrackingActive || !autoSyncScopeId}
+                      >
+                        <MdSyncLock className="h-[0.875rem] w-[0.875rem]" />
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    {cwdTrackingActive
+                      ? t("fileExplorer.autoSyncTerminalPath")
+                      : t("fileExplorer.cwdTrackingUnavailable")}
+                  </TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 rounded-md text-muted-foreground hover:text-foreground"
+                        onClick={() => {
+                          sendTextToTerminal(currentPath);
+                        }}
+                      >
+                        <LuClipboardPaste className="h-[0.875rem] w-[0.875rem]" />
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">{t("fileExplorer.sendToTerminal")}</TooltipContent>
+                </Tooltip>
+              </>
+            )}
           </div>
         </div>
       )}

@@ -952,6 +952,10 @@ function TabBar({
       );
     }
 
+    if (pane?.view === "sftp") {
+      return <MdFolder className="text-sm shrink-0" style={{ color: "var(--df-primary)" }} />;
+    }
+
     const conn = pane?.connectionId
       ? savedConnections.find((connection) => connection.id === pane.connectionId)
       : undefined;

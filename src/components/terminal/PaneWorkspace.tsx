@@ -2,6 +2,7 @@ import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MdErrorOutline } from "react-icons/md";
 import ResizeHandle from "@/components/layout/ResizeHandle";
+import SftpWorkspace from "@/components/panel/file-explorer/SftpWorkspace";
 import { Button } from "@/components/ui/button";
 import { useApp } from "@/context/AppContext";
 import {
@@ -169,6 +170,23 @@ function PaneNodeView({
   const statusMessage = isReconnectPending
     ? t("savedConnections.connecting", { name: node.name })
     : node.connectError;
+
+  if (node.view === "sftp") {
+    return (
+      <div
+        className={`relative h-full w-full overflow-hidden ${
+          showChrome ? "rounded-sm border" : ""
+        } ${showChrome && isActive ? "ring-1 ring-primary/60" : ""}`}
+        style={{
+          borderColor: showChrome ? "var(--df-border)" : undefined,
+          backgroundColor: "var(--df-bg)",
+        }}
+        onMouseDown={() => onActivatePane(node.id)}
+      >
+        <SftpWorkspace pane={node} visible={visible} />
+      </div>
+    );
+  }
 
   return (
     <div

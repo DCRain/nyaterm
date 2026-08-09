@@ -349,16 +349,14 @@ async fn write_local_file_text_impl(
 
 async fn ensure_local_session(manager: &SessionManager, session_id: &str) -> AppResult<()> {
     let sessions = manager.sessions.lock().await;
-    let session = sessions
-        .get(session_id)
-        .ok_or_else(|| AppError::SessionNotFound(format!("Session '{}' not found", session_id)))?;
-
-    if session.info.session_type != SessionType::Local {
-        return Err(AppError::Config(
-            "Local file browser commands require a local terminal session".to_string(),
-        ));
+    // Local host FS ops don't depend on session type; any live session can
+    // anchor browsing (e.g. dual-pane SFTP workspace backed only by SSH).
+    if !sessions.contains_key(session_id) {
+        return Err(AppError::SessionNotFound(format!(
+            "Session '{}' not found",
+            session_id
+        )));
     }
-
     Ok(())
 }
 

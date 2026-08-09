@@ -20,6 +20,7 @@ import {
   MdOutlineSubdirectoryArrowRight,
   MdRefresh,
   MdSend,
+  MdTerminal,
   MdUpload,
   MdVisibility,
 } from "react-icons/md";
@@ -61,6 +62,8 @@ interface FileListItemProps {
   onUploadFolder: () => void;
   onDownload: (entry: FileEntry) => void;
   showPeerSendAction?: boolean;
+  /** Dual-pane SFTP: show Upload (local) or Download (remote) that sends to the peer pane. */
+  peerTransferAction?: "upload" | "download";
   onSendToPeer?: (entry: FileEntry) => void;
   sendTargetOptions?: Array<{
     sessionId: string;
@@ -73,8 +76,12 @@ interface FileListItemProps {
   onDelete: (entry: FileEntry) => void;
   onAddToFavorites: (entry: FileEntry) => void;
   onCopyPath: (entry: FileEntry, mode: "dir" | "name" | "full") => void;
+  /** Hide terminal path/CD actions (SFTP workspace has no shell). Default true. */
+  showTerminalActions?: boolean;
   onSendToTerminal: (entry: FileEntry, mode: "dir" | "name" | "full") => void;
   onCdToDirectory: (entry: FileEntry) => void;
+  /** Open a new SSH terminal at this directory (SFTP remote). */
+  onOpenTerminalHere?: (entry: FileEntry) => void;
   onProperties: (entry: FileEntry) => void;
   onPathPointerDown?: (entry: FileEntry, event: React.PointerEvent) => void;
   onPathPointerMove?: (entry: FileEntry, event: React.PointerEvent) => void;
@@ -126,6 +133,7 @@ export function FileListItem({
   onUploadFolder,
   onDownload,
   showPeerSendAction = false,
+  peerTransferAction,
   onSendToPeer,
   sendTargetOptions = [],
   onSendToTarget,
@@ -134,8 +142,10 @@ export function FileListItem({
   onDelete,
   onAddToFavorites,
   onCopyPath,
+  showTerminalActions = true,
   onSendToTerminal,
   onCdToDirectory,
+  onOpenTerminalHere,
   onProperties,
   onPathPointerDown,
   onPathPointerMove,
@@ -167,6 +177,14 @@ export function FileListItem({
   const isFile = !entry.is_dir;
   const showOpenInternal = isFile && editorType === "external" && !isKnownBinaryFile(entry.name);
   const showOpenExternal = isFile && editorType === "internal";
+  const peerTransferLabel =
+    peerTransferAction === "upload"
+      ? t("fileExplorer.uploadToRemoteDir")
+      : peerTransferAction === "download"
+        ? t("fileExplorer.downloadToLocalDir")
+        : t("fileExplorer.sendToPeer");
+  const PeerTransferIcon = peerTransferAction === "download" ? MdDownload : MdUpload;
+  const showPeerTransferMenu = !!peerTransferAction && !!onSendToPeer && !isParentDirectoryEntry;
 
   useLayoutEffect(() => {
     if (!isRenaming) {
@@ -361,21 +379,24 @@ export function FileListItem({
                 <span className="min-w-0 flex-1 truncate text-xs" onClick={handleNameClick}>
                   {entry.name}
                 </span>
-                {showPeerSendAction && !isParentDirectoryEntry && onSendToPeer && (
-                  <button
-                    type="button"
-                    className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--df-text-dimmed)] opacity-0 transition-opacity hover:bg-[var(--df-bg-hover)] hover:text-[var(--df-primary)] group-hover:opacity-100 group-focus-within:opacity-100"
-                    aria-label={t("fileExplorer.sendToPeer")}
-                    title={t("fileExplorer.sendToPeer")}
-                    onClick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      onSendToPeer(entry);
-                    }}
-                  >
-                    <MdSend className="h-3.5 w-3.5" />
-                  </button>
-                )}
+                {showPeerSendAction &&
+                  !peerTransferAction &&
+                  !isParentDirectoryEntry &&
+                  onSendToPeer && (
+                    <button
+                      type="button"
+                      className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--df-text-dimmed)] opacity-0 transition-opacity hover:bg-[var(--df-bg-hover)] hover:text-[var(--df-primary)] group-hover:opacity-100 group-focus-within:opacity-100"
+                      aria-label={peerTransferLabel}
+                      title={peerTransferLabel}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onSendToPeer(entry);
+                      }}
+                    >
+                      <MdSend className="h-3.5 w-3.5" />
+                    </button>
+                  )}
               </>
             )}
           </div>
@@ -464,6 +485,24 @@ export function FileListItem({
               <MdRefresh className="text-[0.875rem] text-muted-foreground mr-2" />
               {t("fileExplorer.cmRefresh")}
             </ContextMenuItem>
+            {showPeerTransferMenu && (
+              <>
+                <ContextMenuItem onClick={() => onSendToPeer?.(entry)}>
+                  <PeerTransferIcon className="text-[0.875rem] text-muted-foreground mr-2" />
+                  {peerTransferLabel}
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+              </>
+            )}
+            {onOpenTerminalHere && entry.is_dir && (
+              <>
+                <ContextMenuItem onClick={() => onOpenTerminalHere(entry)}>
+                  <MdTerminal className="text-[0.875rem] text-muted-foreground mr-2" />
+                  {t("fileExplorer.openTerminalHere")}
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+              </>
+            )}
             {showTransferActions && (
               <>
                 <ContextMenuSub>
@@ -552,23 +591,27 @@ export function FileListItem({
               <MdFolderCopy className="text-[0.875rem] text-muted-foreground mr-2" />
               {t("fileExplorer.cmCopyDirPath")}
             </ContextMenuItem>
-            <ContextMenuSeparator />
-            <ContextMenuItem onClick={() => onSendToTerminal(entry, "full")}>
-              <MdKeyboardReturn className="text-[0.875rem] text-muted-foreground mr-2" />
-              {t("fileExplorer.cmTerminalPath")}
-            </ContextMenuItem>
-            <ContextMenuItem onClick={() => onSendToTerminal(entry, "name")}>
-              <MdKeyboardArrowRight className="text-[0.875rem] text-muted-foreground mr-2" />
-              {t("fileExplorer.cmTerminalName")}
-            </ContextMenuItem>
-            <ContextMenuItem onClick={() => onSendToTerminal(entry, "dir")}>
-              <MdKeyboardDoubleArrowRight className="text-[0.875rem] text-muted-foreground mr-2" />
-              {t("fileExplorer.cmTerminalDirPath")}
-            </ContextMenuItem>
-            <ContextMenuItem onClick={() => onCdToDirectory(entry)}>
-              <MdOutlineSubdirectoryArrowRight className="text-[0.875rem] text-muted-foreground mr-2" />
-              {t("fileExplorer.cmCdToDirectory")}
-            </ContextMenuItem>
+            {showTerminalActions && (
+              <>
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={() => onSendToTerminal(entry, "full")}>
+                  <MdKeyboardReturn className="text-[0.875rem] text-muted-foreground mr-2" />
+                  {t("fileExplorer.cmTerminalPath")}
+                </ContextMenuItem>
+                <ContextMenuItem onClick={() => onSendToTerminal(entry, "name")}>
+                  <MdKeyboardArrowRight className="text-[0.875rem] text-muted-foreground mr-2" />
+                  {t("fileExplorer.cmTerminalName")}
+                </ContextMenuItem>
+                <ContextMenuItem onClick={() => onSendToTerminal(entry, "dir")}>
+                  <MdKeyboardDoubleArrowRight className="text-[0.875rem] text-muted-foreground mr-2" />
+                  {t("fileExplorer.cmTerminalDirPath")}
+                </ContextMenuItem>
+                <ContextMenuItem onClick={() => onCdToDirectory(entry)}>
+                  <MdOutlineSubdirectoryArrowRight className="text-[0.875rem] text-muted-foreground mr-2" />
+                  {t("fileExplorer.cmCdToDirectory")}
+                </ContextMenuItem>
+              </>
+            )}
             <ContextMenuSeparator />
             {aiActions.length > 0 && (
               <ContextMenuSub>

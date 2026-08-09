@@ -885,6 +885,7 @@
     "directoryHistory": "目录历史",
     "disconnected": "已断开",
     "downloadSelected": "下载选中",
+    "downloadToLocalDir": "下载",
     "dualPane": "双栏",
     "editPath": "点击编辑路径",
     "emptyDirectory": "空目录",
@@ -926,6 +927,7 @@
     "openAfterCreateFile": "创建后打开文件",
     "openAfterCreateFolder": "创建后打开目录",
     "openInternalFailed": "打开内置编辑器失败。",
+    "openTerminalHere": "在此处打开终端",
     "owner": "所有者",
     "ownerGroupRequired": "所有者和用户组不能为空。",
     "ownership": "所有权",
@@ -978,7 +980,8 @@
     "upload": "上传文件",
     "uploadFolder": "上传文件夹",
     "uploadOnce": "上传一次",
-    "uploadPrompt": "远程文件已修改，是否上传更改？"
+    "uploadPrompt": "远程文件已修改，是否上传更改？",
+    "uploadToRemoteDir": "上传"
   },
   "filePreview": {
     "clearSort": "清除排序",
@@ -1633,6 +1636,9 @@
     "notSet": "未设置",
     "openAllConnections": "打开全部连接",
     "openAllConnectionsConfirm": "确定要打开文件夹「{{name}}」中的 {{count}} 个连接吗？",
+    "openSftp": "打开 SFTP",
+    "openSftpDisabled": "此连接已禁用 SFTP，请在连接设置中开启。",
+    "openSftpSshOnly": "仅 SSH 连接支持打开 SFTP。",
     "parity": "校验位",
     "port": "端口",
     "rename": "重命名",
@@ -2424,6 +2430,11 @@
     "x11Display": "本地 X11 DISPLAY",
     "x11DisplayDesc": "需要本机已安装并启动 X server。Windows 可使用 VcXsrv/Xming，macOS 可使用 XQuartz，Linux 通常使用 Xorg/Xwayland。",
     "x11DisplayPlaceholder": "Windows: localhost:0 / Linux/macOS: :0"
+  },
+  "sftpWorkspace": {
+    "local": "本地",
+    "remote": "远程",
+    "tabTitle": "SFTP · {{name}}"
   },
   "sshAuth": {
     "addKey": "添加 SSH 密钥",

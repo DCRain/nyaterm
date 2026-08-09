@@ -5,6 +5,7 @@ import {
   MdDelete,
   MdDriveFileRenameOutline,
   MdEdit,
+  MdFolderOpen,
   MdLink,
   MdPlayCircleOutline,
 } from "react-icons/md";
@@ -271,6 +272,7 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
     handleConnect,
     handleConnectOnly,
     handleConnectSelected,
+    handleOpenSftp,
     handleCopyConnection,
     handleToggleOpenOnStartup,
     requestMoveConnectionToGroup,
@@ -552,6 +554,19 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
           <MdLink className="text-[0.875rem] text-muted-foreground mr-2" />
           {connectLabel}
         </ContextMenuItem>
+        {conn.type === "ssh" ? (
+          <ContextMenuItem
+            disabled={conn.sftp?.enabled === false}
+            onClick={() => {
+              if (conn.sftp?.enabled === false) return;
+              closeAndSuppressDetails();
+              handleOpenSftp(conn);
+            }}
+          >
+            <MdFolderOpen className="text-[0.875rem] text-muted-foreground mr-2" />
+            {t("savedConnections.openSftp")}
+          </ContextMenuItem>
+        ) : null}
         <ContextMenuItem
           onClick={() => {
             closeAndSuppressDetails();
