@@ -1,5 +1,5 @@
 import path from "path";
-import { defineConfig } from "vite";
+import { defineConfig, type PluginOption } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import browserslist from "browserslist";
@@ -8,9 +8,24 @@ import { browserslistToTargets } from "lightningcss";
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 
+/** Inject standalone React DevTools bridge (http://localhost:8097) during Vite serve. */
+const reactDevTools = (): PluginOption => ({
+  name: "react-devtools",
+  apply: "serve",
+  transformIndexHtml() {
+    return [
+      {
+        tag: "script",
+        attrs: { src: "http://localhost:8097" },
+        injectTo: "head",
+      },
+    ];
+  },
+});
+
 // https://vite.dev/config/
 export default defineConfig(async () => ({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), reactDevTools()],
   css: {
     transformer: "lightningcss",
     lightningcss: {

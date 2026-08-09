@@ -4,6 +4,7 @@ packages:
 
 allowBuilds:
   core-js: false
+  electron: true
   esbuild: true
   msw: true
   sharp: true
