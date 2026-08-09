@@ -11,13 +11,13 @@ mod session;
 mod tunnel;
 pub(crate) mod x11_forwarding;
 
-pub(crate) use auth::load_saved_ssh_config;
+pub(crate) use auth::{DraftSshTestInput, build_test_ssh_config, load_saved_ssh_config};
 pub use auth::{PendingAuthManager, PendingSshAuthManager, SshAuthResponse};
 pub use client::{HostKeyVerifyManager, SupportedSshAlgorithms, get_supported_ssh_algorithms};
 pub(crate) use client::{
     RemoteForwardOpen, SshAuth, SshConfig, SshConnectionHandles, SshHandle, SshRawHandle,
     SshStartupCommand, validate_ssh_algorithm_preferences,
 };
-pub(crate) use session::create_ssh_handle_for_tunnel;
+pub(crate) use session::{create_ssh_handle_for_tunnel, test_authenticated_ssh};
 pub use session::{create_multiplexed_ssh_session, create_ssh_session};
 pub(crate) use tunnel::{TunnelManager, TunnelRuntimeState};

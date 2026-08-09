@@ -1,8 +1,10 @@
-import { emit } from "@tauri-apps/api/event";
+﻿import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
 import { useTranslation } from "react-i18next";
-import { MdAdd, MdExpandMore } from "react-icons/md";
+import { MdAdd, MdChevronLeft, MdExpandMore, MdLan, MdMonitor, MdTerminal } from "react-icons/md";
+import { TbNetwork, TbPlugConnected, TbServer } from "react-icons/tb";
+import { toast } from "sonner";
 import {
   DEFAULT_CONNECTION_ICON,
   LINUX_ICONS,
@@ -13,16 +15,33 @@ import {
 import ChildWindowHeader from "@/components/layout/ChildWindowHeader";
 import { buildGroupPath, type ConnectionOption, sortLabel } from "@/components/network/shared";
 import { LocalTerminal } from "@/components/sessions/LocalTerminal";
+import {
+  DEFAULT_RDP_HEIGHT,
+  DEFAULT_RDP_USERNAME,
+  DEFAULT_RDP_WIDTH,
+  defaultRdpRedirectSettings,
+  driveRedirectToStored,
+  normalizeRdpRedirectSettings,
+  normalizeRdpSize,
+  type RdpDisplayMode,
+  RdpForm,
+  type RdpRedirectSettings,
+  type RdpResolutionPreset,
+  resolveRdpResolutionPreset,
+  rdpRedirectSettingsFromSaved,
+  starOrOffToStored,
+} from "@/components/sessions/RdpForm";
 import { SerialForm } from "@/components/sessions/SerialForm";
 import { type SshAuthMode, SshForm } from "@/components/sessions/SshForm";
 import { TelnetForm } from "@/components/sessions/TelnetForm";
+import { VncForm } from "@/components/sessions/VncForm";
 import { ActionButton, ActionFooter } from "@/components/ui/action-footer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useApp } from "@/context/AppContext";
@@ -93,6 +112,67 @@ const isValidSftpShellDetectionTimeout = (value: number) =>
   value >= MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS &&
   value <= MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS;
 
+type WizardStep = "pick" | "form";
+type ProtocolTab = "ssh" | "local" | "telnet" | "serial" | "rdp" | "vnc";
+
+const PROTOCOL_OPTIONS: Array<{
+  id: ProtocolTab;
+  titleKey: string;
+  titleFallback: string;
+  descKey: string;
+  descFallback: string;
+  icon: ComponentType<{ className?: string }>;
+}> = [
+  {
+    id: "ssh",
+    titleKey: "dialog.protocolSsh",
+    titleFallback: "SSH",
+    descKey: "dialog.protocolSshDesc",
+    descFallback: "Secure shell sessions with password or key auth",
+    icon: MdTerminal,
+  },
+  {
+    id: "local",
+    titleKey: "dialog.protocolLocal",
+    titleFallback: "Local terminal",
+    descKey: "dialog.protocolLocalDesc",
+    descFallback: "Launch a local shell on this computer",
+    icon: MdMonitor,
+  },
+  {
+    id: "telnet",
+    titleKey: "dialog.protocolTelnet",
+    titleFallback: "Telnet",
+    descKey: "dialog.protocolTelnetDesc",
+    descFallback: "Plain Telnet or raw TCP CLI sessions",
+    icon: TbNetwork,
+  },
+  {
+    id: "serial",
+    titleKey: "dialog.protocolSerial",
+    titleFallback: "Serial",
+    descKey: "dialog.protocolSerialDesc",
+    descFallback: "Connect to a local serial / COM port",
+    icon: TbPlugConnected,
+  },
+  {
+    id: "rdp",
+    titleKey: "dialog.protocolRdp",
+    titleFallback: "RDP",
+    descKey: "dialog.protocolRdpDesc",
+    descFallback: "Open an external Remote Desktop client",
+    icon: TbServer,
+  },
+  {
+    id: "vnc",
+    titleKey: "dialog.protocolVnc",
+    titleFallback: "VNC",
+    descKey: "dialog.protocolVncDesc",
+    descFallback: "Open an external VNC viewer",
+    icon: MdLan,
+  },
+];
+
 export default function NewSessionPage() {
   const { t } = useTranslation();
   const { appSettings } = useApp();
@@ -114,6 +194,16 @@ export default function NewSessionPage() {
   const [host, setHost] = useState("");
   const [sshPort, setSshPort] = useState(22);
   const [telnetPort, setTelnetPort] = useState(23);
+  const [rdpPort, setRdpPort] = useState(3389);
+  const [vncPort, setVncPort] = useState(5900);
+  const [rdpDisplayMode, setRdpDisplayMode] = useState<RdpDisplayMode>("fullscreen");
+  const [rdpResolutionPreset, setRdpResolutionPreset] = useState<RdpResolutionPreset>("1920x1080");
+  const [rdpWidth, setRdpWidth] = useState(DEFAULT_RDP_WIDTH);
+  const [rdpHeight, setRdpHeight] = useState(DEFAULT_RDP_HEIGHT);
+  const [rdpRedirects, setRdpRedirects] = useState<RdpRedirectSettings>(() =>
+    defaultRdpRedirectSettings(),
+  );
+  const [rdpPreferredClient, setRdpPreferredClient] = useState("");
   const [username, setUsername] = useState("root");
   const [authType, setAuthType] = useState<SshAuthMode>("password");
   const [passwordId, setPasswordId] = useState("");
@@ -131,7 +221,15 @@ export default function NewSessionPage() {
   const [showGroupDropdown, setShowGroupDropdown] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupParentId, setNewGroupParentId] = useState("");
-  const [currentTab, setCurrentTab] = useState("ssh");
+  const [currentTab, setCurrentTab] = useState<ProtocolTab>("ssh");
+  const [wizardStep, setWizardStep] = useState<WizardStep>(editId ? "form" : "pick");
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{
+    ok: boolean;
+    code: string;
+    params?: Record<string, string | number | undefined>;
+    message: string;
+  } | null>(null);
 
   // Proxy
   const [proxyId, setProxyId] = useState("");
@@ -210,13 +308,16 @@ export default function NewSessionPage() {
         setIconKey(found.icon || "");
         setIconAutoDetect(found.icon_auto_detect ?? !found.icon);
 
-        const tabMap: Record<string, string> = {
+        const tabMap: Record<string, ProtocolTab> = {
           ssh: "ssh",
           local_terminal: "local",
           telnet: "telnet",
           serial: "serial",
+          rdp: "rdp",
+          vnc: "vnc",
         };
         setCurrentTab(tabMap[found.type] || "ssh");
+        setWizardStep("form");
         setEncoding(found.encoding || "global");
 
         if (found.type === "ssh") {
@@ -253,6 +354,21 @@ export default function NewSessionPage() {
           setTelnetForceCharacterAtATime(found.force_character_at_a_time ?? false);
           setTelnetSendNaws(found.send_naws ?? true);
           setTelnetSendSga(found.send_sga ?? true);
+        } else if (found.type === "rdp") {
+          setHost(found.host || "");
+          setRdpPort(found.port || 3389);
+          setUsername(found.username?.trim() || DEFAULT_RDP_USERNAME);
+          const mode = found.display_mode === "windowed" ? "windowed" : "fullscreen";
+          setRdpDisplayMode(mode);
+          const sized = normalizeRdpSize(found.width ?? 0, found.height ?? 0);
+          setRdpWidth(sized.width);
+          setRdpHeight(sized.height);
+          setRdpResolutionPreset(resolveRdpResolutionPreset(sized.width, sized.height));
+          setRdpRedirects(rdpRedirectSettingsFromSaved(found));
+          setRdpPreferredClient(found.preferred_client?.trim() || "");
+        } else if (found.type === "vnc") {
+          setHost(found.host || "");
+          setVncPort(found.port || 5900);
         } else if (found.type === "local_terminal") {
           setShellPath(found.shell_path || "powershell.exe");
           setShellArgs(found.shell_args || "");
@@ -299,6 +415,14 @@ export default function NewSessionPage() {
     setHost("");
     setSshPort(22);
     setTelnetPort(23);
+    setRdpPort(3389);
+    setVncPort(5900);
+    setRdpDisplayMode("fullscreen");
+    setRdpResolutionPreset("1920x1080");
+    setRdpWidth(DEFAULT_RDP_WIDTH);
+    setRdpHeight(DEFAULT_RDP_HEIGHT);
+    setRdpRedirects(defaultRdpRedirectSettings());
+    setRdpPreferredClient("");
     setUsername("root");
     setAuthType("password");
     setPasswordId("");
@@ -435,7 +559,7 @@ export default function NewSessionPage() {
           chainLabel,
         ]
           .filter(Boolean)
-          .join(" · ");
+          .join(" 路 ");
         const disabled = wouldCreateJumpHostCycle(connection);
 
         return {
@@ -499,6 +623,30 @@ export default function NewSessionPage() {
       }
     }
 
+    if (currentTab === "rdp") {
+      if (!host.trim()) {
+        return t("dialog.hostRequired");
+      }
+      if (!isValidPort(rdpPort)) {
+        return t("dialog.portInvalid", "Port must be between 1 and 65535");
+      }
+      if (rdpResolutionPreset === "custom" && (rdpWidth < 640 || rdpHeight < 480)) {
+        return t("dialog.rdpResolutionInvalid", "Custom resolution must be at least 640脳480");
+      }
+      if (rdpRedirects.driveRedirectMode === "custom" && !rdpRedirects.driveRedirectCustom.trim()) {
+        return t("dialog.rdpDriveCustomRequired", "Enter at least one drive, e.g. C:;D:;");
+      }
+    }
+
+    if (currentTab === "vnc") {
+      if (!host.trim()) {
+        return t("dialog.hostRequired");
+      }
+      if (!isValidPort(vncPort)) {
+        return t("dialog.portInvalid", "Port must be between 1 and 65535");
+      }
+    }
+
     if (currentTab === "serial") {
       if (!serialPortName.trim()) {
         return t("dialog.serialPortRequired", "Serial port is required");
@@ -524,6 +672,12 @@ export default function NewSessionPage() {
     postLoginCommand,
     postLoginDelayMs,
     postLoginEnabled,
+    rdpHeight,
+    rdpPort,
+    rdpRedirects.driveRedirectCustom,
+    rdpRedirects.driveRedirectMode,
+    rdpResolutionPreset,
+    rdpWidth,
     serialPortName,
     shellPath,
     sshPort,
@@ -531,6 +685,7 @@ export default function NewSessionPage() {
     telnetPort,
     t,
     username,
+    vncPort,
   ]);
 
   const validationError = getValidationError();
@@ -574,7 +729,11 @@ export default function NewSessionPage() {
             ? normalizedSerialPortName
             : currentTab === "telnet"
               ? `${normalizedHost}:${telnetPort}`
-              : normalizedHost;
+              : currentTab === "rdp"
+                ? `${normalizedHost}:${rdpPort}`
+                : currentTab === "vnc"
+                  ? `${normalizedHost}:${vncPort}`
+                  : normalizedHost;
 
       const typeTag =
         currentTab === "ssh"
@@ -583,7 +742,11 @@ export default function NewSessionPage() {
             ? "local_terminal"
             : currentTab === "telnet"
               ? "telnet"
-              : "serial";
+              : currentTab === "rdp"
+                ? "rdp"
+                : currentTab === "vnc"
+                  ? "vnc"
+                  : "serial";
       const network =
         currentTab === "ssh"
           ? (() => {
@@ -607,13 +770,16 @@ export default function NewSessionPage() {
                     : "password"
                   : authType === "password"
                     ? "password"
-                    : authType === "key" && keyId
+                    : authType === "key"
                       ? "key"
                       : "none";
               const nextAuth: NonNullable<SavedConnection["auth"]> = {
                 mode: resolvedAuthMode,
                 password_id: resolvedAuthMode === "password" ? passwordId || "" : "",
-                key_id: currentTab === "ssh" && resolvedAuthMode === "key" ? keyId : undefined,
+                key_id:
+                  currentTab === "ssh" && resolvedAuthMode === "key"
+                    ? keyId || undefined
+                    : undefined,
                 otp_id: currentTab === "ssh" ? otpId || undefined : undefined,
                 auto_fill_otp: currentTab === "ssh" && otpId ? autoFillOtp : undefined,
               };
@@ -704,6 +870,40 @@ export default function NewSessionPage() {
               send_sga: telnetSendSga,
             }
           : {}),
+        ...(currentTab === "rdp"
+          ? (() => {
+              const sized = normalizeRdpSize(rdpWidth, rdpHeight);
+              const redirects = normalizeRdpRedirectSettings(rdpRedirects);
+              return {
+                host: normalizedHost,
+                port: rdpPort,
+                username: normalizedUsername || DEFAULT_RDP_USERNAME,
+                display_mode: rdpDisplayMode,
+                width: sized.width,
+                height: sized.height,
+                redirect_clipboard: redirects.redirectClipboard,
+                redirect_printers: redirects.redirectPrinters,
+                redirect_com_ports: redirects.redirectComPorts,
+                redirect_smart_cards: redirects.redirectSmartCards,
+                drive_redirect: driveRedirectToStored(
+                  redirects.driveRedirectMode,
+                  redirects.driveRedirectCustom,
+                ),
+                device_redirect: starOrOffToStored(redirects.deviceRedirect),
+                camera_redirect: starOrOffToStored(redirects.cameraRedirect),
+                audio_mode: redirects.audioMode,
+                audio_capture: redirects.audioCapture,
+                keyboard_hook: redirects.keyboardHook,
+                preferred_client: rdpPreferredClient.trim() || undefined,
+              };
+            })()
+          : {}),
+        ...(currentTab === "vnc"
+          ? {
+              host: normalizedHost,
+              port: vncPort,
+            }
+          : {}),
         ...(currentTab === "local"
           ? {
               shell_path: normalizedShellPath,
@@ -744,6 +944,163 @@ export default function NewSessionPage() {
     }
   };
 
+  const selectedProtocol = PROTOCOL_OPTIONS.find((item) => item.id === currentTab);
+  const selectedProtocolLabel = selectedProtocol
+    ? t(selectedProtocol.titleKey, selectedProtocol.titleFallback)
+    : currentTab;
+
+  const selectProtocol = (protocol: ProtocolTab) => {
+    setCurrentTab(protocol);
+    setTestResult(null);
+    setError("");
+    if (!editId && protocol === "rdp" && (username === "root" || !username.trim())) {
+      setUsername(DEFAULT_RDP_USERNAME);
+    }
+    setWizardStep("form");
+  };
+
+  const formatTestResultMessage = useCallback(
+    (
+      code: string,
+      params?: Record<string, string | number | undefined>,
+      detail?: string,
+    ) => {
+      const detailSuffix = detail?.trim() ? `: ${detail.trim()}` : "";
+      const key = `dialog.testResult.${code}`;
+      const translated = t(key, {
+        host: params?.host,
+        port: params?.port,
+        path: params?.path,
+        portName: params?.portName,
+        detailSuffix,
+        defaultValue: "",
+      });
+      if (translated) {
+        return translated;
+      }
+      if (detail?.trim()) {
+        return detail;
+      }
+      return t("dialog.testResult.genericFail", "Connection test failed");
+    },
+    [t],
+  );
+
+  const handleTestConnection = async () => {
+    setTesting(true);
+    setTestResult(null);
+    setError("");
+
+    const showResult = (ok: boolean, code: string, params?: Record<string, string | number | undefined>, detail?: string) => {
+      const message = formatTestResultMessage(code, params, detail);
+      setTestResult({ ok, code, params, message });
+      if (ok) {
+        toast.success(message);
+      } else {
+        toast.error(message);
+      }
+    };
+
+    try {
+      if (currentTab === "ssh") {
+        if (!host.trim()) {
+          showResult(false, "host_required");
+          return;
+        }
+        if (!sshPort || sshPort <= 0) {
+          showResult(false, "port_required", { host: host.trim() });
+          return;
+        }
+        if (!username.trim()) {
+          showResult(false, "username_required", { host: host.trim(), port: sshPort });
+          return;
+        }
+        if (authType === "password" && !password.trim() && !passwordId && !(editId && hasPassword)) {
+          showResult(false, "credentials_required", {
+            host: host.trim(),
+            port: sshPort,
+          });
+          return;
+        }
+      }
+
+      const protocol =
+        currentTab === "local"
+          ? "local_terminal"
+          : currentTab === "ssh" ||
+              currentTab === "telnet" ||
+              currentTab === "rdp" ||
+              currentTab === "vnc" ||
+              currentTab === "serial"
+            ? currentTab
+            : currentTab;
+
+      const result = await invoke<{
+        ok: boolean;
+        code: string;
+        params?: {
+          host?: string;
+          port?: number;
+          detail?: string;
+          path?: string;
+          portName?: string;
+        };
+      }>("test_connection_endpoint", {
+        request: {
+          protocol,
+          host: host.trim() || undefined,
+          port:
+            currentTab === "ssh"
+              ? sshPort
+              : currentTab === "telnet"
+                ? telnetPort
+                : currentTab === "rdp"
+                  ? rdpPort
+                  : currentTab === "vnc"
+                    ? vncPort
+                    : undefined,
+          shellPath: shellPath.trim() || undefined,
+          portName: serialPortName.trim() || undefined,
+          baudRate: Number(baudRate) || undefined,
+          dataBits: Number(dataBits) || undefined,
+          parity,
+          stopBits,
+          username: currentTab === "ssh" ? username.trim() || undefined : undefined,
+          authMode: currentTab === "ssh" ? authType : undefined,
+          password:
+            currentTab === "ssh" && authType === "password" && password.trim()
+              ? password
+              : undefined,
+          passwordId:
+            currentTab === "ssh" && authType === "password" && passwordId
+              ? passwordId
+              : undefined,
+          keyId: currentTab === "ssh" && authType === "key" ? keyId || undefined : undefined,
+          otpId: currentTab === "ssh" ? otpId || undefined : undefined,
+          autoFillOtp: currentTab === "ssh" ? Boolean(otpId && autoFillOtp) : undefined,
+          proxyId: currentTab === "ssh" ? proxyId || undefined : undefined,
+          jumpHostId: currentTab === "ssh" ? jumpHostId || undefined : undefined,
+          connectionId: editId || undefined,
+          useStoredPassword:
+            currentTab === "ssh" &&
+            authType === "password" &&
+            !password.trim() &&
+            !passwordId &&
+            Boolean(editId && hasPassword),
+        },
+      });
+
+      showResult(result.ok, result.code, result.params, result.params?.detail);
+    } catch (e) {
+      const message = getErrorMessage(e);
+      showResult(false, "genericFail", undefined, message);
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const showPickStep = !editId && wizardStep === "pick";
+
   return (
     <div className="h-full min-h-0 flex flex-col overflow-hidden bg-background text-foreground">
       <ChildWindowHeader
@@ -751,27 +1108,69 @@ export default function NewSessionPage() {
         onClose={handleClose}
       />
 
-      {/* Body */}
+      {showPickStep ? (
+        <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-5">
+          <p className="mb-4 text-sm text-muted-foreground">
+            {t("dialog.chooseProtocol", "Choose a connection type to continue")}
+          </p>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {PROTOCOL_OPTIONS.map((option) => {
+              const Icon = option.icon;
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  className="flex items-start gap-3 rounded-xl border border-border/70 bg-card/40 p-4 text-left transition-colors hover:border-primary/40 hover:bg-accent/30"
+                  onClick={() => selectProtocol(option.id)}
+                >
+                  <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-background">
+                    <Icon className="size-4 text-foreground/80" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium text-foreground">
+                      {t(option.titleKey, option.titleFallback)}
+                    </span>
+                    <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
+                      {t(option.descKey, option.descFallback)}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
       <Tabs
         value={currentTab}
-        onValueChange={setCurrentTab}
+        onValueChange={(value) => {
+          selectProtocol(value as ProtocolTab);
+        }}
         className="flex-1 min-h-0 flex flex-col overflow-hidden"
       >
-        <div className="shrink-0 px-4 pt-3 sm:px-5">
-          <TabsList className="grid h-8 w-full grid-cols-4 pointer-events-auto">
-            <TabsTrigger value="ssh" className="text-xs">
-              SSH
-            </TabsTrigger>
-            <TabsTrigger value="local" className="text-xs">
-              {t("dialog.localTerminal")}
-            </TabsTrigger>
-            <TabsTrigger value="telnet" className="text-xs">
-              Telnet
-            </TabsTrigger>
-            <TabsTrigger value="serial" className="text-xs">
-              {t("dialog.serial")}
-            </TabsTrigger>
-          </TabsList>
+        <div className="shrink-0 flex items-center gap-2 px-4 pt-3 sm:px-5">
+          {!editId ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-8 gap-1 px-2 text-xs"
+              onClick={() => {
+                setWizardStep("pick");
+                setTestResult(null);
+              }}
+            >
+              <MdChevronLeft className="size-4" />
+              {t("dialog.changeProtocol", "Change type")}
+            </Button>
+          ) : null}
+          <div className="text-xs text-muted-foreground">
+            <span className="font-medium text-foreground">{selectedProtocolLabel}</span>
+            {editId ? (
+              <span className="ml-2 rounded border border-border/60 px-1.5 py-0.5 text-[0.6875rem]">
+                {t("dialog.protocolLocked", "Type locked")}
+              </span>
+            ) : null}
+          </div>
         </div>
 
         <div className="flex-1 min-h-0 w-full space-y-3 overflow-y-auto p-4 pb-20 sm:p-5 sm:pb-20">
@@ -1161,8 +1560,36 @@ export default function NewSessionPage() {
             />
           </TabsContent>
 
+          <TabsContent value="rdp" className="space-y-3 m-0 border-0 outline-none w-full">
+            <RdpForm
+              host={host}
+              setHost={setHost}
+              port={rdpPort}
+              setPort={setRdpPort}
+              username={username}
+              setUsername={setUsername}
+              displayMode={rdpDisplayMode}
+              setDisplayMode={setRdpDisplayMode}
+              resolutionPreset={rdpResolutionPreset}
+              setResolutionPreset={setRdpResolutionPreset}
+              width={rdpWidth}
+              setWidth={setRdpWidth}
+              height={rdpHeight}
+              setHeight={setRdpHeight}
+              preferredClient={rdpPreferredClient}
+              setPreferredClient={setRdpPreferredClient}
+              redirects={rdpRedirects}
+              setRedirects={(patch) =>
+                setRdpRedirects((prev) => normalizeRdpRedirectSettings({ ...prev, ...patch }))
+              }
+            />
+          </TabsContent>
+
+          <TabsContent value="vnc" className="space-y-3 m-0 border-0 outline-none w-full">
+            <VncForm host={host} setHost={setHost} port={vncPort} setPort={setVncPort} />
+          </TabsContent>
+
           <div className="mt-5 space-y-3">
-            {/* Description */}
             <div>
               <Label className="text-xs font-medium text-foreground/80">
                 {t("dialog.description")}
@@ -1175,28 +1602,59 @@ export default function NewSessionPage() {
                 onChange={(e) => setDescription(e.target.value)}
               />
             </div>
-            {/* Messages */}
-            {error && (
-              <div className="p-2 bg-destructive/10 border border-destructive/30 rounded text-xs text-red-400">
+            {error ? (
+              <div className="rounded border border-destructive/30 bg-destructive/10 p-2 text-xs text-red-400">
                 {error}
               </div>
-            )}
+            ) : null}
           </div>
         </div>
       </Tabs>
+      )}
+
+      {!showPickStep && (testing || testResult) ? (
+        <div className="shrink-0 border-t border-border/60 px-4 py-2 sm:px-5">
+          <div
+            className={`rounded border p-2 text-xs ${
+              testing
+                ? "border-border/60 bg-muted/40 text-muted-foreground"
+                : testResult?.ok
+                  ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+                  : "border-destructive/30 bg-destructive/10 text-red-400"
+            }`}
+          >
+            {testing
+              ? t("dialog.testingConnection", "Testing…")
+              : testResult?.message}
+          </div>
+        </div>
+      ) : null}
 
       {/* Footer */}
       <ActionFooter>
         <ActionButton variant="outline" onClick={handleClose}>
           {t("dialog.cancel")}
         </ActionButton>
-        <ActionButton
-          onClick={handleSave}
-          disabled={saveDisabled}
-          title={validationError || undefined}
-        >
-          {connecting ? t("dialog.saving") : t("dialog.save")}
-        </ActionButton>
+        {!showPickStep ? (
+          <ActionButton
+            variant="outline"
+            onClick={() => void handleTestConnection()}
+            disabled={testing || connecting}
+          >
+            {testing
+              ? t("dialog.testingConnection", "Testing…")
+              : t("dialog.testConnection", "Test")}
+          </ActionButton>
+        ) : null}
+        {!showPickStep ? (
+          <ActionButton
+            onClick={handleSave}
+            disabled={saveDisabled}
+            title={validationError || undefined}
+          >
+            {connecting ? t("dialog.saving") : t("dialog.save")}
+          </ActionButton>
+        ) : null}
       </ActionFooter>
     </div>
   );

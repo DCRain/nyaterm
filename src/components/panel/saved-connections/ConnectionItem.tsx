@@ -128,6 +128,44 @@ function getConnectionDetailRows(
           multiline: true,
         },
       ];
+    case "rdp": {
+      const sizedWidth = conn.width && conn.width > 0 ? conn.width : 1920;
+      const sizedHeight = conn.height && conn.height > 0 ? conn.height : 1080;
+      return [
+        { label: t("savedConnections.host"), value: formatRequiredDetailValue(conn.host, t) },
+        { label: t("savedConnections.port"), value: formatRequiredDetailValue(conn.port, t) },
+        {
+          label: t("savedConnections.user"),
+          value: formatRequiredDetailValue(conn.username || "administrator", t),
+        },
+        {
+          label: t("dialog.rdpDisplayMode", "Display mode"),
+          value:
+            conn.display_mode === "windowed"
+              ? t("dialog.rdpWindowed", "Windowed")
+              : t("dialog.rdpFullscreen", "Fullscreen"),
+        },
+        {
+          label: t("dialog.rdpResolution", "Resolution"),
+          value: `${sizedWidth}×${sizedHeight}`,
+        },
+        {
+          label: t("savedConnections.description"),
+          value: description,
+          multiline: true,
+        },
+      ];
+    }
+    case "vnc":
+      return [
+        { label: t("savedConnections.host"), value: formatRequiredDetailValue(conn.host, t) },
+        { label: t("savedConnections.port"), value: formatRequiredDetailValue(conn.port, t) },
+        {
+          label: t("savedConnections.description"),
+          value: description,
+          multiline: true,
+        },
+      ];
     case "serial": {
       const rows: ConnectionDetailRow[] = [
         {

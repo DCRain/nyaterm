@@ -6,6 +6,7 @@ use russh::{MethodKind, MethodSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{Mutex, oneshot};
@@ -345,6 +346,128 @@ pub(crate) fn load_saved_ssh_config(app: &AppHandle, connection_id: &str) -> App
     )
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct DraftSshTestInput {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth_mode: String,
+    pub password: Option<String>,
+    pub password_id: Option<String>,
+    pub key_id: Option<String>,
+    pub otp_id: Option<String>,
+    pub auto_fill_otp: bool,
+    pub proxy_id: Option<String>,
+    pub jump_host_id: Option<String>,
+    pub connection_id: Option<String>,
+    pub use_stored_password: bool,
+}
+
+pub(crate) fn build_test_ssh_config(
+    app: &AppHandle,
+    input: DraftSshTestInput,
+) -> AppResult<SshConfig> {
+    let mut password = input
+        .password
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .map(crate::utils::crypto::encrypt)
+        .transpose()?;
+    let mut password_id = input
+        .password_id
+        .filter(|value| !value.is_empty());
+
+    if input.use_stored_password && password.is_none() && password_id.is_none() {
+        if let Some(connection_id) = input.connection_id.as_deref() {
+            if let Ok(existing) = crate::config::load_connection_by_id(app, connection_id) {
+                if let Some(auth) = existing.auth.as_ref() {
+                    password = auth.password.clone();
+                    password_id = auth.password_id.clone().filter(|id| !id.is_empty());
+                }
+            }
+        }
+    }
+
+    let auth = crate::config::ConnectionAuth {
+        mode: input.auth_mode,
+        password_id,
+        password,
+        key_id: input.key_id.filter(|id| !id.is_empty()),
+        otp_id: input.otp_id.filter(|id| !id.is_empty()),
+        auto_fill_otp: input.auto_fill_otp,
+        has_password: false,
+    };
+
+    if auth.mode == "password"
+        && auth.password.is_none()
+        && auth.password_id.as_deref().unwrap_or("").is_empty()
+    {
+        return Err(AppError::Auth(
+            "credentials_required: password is required for connection test".to_string(),
+        ));
+    }
+
+    let network = if input.proxy_id.is_some() || input.jump_host_id.is_some() {
+        Some(crate::config::ConnectionNetwork {
+            proxy_id: input.proxy_id.filter(|id| !id.is_empty()),
+            proxy_jump_id: input.jump_host_id.filter(|id| !id.is_empty()),
+        })
+    } else {
+        None
+    };
+
+    let conn = crate::config::SavedConnection {
+        id: input
+            .connection_id
+            .clone()
+            .unwrap_or_else(|| "connection-test".to_string()),
+        name: format!("{}@{}:{}", input.username, input.host, input.port),
+        config: crate::config::ConnectionType::Ssh {
+            host: input.host,
+            port: input.port,
+            username: input.username,
+            backspace_mode: "del".to_string(),
+            x11_forwarding: false,
+            encoding: String::new(),
+        },
+        group_id: None,
+        description: None,
+        sort_order: 0,
+        icon: None,
+        icon_auto_detect: None,
+        auth: Some(auth),
+        network,
+        post_login: None,
+        ssh_algorithms: None,
+        sftp: crate::config::SftpSettings::default(),
+        asset: None,
+        created_at_ms: None,
+        updated_at_ms: None,
+        last_used_at_ms: None,
+    };
+
+    let mut visited = HashSet::new();
+    if let Some(connection_id) = input.connection_id.as_ref() {
+        visited.insert(connection_id.clone());
+    }
+    let mut config = resolve_saved_ssh_config(
+        app,
+        &conn,
+        input.connection_id,
+        true,
+        &mut visited,
+    )?;
+    disable_interactive_auth(&mut config);
+    Ok(config)
+}
+
+fn disable_interactive_auth(config: &mut SshConfig) {
+    config.allow_interactive_auth = false;
+    if let Some(jump) = config.proxy_jump.as_mut() {
+        disable_interactive_auth(jump);
+    }
+}
+
 fn resolve_saved_ssh_config(
     app: &AppHandle,
     conn: &crate::config::SavedConnection,
@@ -385,6 +508,13 @@ fn resolve_saved_ssh_config(
         ssh_algorithms: conn.ssh_algorithms.clone(),
         sftp: conn.sftp.clone(),
         encoding,
+        allow_interactive_auth: true,
+        otp_id: conn.auth.as_ref().and_then(|auth| auth.otp_id.clone()),
+        auto_fill_otp: conn
+            .auth
+            .as_ref()
+            .map(|auth| auth.auto_fill_otp)
+            .unwrap_or(false),
     })
 }
 
@@ -440,22 +570,74 @@ fn resolve_auth(app: &AppHandle, conn: &crate::config::SavedConnection) -> AppRe
             Ok(SshAuth::Password { password })
         }
         "key" => {
-            let Some(key_id) = conn_auth.key_id.as_deref() else {
-                return Ok(SshAuth::None);
-            };
-            let ssh_key = crate::config::load_key_by_id(app, key_id)?;
-            let key_data = crate::config::decrypt_key_pem(&ssh_key)?
-                .ok_or_else(|| AppError::Auth("No key data stored".to_string()))?;
-            let cert_data = crate::config::decrypt_key_cert(&ssh_key)?;
-            Ok(SshAuth::Key {
-                key_id: Some(key_id.to_string()),
-                key_data,
-                cert_data,
-                passphrase: ssh_key.passphrase,
-            })
+            if let Some(key_id) = conn_auth.key_id.as_deref().filter(|id| !id.is_empty()) {
+                let ssh_key = crate::config::load_key_by_id(app, key_id)?;
+                let key_data = crate::config::decrypt_key_pem(&ssh_key)?
+                    .ok_or_else(|| AppError::Auth("No key data stored".to_string()))?;
+                let cert_data = crate::config::decrypt_key_cert(&ssh_key)?;
+                return Ok(SshAuth::Key {
+                    key_id: Some(key_id.to_string()),
+                    key_data,
+                    cert_data,
+                    passphrase: ssh_key.passphrase,
+                });
+            }
+            load_default_openssh_identity()
         }
         other => Err(AppError::Auth(format!("Unknown auth type: {}", other))),
     }
+}
+
+const DEFAULT_OPENSSH_IDENTITY_NAMES: &[&str] =
+    &["id_ed25519", "id_rsa", "id_ecdsa", "id_dsa"];
+
+fn default_openssh_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(".ssh"))
+}
+
+fn load_default_openssh_identity() -> AppResult<SshAuth> {
+    let ssh_dir = default_openssh_dir().ok_or_else(|| {
+        AppError::Auth("Cannot resolve home directory for ~/.ssh default keys".to_string())
+    })?;
+    load_default_openssh_identity_from_dir(&ssh_dir)
+}
+
+fn load_default_openssh_identity_from_dir(ssh_dir: &Path) -> AppResult<SshAuth> {
+    let mut tried = Vec::new();
+    for name in DEFAULT_OPENSSH_IDENTITY_NAMES {
+        let path = ssh_dir.join(name);
+        tried.push(path.display().to_string());
+        if !path.is_file() {
+            continue;
+        }
+        let key_data = std::fs::read_to_string(&path).map_err(|err| {
+            AppError::Auth(format!(
+                "Failed to read default OpenSSH key '{}': {err}",
+                path.display()
+            ))
+        })?;
+        if key_data.trim().is_empty() {
+            continue;
+        }
+        let cert_path = ssh_dir.join(format!("{name}-cert.pub"));
+        let cert_data = if cert_path.is_file() {
+            std::fs::read_to_string(&cert_path).ok()
+        } else {
+            None
+        };
+        return Ok(SshAuth::Key {
+            key_id: None,
+            key_data,
+            cert_data,
+            passphrase: None,
+        });
+    }
+
+    Err(AppError::Auth(format!(
+        "No usable default OpenSSH private key found under '{}'. Tried: {}",
+        ssh_dir.display(),
+        tried.join(", ")
+    )))
 }
 
 fn resolve_password_material(
@@ -549,10 +731,7 @@ pub(super) async fn authenticate_handle(
     password_error: &str,
     key_error: &str,
 ) -> AppResult<()> {
-    let otp_info = config
-        .connection_id
-        .as_deref()
-        .and_then(|connection_id| resolve_otp_info(app, connection_id));
+    let otp_info = resolve_otp_info_for_config(app, config);
     let mut updates = SshRuntimeAuthUpdates::default();
 
     match &config.auth {
@@ -589,6 +768,7 @@ pub(super) async fn authenticate_handle(
                 "Authentication failed: none auth rejected",
                 Some(KeyboardInteractiveMode::AdditionalFactor),
                 otp_info.as_ref(),
+                config.allow_interactive_auth,
             )
             .await?;
         }
@@ -850,6 +1030,13 @@ async fn request_runtime_auth_response(
     can_save: bool,
     available_methods: Vec<String>,
 ) -> AppResult<SshAuthResponse> {
+    if !config.allow_interactive_auth {
+        return Err(AppError::Auth(format!(
+            "Interactive authentication required ({})",
+            reason.as_str()
+        )));
+    }
+
     let pending_mgr = app
         .try_state::<Arc<PendingSshAuthManager>>()
         .ok_or_else(|| AppError::Auth("PendingSshAuthManager not available".to_string()))?;
@@ -1061,6 +1248,7 @@ async fn authenticate_password_with_runtime_prompt(
                 password: current_password,
             }),
             otp_info,
+            config.allow_interactive_auth,
         )
         .await
         {
@@ -1156,6 +1344,7 @@ async fn discover_auth_methods_before_secret_prompt(
         fallback_error,
         None,
         otp_info,
+        config.allow_interactive_auth,
     )
     .await
     {
@@ -1383,6 +1572,7 @@ async fn authenticate_publickey_attempt(
         fallback_error,
         None,
         otp_info,
+        config.allow_interactive_auth,
     )
     .await?;
 
@@ -1645,6 +1835,23 @@ fn resolve_otp_info(app: &AppHandle, connection_id: &str) -> Option<OtpAutoFillI
     })
 }
 
+fn resolve_otp_info_for_config(app: &AppHandle, config: &SshConfig) -> Option<OtpAutoFillInfo> {
+    if let Some(otp_id) = config
+        .otp_id
+        .as_deref()
+        .filter(|otp_id| !otp_id.is_empty())
+    {
+        return Some(OtpAutoFillInfo {
+            otp_id: otp_id.to_string(),
+            auto_fill: config.auto_fill_otp,
+        });
+    }
+    config
+        .connection_id
+        .as_deref()
+        .and_then(|connection_id| resolve_otp_info(app, connection_id))
+}
+
 async fn wait_for_next_totp_code(
     connection_id: Option<&str>,
     otp_id: &str,
@@ -1801,6 +2008,7 @@ async fn finish_keyboard_interactive(
     app: &AppHandle,
     mode: KeyboardInteractiveMode<'_>,
     otp_info: Option<&OtpAutoFillInfo>,
+    allow_interactive_auth: bool,
 ) -> AppResult<()> {
     let pending_mgr = app
         .try_state::<Arc<PendingAuthManager>>()
@@ -2018,6 +2226,10 @@ async fn finish_keyboard_interactive(
                     .await?;
                     pending_totp_use = prepared.used_totp;
                     prepared.responses
+                } else if !allow_interactive_auth {
+                    return Err(AppError::Auth(
+                        "Interactive 2FA required during connection test".to_string(),
+                    ));
                 } else {
                     let request_id = uuid::Uuid::new_v4().to_string();
                     let rx = pending_mgr.register(request_id.clone()).await;
@@ -2101,6 +2313,7 @@ async fn try_keyboard_interactive_after_partial(
     fallback_error: &str,
     keyboard_interactive_fallback: Option<KeyboardInteractiveMode<'_>>,
     otp_info: Option<&OtpAutoFillInfo>,
+    allow_interactive_auth: bool,
 ) -> Result<(), SshAuthFailure> {
     match auth_result {
         client::AuthResult::Success => Ok(()),
@@ -2136,6 +2349,7 @@ async fn try_keyboard_interactive_after_partial(
                     app,
                     KeyboardInteractiveMode::AdditionalFactor,
                     otp_info,
+                    allow_interactive_auth,
                 )
                 .await
                 .map_err(|error| {
@@ -2175,6 +2389,7 @@ async fn try_keyboard_interactive_after_partial(
                     app,
                     mode,
                     otp_info,
+                    allow_interactive_auth,
                 )
                 .await
                 .map_err(|error| {
@@ -2331,11 +2546,13 @@ fn normalize_optional_keyboard_interactive_text(text: &str) -> Option<String> {
 mod tests {
     use super::{
         KeyboardInteractiveMode, TotpUseCandidate, is_otp_keyboard_interactive_prompt,
-        is_password_keyboard_interactive_prompt, is_totp_code_reused, record_totp_code_use,
+        is_password_keyboard_interactive_prompt, is_totp_code_reused,
+        load_default_openssh_identity_from_dir, record_totp_code_use,
         resolve_password_material, seconds_until_next_totp_step, should_auto_fill_otp_prompts,
         should_auto_fill_password_prompts, used_totp_codes,
     };
     use crate::config::ConnectionAuth;
+    use crate::core::ssh::client::SshAuth;
     use russh::client::Prompt;
 
     #[test]
@@ -2503,5 +2720,47 @@ mod tests {
             code: "654321".to_string(),
             ..candidate
         }));
+    }
+
+    #[test]
+    fn loads_default_openssh_identity_preferring_ed25519() {
+        let dir = std::env::temp_dir().join(format!(
+            "nyaterm-ssh-default-key-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::write(dir.join("id_rsa"), "RSA_PRIVATE_KEY").expect("write rsa");
+        std::fs::write(dir.join("id_ed25519"), "ED25519_PRIVATE_KEY").expect("write ed");
+
+        let auth = load_default_openssh_identity_from_dir(&dir).expect("load");
+        let _ = std::fs::remove_dir_all(&dir);
+        match auth {
+            SshAuth::Key {
+                key_id,
+                key_data,
+                cert_data,
+                passphrase,
+            } => {
+                assert!(key_id.is_none());
+                assert_eq!(key_data, "ED25519_PRIVATE_KEY");
+                assert!(cert_data.is_none());
+                assert!(passphrase.is_none());
+            }
+            other => panic!("expected key auth, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_default_openssh_identity_errors() {
+        let dir = std::env::temp_dir().join(format!(
+            "nyaterm-ssh-default-key-missing-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let err = load_default_openssh_identity_from_dir(&dir).expect_err("missing");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(err.to_string().contains("No usable default OpenSSH"));
     }
 }

@@ -42,7 +42,13 @@ export interface SyncGroup {
 export type PaneSplitDirection = "horizontal" | "vertical";
 
 /** Connection type discriminator matching Rust ConnectionType. */
-export type ConnectionTypeTag = "ssh" | "local_terminal" | "telnet" | "serial";
+export type ConnectionTypeTag =
+  | "ssh"
+  | "local_terminal"
+  | "telnet"
+  | "serial"
+  | "rdp"
+  | "vnc";
 
 /** Metadata for a connected or disconnected session. */
 export interface SessionInfo {
@@ -370,6 +376,34 @@ export interface SavedConnection {
   auto_login?: TelnetAutoLoginConfig;
   /** SSH-only: enables X11 forwarding for remote graphical applications. */
   x11_forwarding?: boolean;
+  /** RDP-only: "fullscreen" or "windowed". */
+  display_mode?: string;
+  /** RDP-only: desktop width (defaults to 1920). */
+  width?: number;
+  /** RDP-only: desktop height (defaults to 1080). */
+  height?: number;
+  /** RDP-only: clipboard redirection. */
+  redirect_clipboard?: boolean;
+  /** RDP-only: printer redirection. */
+  redirect_printers?: boolean;
+  /** RDP-only: COM port redirection. */
+  redirect_com_ports?: boolean;
+  /** RDP-only: smart card redirection. */
+  redirect_smart_cards?: boolean;
+  /** RDP-only: drive redirect (`*` / `` / `C:;D:;`). */
+  drive_redirect?: string;
+  /** RDP-only: PnP device redirect (`*` or empty). */
+  device_redirect?: string;
+  /** RDP-only: camera redirect (`*` or empty). */
+  camera_redirect?: string;
+  /** RDP-only: audio output mode (0 local / 1 remote / 2 off). */
+  audio_mode?: number;
+  /** RDP-only: microphone capture redirection. */
+  audio_capture?: boolean;
+  /** RDP-only: keyboard hook (0 local / 1 remote / 2 fullscreen-only remote). */
+  keyboard_hook?: number;
+  /** RDP-only: preferred external client id (`mstsc`, `windows-app`, …). Empty = auto. */
+  preferred_client?: string;
   /** Per-connection encoding override. Empty string means follow global setting. */
   encoding?: string;
 }

@@ -45,10 +45,23 @@ pub struct SshConfig {
     /// Character encoding for terminal I/O (e.g. "UTF-8", "GBK").
     #[serde(default = "default_encoding")]
     pub encoding: String,
+    /// When false, runtime password/OTP/key prompts fail immediately instead of
+    /// emitting UI events. Used by connection tests. Host-key TOFU is unaffected.
+    #[serde(default = "default_true")]
+    pub allow_interactive_auth: bool,
+    /// Optional OTP entry for draft / unsaved connection tests.
+    #[serde(default)]
+    pub otp_id: Option<String>,
+    #[serde(default)]
+    pub auto_fill_otp: bool,
 }
 
 fn default_encoding() -> String {
     "UTF-8".to_string()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

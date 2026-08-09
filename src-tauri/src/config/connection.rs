@@ -173,6 +173,52 @@ pub enum ConnectionType {
         #[serde(default)]
         encoding: String,
     },
+    Rdp {
+        host: String,
+        #[serde(default = "default_rdp_port")]
+        port: u16,
+        #[serde(default)]
+        username: String,
+        #[serde(
+            default = "default_rdp_display_mode",
+            skip_serializing_if = "is_default_rdp_display_mode"
+        )]
+        display_mode: String,
+        #[serde(default = "default_rdp_width")]
+        width: u16,
+        #[serde(default = "default_rdp_height")]
+        height: u16,
+        // Always serialize so the edit dialog receives explicit booleans
+        // (skip_serializing_if would omit `true` and the UI looked unchecked).
+        #[serde(default = "default_true")]
+        redirect_clipboard: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        redirect_printers: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        redirect_com_ports: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        redirect_smart_cards: bool,
+        #[serde(default = "default_rdp_drive_redirect")]
+        drive_redirect: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        device_redirect: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        camera_redirect: String,
+        #[serde(default, skip_serializing_if = "is_zero_u8")]
+        audio_mode: u8,
+        #[serde(default = "default_true")]
+        audio_capture: bool,
+        #[serde(default = "default_rdp_keyboard_hook")]
+        keyboard_hook: u8,
+        /// Preferred external client id (`mstsc`, `windows-app`, `wfreerdp`, …). Empty = auto.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        preferred_client: String,
+    },
+    Vnc {
+        host: String,
+        #[serde(default = "default_vnc_port")]
+        port: u16,
+    },
 }
 
 fn default_ssh_port() -> u16 {
@@ -186,6 +232,33 @@ fn default_backspace_mode_ssh() -> String {
 }
 fn default_telnet_port() -> u16 {
     23
+}
+fn default_rdp_port() -> u16 {
+    3389
+}
+fn default_rdp_display_mode() -> String {
+    "fullscreen".to_string()
+}
+fn is_default_rdp_display_mode(value: &str) -> bool {
+    value == "fullscreen"
+}
+fn default_rdp_width() -> u16 {
+    1920
+}
+fn default_rdp_height() -> u16 {
+    1080
+}
+fn default_rdp_drive_redirect() -> String {
+    "*".to_string()
+}
+fn default_rdp_keyboard_hook() -> u8 {
+    2
+}
+fn is_zero_u8(value: &u8) -> bool {
+    *value == 0
+}
+fn default_vnc_port() -> u16 {
+    5900
 }
 fn default_baud_rate() -> u32 {
     115_200
@@ -526,7 +599,9 @@ pub fn save_sessions(app: &AppHandle, config: &SessionsConfig) -> AppResult<()> 
             } => {
                 *ai_execution_profile = AiExecutionProfile::Auto;
             }
-            ConnectionType::Ssh { .. } => {}
+            ConnectionType::Ssh { .. }
+            | ConnectionType::Rdp { .. }
+            | ConnectionType::Vnc { .. } => {}
         }
         if let Some(auth) = &mut conn.auth {
             auth.has_password = false;
@@ -609,6 +684,7 @@ pub fn resolve_connection_encoding(app: &AppHandle, conn: &SavedConnection) -> S
         | ConnectionType::LocalTerminal { encoding, .. }
         | ConnectionType::Telnet { encoding, .. }
         | ConnectionType::Serial { encoding, .. } => encoding.as_str(),
+        ConnectionType::Rdp { .. } | ConnectionType::Vnc { .. } => "",
     };
     if !per_conn.is_empty() {
         return per_conn.to_string();

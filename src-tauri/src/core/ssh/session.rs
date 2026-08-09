@@ -25,6 +25,15 @@ async fn create_authenticated_connection(
     create_authenticated_connection_with_notifications(app, config, None, None).await
 }
 
+/// Connect and authenticate without opening a shell. Used by connection tests.
+pub(crate) async fn test_authenticated_ssh(
+    app: &AppHandle,
+    config: &SshConfig,
+) -> AppResult<()> {
+    let (_handle, _x11_rx) = create_authenticated_connection(app, config).await?;
+    Ok(())
+}
+
 async fn create_authenticated_connection_with_notifications(
     app: &AppHandle,
     config: &SshConfig,

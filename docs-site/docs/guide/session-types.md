@@ -4,12 +4,14 @@ sidebar_position: 0
 
 # 会话类型
 
-NyaTerm 不只是 SSH 客户端，而是一个把多类终端工作流放到同一工作区中的桌面应用。当前支持四类会话：
+NyaTerm 不只是 SSH 客户端，而是一个把多类终端与远程桌面连接放到同一工作区中的桌面应用。当前支持：
 
 - **SSH**
 - **本地终端**
 - **Telnet**
 - **串口**
+- **RDP**（外部客户端）
+- **VNC**（外部客户端）
 
 理解它们之间的差异，有助于你判断某个功能为什么“只在某些标签页里出现”。
 
@@ -21,6 +23,8 @@ NyaTerm 不只是 SSH 客户端，而是一个把多类终端工作流放到同�
 | 本地终端 | 本地 shell、脚本调试、构建命令 | 共享同一套终端 UI、命令历史、分屏 |
 | Telnet | 旧设备、实验环境、兼容性排障 | 终端工作区能力，支持 `Backspace Mode`，但不包含 SSH 专属特性 |
 | 串口 | 路由器、交换机、板卡、嵌入式调试口 | 串口参数配置、`Backspace Mode` 与终端工作区能力 |
+| RDP | Windows 远程桌面 | 保存连接后启动外部 RDP 客户端；不嵌入标签页 |
+| VNC | 图形桌面远程控制 | 保存连接后启动外部 VNC 客户端；不嵌入标签页 |
 
 ## SSH
 
@@ -101,6 +105,26 @@ Telnet 会话适合：
 
 串口会话同样可以放进 NyaTerm 的标签页与分屏工作区中，适合边看一个串口输出，边在另一个 SSH 或本地终端里执行命令。
 
+## RDP / VNC（外部客户端）
+
+RDP 与 VNC 连接可以保存在连接列表中，但 **不会** 在 NyaTerm 标签页内嵌桌面画面。点击连接时，NyaTerm 会按平台探测可用客户端并启动外部程序；密码由外部客户端自行提示输入。
+
+### 推荐客户端
+
+**RDP**
+
+- Windows：系统自带的 `mstsc`，其次 FreeRDP（`xfreerdp` / `wfreerdp`）
+- macOS：临时 `.rdp` 文件 + `open`（由 Microsoft Remote Desktop 等接管），其次 FreeRDP
+- Linux：`xfreerdp` / `wlfreerdp` / `freerdp`，或 Remmina
+
+**VNC**
+
+- macOS：内置 `open vnc://host:port`（屏幕共享），其次 TigerVNC Viewer / `vncviewer`
+- Windows：TigerVNC / UltraVNC / TightVNC / RealVNC 等 `vncviewer`
+- Linux：`vncviewer` / `xtigervncviewer`，或 Remmina
+
+若未检测到可用客户端，NyaTerm 会弹出安装提示，并给出平台相关的安装命令或下载页。
+
 ## 如何选择？
 
 可以按下面这个简单规则判断：
@@ -109,6 +133,7 @@ Telnet 会话适合：
 - 要本机 shell：用 **本地终端**
 - 要兼容传统远程终端：用 **Telnet**
 - 要接调试口 / 设备串口：用 **串口**
+- 要图形远程桌面：用 **RDP** 或 **VNC**（外部客户端）
 
 ## 在一个工作区里混用
 
@@ -117,5 +142,6 @@ NyaTerm 的优势之一，是允许你把这些类型混合放进同一工作区
 - 左边 SSH 看远端日志
 - 右边本地终端执行打包脚本
 - 再开一个串口标签观察设备启动信息
+- 需要时从连接列表启动 RDP / VNC 外部桌面
 
 这也是为什么文档里很多功能会写成“某会话类型专属”或“某会话类型才显示”的原因——工作区统一，但能力边界仍然取决于底层会话类型。

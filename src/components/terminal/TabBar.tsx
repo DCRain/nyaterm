@@ -18,6 +18,7 @@ import {
   MdCheck,
   MdClose,
   MdContentCopy,
+  MdDesktopWindows,
   MdDns,
   MdErrorOutline,
   MdExpandMore,
@@ -987,6 +988,10 @@ function TabBar({
         return "telnet";
       case "serial":
         return "serial";
+      case "rdp":
+        return "rdp";
+      case "vnc":
+        return "vnc";
       default:
         return "ssh";
     }
@@ -1007,6 +1012,10 @@ function TabBar({
 
     if (connection.type === "local_terminal") {
       return <MdTerminal className="text-sm shrink-0 text-emerald-500/70" />;
+    }
+
+    if (connection.type === "rdp" || connection.type === "vnc") {
+      return <MdDesktopWindows className="text-sm shrink-0 text-sky-500/70" />;
     }
 
     return <MdDns className="text-sm shrink-0 text-emerald-500/70" />;

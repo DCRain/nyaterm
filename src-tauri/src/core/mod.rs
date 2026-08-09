@@ -15,6 +15,7 @@ mod output;
 pub mod portable_snapshot;
 mod quick_commands;
 mod recording;
+pub mod remote_desktop;
 pub mod remote_exec;
 mod session;
 pub mod sftp;

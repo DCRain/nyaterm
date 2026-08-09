@@ -4,12 +4,14 @@ sidebar_position: 0
 
 # Session Types
 
-NyaTerm is not just an SSH client. It is a desktop app that puts multiple terminal workflows into one workspace. It currently supports four session types:
+NyaTerm is not just an SSH client. It is a desktop app that puts multiple terminal workflows and remote desktop connections into one workspace. It currently supports:
 
 - **SSH**
 - **Local Terminal**
 - **Telnet**
 - **Serial**
+- **RDP** (external client)
+- **VNC** (external client)
 
 Understanding the differences helps explain why some panels or enhancements only appear for certain tabs.
 
@@ -21,6 +23,8 @@ Understanding the differences helps explain why some panels or enhancements only
 | Local Terminal | Local shell work, scripts, builds | Shared terminal UI, command history, split panes |
 | Telnet | Legacy devices, lab environments, compatibility troubleshooting | Terminal workspace features with `Backspace Mode`, but not SSH-only features |
 | Serial | Routers, switches, boards, embedded debug ports | Serial port settings, `Backspace Mode`, and terminal workspace features |
+| RDP | Windows remote desktop | Saved connections launch an external RDP client; not embedded in tabs |
+| VNC | Graphical remote desktop | Saved connections launch an external VNC client; not embedded in tabs |
 
 ## SSH
 
@@ -99,6 +103,26 @@ When creating a serial session, you can configure:
 
 Serial sessions still live inside NyaTerm's tabbed and split workspace, so you can watch serial output in one pane while running commands in an SSH or local terminal pane.
 
+## RDP / VNC (external clients)
+
+RDP and VNC connections can be saved in the connection list, but they are **not** embedded as desktop views inside NyaTerm tabs. When you connect, NyaTerm detects an available client for your platform and launches it externally. Passwords are prompted by the external client.
+
+### Recommended clients
+
+**RDP**
+
+- Windows: built-in `mstsc`, then FreeRDP (`xfreerdp` / `wfreerdp`)
+- macOS: temporary `.rdp` file via `open` (Microsoft Remote Desktop and similar), then FreeRDP
+- Linux: `xfreerdp` / `wlfreerdp` / `freerdp`, or Remmina
+
+**VNC**
+
+- macOS: built-in `open vnc://host:port` (Screen Sharing), then TigerVNC Viewer / `vncviewer`
+- Windows: TigerVNC / UltraVNC / TightVNC / RealVNC `vncviewer`
+- Linux: `vncviewer` / `xtigervncviewer`, or Remmina
+
+If no client is found, NyaTerm shows an install prompt with platform-specific commands and download links.
+
 ## How to choose
 
 A simple rule of thumb:
@@ -107,6 +131,7 @@ A simple rule of thumb:
 - Need a local shell? Use **Local Terminal**
 - Need a traditional remote terminal? Use **Telnet**
 - Need a device console or debug port? Use **Serial**
+- Need a graphical remote desktop? Use **RDP** or **VNC** (external clients)
 
 ## Mix them in one workspace
 
@@ -115,11 +140,12 @@ One of NyaTerm's strengths is that you can mix these session types in the same w
 - SSH on the left to watch remote logs
 - Local Terminal on the right to run packaging or Git commands
 - A Serial tab open to watch device boot output
+- Launch RDP / VNC from the connection list when you need a full desktop
 
 That is why some features are documented as session-specific. The workspace is shared, but the capability boundary still depends on the underlying session type.
 
 :::tip Screenshot suggestion
 - Suggested image path: `/img/docs/session-types/new-session-tabs.png`
-- Show the SSH / Local Terminal / Telnet / Serial tabs in the new-session window
+- Show the SSH / Local Terminal / Telnet / Serial / RDP / VNC tabs in the new-session window
 - Keeping the default field areas visible helps readers understand the differences
 :::

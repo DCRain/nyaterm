@@ -9,6 +9,7 @@ import AppPanelContent from "./components/app/AppPanelContent";
 import ExternalConnectionMatchDialog from "./components/dialog/connections/ExternalConnectionMatchDialog";
 import type { HostKeyVerifyRequest } from "./components/dialog/connections/HostKeyVerifyDialog";
 import type { OtpRequest } from "./components/dialog/connections/OtpDialog";
+import RemoteDesktopClientMissingDialog from "./components/dialog/connections/RemoteDesktopClientMissingDialog";
 import type { SshAuthRequest } from "./components/dialog/connections/SshAuthDialog";
 import TemporarySshLinkDialog from "./components/dialog/connections/TemporarySshLinkDialog";
 import type { DockerSudoPasswordRequest } from "./components/dialog/docker/DockerSudoPasswordDialog";
@@ -68,9 +69,15 @@ import {
   findExternalConnectionMatches,
   parseExternalOpenUrl,
 } from "./lib/externalOpen";
+import { normalizeHeaderStatusMode } from "./lib/headerStatus";
 import { invoke } from "./lib/invoke";
 import { logger } from "./lib/logger";
-import { normalizeHeaderStatusMode } from "./lib/headerStatus";
+import {
+  isRemoteDesktopConnection,
+  launchSavedRemoteDesktop,
+  type RemoteDesktopClientInstallRecommendation,
+  type RemoteDesktopProtocol,
+} from "./lib/remoteDesktop";
 import {
   listenOpenSendCommandPanel,
   type SendCommandPanelDraft,
@@ -136,7 +143,7 @@ import type {
   Tab,
 } from "./types/global";
 
-const CONNECTION_SESSION_TYPES: Record<SavedConnection["type"], SessionType> = {
+const CONNECTION_SESSION_TYPES: Partial<Record<SavedConnection["type"], SessionType>> = {
   ssh: "SSH",
   local_terminal: "Local",
   telnet: "Telnet",
@@ -146,7 +153,10 @@ const CONNECTION_SESSION_TYPES: Record<SavedConnection["type"], SessionType> = {
 function getConnectionSessionType(
   connection: Pick<SavedConnection, "type"> | null | undefined,
 ): SessionType {
-  return connection ? CONNECTION_SESSION_TYPES[connection.type] : "SSH";
+  if (!connection || isRemoteDesktopConnection(connection)) {
+    return "SSH";
+  }
+  return CONNECTION_SESSION_TYPES[connection.type] ?? "SSH";
 }
 
 function isSessionCreationCancelled(error: unknown) {
@@ -225,6 +235,9 @@ async function createSessionForConnection(
         connectionId: connection.id,
         createRequestId,
       });
+    case "rdp":
+    case "vnc":
+      throw new Error("Remote desktop connections must be launched externally");
     default:
       return invoke<string>("create_ssh_session", {
         connectionId: connection.id,
@@ -434,6 +447,10 @@ function App() {
     null,
   );
   const [postLoginConfirm, setPostLoginConfirm] = useState<PostLoginConfirmState | null>(null);
+  const [remoteDesktopMissing, setRemoteDesktopMissing] = useState<{
+    protocol: RemoteDesktopProtocol;
+    recommendations: RemoteDesktopClientInstallRecommendation[];
+  } | null>(null);
   const allowProgrammaticWindowCloseRef = useRef(false);
   const handleSendCommandDraftConsumed = useCallback(() => {
     setSendCommandDraft(null);
@@ -685,6 +702,32 @@ function App() {
         try {
           const conns = await invoke<SavedConnection[]>("get_saved_connections");
           const conn = conns.find((c) => c.id === connectionId);
+          if (conn && isRemoteDesktopConnection(conn)) {
+            try {
+              const result = await launchSavedRemoteDesktop(conn);
+              if (result.status === "missing_client") {
+                setRemoteDesktopMissing({
+                  protocol: result.protocol,
+                  recommendations: result.recommendations,
+                });
+                return;
+              }
+              recordRecentConnection(conn.id);
+              updateUi({ saved_connections_last_opened_connection_id: conn.id });
+              toast.success(
+                t("remoteDesktop.launched", {
+                  name: conn.name,
+                  client: result.client_name,
+                  defaultValue: "Opened {{name}} with {{client}}",
+                }),
+              );
+            } catch (error) {
+              toast.error(
+                t("savedConnections.connectionFailed", { error: getErrorMessage(error) }),
+              );
+            }
+            return;
+          }
           const connName = conn?.name ?? connectionId;
           const sessionType = getConnectionSessionType(conn);
           const sourceTab = sourceTabId
@@ -812,9 +855,11 @@ function App() {
     recordRecentConnection,
     setActivePane,
     setActiveTabId,
+    t,
     updateAutoIconForSessionStart,
     updatePaneSession,
     updateTabSession,
+    updateUi,
     replaceAppSettings,
   ]);
 
@@ -994,6 +1039,39 @@ function App() {
 
   const connectSavedConnection = useCallback(
     async (connection: SavedConnection, options?: { failureContext?: string }) => {
+      if (isRemoteDesktopConnection(connection)) {
+        try {
+          const result = await launchSavedRemoteDesktop(connection);
+          if (result.status === "missing_client") {
+            setRemoteDesktopMissing({
+              protocol: result.protocol,
+              recommendations: result.recommendations,
+            });
+            return;
+          }
+          recordRecentConnection(connection.id);
+          updateUi({ saved_connections_last_opened_connection_id: connection.id });
+          toast.success(
+            t("remoteDesktop.launched", {
+              name: connection.name,
+              client: result.client_name,
+              defaultValue: "Opened {{name}} with {{client}}",
+            }),
+          );
+        } catch (error) {
+          const errorMessage = getErrorMessage(error);
+          logger.error({
+            domain: "session.lifecycle",
+            event: "remote_desktop.open_failed",
+            message: options?.failureContext ?? "Remote desktop launch failed",
+            ids: { connection_id: connection.id },
+            error,
+          });
+          toast.error(t("savedConnections.connectionFailed", { error: errorMessage }));
+        }
+        return;
+      }
+
       const pending = addPendingTab(
         connection.name,
         getConnectionSessionType(connection),
@@ -1333,6 +1411,11 @@ function App() {
 
   const handleConnectConnectionFromLeaf = useCallback(
     async (leafId: string, connection: SavedConnection) => {
+      if (isRemoteDesktopConnection(connection)) {
+        await connectSavedConnection(connection);
+        return;
+      }
+
       const targetLeaf = terminalWindows
         ? findTerminalWindowLeafById(terminalWindows, leafId)
         : null;
@@ -1391,6 +1474,7 @@ function App() {
     },
     [
       addPendingTab,
+      connectSavedConnection,
       hasTab,
       handleSelectLeafTab,
       markTabConnectionFailed,
@@ -3458,6 +3542,12 @@ function App() {
         onOpenChange={handleExternalMatchOpenChange}
         onSelectConnection={handleExternalMatchConnection}
         onUseTemporary={handleExternalMatchTemporary}
+      />
+      <RemoteDesktopClientMissingDialog
+        open={remoteDesktopMissing !== null}
+        protocol={remoteDesktopMissing?.protocol ?? null}
+        recommendations={remoteDesktopMissing?.recommendations ?? []}
+        onClose={() => setRemoteDesktopMissing(null)}
       />
       <AlertDialog open={postLoginConfirm !== null} onOpenChange={handlePostLoginConfirmOpenChange}>
         <AlertDialogContent>
