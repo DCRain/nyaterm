@@ -32,7 +32,7 @@ function CredentialSuggestions({
     if (selectedRef.current) {
       selectedRef.current.scrollIntoView({ block: "nearest" });
     }
-  });
+  }, [selectedIndex]);
 
   if (!panelState || panelState.matches.length === 0) return null;
 

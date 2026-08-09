@@ -86,7 +86,7 @@ function CommandSuggestions({
     if (selectedRef.current) {
       selectedRef.current.scrollIntoView({ block: "nearest" });
     }
-  });
+  }, [selectedIndex]);
 
   if (!visible || suggestions.length === 0) {
     return null;

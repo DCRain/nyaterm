@@ -958,19 +958,17 @@ pub async fn fuzzy_search_commands(
     limit: usize,
 ) -> AppResult<Vec<FuzzyResult>> {
     let cfg = state.snapshot();
-    let items: Vec<(&str, &str)> = cfg
-        .commands
-        .iter()
-        .map(|c| (c.label.as_str(), c.command.as_str()))
-        .collect();
-    Ok(fuzzy_search_items(
-        &items,
-        &pattern,
-        "quickCommand",
-        limit,
-        None,
-        None,
-    ))
+    let results = tokio::task::spawn_blocking(move || {
+        let items: Vec<(&str, &str)> = cfg
+            .commands
+            .iter()
+            .map(|c| (c.label.as_str(), c.command.as_str()))
+            .collect();
+        fuzzy_search_items(&items, &pattern, "quickCommand", limit, None, None)
+    })
+    .await
+    .map_err(|e| AppError::Config(format!("Task join error: {e}")))?;
+    Ok(results)
 }
 
 #[tauri::command]

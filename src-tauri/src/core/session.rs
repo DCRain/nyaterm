@@ -582,6 +582,9 @@ impl SessionManager {
     }
 
     /// Fuzzy searches command history; returns top `limit` matches by score.
+    ///
+    /// Heavy nucleo matching runs on a blocking pool so typing / session I/O
+    /// are not stalled on the async runtime.
     pub async fn fuzzy_search(
         &self,
         pattern: &str,
@@ -589,28 +592,48 @@ impl SessionManager {
         min_command_length: Option<usize>,
         max_command_length: Option<usize>,
     ) -> Vec<FuzzyResult> {
-        let mut results = {
-            let store = self.history_store.lock().await;
-            store.search(pattern, limit, min_command_length, max_command_length)
-        };
+        let pattern = pattern.to_owned();
+        let history_store = Arc::clone(&self.history_store);
+        let history_pattern = pattern.clone();
+        let mut results = tokio::task::spawn_blocking(move || {
+            let commands = {
+                let store = history_store.blocking_lock();
+                store.clone_commands()
+            };
+            CommandHistoryStore::search_commands(
+                &commands,
+                &history_pattern,
+                limit,
+                min_command_length,
+                max_command_length,
+            )
+        })
+        .await
+        .unwrap_or_default();
 
         let pending_commands = self.pending_history_candidates().await;
         if pending_commands.is_empty() {
             return results;
         }
 
-        let pending_refs: Vec<(&str, &str)> = pending_commands
-            .iter()
-            .map(|command| (command.as_str(), command.as_str()))
-            .collect();
-        let pending_results = fuzzy_search_items(
-            &pending_refs,
-            pattern,
-            "history",
-            limit,
-            min_command_length,
-            max_command_length,
-        );
+        let pending_pattern = pattern;
+        let pending_results = tokio::task::spawn_blocking(move || {
+            let pending_refs: Vec<(&str, &str)> = pending_commands
+                .iter()
+                .map(|command| (command.as_str(), command.as_str()))
+                .collect();
+            fuzzy_search_items(
+                &pending_refs,
+                &pending_pattern,
+                "history",
+                limit,
+                min_command_length,
+                max_command_length,
+            )
+        })
+        .await
+        .unwrap_or_default();
+
         let mut existing = results
             .iter()
             .map(|result| result.command.clone())

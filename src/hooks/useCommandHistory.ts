@@ -25,6 +25,43 @@ interface XTermCoreWithRenderDimensions {
   };
 }
 
+/** Debounce keystrokes before hitting the backend fuzzy search. */
+const SUGGESTION_SEARCH_DEBOUNCE_MS = 160;
+
+function sameSuggestions(a: FuzzyResult[], b: FuzzyResult[]): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let i = 0; i < a.length; i += 1) {
+    const left = a[i];
+    const right = b[i];
+    if (
+      left.command !== right.command ||
+      left.source !== right.source ||
+      left.score !== right.score ||
+      left.display !== right.display
+    ) {
+      return false;
+    }
+    if (left.indices.length !== right.indices.length) {
+      return false;
+    }
+    for (let j = 0; j < left.indices.length; j += 1) {
+      if (left.indices[j] !== right.indices[j]) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+function sameCursorPosition(
+  a: SuggestionCursorPosition,
+  b: SuggestionCursorPosition,
+): boolean {
+  return a.top === b.top && a.left === b.left && a.lineTop === b.lineTop;
+}
+
 export function useCommandHistory(
   terminalRef: React.RefObject<Terminal | null>,
   inputStateRef: React.RefObject<TerminalInputState>,
@@ -45,11 +82,15 @@ export function useCommandHistory(
   const suggestionsRef = useRef<FuzzyResult[]>([]);
   const selectedIndexRef = useRef(-1);
   const showSuggestionsRef = useRef(false);
+  const cursorPositionRef = useRef<SuggestionCursorPosition>({ top: 0, left: 0 });
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const enabledRef = useRef(enabled);
   const minCommandLengthRef = useRef(normalizeCommandSuggestionMinChars(minCommandLength));
   const maxCommandLengthRef = useRef(normalizeCommandSuggestionMaxChars(maxCommandLength));
   const searchRequestIdRef = useRef(0);
+  const lastSearchedPatternRef = useRef<string | null>(null);
+  const searchInFlightRef = useRef(false);
+  const pendingPatternRef = useRef<string | null>(null);
   const deletedHistoryCommandsRef = useRef(new Set<string>());
   const deletedHistoryCommandTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
@@ -91,6 +132,8 @@ export function useCommandHistory(
       searchTimerRef.current = null;
     }
     searchRequestIdRef.current += 1;
+    pendingPatternRef.current = null;
+    lastSearchedPatternRef.current = null;
     if (
       !showSuggestionsRef.current &&
       suggestionsRef.current.length === 0 &&
@@ -124,35 +167,44 @@ export function useCommandHistory(
     };
   }, []);
 
-  const triggerSearch = useCallback(() => {
-    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    const requestId = ++searchRequestIdRef.current;
+  const applySearchResults = useCallback(
+    (merged: FuzzyResult[]) => {
+      const unchanged =
+        sameSuggestions(suggestionsRef.current, merged) &&
+        showSuggestionsRef.current === merged.length > 0 &&
+        selectedIndexRef.current === -1;
 
-    if (!enabledRef.current) {
-      dismissSuggestions();
-      return;
-    }
+      suggestionsRef.current = merged;
+      selectedIndexRef.current = -1;
+      showSuggestionsRef.current = merged.length > 0;
 
-    if (!canShowSuggestions()) {
-      dismissSuggestions();
-      return;
-    }
+      if (!unchanged) {
+        setSuggestions(merged);
+        setSelectedIndex(-1);
+        setShowSuggestions(merged.length > 0);
+      }
 
-    searchTimerRef.current = setTimeout(async () => {
-      if (requestId !== searchRequestIdRef.current) {
+      if (merged.length > 0) {
+        const nextPosition = getCursorViewportPosition();
+        if (!sameCursorPosition(cursorPositionRef.current, nextPosition)) {
+          cursorPositionRef.current = nextPosition;
+          setCursorPosition(nextPosition);
+        }
+      }
+    },
+    [getCursorViewportPosition],
+  );
+
+  const runSearch = useCallback(
+    async (pattern: string, requestId: number) => {
+      if (searchInFlightRef.current) {
+        pendingPatternRef.current = pattern;
         return;
       }
 
-      if (!enabledRef.current) {
-        dismissSuggestions();
-        return;
-      }
+      searchInFlightRef.current = true;
+      lastSearchedPatternRef.current = pattern;
 
-      const pattern = getTrackedCommand(inputStateRef.current);
-      if (!pattern.trim() || !canShowSuggestions()) {
-        dismissSuggestions();
-        return;
-      }
       try {
         // Parallel search across all suggestion providers.
         // To add a new provider, append another invoke() call here.
@@ -183,21 +235,77 @@ export function useCommandHistory(
           return;
         }
 
-        suggestionsRef.current = merged;
-        selectedIndexRef.current = -1;
-        showSuggestionsRef.current = merged.length > 0;
-        setSuggestions(merged);
-        setSelectedIndex(-1);
-        setShowSuggestions(merged.length > 0);
-
-        if (merged.length > 0) {
-          setCursorPosition(getCursorViewportPosition());
-        }
+        applySearchResults(merged);
       } catch {
         // Ignore errors
+      } finally {
+        searchInFlightRef.current = false;
+        const pendingPattern = pendingPatternRef.current;
+        pendingPatternRef.current = null;
+        if (
+          pendingPattern &&
+          pendingPattern !== lastSearchedPatternRef.current &&
+          enabledRef.current &&
+          canShowSuggestions()
+        ) {
+          const nextRequestId = ++searchRequestIdRef.current;
+          void runSearch(pendingPattern, nextRequestId);
+        }
       }
-    }, 80);
-  }, [canShowSuggestions, dismissSuggestions, getCursorViewportPosition, inputStateRef]);
+    },
+    [applySearchResults, canShowSuggestions, dismissSuggestions],
+  );
+
+  const triggerSearch = useCallback(() => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    const requestId = ++searchRequestIdRef.current;
+
+    if (!enabledRef.current) {
+      dismissSuggestions();
+      return;
+    }
+
+    if (!canShowSuggestions()) {
+      dismissSuggestions();
+      return;
+    }
+
+    searchTimerRef.current = setTimeout(() => {
+      if (requestId !== searchRequestIdRef.current) {
+        return;
+      }
+
+      if (!enabledRef.current) {
+        dismissSuggestions();
+        return;
+      }
+
+      const pattern = getTrackedCommand(inputStateRef.current);
+      if (!pattern.trim() || !canShowSuggestions()) {
+        dismissSuggestions();
+        return;
+      }
+
+      if (pattern === lastSearchedPatternRef.current) {
+        if (showSuggestionsRef.current) {
+          const nextPosition = getCursorViewportPosition();
+          if (!sameCursorPosition(cursorPositionRef.current, nextPosition)) {
+            cursorPositionRef.current = nextPosition;
+            setCursorPosition(nextPosition);
+          }
+        }
+        return;
+      }
+
+      void runSearch(pattern, requestId);
+    }, SUGGESTION_SEARCH_DEBOUNCE_MS);
+  }, [
+    canShowSuggestions,
+    dismissSuggestions,
+    getCursorViewportPosition,
+    inputStateRef,
+    runSearch,
+  ]);
 
   useEffect(() => {
     minCommandLengthRef.current = normalizeCommandSuggestionMinChars(
@@ -225,6 +333,7 @@ export function useCommandHistory(
       const tracked = getTrackedCommand(inputStateRef.current).trim();
       if (!showSuggestionsRef.current && !tracked) return;
       if (!canShowSuggestions()) return;
+      lastSearchedPatternRef.current = null;
       triggerSearch();
     };
 

@@ -136,6 +136,7 @@ impl CommandHistoryStore {
             .collect()
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn search(
         &self,
         pattern_str: &str,
@@ -143,10 +144,26 @@ impl CommandHistoryStore {
         min_command_length: Option<usize>,
         max_command_length: Option<usize>,
     ) -> Vec<FuzzyResult> {
-        let items: Vec<(&str, &str)> = self
-            .entries
+        Self::search_commands(
+            &self.clone_commands(),
+            pattern_str,
+            limit,
+            min_command_length,
+            max_command_length,
+        )
+    }
+
+    /// Fuzzy-match a cloned command list (safe to call outside the store lock).
+    pub fn search_commands(
+        commands: &[String],
+        pattern_str: &str,
+        limit: usize,
+        min_command_length: Option<usize>,
+        max_command_length: Option<usize>,
+    ) -> Vec<FuzzyResult> {
+        let items: Vec<(&str, &str)> = commands
             .iter()
-            .map(|entry| (entry.command.as_str(), entry.command.as_str()))
+            .map(|command| (command.as_str(), command.as_str()))
             .collect();
         fuzzy_search_items(
             &items,
@@ -156,6 +173,14 @@ impl CommandHistoryStore {
             min_command_length,
             max_command_length,
         )
+    }
+
+    /// Clone commands for fuzzy matching outside the store lock.
+    pub fn clone_commands(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .map(|entry| entry.command.clone())
+            .collect()
     }
 }
 
