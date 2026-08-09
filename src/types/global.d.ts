@@ -536,6 +536,8 @@ export interface UiConfig {
   start_workspace_mode?: "workbench" | "assets";
   left_width: number;
   right_width: number;
+  /** One-shot marker after raising panel widths for the type filter row. */
+  saved_connections_filter_width_migrated?: boolean;
   quick_cmd_height: number;
   quick_cmd_category_width?: number;
   quick_cmd_view_mode: QuickCommandViewMode;

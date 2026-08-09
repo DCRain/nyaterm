@@ -2958,7 +2958,7 @@ function App() {
   const handleRightResize = useCallback(
     (delta: number) => {
       updateUi((prev) => ({
-        right_width: Math.max(200, Math.min(720, (prev.right_width || 288) - delta)),
+        right_width: Math.max(200, Math.min(720, (prev.right_width || 306) - delta)),
       }));
     },
     [updateUi],

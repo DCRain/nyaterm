@@ -140,6 +140,9 @@ pub fn load_app_settings(app: &AppHandle) -> AppResult<AppSettings> {
     if migrate_activity_bar_show_labels(&raw_settings, &mut settings.ui.activity_bar_layout) {
         migrated = true;
     }
+    if migrate_saved_connections_panel_widths(&raw_settings, &mut settings.ui) {
+        migrated = true;
+    }
 
     for list in [
         &mut settings.ui.activity_bar_layout.left_top,
@@ -472,6 +475,27 @@ fn migrate_activity_bar_show_labels(
         changed = true;
     }
     changed
+}
+
+/// Raise panel widths once so the saved-connections type filter fits on one row.
+fn migrate_saved_connections_panel_widths(
+    _raw_settings: &serde_json::Value,
+    ui: &mut crate::config::ui::UiConfig,
+) -> bool {
+    const MIN_WIDTH: f64 = 306.0;
+
+    if ui.saved_connections_filter_width_migrated {
+        return false;
+    }
+
+    if ui.left_width < MIN_WIDTH {
+        ui.left_width = MIN_WIDTH;
+    }
+    if ui.right_width < MIN_WIDTH {
+        ui.right_width = MIN_WIDTH;
+    }
+    ui.saved_connections_filter_width_migrated = true;
+    true
 }
 
 fn persist_migrated_app_settings(app: &AppHandle, settings: &AppSettings) {

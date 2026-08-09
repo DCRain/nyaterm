@@ -83,12 +83,12 @@ const CONNECTION_TYPE_FILTERS: {
   labelKey: string;
   labelFallback: string;
 }[] = [
-  { id: "ssh", labelKey: "dialog.protocolSsh", labelFallback: "SSH" },
-  { id: "local_terminal", labelKey: "dialog.protocolLocal", labelFallback: "Local terminal" },
-  { id: "telnet", labelKey: "dialog.protocolTelnet", labelFallback: "Telnet" },
-  { id: "serial", labelKey: "dialog.protocolSerial", labelFallback: "Serial" },
-  { id: "rdp", labelKey: "dialog.protocolRdp", labelFallback: "RDP" },
-  { id: "vnc", labelKey: "dialog.protocolVnc", labelFallback: "VNC" },
+  { id: "ssh", labelKey: "savedConnections.filterSsh", labelFallback: "SSH" },
+  { id: "local_terminal", labelKey: "savedConnections.filterLocal", labelFallback: "Local" },
+  { id: "telnet", labelKey: "savedConnections.filterTelnet", labelFallback: "Telnet" },
+  { id: "serial", labelKey: "savedConnections.filterSerial", labelFallback: "Serial" },
+  { id: "rdp", labelKey: "savedConnections.filterRdp", labelFallback: "RDP" },
+  { id: "vnc", labelKey: "savedConnections.filterVnc", labelFallback: "VNC" },
 ];
 
 type ConnectionTypeFilter = "all" | ConnectionTypeTag;
@@ -159,6 +159,24 @@ export default function SavedConnections({
   const { t } = useTranslation();
   const { handleExport, passwordAlert } = useConfigTransfer();
   const panelRootRef = useRef<HTMLDivElement | null>(null);
+
+  // One-shot: ensure both side panels are wide enough for the type filter row.
+  useEffect(() => {
+    if (appSettings.ui.saved_connections_filter_width_migrated) {
+      return;
+    }
+    const minWidth = 306;
+    updateUi((prev) => {
+      if (prev.saved_connections_filter_width_migrated) {
+        return prev;
+      }
+      return {
+        left_width: Math.max(prev.left_width || 0, minWidth),
+        right_width: Math.max(prev.right_width || 0, minWidth),
+        saved_connections_filter_width_migrated: true,
+      };
+    });
+  }, [appSettings.ui.saved_connections_filter_width_migrated, updateUi]);
 
   // ── UI state ──────────────────────────────────────────────────────────────
   // Tracks in-flight connections to prevent duplicate invocations (not shown in UI)

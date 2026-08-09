@@ -229,6 +229,9 @@ pub struct UiConfig {
     pub left_width: f64,
     #[serde(default = "default_right_width")]
     pub right_width: f64,
+    /// One-shot marker: panel widths were raised for the saved-connections type filter row.
+    #[serde(default)]
+    pub saved_connections_filter_width_migrated: bool,
     #[serde(default = "default_quick_cmd_height")]
     pub quick_cmd_height: f64,
     #[serde(default = "default_quick_cmd_category_width")]
@@ -316,7 +319,7 @@ fn default_left_width() -> f64 {
 }
 
 fn default_right_width() -> f64 {
-    288.0
+    306.0
 }
 
 fn default_quick_cmd_height() -> f64 {
@@ -415,6 +418,7 @@ impl Default for UiConfig {
             start_workspace_mode: default_start_workspace_mode(),
             left_width: default_left_width(),
             right_width: default_right_width(),
+            saved_connections_filter_width_migrated: false,
             quick_cmd_height: default_quick_cmd_height(),
             quick_cmd_category_width: default_quick_cmd_category_width(),
             quick_cmd_view_mode: default_quick_cmd_view_mode(),
