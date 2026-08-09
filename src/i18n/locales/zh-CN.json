@@ -1565,6 +1565,7 @@
     "description": "描述",
     "edit": "编辑",
     "filter": "筛选...",
+    "filterAll": "全部",
     "folderName": "文件夹名称",
     "folderNamePlaceholder": "新文件夹...",
     "group": "分组",

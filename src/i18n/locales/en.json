@@ -1566,6 +1566,7 @@
     "description": "Description",
     "edit": "Edit",
     "filter": "Filter...",
+    "filterAll": "All",
     "folderName": "Folder",
     "folderNamePlaceholder": "New folder...",
     "group": "Group",

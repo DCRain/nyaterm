@@ -2949,7 +2949,7 @@ function App() {
   const handleLeftResize = useCallback(
     (delta: number) => {
       updateUi((prev) => ({
-        left_width: Math.max(160, Math.min(720, (prev.left_width || 256) + delta)),
+        left_width: Math.max(160, Math.min(720, (prev.left_width || 306) + delta)),
       }));
     },
     [updateUi],

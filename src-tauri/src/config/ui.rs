@@ -309,7 +309,7 @@ pub struct UiConfig {
 }
 
 fn default_left_width() -> f64 {
-    256.0
+    306.0
 }
 
 fn default_right_width() -> f64 {

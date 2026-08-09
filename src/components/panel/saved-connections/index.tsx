@@ -1,4 +1,4 @@
-import { type ComponentProps, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ComponentProps, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { BiExport, BiImport } from "react-icons/bi";
 import {
@@ -47,7 +47,7 @@ import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
 import { matchesKeyEvent } from "@/lib/shortcutRegistry";
 import type { NewSessionTarget } from "@/lib/windowManager";
-import type { Group, SavedConnection } from "@/types/global";
+import type { ConnectionTypeTag, Group, SavedConnection } from "@/types/global";
 import ConnectionItem from "./ConnectionItem";
 import type { SavedConnectionsContextValue } from "./context";
 import {
@@ -78,6 +78,21 @@ type HeaderActionButtonProps = ComponentProps<typeof Button> & {
 const SAVED_CONNECTIONS_DRAG_MIME = "application/x-nyaterm-saved-connections";
 const POINTER_SAVED_DRAG_THRESHOLD_PX = 4;
 
+const CONNECTION_TYPE_FILTERS: {
+  id: ConnectionTypeTag;
+  labelKey: string;
+  labelFallback: string;
+}[] = [
+  { id: "ssh", labelKey: "dialog.protocolSsh", labelFallback: "SSH" },
+  { id: "local_terminal", labelKey: "dialog.protocolLocal", labelFallback: "Local terminal" },
+  { id: "telnet", labelKey: "dialog.protocolTelnet", labelFallback: "Telnet" },
+  { id: "serial", labelKey: "dialog.protocolSerial", labelFallback: "Serial" },
+  { id: "rdp", labelKey: "dialog.protocolRdp", labelFallback: "RDP" },
+  { id: "vnc", labelKey: "dialog.protocolVnc", labelFallback: "VNC" },
+];
+
+type ConnectionTypeFilter = "all" | ConnectionTypeTag;
+
 interface PointerSavedDragState {
   type: "connection" | "group";
   id: string;
@@ -105,6 +120,34 @@ function HeaderActionButton({ tooltip, children, ...props }: HeaderActionButtonP
   );
 }
 
+function TypeFilterChip({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className="h-6 shrink-0 rounded-md border px-2 text-[0.6875rem] transition-colors"
+      style={{
+        borderColor: active ? "var(--df-primary)" : "var(--df-border)",
+        color: active ? "var(--df-primary)" : "var(--df-text-muted)",
+        backgroundColor: active
+          ? "color-mix(in srgb, var(--df-primary) 12%, transparent)"
+          : "transparent",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
 /** Grouped saved SSH connections panel. Delegates rendering to sub-components via context. */
 export default function SavedConnections({
   onTemporarySshLink,
@@ -123,10 +166,11 @@ export default function SavedConnections({
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [selectedConnectionIds, setSelectedConnectionIds] = useState<Set<string>>(new Set());
   const [filterText, setFilterText] = useState("");
+  const [typeFilter, setTypeFilter] = useState<ConnectionTypeFilter>("all");
   const [keyboardActiveConnectionId, setKeyboardActiveConnectionId] = useState<string | null>(null);
   const searchExpandedBaseRef = useRef<Set<string> | null>(null);
   const searchAutoExpandedGroupIdsRef = useRef<Set<string>>(new Set());
-  const previousKeywordRef = useRef("");
+  const previousFilterKeyRef = useRef("");
   const restoredLastOpenedConnectionIdRef = useRef<string | null>(null);
   const lastSelectedConnectionIdRef = useRef<string | null>(null);
   const connectionElementRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -159,6 +203,7 @@ export default function SavedConnections({
   groupsRef.current = savedGroups;
 
   const keyword = filterText.trim().toLowerCase();
+  const isFiltering = keyword.length > 0 || typeFilter !== "all";
   const isDragEnabled = sortMode === "default";
   const isPointerDragEnabled = isDragEnabled && shouldUsePointerSavedConnectionsDrag();
   const connectionById = useMemo(
@@ -168,14 +213,15 @@ export default function SavedConnections({
 
   // ── Derived tree ──────────────────────────────────────────────────────────
   const { rootNodes, ungrouped } = useMemo(() => {
-    const filtered = keyword
-      ? savedConnections.filter(
-          (c) =>
-            c.name.toLowerCase().includes(keyword) ||
-            (c.host ?? "").toLowerCase().includes(keyword) ||
-            (c.username ?? "").toLowerCase().includes(keyword),
-        )
-      : savedConnections;
+    const filtered = savedConnections.filter((c) => {
+      if (typeFilter !== "all" && c.type !== typeFilter) return false;
+      if (!keyword) return true;
+      return (
+        c.name.toLowerCase().includes(keyword) ||
+        (c.host ?? "").toLowerCase().includes(keyword) ||
+        (c.username ?? "").toLowerCase().includes(keyword)
+      );
+    });
 
     const sortConns = (list: SavedConnection[]) => {
       if (sortMode === "name-asc") return [...list].sort((a, b) => naturalCompare(a.name, b.name));
@@ -227,8 +273,11 @@ export default function SavedConnections({
       return node.connections.length > 0 || node.children.length > 0;
     };
 
-    return { rootNodes: keyword ? roots.filter(prune) : roots, ungrouped: noGroup };
-  }, [savedConnections, savedGroups, keyword, sortMode]);
+    return {
+      rootNodes: isFiltering ? roots.filter(prune) : roots,
+      ungrouped: noGroup,
+    };
+  }, [savedConnections, savedGroups, keyword, typeFilter, isFiltering, sortMode]);
 
   useEffect(() => {
     const connectionId = appSettings.ui.saved_connections_last_opened_connection_id;
@@ -280,25 +329,26 @@ export default function SavedConnections({
   }, [appSettings.ui.saved_connections_last_opened_connection_id, savedConnections, savedGroups]);
 
   useEffect(() => {
-    const previousKeyword = previousKeywordRef.current;
+    const filterKey = `${typeFilter}\0${keyword}`;
+    const previousFilterKey = previousFilterKeyRef.current;
 
-    if (!keyword) {
-      if (previousKeyword && searchExpandedBaseRef.current) {
+    if (!isFiltering) {
+      if (previousFilterKey && searchExpandedBaseRef.current) {
         setExpandedGroups(searchExpandedBaseRef.current);
       }
       searchExpandedBaseRef.current = null;
       searchAutoExpandedGroupIdsRef.current = new Set();
-      previousKeywordRef.current = "";
+      previousFilterKeyRef.current = "";
       return;
     }
 
-    if (!previousKeyword) {
+    if (!previousFilterKey) {
       searchExpandedBaseRef.current = new Set(expandedGroups);
     }
-    if (previousKeyword !== keyword) {
+    if (previousFilterKey !== filterKey) {
       searchAutoExpandedGroupIdsRef.current = new Set();
     }
-    previousKeywordRef.current = keyword;
+    previousFilterKeyRef.current = filterKey;
 
     const matchingGroupIds = new Set<string>();
     const appendNodeIds = (node: GroupNode) => {
@@ -327,7 +377,7 @@ export default function SavedConnections({
       });
       return changed ? next : prev;
     });
-  }, [expandedGroups, keyword, rootNodes]);
+  }, [expandedGroups, isFiltering, keyword, rootNodes, typeFilter]);
 
   const visibleConnectionIds = useMemo(() => {
     const ids: string[] = [];
@@ -1537,6 +1587,32 @@ export default function SavedConnections({
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
+        </div>
+
+        <div
+          className="nyaterm-wallpaper-transparent-surface flex items-center gap-1 overflow-x-auto px-2 py-1 shrink-0 border-b terminal-scroll"
+          style={{
+            borderColor: "color-mix(in srgb, var(--df-border) 40%, transparent)",
+            backgroundColor: "var(--df-bg-section-header)",
+          }}
+        >
+          <TypeFilterChip
+            active={typeFilter === "all"}
+            onClick={() => setTypeFilter("all")}
+          >
+            {t("savedConnections.filterAll", "All")}
+          </TypeFilterChip>
+          {CONNECTION_TYPE_FILTERS.map((item) => (
+            <TypeFilterChip
+              key={item.id}
+              active={typeFilter === item.id}
+              onClick={() =>
+                setTypeFilter((prev) => (prev === item.id ? "all" : item.id))
+              }
+            >
+              {t(item.labelKey, item.labelFallback)}
+            </TypeFilterChip>
+          ))}
         </div>
 
         {/* List */}

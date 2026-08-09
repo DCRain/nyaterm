@@ -1565,6 +1565,7 @@
     "description": "描述",
     "edit": "編輯",
     "filter": "篩選...",
+    "filterAll": "全部",
     "folderName": "資料夾名稱",
     "folderNamePlaceholder": "新資料夾...",
     "group": "分組",
