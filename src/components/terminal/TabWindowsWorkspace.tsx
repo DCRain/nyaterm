@@ -16,9 +16,8 @@ import {
   type TerminalWindowNode,
   type TerminalWindowSplit,
 } from "@/lib/tabWindows";
-import type { PaneSplitDirection, SavedConnection, Tab } from "@/types/global";
+import type { Tab } from "@/types/global";
 import PaneWorkspace from "./PaneWorkspace";
-import TabBar from "./TabBar";
 import DropZoneOverlay, { type DropZone } from "./TabDockDropOverlay";
 
 interface LeafContentRect {
@@ -42,35 +41,7 @@ interface DropState {
 interface TabWindowsWorkspaceProps {
   layout: TerminalWindowNode | null;
   tabsById: Map<string, Tab>;
-  focusedTabId?: string | null;
-  unreadTabIds?: Set<string>;
-  disconnectedTabIds?: Set<string>;
   onSelectTab: (leafId: string, tabId: string) => void;
-  onAddTab: (leafId: string) => void;
-  onConnectConnection: (leafId: string, connection: SavedConnection) => void | Promise<void>;
-  onTabClose: (tab: Tab) => void | Promise<void>;
-  onDuplicateSession: (tab: Tab) => void | Promise<void>;
-  onMultiplexSshSession: (tab: Tab) => void | Promise<void>;
-  onDuplicateSessionWithCommand: (
-    tab: Tab,
-    command: string,
-    delayMs: number,
-  ) => void | Promise<void>;
-  onMultiplexSshSessionWithCommand: (
-    tab: Tab,
-    command: string,
-    delayMs: number,
-  ) => void | Promise<void>;
-  onReconnectSession: (tab: Tab) => void | Promise<void>;
-  onDisconnectSession: (tab: Tab) => void | Promise<void>;
-  onSplitSession: (tab: Tab, direction: PaneSplitDirection) => void | Promise<void>;
-  onUnsplit?: () => void;
-  onCloseSession: (tab: Tab) => void | Promise<void>;
-  onCloseAll: () => void | Promise<void>;
-  onCloseInactive: (keepTabId: string) => void | Promise<void>;
-  onCloseRight: (tabId: string) => void | Promise<void>;
-  onSessionInfo: (tab: Tab) => void | Promise<void>;
-  onReorderTabs: (leafId: string, fromTabId: string, toIndex: number) => void;
   onMoveTabToLeaf?: (fromTabId: string, targetLeafId: string, toIndex: number) => void;
   onSplitTabToLeaf?: (
     fromTabId: string,
@@ -98,15 +69,9 @@ interface WindowNodeViewExtraProps {
   onLeafDrop: LeafDragHandler;
 }
 
-type WindowNodeViewProps = Omit<
+type WindowNodeViewProps = Pick<
   TabWindowsWorkspaceProps,
-  | "layout"
-  | "onActivatePane"
-  | "onUpdatePaneSplitRatio"
-  | "onReconnectPane"
-  | "onReconnected"
-  | "onDisconnectedCloseRequested"
-  | "onConnectionError"
+  "tabsById" | "onSelectTab" | "onUpdateWindowSplitRatio"
 > &
   WindowNodeViewExtraProps;
 
@@ -210,28 +175,7 @@ function SplitWindow({
 function LeafWindow({
   leaf,
   tabsById,
-  focusedTabId,
-  unreadTabIds,
-  disconnectedTabIds,
   onSelectTab,
-  onAddTab,
-  onConnectConnection,
-  onTabClose,
-  onDuplicateSession,
-  onMultiplexSshSession,
-  onDuplicateSessionWithCommand,
-  onMultiplexSshSessionWithCommand,
-  onReconnectSession,
-  onDisconnectSession,
-  onSplitSession,
-  onUnsplit,
-  onCloseSession,
-  onCloseAll,
-  onCloseInactive,
-  onCloseRight,
-  onSessionInfo,
-  onReorderTabs,
-  onMoveTabToLeaf,
   workspaceRef,
   dropState,
   onLeafContentRectChange,
@@ -240,19 +184,7 @@ function LeafWindow({
   onLeafDrop,
 }: {
   leaf: TerminalWindowLeaf;
-} & Omit<
-  WindowNodeViewProps,
-  | "node"
-  | "onUpdateWindowSplitRatio"
-  | "onLeafContentRectChange"
-  | "onLeafDragOver"
-  | "onLeafDragLeave"
-  | "onLeafDrop"
-> &
-  Pick<
-    WindowNodeViewProps,
-    "onLeafContentRectChange" | "onLeafDragOver" | "onLeafDragLeave" | "onLeafDrop"
-  >) {
+} & Omit<WindowNodeViewProps, "onUpdateWindowSplitRatio">) {
   const contentRef = useRef<HTMLDivElement | null>(null);
   const tabs = useMemo(
     () => leaf.tabIds.map((tabId) => tabsById.get(tabId)).filter((tab): tab is Tab => !!tab),
@@ -321,37 +253,6 @@ function LeafWindow({
         }
       }}
     >
-      <TabBar
-        tabs={tabs}
-        activeTabId={activeTab?.id ?? null}
-        focusedTabId={focusedTabId}
-        unreadTabIds={unreadTabIds}
-        disconnectedTabIds={disconnectedTabIds}
-        onTabChange={(tabId) => onSelectTab(leaf.id, tabId)}
-        onTabClose={onTabClose}
-        onAddTab={() => onAddTab(leaf.id)}
-        onConnectConnection={(connection) => onConnectConnection(leaf.id, connection)}
-        onDuplicateSession={onDuplicateSession}
-        onMultiplexSshSession={onMultiplexSshSession}
-        onDuplicateSessionWithCommand={onDuplicateSessionWithCommand}
-        onMultiplexSshSessionWithCommand={onMultiplexSshSessionWithCommand}
-        onReconnectSession={onReconnectSession}
-        onDisconnectSession={onDisconnectSession}
-        onSplitSession={onSplitSession}
-        onUnsplit={onUnsplit}
-        onCloseSession={onCloseSession}
-        onCloseAll={onCloseAll}
-        onCloseInactive={onCloseInactive}
-        onCloseRight={onCloseRight}
-        onSessionInfo={onSessionInfo}
-        onReorderTabs={(fromTabId, toIndex) => onReorderTabs(leaf.id, fromTabId, toIndex)}
-        onMoveTabHere={
-          onMoveTabToLeaf
-            ? (fromTabId, toIndex) => onMoveTabToLeaf(fromTabId, leaf.id, toIndex)
-            : undefined
-        }
-      />
-
       <div
         ref={contentRef}
         className="relative flex-1 overflow-hidden"
@@ -368,28 +269,7 @@ function LeafWindow({
 function WindowNodeView({
   node,
   tabsById,
-  focusedTabId,
-  unreadTabIds,
-  disconnectedTabIds,
   onSelectTab,
-  onAddTab,
-  onConnectConnection,
-  onTabClose,
-  onDuplicateSession,
-  onMultiplexSshSession,
-  onDuplicateSessionWithCommand,
-  onMultiplexSshSessionWithCommand,
-  onReconnectSession,
-  onDisconnectSession,
-  onSplitSession,
-  onUnsplit,
-  onCloseSession,
-  onCloseAll,
-  onCloseInactive,
-  onCloseRight,
-  onSessionInfo,
-  onReorderTabs,
-  onMoveTabToLeaf,
   onUpdateWindowSplitRatio,
   workspaceRef,
   dropState,
@@ -405,28 +285,7 @@ function WindowNodeView({
       <SplitWindow
         split={node}
         tabsById={tabsById}
-        focusedTabId={focusedTabId}
-        unreadTabIds={unreadTabIds}
-        disconnectedTabIds={disconnectedTabIds}
         onSelectTab={onSelectTab}
-        onAddTab={onAddTab}
-        onConnectConnection={onConnectConnection}
-        onTabClose={onTabClose}
-        onDuplicateSession={onDuplicateSession}
-        onMultiplexSshSession={onMultiplexSshSession}
-        onDuplicateSessionWithCommand={onDuplicateSessionWithCommand}
-        onMultiplexSshSessionWithCommand={onMultiplexSshSessionWithCommand}
-        onReconnectSession={onReconnectSession}
-        onDisconnectSession={onDisconnectSession}
-        onSplitSession={onSplitSession}
-        onUnsplit={onUnsplit}
-        onCloseSession={onCloseSession}
-        onCloseAll={onCloseAll}
-        onCloseInactive={onCloseInactive}
-        onCloseRight={onCloseRight}
-        onSessionInfo={onSessionInfo}
-        onReorderTabs={onReorderTabs}
-        onMoveTabToLeaf={onMoveTabToLeaf}
         onUpdateWindowSplitRatio={onUpdateWindowSplitRatio}
         workspaceRef={workspaceRef}
         dropState={dropState}
@@ -442,28 +301,7 @@ function WindowNodeView({
     <LeafWindow
       leaf={node}
       tabsById={tabsById}
-      focusedTabId={focusedTabId}
-      unreadTabIds={unreadTabIds}
-      disconnectedTabIds={disconnectedTabIds}
       onSelectTab={onSelectTab}
-      onAddTab={onAddTab}
-      onConnectConnection={onConnectConnection}
-      onTabClose={onTabClose}
-      onDuplicateSession={onDuplicateSession}
-      onMultiplexSshSession={onMultiplexSshSession}
-      onDuplicateSessionWithCommand={onDuplicateSessionWithCommand}
-      onMultiplexSshSessionWithCommand={onMultiplexSshSessionWithCommand}
-      onReconnectSession={onReconnectSession}
-      onDisconnectSession={onDisconnectSession}
-      onSplitSession={onSplitSession}
-      onUnsplit={onUnsplit}
-      onCloseSession={onCloseSession}
-      onCloseAll={onCloseAll}
-      onCloseInactive={onCloseInactive}
-      onCloseRight={onCloseRight}
-      onSessionInfo={onSessionInfo}
-      onReorderTabs={onReorderTabs}
-      onMoveTabToLeaf={onMoveTabToLeaf}
       workspaceRef={workspaceRef}
       dropState={dropState}
       onLeafContentRectChange={onLeafContentRectChange}
@@ -492,13 +330,13 @@ function TerminalContentHost({
   placements: TabPlacement[];
   leafRects: Map<string, LeafContentRect>;
   dropState: DropState | null;
-  onSelectTab: TabWindowsWorkspaceProps["onSelectTab"];
-  onActivatePane: TabWindowsWorkspaceProps["onActivatePane"];
-  onUpdatePaneSplitRatio: TabWindowsWorkspaceProps["onUpdatePaneSplitRatio"];
-  onReconnectPane?: TabWindowsWorkspaceProps["onReconnectPane"];
-  onReconnected?: TabWindowsWorkspaceProps["onReconnected"];
-  onDisconnectedCloseRequested?: TabWindowsWorkspaceProps["onDisconnectedCloseRequested"];
-  onConnectionError?: TabWindowsWorkspaceProps["onConnectionError"];
+  onSelectTab: (leafId: string, tabId: string) => void;
+  onActivatePane: (tabId: string, paneId: string) => void;
+  onUpdatePaneSplitRatio: (tabId: string, splitId: string, ratio: number) => void;
+  onReconnectPane?: (tabId: string, paneId: string) => void | Promise<void>;
+  onReconnected?: (oldSessionId: string, newSessionId: string) => void;
+  onDisconnectedCloseRequested?: (tabId: string, paneId: string) => void | Promise<void>;
+  onConnectionError?: (tabId: string, paneId: string, sessionId: string, error: string) => void;
   onLeafDragOver: LeafDragHandler;
   onLeafDragLeave: LeafDragHandler;
   onLeafDrop: LeafDragHandler;
@@ -556,11 +394,11 @@ function TabWindowsWorkspace({
   onSelectTab,
   onActivatePane,
   onUpdatePaneSplitRatio,
+  onUpdateWindowSplitRatio,
   onReconnectPane,
   onReconnected,
   onDisconnectedCloseRequested,
   onConnectionError,
-  ...props
 }: TabWindowsWorkspaceProps) {
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const [leafRects, setLeafRects] = useState<Map<string, LeafContentRect>>(() => new Map());
@@ -637,55 +475,49 @@ function TabWindowsWorkspace({
           distance: rect.height - y,
           threshold: verticalThreshold,
         },
-      ]
-        .filter((edge) => edge.distance <= edge.threshold)
-        .sort((left, right) => left.distance - right.distance);
+      ];
 
-      const edge = edgeDistances[0];
-      if (edge && onSplitTabToLeaf) {
-        return { type: "edge", direction: edge.direction };
+      const nearestEdge = edgeDistances
+        .filter((edge) => edge.distance <= edge.threshold)
+        .sort((a, b) => a.distance - b.distance)[0];
+
+      if (nearestEdge) {
+        return { type: "edge", direction: nearestEdge.direction };
       }
 
-      return onMoveTabToLeaf ? { type: "center" } : null;
+      return { type: "center" };
     },
-    [leafRects, onMoveTabToLeaf, onSplitTabToLeaf],
+    [leafRects],
   );
 
   const handleLeafDragOver = useCallback<LeafDragHandler>(
     (leafId, event) => {
-      if (!isTabDragEvent(event)) {
-        clearDropState();
-        return;
-      }
-
-      const nextZone = detectDropZone(leafId, event);
-      if (!nextZone) {
-        clearDropState();
-        return;
-      }
-
+      if (!isTabDragEvent(event)) return;
       event.preventDefault();
-      event.stopPropagation();
       event.dataTransfer.dropEffect = "move";
+      const zone = detectDropZone(leafId, event);
+      if (!zone) {
+        setDropState((current) => (current?.leafId === leafId ? null : current));
+        return;
+      }
       setDropState((current) => {
         if (
           current?.leafId === leafId &&
-          current.zone.type === nextZone.type &&
-          (current.zone.type !== "edge" ||
-            nextZone.type !== "edge" ||
-            current.zone.direction === nextZone.direction)
+          current.zone.type === zone.type &&
+          (zone.type !== "edge" ||
+            (current.zone.type === "edge" && current.zone.direction === zone.direction))
         ) {
           return current;
         }
-        return { leafId, zone: nextZone };
+        return { leafId, zone };
       });
     },
-    [clearDropState, detectDropZone, isTabDragEvent],
+    [detectDropZone, isTabDragEvent],
   );
 
   const handleLeafDragLeave = useCallback<LeafDragHandler>((leafId, event) => {
-    const relatedTarget = event.relatedTarget;
-    if (relatedTarget instanceof Node && event.currentTarget.contains(relatedTarget)) {
+    const related = event.relatedTarget;
+    if (related instanceof Node && event.currentTarget.contains(related)) {
       return;
     }
     setDropState((current) => (current?.leafId === leafId ? null : current));
@@ -737,16 +569,14 @@ function TabWindowsWorkspace({
       <WindowNodeView
         node={layout}
         tabsById={tabsById}
-        onMoveTabToLeaf={onMoveTabToLeaf}
-        onSplitTabToLeaf={onSplitTabToLeaf}
         onSelectTab={onSelectTab}
+        onUpdateWindowSplitRatio={onUpdateWindowSplitRatio}
         workspaceRef={workspaceRef}
         dropState={dropState}
         onLeafContentRectChange={handleLeafContentRectChange}
         onLeafDragOver={handleLeafDragOver}
         onLeafDragLeave={handleLeafDragLeave}
         onLeafDrop={handleLeafDrop}
-        {...props}
       />
       <TerminalContentHost
         placements={placements}

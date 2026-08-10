@@ -107,6 +107,8 @@ interface ActivityBarProps {
   onMoveItem: (itemId: string, targetZone: ActivityBarZone) => void;
   onToggleLabel: () => void;
   onHide?: () => void;
+  /** Reveal the activity bar when it is currently hidden. */
+  onShow?: () => void;
   showLabels: boolean;
   /** When false, the activity bar strip is not rendered by the layout. */
   visible?: boolean;

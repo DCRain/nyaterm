@@ -434,6 +434,18 @@ export function useActivityBarController({
     [updateUi],
   );
 
+  const handleSetVisibility = useCallback(
+    (side: "left" | "right", visible: boolean) => {
+      updateUi((prev) => ({
+        activity_bar_layout: {
+          ...prev.activity_bar_layout,
+          ...(side === "left" ? { show_left: visible } : { show_right: visible }),
+        },
+      }));
+    },
+    [updateUi],
+  );
+
   return {
     leftTopItems,
     leftBottomItems,
@@ -449,5 +461,6 @@ export function useActivityBarController({
     handleMoveItem,
     handleToggleLabel,
     handleToggleVisibility,
+    handleSetVisibility,
   };
 }

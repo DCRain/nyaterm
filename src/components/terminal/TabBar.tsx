@@ -59,6 +59,8 @@ interface TabBarProps {
   focusedTabId?: string | null;
   unreadTabIds?: Set<string>;
   disconnectedTabIds?: Set<string>;
+  /** Embed in the app header between menu and window controls. */
+  variant?: "default" | "header";
   onTabChange: (tabId: string) => void;
   onTabClose: (tab: Tab) => void | Promise<void>;
   onAddTab: () => void;
@@ -244,6 +246,7 @@ function TabBar({
   focusedTabId,
   unreadTabIds,
   disconnectedTabIds,
+  variant = "default",
   onTabChange,
   onTabClose,
   onAddTab,
@@ -1119,13 +1122,15 @@ function TabBar({
         draggable={!usePointerTabDrag}
         className={`group relative flex items-center gap-2 border-r pl-3 pr-2 text-xs transition-[color,background-color,opacity] duration-200 ${
           isActive ? "font-semibold" : "font-medium df-hover"
-        } ${draggedTabId === tab.id ? "opacity-60" : ""}`}
+        } ${draggedTabId === tab.id ? "opacity-60" : ""} ${
+          variant === "header" ? "max-w-[20rem] shrink-0" : "shrink-0"
+        }`}
         style={{
           borderColor: "var(--df-border)",
           backgroundColor: isActive
             ? accentColor
-              ? `color-mix(in srgb, ${accentColor} 8%, var(--df-bg))`
-              : "var(--df-bg)"
+              ? `color-mix(in srgb, ${accentColor} 18%, var(--df-bg-panel))`
+              : "color-mix(in srgb, var(--df-primary) 14%, var(--df-bg-panel))"
             : accentColor
               ? `color-mix(in srgb, ${accentColor} 5%, transparent)`
               : "transparent",
@@ -1179,23 +1184,6 @@ function TabBar({
           handleDropAtIndex(getInsertionIndex(event, index), event);
         }}
       >
-        {isActive && (
-          <div
-            className="absolute top-0 left-0 h-[2px] w-full"
-            style={{
-              backgroundColor: accentColor || "var(--df-primary)",
-              boxShadow: `0 1px 4px ${accentColor || "var(--df-primary)"}`,
-            }}
-          />
-        )}
-
-        {isActive && (
-          <div
-            className="absolute bottom-0 left-0 z-10 h-[1px] w-full"
-            style={{ backgroundColor: "var(--df-bg)" }}
-          />
-        )}
-
         {renderTabIcon(tab)}
 
         <span
@@ -1208,7 +1196,12 @@ function TabBar({
           {index + 1}
         </span>
 
-        <span className="max-w-[160px] truncate whitespace-nowrap" style={{ color: tabNameColor }}>
+        <span
+          className={`truncate whitespace-nowrap ${
+            variant === "header" ? "max-w-[16rem]" : "max-w-[160px]"
+          }`}
+          style={{ color: tabNameColor }}
+        >
           {displayName}
         </span>
 
@@ -1396,15 +1389,21 @@ function TabBar({
   return (
     <>
       <div
-        className="flex h-9 shrink-0"
-        style={{
-          backgroundColor: "var(--df-bg-panel)",
-          boxShadow: "inset 0 -1px 0 var(--df-border)",
-        }}
+        className={`flex ${variant === "header" ? "h-full min-w-0 max-w-full shrink" : "h-9 shrink-0"}`}
+        style={
+          variant === "header"
+            ? undefined
+            : {
+                backgroundColor: "var(--df-bg-panel)",
+                boxShadow: "inset 0 -1px 0 var(--df-border)",
+              }
+        }
       >
         <div
           ref={tabStripRef}
-          className="tab-strip-scroll relative flex min-w-0 flex-1 overflow-x-auto overflow-y-hidden"
+          className={`tab-strip-scroll relative flex overflow-x-auto overflow-y-hidden ${
+            variant === "header" ? "min-w-0 max-w-full w-max" : "min-w-0 max-w-full shrink"
+          }`}
           onScroll={handleTabStripScroll}
           onWheel={handleTabStripWheel}
         >
@@ -1416,7 +1415,7 @@ function TabBar({
           )}
 
           <div
-            className="relative flex min-w-6 flex-1 shrink-0"
+            className="relative w-1.5 shrink-0"
             onDragOver={(event) => {
               if (!draggedTabId && !event.dataTransfer.types.includes("application/nyaterm-tab"))
                 return;
@@ -1437,58 +1436,14 @@ function TabBar({
           </div>
         </div>
 
-        {tabStripScroll.hasOverflow && (
-          <DropdownMenu>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    className="flex h-full w-8 shrink-0 items-center justify-center border-l transition-colors df-hover"
-                    style={{
-                      color: "var(--df-text-muted)",
-                      borderColor: "var(--df-border)",
-                    }}
-                    aria-label={t("terminal.openTabs")}
-                  >
-                    <MdExpandMore className="text-base" />
-                  </button>
-                </DropdownMenuTrigger>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" sideOffset={6} showArrow>
-                {t("terminal.openTabs")}
-              </TooltipContent>
-            </Tooltip>
-            <DropdownMenuContent
-              align="end"
-              className="w-64 max-w-[calc(100vw-1rem)]"
-              onCloseAutoFocus={(event) => {
-                event.preventDefault();
-                const pendingTab = pendingOpenTabFocusRef.current;
-                pendingOpenTabFocusRef.current = null;
-                if (pendingTab) {
-                  focusOpenTabTerminal(pendingTab);
-                }
-              }}
-            >
-              <DropdownMenuLabel className="text-muted-foreground">
-                {t("terminal.openTabs")}
-              </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              {openTabsMenuItems.map(({ tab, index }) => renderOpenTabMenuItem(tab, index))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
-
         <DropdownMenu>
           <Tooltip>
             <TooltipTrigger asChild>
               <DropdownMenuTrigger asChild>
                 <button
-                  className="flex h-full w-9 shrink-0 items-center justify-center border-l transition-colors df-hover"
+                  className="flex h-full w-8 shrink-0 items-center justify-center transition-colors df-hover"
                   style={{
                     color: "var(--df-text-muted)",
-                    borderColor: "var(--df-border)",
                   }}
                   aria-label={t("terminal.newSession")}
                 >
@@ -1500,7 +1455,7 @@ function TabBar({
               {t("terminal.newSession")}
             </TooltipContent>
           </Tooltip>
-          <DropdownMenuContent align="end" className="min-w-[260px] max-w-[360px]">
+          <DropdownMenuContent align="start" className="min-w-[260px] max-w-[360px]">
             <DropdownMenuGroup>
               <DropdownMenuItem onSelect={() => onAddTab()}>
                 <MdAdd className="text-sm text-muted-foreground" />
@@ -1551,6 +1506,65 @@ function TabBar({
               : renderEmptyMenuItem(t("terminal.noRecentSessions"))}
           </DropdownMenuContent>
         </DropdownMenu>
+
+        {tabStripScroll.hasOverflow && (
+          <DropdownMenu>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex h-full w-8 shrink-0 items-center justify-center transition-colors df-hover"
+                    style={{
+                      color: "var(--df-text-muted)",
+                    }}
+                    aria-label={t("terminal.openTabs")}
+                  >
+                    <MdExpandMore className="text-base" />
+                  </button>
+                </DropdownMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" sideOffset={6} showArrow>
+                {t("terminal.openTabs")}
+              </TooltipContent>
+            </Tooltip>
+            <DropdownMenuContent
+              align="start"
+              className="w-64 max-w-[calc(100vw-1rem)]"
+              onCloseAutoFocus={(event) => {
+                event.preventDefault();
+                const pendingTab = pendingOpenTabFocusRef.current;
+                pendingOpenTabFocusRef.current = null;
+                if (pendingTab) {
+                  focusOpenTabTerminal(pendingTab);
+                }
+              }}
+            >
+              <DropdownMenuLabel className="text-muted-foreground">
+                {t("terminal.openTabs")}
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {openTabsMenuItems.map(({ tab, index }) => renderOpenTabMenuItem(tab, index))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+
+        {variant !== "header" && (
+          <div
+            className="relative flex min-h-full min-w-8 flex-1 shrink-0"
+            data-tauri-drag-region
+            onDragOver={(event) => {
+              if (!draggedTabId && !event.dataTransfer.types.includes("application/nyaterm-tab"))
+                return;
+              event.preventDefault();
+              setDropIndex(tabs.length);
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              handleDropAtIndex(tabs.length, event);
+            }}
+          />
+        )}
       </div>
 
       <TabRenameDialog

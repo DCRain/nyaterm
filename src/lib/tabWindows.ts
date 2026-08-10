@@ -70,6 +70,75 @@ export function collectWindowTabIds(node: TerminalWindowNode): string[] {
   return [...collectWindowTabIds(node.first), ...collectWindowTabIds(node.second)];
 }
 
+/** Depth-first leaf list in display order (used by the unified header tab strip). */
+export function listTerminalWindowLeaves(node: TerminalWindowNode): TerminalWindowLeaf[] {
+  if (!isTerminalWindowSplit(node)) {
+    return [normalizeLeaf(node)];
+  }
+
+  return [...listTerminalWindowLeaves(node.first), ...listTerminalWindowLeaves(node.second)];
+}
+
+/** Tabs in header strip order: leaf tree order, each leaf's tabIds sequence. */
+export function flattenLeafTabs(
+  layout: TerminalWindowNode | null,
+  tabsById: Map<string, Tab>,
+): Tab[] {
+  if (!layout) return [];
+  return collectWindowTabIds(layout)
+    .map((tabId) => tabsById.get(tabId))
+    .filter((tab): tab is Tab => Boolean(tab));
+}
+
+/**
+ * Map a global insertion index (into the flat tab list with `fromTabId` already
+ * removed) to a leaf + local insert index for move/reorder.
+ */
+export function resolveGlobalTabDrop(
+  layout: TerminalWindowNode,
+  globalIndex: number,
+  options?: { excludeTabId?: string },
+): { leafId: string; localIndex: number } | null {
+  const leaves = listTerminalWindowLeaves(layout);
+  if (leaves.length === 0) return null;
+
+  const sizes = leaves.map((leaf) =>
+    options?.excludeTabId
+      ? leaf.tabIds.filter((id) => id !== options.excludeTabId).length
+      : leaf.tabIds.length,
+  );
+  const total = sizes.reduce((sum, size) => sum + size, 0);
+  let remaining = Math.max(0, Math.min(total, globalIndex));
+
+  for (let i = 0; i < leaves.length; i++) {
+    if (remaining <= sizes[i]) {
+      return { leafId: leaves[i].id, localIndex: remaining };
+    }
+    remaining -= sizes[i];
+  }
+
+  const last = leaves[leaves.length - 1];
+  return { leafId: last.id, localIndex: sizes[sizes.length - 1] ?? 0 };
+}
+
+/** Reorder a tab in the unified strip; may move it across leaves. */
+export function reorderTabsGlobally(
+  node: TerminalWindowNode,
+  fromTabId: string,
+  toGlobalIndex: number,
+): TerminalWindowNode {
+  const flat = collectWindowTabIds(node);
+  const fromIndex = flat.indexOf(fromTabId);
+  if (fromIndex === -1) return node;
+
+  const without = flat.filter((id) => id !== fromTabId);
+  const bounded = Math.max(0, Math.min(without.length, toGlobalIndex));
+  const target = resolveGlobalTabDrop(node, bounded, { excludeTabId: fromTabId });
+  if (!target) return node;
+
+  return moveTabBetweenLeaves(node, fromTabId, target.leafId, target.localIndex) ?? node;
+}
+
 export function getFirstTerminalWindowLeaf(node: TerminalWindowNode): TerminalWindowLeaf {
   if (!isTerminalWindowSplit(node)) {
     return normalizeLeaf(node);

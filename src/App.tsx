@@ -97,12 +97,14 @@ import { getSessionInputPeerIds, purgeSessionFromGroups } from "./lib/syncInputG
 import {
   findTerminalWindowLeafById,
   findTerminalWindowLeafByTabId,
+  flattenLeafTabs,
   flattenTerminalWindows,
+  getFirstTerminalWindowLeaf,
   insertTabAfterInLeaf,
   insertTabIntoLeaf,
   moveTabBetweenLeaves,
   reconcileTerminalWindows,
-  reorderTabsInLeaf,
+  reorderTabsGlobally,
   restoreTerminalWindowLayout,
   type SplitEdgeDirection,
   serializeTerminalWindowLayout,
@@ -1691,13 +1693,59 @@ function App() {
     ],
   );
 
-  const handleReorderTabsInLeaf = useCallback((_: string, fromTabId: string, toIndex: number) => {
+  const handleReorderHeaderTabs = useCallback((fromTabId: string, toIndex: number) => {
     preserveRestoredLeafActiveTabsRef.current = false;
     restoredGlobalActiveTabIdRef.current = null;
     setTerminalWindows((current) =>
-      current ? reorderTabsInLeaf(current, fromTabId, toIndex) : current,
+      current ? reorderTabsGlobally(current, fromTabId, toIndex) : current,
     );
   }, []);
+
+  const handleSelectHeaderTab = useCallback(
+    (tabId: string) => {
+      if (!terminalWindows) {
+        setActiveTabId(tabId);
+        return;
+      }
+      const leaf = findTerminalWindowLeafByTabId(terminalWindows, tabId);
+      if (leaf) {
+        handleSelectLeafTab(leaf.id, tabId);
+        return;
+      }
+      setActiveTabId(tabId);
+    },
+    [handleSelectLeafTab, setActiveTabId, terminalWindows],
+  );
+
+  const handleAddHeaderTab = useCallback(() => {
+    if (!terminalWindows) {
+      openNewSessionWithTarget();
+      return;
+    }
+    const leaf =
+      (activeTabId ? findTerminalWindowLeafByTabId(terminalWindows, activeTabId) : null) ??
+      getFirstTerminalWindowLeaf(terminalWindows);
+    handleAddTabFromLeaf(leaf.id);
+  }, [activeTabId, handleAddTabFromLeaf, openNewSessionWithTarget, terminalWindows]);
+
+  const handleConnectConnectionFromHeader = useCallback(
+    async (connection: SavedConnection) => {
+      if (!terminalWindows) {
+        await connectSavedConnection(connection);
+        return;
+      }
+      const leaf =
+        (activeTabId ? findTerminalWindowLeafByTabId(terminalWindows, activeTabId) : null) ??
+        getFirstTerminalWindowLeaf(terminalWindows);
+      await handleConnectConnectionFromLeaf(leaf.id, connection);
+    },
+    [
+      activeTabId,
+      connectSavedConnection,
+      handleConnectConnectionFromLeaf,
+      terminalWindows,
+    ],
+  );
 
   const handleMoveTabToLeaf = useCallback(
     (fromTabId: string, targetLeafId: string, toIndex: number) => {
@@ -2892,12 +2940,11 @@ function App() {
 
   const handleCloseInactiveTabs = useCallback(
     async (keepTabId: string) => {
-      const leaf = terminalWindows
-        ? findTerminalWindowLeafByTabId(terminalWindows, keepTabId)
-        : null;
-      const targetTabs = leaf?.tabIds ?? tabs.map((tab) => tab.id);
+      const tabOrder = terminalWindows
+        ? flattenLeafTabs(terminalWindows, tabsById).map((tab) => tab.id)
+        : tabs.map((tab) => tab.id);
       const targetTabsToClose = tabs.filter(
-        (tab) => targetTabs.includes(tab.id) && tab.id !== keepTabId,
+        (tab) => tabOrder.includes(tab.id) && tab.id !== keepTabId,
       );
       const tabsToClose = targetTabsToClose.filter((tab) => !tab.locked);
       const skippedLockedCount = targetTabsToClose.length - tabsToClose.length;
@@ -2932,14 +2979,16 @@ function App() {
       setActiveTabId,
       t,
       tabs,
+      tabsById,
       terminalWindows,
     ],
   );
 
   const handleCloseRightTabs = useCallback(
     async (tabId: string) => {
-      const leaf = terminalWindows ? findTerminalWindowLeafByTabId(terminalWindows, tabId) : null;
-      const tabOrder = leaf?.tabIds ?? tabs.map((tab) => tab.id);
+      const tabOrder = terminalWindows
+        ? flattenLeafTabs(terminalWindows, tabsById).map((tab) => tab.id)
+        : tabs.map((tab) => tab.id);
       const idx = tabOrder.indexOf(tabId);
       if (idx === -1) return;
 
@@ -2966,7 +3015,7 @@ function App() {
         toast.error(t("tabCtx.closeFailed"));
       }
     },
-    [closeTabs, closeWorkspaceTabSessions, persistWorkspaceNow, t, tabs, terminalWindows],
+    [closeTabs, closeWorkspaceTabSessions, persistWorkspaceNow, t, tabs, tabsById, terminalWindows],
   );
 
   const handleSessionInfo = useCallback((tab: Tab) => {
@@ -3199,6 +3248,7 @@ function App() {
     handleMoveItem,
     handleToggleLabel,
     handleToggleVisibility,
+    handleSetVisibility,
   } = useActivityBarController({
     uiConfig,
     recordingSessions,
@@ -3622,6 +3672,34 @@ function App() {
           rightActivityBarVisible: showRightActivityBar,
           onToggleLeftActivityBar: () => handleToggleVisibility("left"),
           onToggleRightActivityBar: () => handleToggleVisibility("right"),
+          tabBar:
+            tabs.length > 0
+              ? {
+                  tabs: terminalWindows ? flattenLeafTabs(terminalWindows, tabsById) : tabs,
+                  activeTabId,
+                  focusedTabId: activeTabId,
+                  unreadTabIds,
+                  disconnectedTabIds,
+                  onTabChange: handleSelectHeaderTab,
+                  onTabClose: handleCloseWorkspaceTab,
+                  onAddTab: handleAddHeaderTab,
+                  onConnectConnection: handleConnectConnectionFromHeader,
+                  onDuplicateSession: handleDuplicateSession,
+                  onMultiplexSshSession: handleMultiplexSshSession,
+                  onDuplicateSessionWithCommand: handleDuplicateSessionWithCommand,
+                  onMultiplexSshSessionWithCommand: handleMultiplexSshSessionWithCommand,
+                  onReconnectSession: handleReconnectSession,
+                  onDisconnectSession: handleDisconnectSession,
+                  onSplitSession: handleSplitSession,
+                  onUnsplit: handleUnsplit,
+                  onCloseSession: handleCloseSession,
+                  onCloseAll: handleCloseAllTabs,
+                  onCloseInactive: handleCloseInactiveTabs,
+                  onCloseRight: handleCloseRightTabs,
+                  onSessionInfo: handleSessionInfo,
+                  onReorderTabs: handleReorderHeaderTabs,
+                }
+              : null,
           activeTab,
           savedConnections,
           remoteStatsEnabled,
@@ -3649,7 +3727,8 @@ function App() {
           onReorder: (zoneKey, ids) => handleReorder("left", zoneKey, ids),
           onMoveItem: handleMoveItem,
           onToggleLabel: () => handleToggleLabel("left"),
-          onHide: () => handleToggleVisibility("left"),
+          onHide: () => handleSetVisibility("left", false),
+          onShow: () => handleSetVisibility("left", true),
           showLabels: showLabelsLeft,
           visible: showLeftActivityBar,
         }}
@@ -3663,7 +3742,8 @@ function App() {
           onReorder: (zoneKey, ids) => handleReorder("right", zoneKey, ids),
           onMoveItem: handleMoveItem,
           onToggleLabel: () => handleToggleLabel("right"),
-          onHide: () => handleToggleVisibility("right"),
+          onHide: () => handleSetVisibility("right", false),
+          onShow: () => handleSetVisibility("right", true),
           showLabels: showLabelsRight,
           visible: showRightActivityBar,
         }}
@@ -3679,27 +3759,7 @@ function App() {
         workspace={{
           layout: terminalWindows,
           tabsById,
-          focusedTabId: activeTabId,
-          unreadTabIds,
-          disconnectedTabIds,
           onSelectTab: handleSelectLeafTab,
-          onAddTab: handleAddTabFromLeaf,
-          onConnectConnection: handleConnectConnectionFromLeaf,
-          onTabClose: handleCloseWorkspaceTab,
-          onDuplicateSession: handleDuplicateSession,
-          onMultiplexSshSession: handleMultiplexSshSession,
-          onDuplicateSessionWithCommand: handleDuplicateSessionWithCommand,
-          onMultiplexSshSessionWithCommand: handleMultiplexSshSessionWithCommand,
-          onReconnectSession: handleReconnectSession,
-          onDisconnectSession: handleDisconnectSession,
-          onSplitSession: handleSplitSession,
-          onUnsplit: handleUnsplit,
-          onCloseSession: handleCloseSession,
-          onCloseAll: handleCloseAllTabs,
-          onCloseInactive: handleCloseInactiveTabs,
-          onCloseRight: handleCloseRightTabs,
-          onSessionInfo: handleSessionInfo,
-          onReorderTabs: handleReorderTabsInLeaf,
           onMoveTabToLeaf: handleMoveTabToLeaf,
           onSplitTabToLeaf: handleSplitTabToLeaf,
           onActivatePane: handleActivatePane,

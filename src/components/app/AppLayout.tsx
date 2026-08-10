@@ -1,6 +1,6 @@
 import type { TFunction } from "i18next";
 import { type ComponentProps, type ReactNode, useEffect, useMemo, useState } from "react";
-import { MdTerminal } from "react-icons/md";
+import { MdChevronLeft, MdChevronRight, MdTerminal } from "react-icons/md";
 import PanelStack from "@/components/app/PanelStack";
 import AboutDialog from "@/components/dialog/app/AboutDialog";
 import LockScreen from "@/components/dialog/app/LockScreen";
@@ -286,6 +286,28 @@ export default function AppLayout({
               backgroundColor: backgroundEnabled ? "transparent" : "var(--df-bg-terminal)",
             }}
           >
+            {hasLeftActivityItems && !leftActivityBarVisible && (
+              <button
+                type="button"
+                className="absolute left-0 top-1/2 z-30 flex h-12 w-3 -translate-y-1/2 cursor-pointer items-center justify-center rounded-r-sm bg-transparent text-[var(--df-text-dimmed)] transition-colors hover:bg-[color-mix(in_srgb,var(--df-text-muted)_12%,transparent)] hover:text-[var(--df-primary)]"
+                aria-label={t("activityBar.showLeft")}
+                title={t("activityBar.showLeft")}
+                onClick={() => leftActivityBar.onShow?.()}
+              >
+                <MdChevronRight className="text-sm" />
+              </button>
+            )}
+            {hasRightActivityItems && !rightActivityBarVisible && (
+              <button
+                type="button"
+                className="absolute right-0 top-1/2 z-30 flex h-12 w-3 -translate-y-1/2 cursor-pointer items-center justify-center rounded-l-sm bg-transparent text-[var(--df-text-dimmed)] transition-colors hover:bg-[color-mix(in_srgb,var(--df-text-muted)_12%,transparent)] hover:text-[var(--df-primary)]"
+                aria-label={t("activityBar.showRight")}
+                title={t("activityBar.showRight")}
+                onClick={() => rightActivityBar.onShow?.()}
+              >
+                <MdChevronLeft className="text-sm" />
+              </button>
+            )}
             <div className="flex-1 relative overflow-hidden">
               {tabsCount === 0 ? (
                 <StartWorkspace

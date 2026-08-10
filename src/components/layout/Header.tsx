@@ -1,6 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useEffect, useMemo, useState } from "react";
+import { type ComponentProps, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { BiExport, BiImport } from "react-icons/bi";
 import { GrUpgrade } from "react-icons/gr";
@@ -106,6 +106,9 @@ import type {
 } from "@/types/global";
 import ImportDialog from "../dialog/connections/ImportDialog";
 import { resolveConnectionIcon } from "../icons";
+import TabBar from "../terminal/TabBar";
+
+type HeaderTabBarProps = Omit<ComponentProps<typeof TabBar>, "variant">;
 
 function AscendIcon({ className }: { className?: string }) {
   return (
@@ -553,6 +556,8 @@ interface HeaderProps {
   rightActivityBarVisible?: boolean;
   onToggleLeftActivityBar?: () => void;
   onToggleRightActivityBar?: () => void;
+  /** Unified session tab strip rendered between the menu and window controls. */
+  tabBar?: HeaderTabBarProps | null;
   activeTab?: Tab | null;
   savedConnections?: SavedConnection[];
   remoteStatsEnabled?: boolean;
@@ -593,6 +598,7 @@ export default function Header({
   rightActivityBarVisible = false,
   onToggleLeftActivityBar,
   onToggleRightActivityBar,
+  tabBar,
   activeTab,
   savedConnections,
   remoteStatsEnabled = true,
@@ -1555,11 +1561,19 @@ export default function Header({
         </DropdownMenu>
       </div>
 
-      <div className="flex-1 min-w-0 h-full flex items-center justify-center gap-2 px-2">
-        <div className="h-full min-w-0 flex-1" data-tauri-drag-region />
+      <div className="flex-1 min-w-0 h-full flex items-center gap-1 px-0">
+        {tabBar && tabBar.tabs.length > 0 ? (
+          <>
+            <div className="h-full w-3 shrink-0" data-tauri-drag-region />
+            <TabBar {...tabBar} variant="header" />
+            <div className="h-full min-w-3 flex-1" data-tauri-drag-region />
+          </>
+        ) : (
+          <div className="h-full min-w-0 flex-1" data-tauri-drag-region />
+        )}
         {headerStatusVisible && (
           <div
-            className="flex max-w-full min-w-0 items-center gap-0.5 rounded-md text-xs font-medium"
+            className="flex max-w-[min(28%,16rem)] min-w-0 shrink items-center gap-0.5 rounded-md text-xs font-medium"
             style={{ color: "var(--df-text-muted)" }}
             title={headerStatus.title}
             data-tauri-drag-region
@@ -1615,7 +1629,9 @@ export default function Header({
             </DropdownMenu>
           </div>
         )}
-        <div className="h-full min-w-0 flex-1" data-tauri-drag-region />
+        {!(tabBar && tabBar.tabs.length > 0) && (
+          <div className="h-full min-w-0 flex-1" data-tauri-drag-region />
+        )}
       </div>
 
       <div className="flex items-center gap-1 shrink-0" style={{ color: "var(--df-text-muted)" }}>
