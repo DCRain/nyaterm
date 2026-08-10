@@ -25,12 +25,15 @@
   "activityBar": {
     "collapse": "Collapse",
     "expand": "Expand",
+    "hide": "Hide Activity Bar",
     "leftBottom": "Left Bottom",
     "leftTop": "Left Top",
     "moveTo": "Move to",
     "rightBottom": "Right Bottom",
     "rightTop": "Right Top",
-    "showLabel": "Show Labels"
+    "showLabel": "Show Labels",
+    "showLeft": "Left Activity Bar",
+    "showRight": "Right Activity Bar"
   },
   "ai": {
     "actionName": "Action name",

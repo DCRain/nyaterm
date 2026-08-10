@@ -15,7 +15,7 @@ import {
   HiMiniArrowTurnRightDown,
   HiMiniArrowTurnRightUp,
 } from "react-icons/hi2";
-import { MdChevronLeft, MdChevronRight } from "react-icons/md";
+import { MdChevronLeft, MdChevronRight, MdVisibilityOff } from "react-icons/md";
 import {
   ContextMenu,
   ContextMenuCheckboxItem,
@@ -106,7 +106,10 @@ interface ActivityBarProps {
   onReorder: (zone: "top" | "bottom", orderedIds: string[]) => void;
   onMoveItem: (itemId: string, targetZone: ActivityBarZone) => void;
   onToggleLabel: () => void;
+  onHide?: () => void;
   showLabels: boolean;
+  /** When false, the activity bar strip is not rendered by the layout. */
+  visible?: boolean;
   side: "left" | "right";
   zone: { top: ActivityBarZone; bottom: ActivityBarZone };
 }
@@ -121,6 +124,7 @@ export default function ActivityBar({
   onReorder,
   onMoveItem,
   onToggleLabel,
+  onHide,
   showLabels,
   side,
   zone,
@@ -160,6 +164,7 @@ export default function ActivityBar({
           onReorder={onReorder}
           onMoveItem={onMoveItem}
           onToggleLabel={onToggleLabel}
+          onHide={onHide}
           showLabels={showLabels}
           indicatorSide={indicatorSide}
           tooltipSide={tooltipSide}
@@ -178,6 +183,7 @@ export default function ActivityBar({
             onReorder={onReorder}
             onMoveItem={onMoveItem}
             onToggleLabel={onToggleLabel}
+            onHide={onHide}
             showLabels={showLabels}
             indicatorSide={indicatorSide}
             tooltipSide={tooltipSide}
@@ -189,36 +195,63 @@ export default function ActivityBar({
           className={`shrink-0 border-t ${showLabels ? "px-1 py-1" : "py-1"}`}
           style={{ borderColor: "color-mix(in srgb, var(--df-border) 50%, transparent)" }}
         >
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                aria-pressed={showLabels}
-                aria-label={
-                  showLabels
-                    ? t("activityBar.collapse", "Collapse")
-                    : t("activityBar.expand", "Expand")
-                }
-                className={`flex h-8 w-full items-center rounded-md transition-colors hover:bg-[var(--df-bg-hover)] ${
-                  showLabels ? "justify-start gap-2 px-2" : "justify-center"
-                }`}
-                style={{ color: "var(--df-text-muted)" }}
-                onClick={onToggleLabel}
-              >
-                <ExpandIcon className="text-base shrink-0" />
-                {showLabels ? (
-                  <span className="truncate text-[0.6875rem]">
-                    {t("activityBar.collapse", "Collapse")}
-                  </span>
+          <div className={`flex ${showLabels ? "flex-col gap-0.5" : "flex-col gap-0.5"}`}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-pressed={showLabels}
+                  aria-label={
+                    showLabels
+                      ? t("activityBar.collapse", "Collapse")
+                      : t("activityBar.expand", "Expand")
+                  }
+                  className={`flex h-8 w-full items-center rounded-md transition-colors hover:bg-[var(--df-bg-hover)] ${
+                    showLabels ? "justify-start gap-2 px-2" : "justify-center"
+                  }`}
+                  style={{ color: "var(--df-text-muted)" }}
+                  onClick={onToggleLabel}
+                >
+                  <ExpandIcon className="text-base shrink-0" />
+                  {showLabels ? (
+                    <span className="truncate text-[0.6875rem]">
+                      {t("activityBar.collapse", "Collapse")}
+                    </span>
+                  ) : null}
+                </button>
+              </TooltipTrigger>
+              {!showLabels ? (
+                <TooltipContent side={tooltipSide} sideOffset={4}>
+                  <span className="text-xs">{t("activityBar.expand", "Expand")}</span>
+                </TooltipContent>
+              ) : null}
+            </Tooltip>
+            {onHide ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={t("activityBar.hide")}
+                    className={`flex h-8 w-full items-center rounded-md transition-colors hover:bg-[var(--df-bg-hover)] ${
+                      showLabels ? "justify-start gap-2 px-2" : "justify-center"
+                    }`}
+                    style={{ color: "var(--df-text-muted)" }}
+                    onClick={onHide}
+                  >
+                    <MdVisibilityOff className="text-base shrink-0" />
+                    {showLabels ? (
+                      <span className="truncate text-[0.6875rem]">{t("activityBar.hide")}</span>
+                    ) : null}
+                  </button>
+                </TooltipTrigger>
+                {!showLabels ? (
+                  <TooltipContent side={tooltipSide} sideOffset={4}>
+                    <span className="text-xs">{t("activityBar.hide")}</span>
+                  </TooltipContent>
                 ) : null}
-              </button>
-            </TooltipTrigger>
-            {!showLabels ? (
-              <TooltipContent side={tooltipSide} sideOffset={4}>
-                <span className="text-xs">{t("activityBar.expand", "Expand")}</span>
-              </TooltipContent>
+              </Tooltip>
             ) : null}
-          </Tooltip>
+          </div>
         </div>
       </div>
     </TooltipProvider>
@@ -236,6 +269,7 @@ interface DropZoneProps {
   onReorder: (zone: "top" | "bottom", orderedIds: string[]) => void;
   onMoveItem: (itemId: string, targetZone: ActivityBarZone) => void;
   onToggleLabel: () => void;
+  onHide?: () => void;
   showLabels: boolean;
   indicatorSide: string;
   tooltipSide: "left" | "right";
@@ -253,6 +287,7 @@ function DropZone({
   onReorder,
   onMoveItem,
   onToggleLabel,
+  onHide,
   showLabels,
   indicatorSide,
   tooltipSide,
@@ -462,6 +497,7 @@ function DropZone({
           currentZone={zoneName}
           onMoveItem={onMoveItem}
           onToggleLabel={onToggleLabel}
+          onHide={onHide}
           dropZoneName={zoneName}
           dropIndex={idx}
           onDragStart={(e) => handleDragStart(e, item.id)}
@@ -500,6 +536,7 @@ function ActivityBarButton({
   currentZone,
   onMoveItem,
   onToggleLabel,
+  onHide,
   dropZoneName,
   dropIndex,
   onDragStart,
@@ -523,6 +560,7 @@ function ActivityBarButton({
   currentZone: ActivityBarZone;
   onMoveItem: (itemId: string, targetZone: ActivityBarZone) => void;
   onToggleLabel: () => void;
+  onHide?: () => void;
   dropZoneName: ActivityBarZone;
   dropIndex: number;
   onDragStart: (e: DragEvent) => void;
@@ -624,6 +662,12 @@ function ActivityBarButton({
         <ContextMenuCheckboxItem checked={showLabel} onCheckedChange={onToggleLabel}>
           {t("activityBar.showLabel")}
         </ContextMenuCheckboxItem>
+        {onHide ? (
+          <ContextMenuItem onClick={onHide}>
+            <MdVisibilityOff />
+            {t("activityBar.hide")}
+          </ContextMenuItem>
+        ) : null}
       </ContextMenuContent>
     </ContextMenu>
   );

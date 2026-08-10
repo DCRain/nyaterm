@@ -25,12 +25,15 @@
   "activityBar": {
     "collapse": "收合",
     "expand": "展開",
+    "hide": "隱藏活動列",
     "leftBottom": "左側底部",
     "leftTop": "左側頂部",
     "moveTo": "移動至",
     "rightBottom": "右側底部",
     "rightTop": "右側頂部",
-    "showLabel": "顯示工具名稱"
+    "showLabel": "顯示工具名稱",
+    "showLeft": "左側活動列",
+    "showRight": "右側活動列"
   },
   "ai": {
     "actionName": "功能名稱",

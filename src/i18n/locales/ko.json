@@ -25,12 +25,15 @@
   "activityBar": {
     "collapse": "접기",
     "expand": "펼치기",
+    "hide": "활동 표시줄 숨기기",
     "leftBottom": "왼쪽 아래",
     "leftTop": "왼쪽 위",
     "moveTo": "이동",
     "rightBottom": "오른쪽 아래",
     "rightTop": "오른쪽 위",
-    "showLabel": "레이블 표시"
+    "showLabel": "레이블 표시",
+    "showLeft": "왼쪽 활동 표시줄",
+    "showRight": "오른쪽 활동 표시줄"
   },
   "ai": {
     "actionName": "작업 이름",

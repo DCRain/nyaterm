@@ -201,6 +201,8 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
       right_bottom: ["quickCmdBar", "serialSend", "recording", "lock"],
       show_labels_left: false,
       show_labels_right: false,
+      show_left: false,
+      show_right: false,
     },
   },
   keybindings: {},

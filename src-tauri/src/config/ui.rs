@@ -169,6 +169,12 @@ pub struct ActivityBarLayout {
     pub show_labels_left: bool,
     #[serde(default)]
     pub show_labels_right: bool,
+    /// Whether the left activity bar strip is visible. Defaults to hidden.
+    #[serde(default)]
+    pub show_left: bool,
+    /// Whether the right activity bar strip is visible. Defaults to hidden.
+    #[serde(default)]
+    pub show_right: bool,
 }
 
 impl Default for ActivityBarLayout {
@@ -180,6 +186,8 @@ impl Default for ActivityBarLayout {
             right_bottom: default_right_bottom(),
             show_labels_left: false,
             show_labels_right: false,
+            show_left: false,
+            show_right: false,
         }
     }
 }

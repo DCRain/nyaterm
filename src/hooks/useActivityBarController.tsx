@@ -108,6 +108,14 @@ function normalizeActivityBarState(uiConfig: UiConfig): Partial<UiConfig> | null
       : (legacyShowLabels ?? false);
   layout.show_labels_left = originalShowLabelsLeft;
   layout.show_labels_right = originalShowLabelsRight;
+  layout.show_left =
+    typeof uiConfig.activity_bar_layout.show_left === "boolean"
+      ? uiConfig.activity_bar_layout.show_left
+      : false;
+  layout.show_right =
+    typeof uiConfig.activity_bar_layout.show_right === "boolean"
+      ? uiConfig.activity_bar_layout.show_right
+      : false;
 
   for (const zone of ACTIVITY_LAYOUT_ZONES) {
     for (const id of uiConfig.activity_bar_layout[zone]) {
@@ -198,7 +206,9 @@ function normalizeActivityBarState(uiConfig: UiConfig): Partial<UiConfig> | null
         layout[zone].some((id, index) => id !== uiConfig.activity_bar_layout[zone][index]),
     ) ||
     layout.show_labels_left !== uiConfig.activity_bar_layout.show_labels_left ||
-    layout.show_labels_right !== uiConfig.activity_bar_layout.show_labels_right;
+    layout.show_labels_right !== uiConfig.activity_bar_layout.show_labels_right ||
+    layout.show_left !== uiConfig.activity_bar_layout.show_left ||
+    layout.show_right !== uiConfig.activity_bar_layout.show_right;
   const leftOpenChanged =
     leftOpenPanels.length !== originalLeftOpenPanels.length ||
     leftOpenPanels.some((id, index) => id !== originalLeftOpenPanels[index]);
@@ -410,6 +420,20 @@ export function useActivityBarController({
     [updateUi],
   );
 
+  const handleToggleVisibility = useCallback(
+    (side: "left" | "right") => {
+      updateUi((prev) => ({
+        activity_bar_layout: {
+          ...prev.activity_bar_layout,
+          ...(side === "left"
+            ? { show_left: !prev.activity_bar_layout.show_left }
+            : { show_right: !prev.activity_bar_layout.show_right }),
+        },
+      }));
+    },
+    [updateUi],
+  );
+
   return {
     leftTopItems,
     leftBottomItems,
@@ -417,10 +441,13 @@ export function useActivityBarController({
     rightBottomItems,
     showLabelsLeft: layout.show_labels_left,
     showLabelsRight: layout.show_labels_right,
+    showLeft: layout.show_left,
+    showRight: layout.show_right,
     toggleActiveIds,
     handleItemSelect,
     handleReorder,
     handleMoveItem,
     handleToggleLabel,
+    handleToggleVisibility,
   };
 }

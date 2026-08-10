@@ -549,6 +549,10 @@ interface HeaderProps {
   hasUpdate?: boolean;
   showUpdateDot?: boolean;
   onHelpMenuOpen?: () => void;
+  leftActivityBarVisible?: boolean;
+  rightActivityBarVisible?: boolean;
+  onToggleLeftActivityBar?: () => void;
+  onToggleRightActivityBar?: () => void;
   activeTab?: Tab | null;
   savedConnections?: SavedConnection[];
   remoteStatsEnabled?: boolean;
@@ -585,6 +589,10 @@ export default function Header({
   hasUpdate,
   showUpdateDot,
   onHelpMenuOpen,
+  leftActivityBarVisible = false,
+  rightActivityBarVisible = false,
+  onToggleLeftActivityBar,
+  onToggleRightActivityBar,
   activeTab,
   savedConnections,
   remoteStatsEnabled = true,
@@ -866,6 +874,19 @@ export default function Header({
         label: t("menu.panels"),
         icon: "view_sidebar",
         submenu: [
+          {
+            label: t("activityBar.showLeft"),
+            icon: "view_sidebar",
+            checked: leftActivityBarVisible,
+            action: () => onToggleLeftActivityBar?.(),
+          },
+          {
+            label: t("activityBar.showRight"),
+            icon: "view_sidebar",
+            checked: rightActivityBarVisible,
+            action: () => onToggleRightActivityBar?.(),
+          },
+          { label: "separator", separator: true },
           {
             label: t("settings.panelMultiOpen"),
             icon: "view_sidebar",

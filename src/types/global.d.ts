@@ -512,6 +512,10 @@ export interface ActivityBarLayout {
   show_labels_left: boolean;
   /** Expanded (icon + label) state for the right activity bar. */
   show_labels_right: boolean;
+  /** Whether the left activity bar strip is visible. */
+  show_left: boolean;
+  /** Whether the right activity bar strip is visible. */
+  show_right: boolean;
 }
 
 /** Layout preferences: panel widths, active panels, theme. */

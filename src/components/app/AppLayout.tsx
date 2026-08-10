@@ -202,6 +202,8 @@ export default function AppLayout({
     leftActivityBar.items.length > 0 || (leftActivityBar.bottomItems?.length ?? 0) > 0;
   const hasRightActivityItems =
     rightActivityBar.items.length > 0 || (rightActivityBar.bottomItems?.length ?? 0) > 0;
+  const leftActivityBarVisible = Boolean(leftActivityBar.visible);
+  const rightActivityBarVisible = Boolean(rightActivityBar.visible);
   const leftPanelOpen =
     hasLeftActivityItems && (leftPanelIds.length > 0 || Boolean(leftOverlayPanelId));
   const rightPanelOpen =
@@ -245,7 +247,7 @@ export default function AppLayout({
         <Header {...header} />
 
         <main className="flex-1 flex overflow-hidden relative">
-          {hasLeftActivityItems && (
+          {hasLeftActivityItems && leftActivityBarVisible && (
             <ActivityBar
               {...leftActivityBar}
               side="left"
@@ -385,7 +387,7 @@ export default function AppLayout({
             </>
           )}
 
-          {hasRightActivityItems && (
+          {hasRightActivityItems && rightActivityBarVisible && (
             <ActivityBar
               {...rightActivityBar}
               side="right"

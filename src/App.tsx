@@ -3191,11 +3191,14 @@ function App() {
     rightBottomItems,
     showLabelsLeft,
     showLabelsRight,
+    showLeft: showLeftActivityBar,
+    showRight: showRightActivityBar,
     toggleActiveIds,
     handleItemSelect,
     handleReorder,
     handleMoveItem,
     handleToggleLabel,
+    handleToggleVisibility,
   } = useActivityBarController({
     uiConfig,
     recordingSessions,
@@ -3615,6 +3618,10 @@ function App() {
           hasUpdate: updateInfo !== null,
           showUpdateDot: helpDotVisible,
           onHelpMenuOpen: () => setHelpDotVisible(false),
+          leftActivityBarVisible: showLeftActivityBar,
+          rightActivityBarVisible: showRightActivityBar,
+          onToggleLeftActivityBar: () => handleToggleVisibility("left"),
+          onToggleRightActivityBar: () => handleToggleVisibility("right"),
           activeTab,
           savedConnections,
           remoteStatsEnabled,
@@ -3642,7 +3649,9 @@ function App() {
           onReorder: (zoneKey, ids) => handleReorder("left", zoneKey, ids),
           onMoveItem: handleMoveItem,
           onToggleLabel: () => handleToggleLabel("left"),
+          onHide: () => handleToggleVisibility("left"),
           showLabels: showLabelsLeft,
+          visible: showLeftActivityBar,
         }}
         rightActivityBar={{
           items: rightTopItems,
@@ -3654,7 +3663,9 @@ function App() {
           onReorder: (zoneKey, ids) => handleReorder("right", zoneKey, ids),
           onMoveItem: handleMoveItem,
           onToggleLabel: () => handleToggleLabel("right"),
+          onHide: () => handleToggleVisibility("right"),
           showLabels: showLabelsRight,
+          visible: showRightActivityBar,
         }}
         onLeftResize={handleLeftResize}
         onRightResize={handleRightResize}
