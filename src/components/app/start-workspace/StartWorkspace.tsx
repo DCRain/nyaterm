@@ -57,10 +57,10 @@ export default function StartWorkspace({
     <div className="relative h-full min-h-0 overflow-hidden">
       <div className="pointer-events-none absolute left-0 right-0 top-3 z-30 flex justify-center">
         <div
-          className="pointer-events-auto inline-flex rounded-md border p-0.5"
+          className="pointer-events-auto inline-flex rounded-lg border p-0.5 shadow-sm"
           style={{
-            borderColor: "var(--df-border)",
-            backgroundColor: "color-mix(in srgb, var(--df-bg-panel) 78%, transparent)",
+            borderColor: "color-mix(in srgb, var(--df-border) 80%, transparent)",
+            backgroundColor: "color-mix(in srgb, var(--df-bg-panel) 88%, transparent)",
           }}
         >
           <ModeButton active={mode === "workbench"} onClick={() => setMode("workbench")}>
@@ -87,6 +87,7 @@ export default function StartWorkspace({
           onOpenChat={onOpenChat}
           onShowCommands={onShowCommands}
           onSwitchTerminal={onSwitchTerminal}
+          onConnectConnection={onConnectConnection}
         />
       ) : (
         <div className="h-full min-h-0 pt-14">
@@ -118,7 +119,7 @@ function ModeButton({
     <button
       type="button"
       aria-pressed={active}
-      className="h-7 rounded px-3 text-xs font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-[var(--df-primary)]"
+      className="h-7 cursor-pointer rounded px-3 text-xs font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-[var(--df-primary)]"
       style={{
         color: active ? "var(--df-primary)" : "var(--df-text-muted)",
         backgroundColor: active

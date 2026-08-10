@@ -288,6 +288,10 @@
     "workbenchLocalTerminal": "로컬 터미널",
     "workbenchNewConnection": "새 연결",
     "workbenchQuickOpen": "빠른 열기",
+    "workbenchRecent": "최근 사용",
+    "workbenchRecentEmpty": "연결을 열면 여기에 최근 항목이 표시됩니다",
+    "workbenchShortcuts": "단축키",
+    "workbenchSubtitle": "작업을 선택하거나 최근 연결을 이어가세요",
     "workbenchTemporaryLink": "임시 링크"
   },
   "ascendNpuMonitor": {
@@ -1182,6 +1186,7 @@
     "resetLayout": "레이아웃 재설정",
     "resetZoom": "확대/축소 재설정",
     "restore": "복원",
+    "reactDevtools": "React DevTools",
     "selectAll": "모두 선택",
     "smartSplit": "스마트 분할",
     "syncInput": "입력 동기화",

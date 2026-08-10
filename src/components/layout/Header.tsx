@@ -8,7 +8,9 @@ import {
   MdAccessTime,
   MdAdd,
   MdArticle,
+  MdBugReport,
   MdCellTower,
+  MdCheck,
   MdComputer,
   MdContentCopy,
   MdContentPaste,
@@ -80,6 +82,10 @@ import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
 import { isMacOS } from "@/lib/platform";
 import {
+  isReactDevtoolsPlusEnabled,
+  toggleReactDevtoolsPlus,
+} from "@/lib/reactDevtoolsPlus";
+import {
   decreaseTerminalFontSizeDelta,
   increaseTerminalFontSizeDelta,
   resetTerminalFontSizeDelta,
@@ -137,6 +143,8 @@ const iconMap: Record<string, React.ElementType> = {
   update: MdUpdate,
   upgrade: GrUpgrade,
   article: MdArticle,
+  bug_report: MdBugReport,
+  check: MdCheck,
   info: MdInfo,
   menu: MdMenu,
   view_sidebar: MdViewSidebar,
@@ -1062,6 +1070,16 @@ export default function Header({
           }
         },
       },
+      ...(import.meta.env.DEV
+        ? [
+            {
+              label: t("menu.reactDevtools"),
+              icon: "bug_report",
+              checked: isReactDevtoolsPlusEnabled(),
+              action: () => toggleReactDevtoolsPlus(),
+            } satisfies MenuItem,
+          ]
+        : []),
       { label: "separator", separator: true },
       { label: t("menu.about"), action: onAbout, icon: "info" },
     ],
@@ -1091,6 +1109,26 @@ export default function Header({
     }
 
     if (item.checked !== undefined) {
+      // Help-style rows keep a leading icon aligned with siblings; show ✓ on the right when on.
+      if (item.icon) {
+        return (
+          <MenubarItem
+            key={item.label}
+            disabled={item.disabled}
+            onClick={() => {
+              item.action?.();
+            }}
+          >
+            <DynamicIcon name={item.icon} className="text-[1rem] text-[var(--df-text-muted)]" />
+            <span className="flex-1">{item.label}</span>
+            {item.checked ? (
+              <DynamicIcon name="check" className="text-[1rem] text-[var(--df-text-muted)]" />
+            ) : null}
+            {item.shortcut && <MenubarShortcut>{item.shortcut}</MenubarShortcut>}
+          </MenubarItem>
+        );
+      }
+
       return (
         <MenubarCheckboxItem
           key={item.label}
@@ -1100,9 +1138,6 @@ export default function Header({
             item.action?.();
           }}
         >
-          {item.icon && (
-            <DynamicIcon name={item.icon} className="text-[1rem] text-[var(--df-text-muted)]" />
-          )}
           <span className="flex-1">{item.label}</span>
           {item.shortcut && <MenubarShortcut>{item.shortcut}</MenubarShortcut>}
         </MenubarCheckboxItem>

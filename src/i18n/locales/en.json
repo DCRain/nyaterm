@@ -288,6 +288,10 @@
     "workbenchLocalTerminal": "Local Terminal",
     "workbenchNewConnection": "New Connection",
     "workbenchQuickOpen": "Quick Open",
+    "workbenchRecent": "Recent",
+    "workbenchRecentEmpty": "Connections you open will show up here",
+    "workbenchShortcuts": "Shortcuts",
+    "workbenchSubtitle": "Pick an action to start, or resume a recent connection",
     "workbenchTemporaryLink": "Temporary Link"
   },
   "ascendNpuMonitor": {
@@ -1186,6 +1190,7 @@
     "resetLayout": "Reset Layout",
     "resetZoom": "Reset Zoom",
     "restore": "Restore",
+    "reactDevtools": "React DevTools",
     "selectAll": "Select All",
     "smartSplit": "Smart Split",
     "syncInput": "Sync Input",

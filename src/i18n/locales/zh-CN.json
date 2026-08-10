@@ -288,6 +288,10 @@
     "workbenchLocalTerminal": "本地终端",
     "workbenchNewConnection": "新建连接",
     "workbenchQuickOpen": "快速打开",
+    "workbenchRecent": "最近使用",
+    "workbenchRecentEmpty": "打开连接后，最近使用会显示在这里",
+    "workbenchShortcuts": "快捷键",
+    "workbenchSubtitle": "选择操作开始，或继续最近的连接",
     "workbenchTemporaryLink": "临时链接"
   },
   "ascendNpuMonitor": {
@@ -1185,6 +1189,7 @@
     "resetLayout": "重置面板布局",
     "resetZoom": "重置缩放",
     "restore": "还原",
+    "reactDevtools": "React 开发者工具",
     "selectAll": "全选",
     "smartSplit": "智能分屏",
     "syncInput": "同步输入",
