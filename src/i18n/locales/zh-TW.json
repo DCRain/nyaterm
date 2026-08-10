@@ -1162,6 +1162,7 @@
   "menu": {
     "about": "關於",
     "alwaysOnTop": "置頂視窗",
+    "appMenu": "選單",
     "autoTile": "自動分割所有工作階段",
     "broadcastToAll": "廣播輸入到所有工作階段",
     "checkForUpdates": "檢查更新",

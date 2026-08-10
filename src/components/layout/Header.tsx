@@ -62,11 +62,17 @@ import QuitConfirmDialog from "@/components/dialog/app/QuitConfirmDialog";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuPortal,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useApp } from "@/context/AppContext";
@@ -100,21 +106,6 @@ import type {
 } from "@/types/global";
 import ImportDialog from "../dialog/connections/ImportDialog";
 import { resolveConnectionIcon } from "../icons";
-import NyaTermLogo from "../NyaTermLogo";
-import {
-  Menubar,
-  MenubarCheckboxItem,
-  MenubarContent,
-  MenubarItem,
-  MenubarMenu,
-  MenubarPortal,
-  MenubarSeparator,
-  MenubarShortcut,
-  MenubarSub,
-  MenubarSubContent,
-  MenubarSubTrigger,
-  MenubarTrigger,
-} from "../ui/menubar";
 
 function AscendIcon({ className }: { className?: string }) {
   return (
@@ -553,8 +544,6 @@ function HeaderMiniProgress({ value }: { value: number | null }) {
 
 interface HeaderProps {
   onNewSession: () => void;
-  onToggleLeft?: () => void;
-  onToggleRight?: () => void;
   onAbout: () => void;
   onCheckForUpdates: () => void;
   hasUpdate?: boolean;
@@ -588,11 +577,9 @@ interface MenuItem {
   shortcut?: string;
 }
 
-/** Top bar with File/Edit/View/Terminal/Help menus, theme picker, and mobile toggles. */
+/** Top bar with app menu icon, status, and window controls. */
 export default function Header({
   onNewSession,
-  onToggleLeft,
-  onToggleRight,
   onAbout,
   onCheckForUpdates,
   hasUpdate,
@@ -1087,24 +1074,24 @@ export default function Header({
 
   const renderMenuItem = (item: MenuItem, idx: number) => {
     if (item.separator) {
-      return <MenubarSeparator key={`sep-${idx}`} />;
+      return <DropdownMenuSeparator key={`sep-${idx}`} />;
     }
 
     if (item.submenu) {
       return (
-        <MenubarSub key={item.label}>
-          <MenubarSubTrigger disabled={item.disabled} className="gap-2">
+        <DropdownMenuSub key={item.label}>
+          <DropdownMenuSubTrigger disabled={item.disabled} className="gap-2">
             {item.icon && (
               <DynamicIcon name={item.icon} className="text-[1rem] text-[var(--df-text-muted)]" />
             )}
             <span className="flex-1">{item.label}</span>
-          </MenubarSubTrigger>
-          <MenubarPortal>
-            <MenubarSubContent>
+          </DropdownMenuSubTrigger>
+          <DropdownMenuPortal>
+            <DropdownMenuSubContent>
               {item.submenu.map((sub, i) => renderMenuItem(sub, i))}
-            </MenubarSubContent>
-          </MenubarPortal>
-        </MenubarSub>
+            </DropdownMenuSubContent>
+          </DropdownMenuPortal>
+        </DropdownMenuSub>
       );
     }
 
@@ -1112,7 +1099,7 @@ export default function Header({
       // Help-style rows keep a leading icon aligned with siblings; show ✓ on the right when on.
       if (item.icon) {
         return (
-          <MenubarItem
+          <DropdownMenuItem
             key={item.label}
             disabled={item.disabled}
             onClick={() => {
@@ -1124,13 +1111,13 @@ export default function Header({
             {item.checked ? (
               <DynamicIcon name="check" className="text-[1rem] text-[var(--df-text-muted)]" />
             ) : null}
-            {item.shortcut && <MenubarShortcut>{item.shortcut}</MenubarShortcut>}
-          </MenubarItem>
+            {item.shortcut && <DropdownMenuShortcut>{item.shortcut}</DropdownMenuShortcut>}
+          </DropdownMenuItem>
         );
       }
 
       return (
-        <MenubarCheckboxItem
+        <DropdownMenuCheckboxItem
           key={item.label}
           checked={item.checked}
           disabled={item.disabled}
@@ -1139,13 +1126,13 @@ export default function Header({
           }}
         >
           <span className="flex-1">{item.label}</span>
-          {item.shortcut && <MenubarShortcut>{item.shortcut}</MenubarShortcut>}
-        </MenubarCheckboxItem>
+          {item.shortcut && <DropdownMenuShortcut>{item.shortcut}</DropdownMenuShortcut>}
+        </DropdownMenuCheckboxItem>
       );
     }
 
     return (
-      <MenubarItem
+      <DropdownMenuItem
         key={item.label}
         disabled={item.disabled}
         onClick={() => {
@@ -1164,8 +1151,8 @@ export default function Header({
             {t("updater.hasNewVersion")}
           </span>
         )}
-        {item.shortcut && <MenubarShortcut>{item.shortcut}</MenubarShortcut>}
-      </MenubarItem>
+        {item.shortcut && <DropdownMenuShortcut>{item.shortcut}</DropdownMenuShortcut>}
+      </DropdownMenuItem>
     );
   };
 
@@ -1505,39 +1492,46 @@ export default function Header({
       style={{ backgroundColor: "var(--df-bg-panel)", borderColor: "var(--df-border)" }}
     >
       <div className={`flex items-center gap-2 shrink-0${isMacOS ? " pl-[70px]" : ""}`}>
-        {!isMacOS && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className="lg:hidden text-[var(--df-text-muted)] hover:bg-[color-mix(in_srgb,var(--df-text-muted)_10%,transparent)] hover:text-[var(--df-text-muted)]"
-            onClick={onToggleLeft}
-          >
-            <MdMenu className="text-base" />
-          </Button>
-        )}
-
-        <Menubar className="border-none bg-transparent h-auto p-0 gap-1 shadow-none">
-          {menuKeys.map(({ key, label }) => (
-            <MenubarMenu key={key}>
-              <MenubarTrigger
-                className="relative cursor-default px-2.5 py-1 text-xs font-medium rounded-md transition-colors text-[var(--df-text-muted)] data-[state=open]:text-[var(--df-primary)] data-[state=open]:bg-[color-mix(in_srgb,var(--df-primary)_10%,transparent)] hover:bg-[color-mix(in_srgb,var(--df-text-muted)_10%,transparent)] focus:bg-[color-mix(in_srgb,var(--df-text-muted)_10%,transparent)] focus:text-[var(--df-text-muted)] data-[state=open]:focus:bg-[color-mix(in_srgb,var(--df-primary)_10%,transparent)] data-[state=open]:focus:text-[var(--df-primary)] outline-none"
-                {...(key === "help" && showUpdateDot ? { onClick: onHelpMenuOpen } : {})}
-              >
-                {label}
-                {key === "help" && showUpdateDot && (
-                  <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="relative text-[var(--df-text-muted)] hover:bg-[color-mix(in_srgb,var(--df-text-muted)_10%,transparent)] hover:text-[var(--df-text-muted)] data-[state=open]:bg-[color-mix(in_srgb,var(--df-primary)_10%,transparent)] data-[state=open]:text-[var(--df-primary)]"
+              aria-label={t("menu.appMenu")}
+            >
+              <MdMenu className="text-base" />
+              {showUpdateDot && (
+                <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+                </span>
+              )}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="min-w-[160px]">
+            {menuKeys.map(({ key, label }) => (
+              <DropdownMenuSub key={key}>
+                <DropdownMenuSubTrigger
+                  {...(key === "help" && showUpdateDot ? { onClick: onHelpMenuOpen } : {})}
+                >
+                  <span className="flex items-center gap-2">
+                    {label}
+                    {key === "help" && showUpdateDot && (
+                      <span className="inline-flex h-2 w-2 rounded-full bg-green-500" />
+                    )}
                   </span>
-                )}
-              </MenubarTrigger>
-              <MenubarContent align="start" className="min-w-[180px]">
-                {menus[key].map((item, idx) => renderMenuItem(item, idx))}
-              </MenubarContent>
-            </MenubarMenu>
-          ))}
-        </Menubar>
+                </DropdownMenuSubTrigger>
+                <DropdownMenuPortal>
+                  <DropdownMenuSubContent className="min-w-[180px]">
+                    {menus[key].map((item, idx) => renderMenuItem(item, idx))}
+                  </DropdownMenuSubContent>
+                </DropdownMenuPortal>
+              </DropdownMenuSub>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       <div className="flex-1 min-w-0 h-full flex items-center justify-center gap-2 px-2">
@@ -1604,18 +1598,6 @@ export default function Header({
       </div>
 
       <div className="flex items-center gap-1 shrink-0" style={{ color: "var(--df-text-muted)" }}>
-        {!isMacOS && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className="md:hidden text-[var(--df-text-muted)] hover:bg-[color-mix(in_srgb,var(--df-text-muted)_10%,transparent)] hover:text-[var(--df-text-muted)]"
-            onClick={onToggleRight}
-          >
-            <MdViewSidebar className="text-base" />
-          </Button>
-        )}
-
         {!isMacOS && (
           <div className="flex items-center h-full -mr-2 ml-1">
             <Button

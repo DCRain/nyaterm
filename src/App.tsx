@@ -449,9 +449,6 @@ function App() {
     }
   }, [appSettings.ui.language, i18n]);
 
-  // Mobile state
-  const [mobileLeftOpen, setMobileLeftOpen] = useState(false);
-  const [mobileRightOpen, setMobileRightOpen] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [showUpdateDialog, setShowUpdateDialog] = useState(false);
   const [showSyncGroupDialog, setShowSyncGroupDialog] = useState(false);
@@ -3634,12 +3631,6 @@ function App() {
           onClearTerminal: () => window.dispatchEvent(new CustomEvent("nyaterm:clear-terminal")),
           onRefitTerminals: () =>
             window.dispatchEvent(new CustomEvent("nyaterm:refresh-terminals")),
-        }}
-        mobile={{
-          leftOpen: mobileLeftOpen,
-          rightOpen: mobileRightOpen,
-          setLeftOpen: setMobileLeftOpen,
-          setRightOpen: setMobileRightOpen,
         }}
         leftActivityBar={{
           items: leftTopItems,

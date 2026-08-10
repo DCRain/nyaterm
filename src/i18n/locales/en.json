@@ -1163,6 +1163,7 @@
   "menu": {
     "about": "About",
     "alwaysOnTop": "Always on Top",
+    "appMenu": "Menu",
     "autoTile": "Auto-split All",
     "broadcastToAll": "Broadcast All",
     "checkForUpdates": "Check Updates",

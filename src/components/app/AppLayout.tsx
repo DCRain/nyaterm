@@ -1,6 +1,6 @@
 import type { TFunction } from "i18next";
 import { type ComponentProps, type ReactNode, useEffect, useMemo, useState } from "react";
-import { MdClose, MdTerminal } from "react-icons/md";
+import { MdTerminal } from "react-icons/md";
 import PanelStack from "@/components/app/PanelStack";
 import AboutDialog from "@/components/dialog/app/AboutDialog";
 import LockScreen from "@/components/dialog/app/LockScreen";
@@ -17,10 +17,7 @@ import DockerSudoPasswordDialog, {
 } from "@/components/dialog/docker/DockerSudoPasswordDialog";
 import { TransferDuplicateDialog } from "@/components/dialog/file-explorer/TransferDuplicateDialog";
 import SyncGroupDialog from "@/components/dialog/terminal/SyncGroupDialog";
-import ActivityBar, {
-  ACTIVITY_BAR_COLLAPSED_WIDTH,
-  ACTIVITY_BAR_EXPANDED_WIDTH,
-} from "@/components/layout/ActivityBar";
+import ActivityBar from "@/components/layout/ActivityBar";
 import Header from "@/components/layout/Header";
 import ResizeHandle from "@/components/layout/ResizeHandle";
 import QuickCommands from "@/components/panel/QuickCommands";
@@ -33,7 +30,6 @@ import {
   isWindowTransparencyEnabled,
   loadBackgroundImageDataUrl,
 } from "@/lib/backgroundImage";
-import { isMacOS } from "@/lib/platform";
 import type { SendCommandPanelDraft } from "@/lib/sendCommandPanelEvents";
 import type { UpdateInfo } from "@/lib/updater";
 import { bounceTopModalWindow } from "@/lib/windowManager";
@@ -55,13 +51,7 @@ interface AppLayoutProps {
   t: TFunction;
   uiConfig: UiConfig;
   appearance: AppearanceSettings;
-  header: Omit<HeaderProps, "onToggleLeft" | "onToggleRight">;
-  mobile: {
-    leftOpen: boolean;
-    rightOpen: boolean;
-    setLeftOpen: (open: boolean) => void;
-    setRightOpen: (open: boolean) => void;
-  };
+  header: HeaderProps;
   leftActivityBar: ActivityBarSideProps;
   rightActivityBar: ActivityBarSideProps;
   onLeftResize: (delta: number) => void;
@@ -146,7 +136,6 @@ export default function AppLayout({
   uiConfig,
   appearance,
   header,
-  mobile,
   leftActivityBar,
   rightActivityBar,
   onLeftResize,
@@ -213,18 +202,10 @@ export default function AppLayout({
     leftActivityBar.items.length > 0 || (leftActivityBar.bottomItems?.length ?? 0) > 0;
   const hasRightActivityItems =
     rightActivityBar.items.length > 0 || (rightActivityBar.bottomItems?.length ?? 0) > 0;
-  const leftActivityBarWidth = leftActivityBar.showLabels
-    ? ACTIVITY_BAR_EXPANDED_WIDTH
-    : ACTIVITY_BAR_COLLAPSED_WIDTH;
-  const rightActivityBarWidth = rightActivityBar.showLabels
-    ? ACTIVITY_BAR_EXPANDED_WIDTH
-    : ACTIVITY_BAR_COLLAPSED_WIDTH;
   const leftPanelOpen =
     hasLeftActivityItems && (leftPanelIds.length > 0 || Boolean(leftOverlayPanelId));
   const rightPanelOpen =
     hasRightActivityItems && (rightPanelIds.length > 0 || Boolean(rightOverlayPanelId));
-  const leftMobileOpen = hasLeftActivityItems && mobile.leftOpen;
-  const rightMobileOpen = hasRightActivityItems && mobile.rightOpen;
 
   useEffect(() => {
     const roots = [document.documentElement, document.body];
@@ -242,22 +223,6 @@ export default function AppLayout({
       }
     };
   }, [windowTransparencyEnabled]);
-
-  useEffect(() => {
-    if (!hasLeftActivityItems && mobile.leftOpen) {
-      mobile.setLeftOpen(false);
-    }
-    if (!hasRightActivityItems && mobile.rightOpen) {
-      mobile.setRightOpen(false);
-    }
-  }, [
-    hasLeftActivityItems,
-    hasRightActivityItems,
-    mobile.leftOpen,
-    mobile.rightOpen,
-    mobile.setLeftOpen,
-    mobile.setRightOpen,
-  ]);
 
   return (
     <div
@@ -277,27 +242,9 @@ export default function AppLayout({
         />
       )}
       <div className="relative z-10 flex h-full min-h-0 flex-col">
-        <Header
-          {...header}
-          onToggleLeft={() => {
-            if (hasLeftActivityItems) mobile.setLeftOpen(!mobile.leftOpen);
-          }}
-          onToggleRight={() => {
-            if (hasRightActivityItems) mobile.setRightOpen(!mobile.rightOpen);
-          }}
-        />
+        <Header {...header} />
 
         <main className="flex-1 flex overflow-hidden relative">
-          {!isMacOS && (leftMobileOpen || rightMobileOpen) && (
-            <div
-              className="absolute inset-0 bg-black/50 z-40 lg:hidden"
-              onClick={() => {
-                mobile.setLeftOpen(false);
-                mobile.setRightOpen(false);
-              }}
-            />
-          )}
-
           {hasLeftActivityItems && (
             <ActivityBar
               {...leftActivityBar}
@@ -312,37 +259,9 @@ export default function AppLayout({
                 style={{
                   width: uiConfig.left_width,
                   backgroundColor: "var(--df-bg-panel)",
-                  ["--activity-bar-offset" as string]: `${leftActivityBarWidth}px`,
                 }}
-                className={
-                  isMacOS
-                    ? "relative flex flex-col"
-                    : `
-                    fixed inset-y-0 z-40 flex flex-col shadow-xl transition-transform duration-200
-                    left-[var(--activity-bar-offset)]
-                    lg:relative lg:left-auto lg:translate-x-0 lg:z-0 lg:shadow-none
-                    ${
-                      leftMobileOpen
-                        ? "translate-x-0"
-                        : "-translate-x-[calc(100%+var(--activity-bar-offset))] lg:translate-x-0"
-                    }
-                  `
-                }
+                className="relative flex flex-col"
               >
-                {!isMacOS && (
-                  <div
-                    className="lg:hidden h-10 flex items-center justify-end px-2 border-b shrink-0"
-                    style={{ borderColor: "var(--df-border)" }}
-                  >
-                    <button
-                      onClick={() => mobile.setLeftOpen(false)}
-                      style={{ color: "var(--df-text-muted)" }}
-                    >
-                      <MdClose />
-                    </button>
-                  </div>
-                )}
-
                 <div className="flex-1 min-h-0 overflow-hidden">
                   <PanelStack
                     panelIds={leftPanelIds}
@@ -355,11 +274,7 @@ export default function AppLayout({
                   />
                 </div>
               </div>
-              <ResizeHandle
-                direction="horizontal"
-                onResize={onLeftResize}
-                className={isMacOS ? "" : "hidden lg:block"}
-              />
+              <ResizeHandle direction="horizontal" onResize={onLeftResize} />
             </>
           )}
 
@@ -444,50 +359,17 @@ export default function AppLayout({
 
           {hasRightActivityItems && (
             <>
-              {rightPanelOpen && (
-                <ResizeHandle
-                  direction="horizontal"
-                  onResize={onRightResize}
-                  className={isMacOS ? "" : "hidden md:block"}
-                />
-              )}
+              {rightPanelOpen && <ResizeHandle direction="horizontal" onResize={onRightResize} />}
               <aside
                 style={{
                   width: rightPanelOpen ? uiConfig.right_width : 0,
                   backgroundColor: "var(--df-bg-panel)",
                   borderColor: "var(--df-border)",
-                  ["--activity-bar-offset" as string]: `${rightActivityBarWidth}px`,
                 }}
-                className={
-                  isMacOS
-                    ? `relative flex flex-col overflow-hidden ${rightPanelOpen ? "border-l" : "hidden"}`
-                    : `
-                    fixed inset-y-0 z-50 flex flex-col overflow-hidden shadow-xl transition-transform duration-200 border-l
-                    right-[var(--activity-bar-offset)]
-                    md:relative md:right-auto md:translate-x-0 md:z-0 md:shadow-none
-                    ${
-                      rightPanelOpen && rightMobileOpen
-                        ? "translate-x-0"
-                        : "translate-x-[calc(100%+var(--activity-bar-offset))] md:translate-x-0"
-                    }
-                    ${rightPanelOpen ? "" : "hidden"}
-                  `
-                }
+                className={`relative flex flex-col overflow-hidden ${
+                  rightPanelOpen ? "border-l" : "hidden"
+                }`}
               >
-                {!isMacOS && (
-                  <div
-                    className="md:hidden h-10 flex items-center justify-end px-2 border-b shrink-0"
-                    style={{ borderColor: "var(--df-border)" }}
-                  >
-                    <button
-                      onClick={() => mobile.setRightOpen(false)}
-                      style={{ color: "var(--df-text-muted)" }}
-                    >
-                      <MdClose />
-                    </button>
-                  </div>
-                )}
-
                 <div className="flex-1 min-h-0 overflow-hidden">
                   <PanelStack
                     panelIds={rightPanelIds}

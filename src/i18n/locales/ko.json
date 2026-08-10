@@ -1159,6 +1159,7 @@
   "menu": {
     "about": "정보",
     "alwaysOnTop": "항상 위에 표시",
+    "appMenu": "메뉴",
     "autoTile": "모두 자동 분할",
     "broadcastToAll": "모두에게 방송",
     "checkForUpdates": "업데이트 확인",

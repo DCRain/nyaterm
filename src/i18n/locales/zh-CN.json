@@ -1162,6 +1162,7 @@
   "menu": {
     "about": "关于",
     "alwaysOnTop": "置顶窗口",
+    "appMenu": "菜单",
     "autoTile": "自动分割所有会话",
     "broadcastToAll": "广播输入到所有会话",
     "checkForUpdates": "检查更新",
