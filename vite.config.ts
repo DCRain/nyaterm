@@ -1,6 +1,7 @@
 import path from "path";
-import { defineConfig, type PluginOption } from "vite";
+import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { reactDevToolsPlus } from "react-devtools-plus/vite";
 import tailwindcss from "@tailwindcss/vite";
 import browserslist from "browserslist";
 import { browserslistToTargets } from "lightningcss";
@@ -8,32 +9,18 @@ import { browserslistToTargets } from "lightningcss";
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 
-/**
- * Inject standalone React DevTools bridge (http://localhost:8097) during Vite serve.
- * Enabled by default so `pnpm devtools` can inspect components. Set
- * NYATERM_REACT_DEVTOOLS=0 to disable the bridge.
- */
-const reactDevTools = (): PluginOption => ({
-  name: "react-devtools",
-  apply: "serve",
-  transformIndexHtml() {
-    // @ts-expect-error process is a nodejs global
-    if (process.env.NYATERM_REACT_DEVTOOLS === "0") {
-      return [];
-    }
-    return [
-      {
-        tag: "script",
-        attrs: { src: "http://localhost:8097" },
-        injectTo: "head",
-      },
-    ];
-  },
-});
-
 // https://vite.dev/config/
 export default defineConfig(async () => ({
-  plugins: [react(), tailwindcss(), reactDevTools()],
+  plugins: [
+    react(),
+    // In-app React DevTools overlay (Alt/Option+Shift+D), Vue-DevTools-like UX for Tauri.
+    reactDevToolsPlus({
+      launchEditor: "cursor",
+      rootSelector: "#root",
+      theme: { mode: "dark", primaryColor: "react" },
+    }),
+    tailwindcss(),
+  ],
   css: {
     transformer: "lightningcss",
     lightningcss: {
