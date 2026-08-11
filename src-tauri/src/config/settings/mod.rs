@@ -4,6 +4,7 @@ mod diagnostics;
 mod general;
 mod interaction;
 mod proxy;
+mod recording;
 mod search;
 mod security;
 mod terminal;
@@ -24,6 +25,7 @@ pub use diagnostics::{DiagnosticsLogLevel, DiagnosticsSettings};
 pub use general::GeneralSettings;
 pub use interaction::InteractionSettings;
 pub use proxy::ProxySettings;
+pub use recording::RecordingSettings;
 pub use search::{SearchEngine, SearchSettings};
 pub use security::SecuritySettings;
 pub use terminal::{ActionLinksMatcherSettings, KeywordHighlightRule, TerminalSettings};
@@ -59,6 +61,8 @@ pub struct AppSettings {
     pub terminal: TerminalSettings,
     #[serde(default)]
     pub interaction: InteractionSettings,
+    #[serde(default)]
+    pub recording: RecordingSettings,
     #[serde(default)]
     pub transfer: TransferSettings,
     #[serde(default)]
@@ -126,6 +130,13 @@ pub fn load_app_settings(app: &AppHandle) -> AppResult<AppSettings> {
         migrated = true;
     }
     if settings.terminal.normalize_timestamp_format() {
+        migrated = true;
+    }
+    if migrate_legacy_recording_settings(&raw_settings, &mut settings.recording, &settings.transfer)
+    {
+        migrated = true;
+    }
+    if settings.recording.normalize() {
         migrated = true;
     }
     if settings.appearance.normalize_terminal_font_family() {
@@ -499,6 +510,44 @@ fn migrate_saved_connections_panel_widths(
     true
 }
 
+fn migrate_legacy_recording_settings(
+    raw_settings: &serde_json::Value,
+    recording: &mut RecordingSettings,
+    transfer: &TransferSettings,
+) -> bool {
+    if raw_settings.get("recording").is_some() {
+        return false;
+    }
+
+    let Some(raw_transfer) = raw_settings
+        .get("transfer")
+        .and_then(|value| value.as_object())
+    else {
+        return false;
+    };
+
+    let has_legacy_recording = [
+        "recording_path",
+        "recording_include_io_labels",
+        "recording_include_timestamps",
+        "recording_auto_start",
+        "recording_memory_limit_bytes",
+    ]
+    .iter()
+    .any(|key| raw_transfer.contains_key(*key));
+
+    if !has_legacy_recording {
+        return false;
+    }
+
+    recording.auto_start = transfer.recording_auto_start;
+    recording.base_path = transfer.recording_path.clone();
+    recording.include_io_labels = transfer.recording_include_io_labels;
+    recording.include_timestamps = transfer.recording_include_timestamps;
+    recording.memory_limit_bytes = transfer.recording_memory_limit_bytes;
+    true
+}
+
 fn persist_migrated_app_settings(app: &AppHandle, settings: &AppSettings) {
     let mut persisted = settings.clone();
     let Ok(cloud_sync) = encrypt_cloud_sync_settings(persisted.cloud_sync.clone()) else {
@@ -520,7 +569,10 @@ pub fn save_app_settings(app: &AppHandle, config: &AppSettings) -> AppResult<()>
 
 #[cfg(test)]
 mod tests {
-    use super::{TerminalSettings, migrate_terminal_timestamp_format};
+    use super::{
+        RecordingSettings, TerminalSettings, TransferSettings, migrate_legacy_recording_settings,
+        migrate_terminal_timestamp_format,
+    };
 
     #[test]
     fn migrates_legacy_timestamp_milliseconds_to_format() {
@@ -574,5 +626,32 @@ mod tests {
             &mut terminal
         ));
         assert_eq!(terminal.timestamp_format, "HH:mm:ss");
+    }
+
+    #[test]
+    fn migrates_legacy_transfer_recording_settings() {
+        let raw_settings = serde_json::json!({
+            "transfer": {
+                "recording_path": "D:/logs",
+                "recording_include_io_labels": false,
+                "recording_include_timestamps": false,
+                "recording_auto_start": true,
+                "recording_memory_limit_bytes": 1048576
+            }
+        });
+        let transfer: TransferSettings =
+            serde_json::from_value(raw_settings["transfer"].clone()).expect("transfer");
+        let mut recording = RecordingSettings::default();
+
+        assert!(migrate_legacy_recording_settings(
+            &raw_settings,
+            &mut recording,
+            &transfer
+        ));
+        assert!(recording.auto_start);
+        assert_eq!(recording.base_path, "D:/logs");
+        assert!(!recording.include_io_labels);
+        assert!(!recording.include_timestamps);
+        assert_eq!(recording.memory_limit_bytes, 1048576);
     }
 }

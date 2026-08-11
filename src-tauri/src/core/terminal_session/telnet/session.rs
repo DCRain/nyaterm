@@ -221,6 +221,9 @@ async fn telnet_session_task(
                             initial_bytes,
                         } => {
                             if !passthrough.is_empty() {
+                                if let Some(ref recorder) = recording_mgr_reader {
+                                    recorder.write_raw_output(&sid_reader, &passthrough);
+                                }
                                 let pre = output_decoder.decode(&passthrough);
                                 if !pre.is_empty() {
                                     if let Some(ref recorder) = recording_mgr_reader {
@@ -254,6 +257,9 @@ async fn telnet_session_task(
                         ZmodemDetectResult::NoMatch { passthrough } => {
                             if passthrough.is_empty() {
                                 continue;
+                            }
+                            if let Some(ref recorder) = recording_mgr_reader {
+                                recorder.write_raw_output(&sid_reader, &passthrough);
                             }
                             passthrough
                         }
@@ -368,9 +374,6 @@ async fn telnet_session_task(
             }, if startup_deadline.is_some() => {
                 startup_deadline = None;
                 if let Some(pending) = pending_startup.take() {
-                    if let Some(ref recorder) = recording_mgr {
-                        recorder.write_input(&session_id, &pending.input);
-                    }
                     let send_input = encode_terminal_input(&pending.input, &encoding);
                     if let Err(e) = writer.write_all(&send_input).await {
                         log_rate_limited(StructuredLog {
@@ -404,7 +407,7 @@ async fn telnet_session_task(
                     Some(SessionCommand::DetachRenderer) => {
                         output.detach();
                     }
-                    Some(SessionCommand::Write { mut data, automated }) => {
+                    Some(SessionCommand::Write { mut data, automated, .. }) => {
                         if !automated {
                             let mut auto = auto_login.lock().await;
                             if let Some(auto) = auto.as_mut() {
@@ -434,9 +437,6 @@ async fn telnet_session_task(
                             }
 
                             for data in edit_result.writes {
-                                if let Some(ref recorder) = recording_mgr {
-                                    recorder.write_input(&session_id, &data);
-                                }
                                 let send_data = encode_terminal_input(&data, &encoding);
                                 if let Err(e) = writer.write_all(&send_data).await {
                                     write_failed = Some(e);
@@ -455,9 +455,6 @@ async fn telnet_session_task(
                                 }
                             }
                             let send_data = encode_terminal_input(&data, &encoding);
-                            if let Some(ref recorder) = recording_mgr {
-                                recorder.write_input(&session_id, &data);
-                            }
                             for chunk in split_write_chunks(&send_data, config.force_character_at_a_time) {
                                 if let Err(e) = writer.write_all(&chunk).await {
                                     write_failed = Some(e);

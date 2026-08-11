@@ -1,5 +1,6 @@
 /// Per-connection local terminal config.
 pub struct LocalSessionConfig {
+    pub connection_id: Option<String>,
     pub shell_path: String,
     pub shell_args: String,
     pub working_dir: Option<String>,

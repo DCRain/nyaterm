@@ -73,6 +73,12 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     defaultKeys: "ctrl+shift+a, meta+shift+a",
   },
   {
+    id: "terminal.showCommandSuggestions",
+    category: "terminal",
+    labelKey: "settings.shortcutLabels.showCommandSuggestions",
+    defaultKeys: "alt+r",
+  },
+  {
     id: "terminal.manageSyncGroups",
     category: "terminal",
     labelKey: "settings.shortcutLabels.manageSyncGroups",

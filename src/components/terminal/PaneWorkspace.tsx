@@ -5,6 +5,7 @@ import ResizeHandle from "@/components/layout/ResizeHandle";
 import SftpWorkspace from "@/components/panel/file-explorer/SftpWorkspace";
 import { Button } from "@/components/ui/button";
 import { useApp } from "@/context/AppContext";
+import RdpPaneHost from "@/components/rdp/RdpPaneHost";
 import {
   getActiveGroupForSession,
   getSessionInputPeerIds,
@@ -14,7 +15,7 @@ import {
   resumeSessionInGroup,
 } from "@/lib/syncInputGroups";
 import { isSplitPane } from "@/lib/workspaceTabs";
-import type { PaneNode, SplitPane, Tab } from "@/types/global";
+import type { PaneNode, SplitPane, Tab, TerminalSessionPane } from "@/types/global";
 import XTerminal from "./XTerminal";
 
 interface PaneWorkspaceProps {
@@ -278,6 +279,16 @@ function PaneNodeView({
             </Button>
           ) : null}
         </div>
+      ) : node.paneKind === "rdp" ? (
+        <RdpPaneHost
+          pane={node}
+          active={isActive}
+          visible={visible}
+          onDisconnectedCloseRequested={() => void onDisconnectedCloseRequested?.(tab.id, node.id)}
+          onConnectionError={(sessionId, error) =>
+            onConnectionError?.(tab.id, node.id, sessionId, error)
+          }
+        />
       ) : (
         <PaneXTerminal
           sessionId={node.sessionId}
@@ -313,7 +324,7 @@ function PaneXTerminal({
   sessionId: string;
   active: boolean;
   visible: boolean;
-  sessionType: import("@/types/global").SessionType;
+  sessionType: TerminalSessionPane["type"];
   connectionId?: string;
   onReconnected?: (oldSessionId: string, newSessionId: string) => void;
   onDisconnectedCloseRequested?: () => void;

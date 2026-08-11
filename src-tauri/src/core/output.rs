@@ -13,10 +13,11 @@ const OUTPUT_NORMAL_BATCH_BYTES: usize = 64 * 1024;
 const OUTPUT_FLOOD_BATCH_BYTES: usize = 128 * 1024;
 const OUTPUT_PAUSE_HIGH_WATERMARK_BYTES: usize = 1024 * 1024;
 const OUTPUT_RESUME_LOW_WATERMARK_BYTES: usize = 128 * 1024;
-const OUTPUT_MAX_PENDING_BYTES: usize = 8 * 1024 * 1024;
 const OUTPUT_CLOSE_FLUSH_MAX_BYTES: usize = 1024 * 1024;
-const ALT_SCREEN_ENTER: &str = "\x1b[?1049h";
-const ALT_SCREEN_EXIT: &str = "\x1b[?1049l";
+#[cfg(not(test))]
+const OUTPUT_CATASTROPHIC_BACKLOG_BYTES: usize = 64 * 1024 * 1024;
+#[cfg(test)]
+const OUTPUT_CATASTROPHIC_BACKLOG_BYTES: usize = OUTPUT_PAUSE_HIGH_WATERMARK_BYTES + 64 * 1024;
 
 type OutputSink = dyn Fn(TerminalOutputPayload) + Send + Sync + 'static;
 
@@ -34,11 +35,10 @@ struct OutputState {
     pending: VecDeque<String>,
     pending_bytes: usize,
     unacked_bytes: usize,
-    dropped_bytes: usize,
-    alt_screen_prefix: Option<&'static str>,
     next_flush_id: u64,
     scheduled_flush_id: Option<u64>,
     flow_paused: bool,
+    catastrophic_close_sent: bool,
 }
 
 struct FlushResult {
@@ -106,14 +106,17 @@ impl SessionOutputCoalescer {
 
         let mut schedule_timer = None;
         let mut flush_now = false;
+        let mut close_for_overflow = false;
         let flow_change = {
             let mut state = self.state.lock().unwrap();
             let was_empty = state.pending.is_empty();
             state.pending_bytes = state.pending_bytes.saturating_add(text.len());
             state.pending.push_back(text);
-            trim_pending(&mut state);
 
             let flow_change = update_flow_state(&mut state);
+            if should_close_for_catastrophic_backlog(&mut state) {
+                close_for_overflow = true;
+            }
             if state.attached && state.pending_bytes >= batch_limit(&state) {
                 state.next_flush_id = state.next_flush_id.wrapping_add(1);
                 state.scheduled_flush_id = None;
@@ -128,6 +131,9 @@ impl SessionOutputCoalescer {
         };
 
         self.send_flow_change(flow_change);
+        if close_for_overflow {
+            self.send_close_for_overflow();
+        }
 
         if let Some(flush_id) = schedule_timer {
             self.schedule_flush(flush_id);
@@ -283,6 +289,17 @@ impl SessionOutputCoalescer {
         };
         let _ = tx.send(command);
     }
+
+    fn send_close_for_overflow(&self) {
+        tracing::error!(
+            threshold_bytes = OUTPUT_CATASTROPHIC_BACKLOG_BYTES,
+            "Closing terminal session after catastrophic output backlog overflow"
+        );
+        let Some(tx) = &self.flow_control_tx else {
+            return;
+        };
+        let _ = tx.send(SessionCommand::Close);
+    }
 }
 
 fn flush_from_state(state: &mut OutputState) -> FlushResult {
@@ -307,15 +324,12 @@ fn flush_all_from_state(state: &mut OutputState) -> FlushResult {
 }
 
 fn take_pending_batch(state: &mut OutputState) -> Option<TerminalOutputPayload> {
-    if state.pending.is_empty() && state.alt_screen_prefix.is_none() {
+    if state.pending.is_empty() {
         return None;
     }
 
     let mut remaining = batch_limit(state);
     let mut data = String::new();
-    if let Some(prefix) = state.alt_screen_prefix.take() {
-        data.push_str(prefix);
-    }
 
     while remaining > 0 {
         let Some(front) = state.pending.pop_front() else {
@@ -345,14 +359,11 @@ fn take_pending_batch(state: &mut OutputState) -> Option<TerminalOutputPayload> 
 }
 
 fn take_all_pending(state: &mut OutputState) -> Option<TerminalOutputPayload> {
-    if state.pending.is_empty() && state.alt_screen_prefix.is_none() {
+    if state.pending.is_empty() {
         return None;
     }
 
     let mut data = String::new();
-    if let Some(prefix) = state.alt_screen_prefix.take() {
-        data.push_str(prefix);
-    }
     while let Some(chunk) = state.pending.pop_front() {
         state.pending_bytes = state.pending_bytes.saturating_sub(chunk.len());
         data.push_str(&chunk);
@@ -368,16 +379,11 @@ fn take_all_pending(state: &mut OutputState) -> Option<TerminalOutputPayload> {
 fn payload_from_data(state: &mut OutputState, data: String) -> TerminalOutputPayload {
     let bytes = data.len();
     state.unacked_bytes = state.unacked_bytes.saturating_add(bytes);
-    let dropped_bytes = std::mem::take(&mut state.dropped_bytes);
     TerminalOutputPayload {
         data,
         bytes,
-        dropped_bytes,
+        dropped_bytes: 0,
     }
-}
-
-fn trim_pending(state: &mut OutputState) {
-    trim_pending_to_max(state, OUTPUT_MAX_PENDING_BYTES);
 }
 
 fn trim_pending_to_max(state: &mut OutputState, max_bytes: usize) {
@@ -386,7 +392,6 @@ fn trim_pending_to_max(state: &mut OutputState, max_bytes: usize) {
     }
 
     let mut bytes_to_drop = state.pending_bytes - max_bytes;
-    let mut dropped_text = String::new();
     while bytes_to_drop > 0 {
         let Some(front) = state.pending.pop_front() else {
             break;
@@ -395,8 +400,6 @@ fn trim_pending_to_max(state: &mut OutputState, max_bytes: usize) {
         if front.len() <= bytes_to_drop {
             bytes_to_drop -= front.len();
             state.pending_bytes = state.pending_bytes.saturating_sub(front.len());
-            state.dropped_bytes = state.dropped_bytes.saturating_add(front.len());
-            dropped_text.push_str(&front);
             continue;
         }
 
@@ -404,17 +407,7 @@ fn trim_pending_to_max(state: &mut OutputState, max_bytes: usize) {
         let (dropped, kept) = front.split_at(split_at);
         state.pending.push_front(kept.to_string());
         state.pending_bytes = state.pending_bytes.saturating_sub(dropped.len());
-        state.dropped_bytes = state.dropped_bytes.saturating_add(dropped.len());
-        dropped_text.push_str(dropped);
         break;
-    }
-
-    if let Some(active) = last_alt_screen_state(&dropped_text) {
-        state.alt_screen_prefix = Some(if active {
-            ALT_SCREEN_ENTER
-        } else {
-            ALT_SCREEN_EXIT
-        });
     }
 }
 
@@ -429,6 +422,15 @@ fn update_flow_state(state: &mut OutputState) -> Option<bool> {
     } else {
         None
     }
+}
+
+fn should_close_for_catastrophic_backlog(state: &mut OutputState) -> bool {
+    let backlog = state.pending_bytes.saturating_add(state.unacked_bytes);
+    if state.catastrophic_close_sent || backlog < OUTPUT_CATASTROPHIC_BACKLOG_BYTES {
+        return false;
+    }
+    state.catastrophic_close_sent = true;
+    true
 }
 
 fn batch_limit(state: &OutputState) -> usize {
@@ -458,22 +460,11 @@ fn byte_boundary_at_or_before(text: &str, max_bytes: usize) -> usize {
     }
 }
 
-fn last_alt_screen_state(text: &str) -> Option<bool> {
-    let enter = text.rfind(ALT_SCREEN_ENTER);
-    let exit = text.rfind(ALT_SCREEN_EXIT);
-    match (enter, exit) {
-        (Some(enter), Some(exit)) => Some(enter > exit),
-        (Some(_), None) => Some(true),
-        (None, Some(_)) => Some(false),
-        (None, None) => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        ALT_SCREEN_ENTER, ALT_SCREEN_EXIT, OUTPUT_CLOSE_FLUSH_MAX_BYTES, OUTPUT_FLOOD_BATCH_BYTES,
-        OUTPUT_MAX_PENDING_BYTES, OUTPUT_NORMAL_BATCH_BYTES, OUTPUT_PAUSE_HIGH_WATERMARK_BYTES,
+        OUTPUT_CATASTROPHIC_BACKLOG_BYTES, OUTPUT_CLOSE_FLUSH_MAX_BYTES, OUTPUT_FLOOD_BATCH_BYTES,
+        OUTPUT_NORMAL_BATCH_BYTES, OUTPUT_PAUSE_HIGH_WATERMARK_BYTES,
         OUTPUT_RESUME_LOW_WATERMARK_BYTES, SessionOutputCoalescer, TerminalOutputPayload,
     };
     use crate::core::SessionCommand;
@@ -591,45 +582,61 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pending_output_has_hard_cap_and_reports_dropped_bytes() {
+    async fn pending_output_is_preserved_in_order_without_dropped_bytes() {
         let (emitted, sink) = collect_sink();
         let output = SessionOutputCoalescer::with_sink(sink);
+        let payload = format!("{}{}", "a".repeat(OUTPUT_FLOOD_BATCH_BYTES), "tail");
 
-        output.push_owned("a".repeat(OUTPUT_MAX_PENDING_BYTES + 16));
+        output.push_owned(payload.clone());
         output.attach();
 
+        let emitted_bytes = wait_for_emitted_bytes(&emitted, OUTPUT_FLOOD_BATCH_BYTES).await;
+        output.ack(emitted_bytes);
+        let total = wait_for_emitted_bytes(&emitted, payload.len()).await;
         let emitted = emitted.lock().unwrap();
-        assert_eq!(emitted[0].dropped_bytes, 16);
-        assert_eq!(emitted[0].data.len(), OUTPUT_FLOOD_BATCH_BYTES);
+        assert_eq!(total, payload.len());
+        assert_eq!(
+            emitted
+                .iter()
+                .map(|payload| payload.data.as_str())
+                .collect::<String>(),
+            payload
+        );
+        assert!(emitted.iter().all(|payload| payload.dropped_bytes == 0));
     }
 
     #[tokio::test]
-    async fn dropped_alternate_screen_state_is_preserved() {
+    async fn detached_pending_output_is_preserved_until_attach() {
         let (emitted, sink) = collect_sink();
         let output = SessionOutputCoalescer::with_sink(sink);
-        let prefix = format!("before{ALT_SCREEN_ENTER}");
-        let payload = format!("{}{}", prefix, "x".repeat(OUTPUT_MAX_PENDING_BYTES + 16));
+        let payload = "\x1b[?25lhidden\x1b[?25h";
 
-        output.push_owned(payload);
+        output.detach();
+        output.push(payload);
+        sleep(Duration::from_millis(20)).await;
+        assert!(emitted.lock().unwrap().is_empty());
+
         output.attach();
 
         let emitted = emitted.lock().unwrap();
-        assert!(emitted[0].data.starts_with(ALT_SCREEN_ENTER));
-        assert!(emitted[0].dropped_bytes > 0);
+        assert_eq!(emitted.len(), 1);
+        assert_eq!(emitted[0].data, payload);
+        assert_eq!(emitted[0].dropped_bytes, 0);
     }
 
     #[tokio::test]
-    async fn dropped_alternate_screen_exit_is_preserved() {
-        let (emitted, sink) = collect_sink();
-        let output = SessionOutputCoalescer::with_sink(sink);
-        let prefix = format!("before{ALT_SCREEN_EXIT}");
-        let payload = format!("{}{}", prefix, "x".repeat(OUTPUT_MAX_PENDING_BYTES + 16));
+    async fn catastrophic_backlog_sends_explicit_close_instead_of_dropping() {
+        let (_emitted, sink) = collect_sink();
+        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
+        let output = SessionOutputCoalescer::with_flow_sink(cmd_tx, sink);
 
-        output.push_owned(payload);
-        output.attach();
+        output.push_owned("x".repeat(OUTPUT_CATASTROPHIC_BACKLOG_BYTES));
 
-        let emitted = emitted.lock().unwrap();
-        assert!(emitted[0].data.starts_with(ALT_SCREEN_EXIT));
+        assert!(matches!(
+            cmd_rx.recv().await,
+            Some(SessionCommand::PauseOutput)
+        ));
+        assert!(matches!(cmd_rx.recv().await, Some(SessionCommand::Close)));
     }
 
     #[tokio::test]
@@ -709,7 +716,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn close_flushes_only_recent_pending_output() {
+    async fn close_flushes_only_recent_pending_output_without_protocol_drop_ack() {
         let (emitted, sink) = collect_sink();
         let output = SessionOutputCoalescer::with_sink(sink);
 
@@ -719,7 +726,7 @@ mod tests {
         let emitted = emitted.lock().unwrap();
         assert_eq!(emitted.len(), 1);
         assert_eq!(emitted[0].bytes, OUTPUT_CLOSE_FLUSH_MAX_BYTES);
-        assert_eq!(emitted[0].dropped_bytes, 16);
+        assert_eq!(emitted[0].dropped_bytes, 0);
         assert!(emitted[0].data.chars().all(|ch| ch == 'a'));
     }
 }

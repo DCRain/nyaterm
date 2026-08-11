@@ -88,10 +88,6 @@ export function TransferTab() {
 
   const update = (patch: Partial<typeof transfer>) =>
     updateAppSettings({ transfer: { ...transfer, ...patch } });
-  const recordingMemoryLimitMiB = Math.max(
-    1,
-    Math.round((transfer.recording_memory_limit_bytes || 5 * 1024 * 1024) / (1024 * 1024)),
-  );
 
   return (
     <div className="space-y-5">
@@ -148,60 +144,6 @@ export function TransferTab() {
             ]}
           />
         )}
-      </SettingSection>
-
-      <SettingSection
-        title={t("settings.recordingSettings")}
-        desc={t("settings.recordingSettingsDesc")}
-        contentClassName="space-y-5"
-      >
-        <PathPickerInput
-          label={t("settings.recordingPath")}
-          desc={t("settings.recordingPathDesc")}
-          value={transfer.recording_path}
-          placeholder={defaultDownloadDir}
-          onChange={(v) => update({ recording_path: v })}
-        />
-
-        <SettingRow
-          label={t("settings.recordingAutoStart")}
-          desc={t("settings.recordingAutoStartDesc")}
-        >
-          <SettingSwitch
-            checked={transfer.recording_auto_start}
-            onChange={(v) => update({ recording_auto_start: v })}
-          />
-        </SettingRow>
-
-        <SettingRow
-          label={t("settings.recordingIncludeIoLabels")}
-          desc={t("settings.recordingIncludeIoLabelsDesc")}
-        >
-          <SettingSwitch
-            checked={transfer.recording_include_io_labels}
-            onChange={(v) => update({ recording_include_io_labels: v })}
-          />
-        </SettingRow>
-
-        <SettingRow
-          label={t("settings.recordingIncludeTimestamps")}
-          desc={t("settings.recordingIncludeTimestampsDesc")}
-        >
-          <SettingSwitch
-            checked={transfer.recording_include_timestamps ?? true}
-            onChange={(v) => update({ recording_include_timestamps: v })}
-          />
-        </SettingRow>
-
-        <SettingNumberInput
-          label={t("settings.recordingMemoryLimit")}
-          desc={t("settings.recordingMemoryLimitDesc")}
-          min={1}
-          max={100}
-          value={recordingMemoryLimitMiB}
-          controlClassName="max-w-sm"
-          onChange={(v) => update({ recording_memory_limit_bytes: Math.max(1, v) * 1024 * 1024 })}
-        />
       </SettingSection>
 
       <SettingSection contentClassName="space-y-5">

@@ -15,22 +15,7 @@ import {
 import ChildWindowHeader from "@/components/layout/ChildWindowHeader";
 import { buildGroupPath, type ConnectionOption, sortLabel } from "@/components/network/shared";
 import { LocalTerminal } from "@/components/sessions/LocalTerminal";
-import {
-  DEFAULT_RDP_HEIGHT,
-  DEFAULT_RDP_USERNAME,
-  DEFAULT_RDP_WIDTH,
-  defaultRdpRedirectSettings,
-  driveRedirectToStored,
-  normalizeRdpRedirectSettings,
-  normalizeRdpSize,
-  type RdpDisplayMode,
-  RdpForm,
-  type RdpRedirectSettings,
-  type RdpResolutionPreset,
-  rdpRedirectSettingsFromSaved,
-  resolveRdpResolutionPreset,
-  starOrOffToStored,
-} from "@/components/sessions/RdpForm";
+import { RdpForm } from "@/components/sessions/RdpForm";
 import { SerialForm } from "@/components/sessions/SerialForm";
 import { type SshAuthMode, SshForm } from "@/components/sessions/SshForm";
 import { TelnetForm } from "@/components/sessions/TelnetForm";
@@ -52,9 +37,16 @@ import type {
   Group,
   OtpEntry,
   ProxyConfig,
+  RdpCertificatePolicy,
+  RdpClipboardMode,
+  RdpDisplayMode,
+  RecordingMode,
   SavedConnection,
   SftpSettings,
+  SshAgentEndpoint,
   SshAlgorithmPreferences,
+  SshProfile,
+  SshTerminalType,
 } from "@/types/global";
 
 const isValidPort = (value: number) => Number.isInteger(value) && value >= 1 && value <= 65535;
@@ -77,6 +69,7 @@ const DEFAULT_SFTP_SETTINGS: SftpSettings = {
   shell_detection_timeout_ms: DEFAULT_SFTP_SHELL_DETECTION_TIMEOUT_MS,
   filename_encoding: "",
 };
+type SshTerminalTypeSelection = SshTerminalType | "default";
 
 function normalizeSshAlgorithms(
   value: SavedConnection["ssh_algorithms"] | undefined,
@@ -160,7 +153,7 @@ const PROTOCOL_OPTIONS: Array<{
     titleKey: "dialog.protocolRdp",
     titleFallback: "RDP",
     descKey: "dialog.protocolRdpDesc",
-    descFallback: "Open an external Remote Desktop client",
+    descFallback: "Connect to a remote Windows desktop inside NyaTerm",
     icon: TbServer,
   },
   {
@@ -197,14 +190,16 @@ export default function NewSessionPage() {
   const [telnetPort, setTelnetPort] = useState(23);
   const [rdpPort, setRdpPort] = useState(3389);
   const [vncPort, setVncPort] = useState(5900);
-  const [rdpDisplayMode, setRdpDisplayMode] = useState<RdpDisplayMode>("fullscreen");
-  const [rdpResolutionPreset, setRdpResolutionPreset] = useState<RdpResolutionPreset>("1920x1080");
-  const [rdpWidth, setRdpWidth] = useState(DEFAULT_RDP_WIDTH);
-  const [rdpHeight, setRdpHeight] = useState(DEFAULT_RDP_HEIGHT);
-  const [rdpRedirects, setRdpRedirects] = useState<RdpRedirectSettings>(() =>
-    defaultRdpRedirectSettings(),
-  );
-  const [rdpPreferredClient, setRdpPreferredClient] = useState("");
+  const [rdpDomain, setRdpDomain] = useState("");
+  const [rdpUseNla, setRdpUseNla] = useState(true);
+  const [rdpCertificatePolicy, setRdpCertificatePolicy] =
+    useState<RdpCertificatePolicy>("prompt");
+  const [rdpDisplayMode, setRdpDisplayMode] = useState<RdpDisplayMode>("fit-window");
+  const [rdpDisplayWidth, setRdpDisplayWidth] = useState(1920);
+  const [rdpDisplayHeight, setRdpDisplayHeight] = useState(1080);
+  const [rdpClipboardMode, setRdpClipboardMode] = useState<RdpClipboardMode>("text-only");
+  const [rdpReconnectEnabled, setRdpReconnectEnabled] = useState(true);
+  const [rdpReconnectMaxAttempts, setRdpReconnectMaxAttempts] = useState(5);
   const [username, setUsername] = useState("root");
   const [authType, setAuthType] = useState<SshAuthMode>("password");
   const [passwordId, setPasswordId] = useState("");
@@ -248,8 +243,12 @@ export default function NewSessionPage() {
   const [postLoginDelayMs, setPostLoginDelayMs] = useState(DEFAULT_POST_LOGIN_DELAY_MS);
   const [sshBackspaceMode, setSshBackspaceMode] = useState("del");
   const [x11Forwarding, setX11Forwarding] = useState(false);
+  const [agentEndpoint, setAgentEndpoint] = useState<SshAgentEndpoint>({ type: "auto" });
+  const [agentForwarding, setAgentForwarding] = useState(false);
   const [sshAlgorithms, setSshAlgorithms] =
     useState<SshAlgorithmPreferences>(DEFAULT_SSH_ALGORITHMS);
+  const [sshProfile, setSshProfile] = useState<SshProfile>("standard");
+  const [sshTerminalType, setSshTerminalType] = useState<SshTerminalTypeSelection>("default");
   const [sftpSettings, setSftpSettings] = useState<SftpSettings>(DEFAULT_SFTP_SETTINGS);
 
   // Serial Settings States
@@ -278,6 +277,11 @@ export default function NewSessionPage() {
 
   // Per-connection encoding ("global" = follow global setting)
   const [encoding, setEncoding] = useState("global");
+  const [recordingUseGlobal, setRecordingUseGlobal] = useState(true);
+  const [recordingAutoStart, setRecordingAutoStart] = useState(appSettings.recording.auto_start);
+  const [recordingMode, setRecordingMode] = useState<RecordingMode>(
+    appSettings.recording.default_mode,
+  );
 
   useEffect(() => {
     invoke<Group[]>("get_groups")
@@ -321,6 +325,9 @@ export default function NewSessionPage() {
         setCurrentTab(tabMap[found.type] || "ssh");
         setWizardStep("form");
         setEncoding(found.encoding || "global");
+        setRecordingUseGlobal(!found.recording);
+        setRecordingAutoStart(found.recording?.auto_start ?? appSettings.recording.auto_start);
+        setRecordingMode(found.recording?.mode ?? appSettings.recording.default_mode);
 
         if (found.type === "ssh") {
           setHost(found.host || "");
@@ -339,7 +346,11 @@ export default function NewSessionPage() {
           setPostLoginDelayMs(found.post_login?.delay_ms ?? DEFAULT_POST_LOGIN_DELAY_MS);
           setSshBackspaceMode(found.backspace_mode || "del");
           setX11Forwarding(found.x11_forwarding ?? false);
+          setAgentEndpoint(found.agent_endpoint ?? { type: "auto" });
+          setAgentForwarding(found.agent_forwarding ?? false);
           setSshAlgorithms(normalizeSshAlgorithms(found.ssh_algorithms));
+          setSshProfile(found.ssh_profile || "standard");
+          setSshTerminalType(found.terminal_type || "default");
           setSftpSettings(normalizeSftpSettings(found.sftp));
         } else if (found.type === "telnet") {
           setHost(found.host || "");
@@ -359,15 +370,20 @@ export default function NewSessionPage() {
         } else if (found.type === "rdp") {
           setHost(found.host || "");
           setRdpPort(found.port || 3389);
-          setUsername(found.username?.trim() || DEFAULT_RDP_USERNAME);
-          const mode = found.display_mode === "windowed" ? "windowed" : "fullscreen";
-          setRdpDisplayMode(mode);
-          const sized = normalizeRdpSize(found.width ?? 0, found.height ?? 0);
-          setRdpWidth(sized.width);
-          setRdpHeight(sized.height);
-          setRdpResolutionPreset(resolveRdpResolutionPreset(sized.width, sized.height));
-          setRdpRedirects(rdpRedirectSettingsFromSaved(found));
-          setRdpPreferredClient(found.preferred_client?.trim() || "");
+          setUsername(found.username || "");
+          setRdpDomain(found.domain || "");
+          setPasswordId(found.auth?.password_id || "");
+          setHasPassword(found.auth?.has_password || false);
+          setRdpUseNla(found.security?.use_nla ?? true);
+          setRdpCertificatePolicy(found.security?.certificate_policy ?? "prompt");
+          setRdpDisplayMode(
+            found.display?.mode === "native" ? "fixed" : (found.display?.mode ?? "fit-window"),
+          );
+          setRdpDisplayWidth(found.display?.width ?? 1920);
+          setRdpDisplayHeight(found.display?.height ?? 1080);
+          setRdpClipboardMode(found.clipboard?.mode ?? "text-only");
+          setRdpReconnectEnabled(found.reconnect?.enabled ?? true);
+          setRdpReconnectMaxAttempts(found.reconnect?.max_attempts ?? 5);
         } else if (found.type === "vnc") {
           setHost(found.host || "");
           setVncPort(found.port || 5900);
@@ -385,7 +401,7 @@ export default function NewSessionPage() {
         }
       })
       .catch((e) => setError(getErrorMessage(e)));
-  }, [editId, t]);
+  }, [appSettings.recording.auto_start, appSettings.recording.default_mode, editId, t]);
 
   const loadSerialPorts = useCallback(async () => {
     setSerialPortsLoading(true);
@@ -420,13 +436,16 @@ export default function NewSessionPage() {
     setTelnetPort(23);
     setRdpPort(3389);
     setVncPort(5900);
-    setRdpDisplayMode("fullscreen");
-    setRdpResolutionPreset("1920x1080");
-    setRdpWidth(DEFAULT_RDP_WIDTH);
-    setRdpHeight(DEFAULT_RDP_HEIGHT);
-    setRdpRedirects(defaultRdpRedirectSettings());
-    setRdpPreferredClient("");
     setUsername("root");
+    setRdpDomain("");
+    setRdpUseNla(true);
+    setRdpCertificatePolicy("prompt");
+    setRdpDisplayMode("fit-window");
+    setRdpDisplayWidth(1920);
+    setRdpDisplayHeight(1080);
+    setRdpClipboardMode("text-only");
+    setRdpReconnectEnabled(true);
+    setRdpReconnectMaxAttempts(5);
     setAuthType("password");
     setPasswordId("");
     setPassword("");
@@ -443,7 +462,11 @@ export default function NewSessionPage() {
     setPostLoginDelayMs(DEFAULT_POST_LOGIN_DELAY_MS);
     setSshBackspaceMode("del");
     setX11Forwarding(false);
+    setAgentEndpoint({ type: "auto" });
+    setAgentForwarding(false);
     setSshAlgorithms({ ...DEFAULT_SSH_ALGORITHMS });
+    setSshProfile("standard");
+    setSshTerminalType("default");
     setSftpSettings({ ...DEFAULT_SFTP_SETTINGS });
     setSerialPortName("");
     setSerialPorts([]);
@@ -466,10 +489,13 @@ export default function NewSessionPage() {
     setTelnetSendNaws(true);
     setTelnetSendSga(true);
     setEncoding("global");
+    setRecordingUseGlobal(true);
+    setRecordingAutoStart(appSettings.recording.auto_start);
+    setRecordingMode(appSettings.recording.default_mode);
     setShowIconPicker(false);
     setError("");
     setConnecting(false);
-  }, []);
+  }, [appSettings.recording.auto_start, appSettings.recording.default_mode]);
 
   const serialPortOptions: { unavailable?: boolean; value: string }[] = serialPorts.map((port) => ({
     value: port,
@@ -633,11 +659,18 @@ export default function NewSessionPage() {
       if (!isValidPort(rdpPort)) {
         return t("dialog.portInvalid", "Port must be between 1 and 65535");
       }
-      if (rdpResolutionPreset === "custom" && (rdpWidth < 640 || rdpHeight < 480)) {
-        return t("dialog.rdpResolutionInvalid", "Custom resolution must be at least 640脳480");
+      if (!username.trim()) {
+        return t("dialog.usernameRequired", "Username is required");
       }
-      if (rdpRedirects.driveRedirectMode === "custom" && !rdpRedirects.driveRedirectCustom.trim()) {
-        return t("dialog.rdpDriveCustomRequired", "Enter at least one drive, e.g. C:;D:;");
+      if (!Number.isInteger(rdpDisplayWidth) || rdpDisplayWidth < 640 || rdpDisplayWidth > 7680) {
+        return t("dialog.rdpDisplayWidthInvalid");
+      }
+      if (
+        !Number.isInteger(rdpDisplayHeight) ||
+        rdpDisplayHeight < 480 ||
+        rdpDisplayHeight > 4320
+      ) {
+        return t("dialog.rdpDisplayHeightInvalid");
       }
     }
 
@@ -675,12 +708,9 @@ export default function NewSessionPage() {
     postLoginCommand,
     postLoginDelayMs,
     postLoginEnabled,
-    rdpHeight,
+    rdpDisplayHeight,
+    rdpDisplayWidth,
     rdpPort,
-    rdpRedirects.driveRedirectCustom,
-    rdpRedirects.driveRedirectMode,
-    rdpResolutionPreset,
-    rdpWidth,
     serialPortName,
     shellPath,
     sshPort,
@@ -764,10 +794,10 @@ export default function NewSessionPage() {
             })()
           : undefined;
       const auth =
-        currentTab === "ssh" || currentTab === "telnet"
+        currentTab === "ssh" || currentTab === "telnet" || currentTab === "rdp"
           ? (() => {
               const resolvedAuthMode: SshAuthMode =
-                currentTab === "telnet"
+                currentTab === "telnet" || currentTab === "rdp"
                   ? authType === "none"
                     ? "none"
                     : "password"
@@ -775,7 +805,9 @@ export default function NewSessionPage() {
                     ? "password"
                     : authType === "key"
                       ? "key"
-                      : "none";
+                      : authType === "agent"
+                        ? "agent"
+                        : "none";
               const nextAuth: NonNullable<SavedConnection["auth"]> = {
                 mode: resolvedAuthMode,
                 password_id: resolvedAuthMode === "password" ? passwordId || "" : "",
@@ -832,6 +864,14 @@ export default function NewSessionPage() {
         initialData && initialGroupKey === finalGroupKey
           ? (initialData.sort_order ?? nextSortOrder)
           : nextSortOrder;
+      const supportsRecording = currentTab !== "rdp" && currentTab !== "vnc";
+      const recording =
+        supportsRecording && !recordingUseGlobal
+          ? {
+              auto_start: recordingAutoStart,
+              mode: recordingMode,
+            }
+          : undefined;
 
       const connection: SavedConnection = {
         id: initialData?.id || "",
@@ -844,6 +884,7 @@ export default function NewSessionPage() {
         icon: iconKey || undefined,
         icon_auto_detect: currentTab === "ssh" ? iconAutoDetect : false,
         encoding: encoding === "global" ? undefined : encoding,
+        recording,
         ...(currentTab === "ssh"
           ? {
               host: normalizedHost,
@@ -853,9 +894,13 @@ export default function NewSessionPage() {
               network,
               post_login: postLogin,
               ssh_algorithms: sshAlgorithms,
+              ssh_profile: sshProfile,
+              terminal_type: sshTerminalType === "default" ? undefined : sshTerminalType,
               sftp: sftpSettings,
               backspace_mode: sshBackspaceMode,
               x11_forwarding: x11Forwarding,
+              agent_endpoint: agentEndpoint,
+              agent_forwarding: agentForwarding,
             }
           : {}),
         ...(currentTab === "telnet"
@@ -875,32 +920,30 @@ export default function NewSessionPage() {
             }
           : {}),
         ...(currentTab === "rdp"
-          ? (() => {
-              const sized = normalizeRdpSize(rdpWidth, rdpHeight);
-              const redirects = normalizeRdpRedirectSettings(rdpRedirects);
-              return {
-                host: normalizedHost,
-                port: rdpPort,
-                username: normalizedUsername || DEFAULT_RDP_USERNAME,
-                display_mode: rdpDisplayMode,
-                width: sized.width,
-                height: sized.height,
-                redirect_clipboard: redirects.redirectClipboard,
-                redirect_printers: redirects.redirectPrinters,
-                redirect_com_ports: redirects.redirectComPorts,
-                redirect_smart_cards: redirects.redirectSmartCards,
-                drive_redirect: driveRedirectToStored(
-                  redirects.driveRedirectMode,
-                  redirects.driveRedirectCustom,
-                ),
-                device_redirect: starOrOffToStored(redirects.deviceRedirect),
-                camera_redirect: starOrOffToStored(redirects.cameraRedirect),
-                audio_mode: redirects.audioMode,
-                audio_capture: redirects.audioCapture,
-                keyboard_hook: redirects.keyboardHook,
-                preferred_client: rdpPreferredClient.trim() || undefined,
-              };
-            })()
+          ? {
+              host: normalizedHost,
+              port: rdpPort,
+              username: normalizedUsername,
+              domain: rdpDomain.trim() || undefined,
+              auth,
+              security: {
+                use_nla: rdpUseNla,
+                certificate_policy: rdpCertificatePolicy,
+              },
+              display: {
+                mode: rdpDisplayMode,
+                width: rdpDisplayWidth,
+                height: rdpDisplayHeight,
+                color_depth: 32,
+              },
+              clipboard: {
+                mode: rdpClipboardMode,
+              },
+              reconnect: {
+                enabled: rdpReconnectEnabled,
+                max_attempts: rdpReconnectMaxAttempts,
+              },
+            }
           : {}),
         ...(currentTab === "vnc"
           ? {
@@ -958,7 +1001,7 @@ export default function NewSessionPage() {
     setTestResult(null);
     setError("");
     if (!editId && protocol === "rdp" && (username === "root" || !username.trim())) {
-      setUsername(DEFAULT_RDP_USERNAME);
+      setUsername("");
     }
     setWizardStep("form");
   };
@@ -1478,10 +1521,24 @@ export default function NewSessionPage() {
                 setBackspaceMode={setSshBackspaceMode}
                 x11Forwarding={x11Forwarding}
                 setX11Forwarding={setX11Forwarding}
+                agentEndpoint={agentEndpoint}
+                setAgentEndpoint={setAgentEndpoint}
+                agentForwarding={agentForwarding}
+                setAgentForwarding={setAgentForwarding}
                 sshAlgorithms={sshAlgorithms}
                 setSshAlgorithms={setSshAlgorithms}
+                sshProfile={sshProfile}
+                setSshProfile={setSshProfile}
+                sshTerminalType={sshTerminalType}
+                setSshTerminalType={setSshTerminalType}
                 sftpSettings={sftpSettings}
                 setSftpSettings={setSftpSettings}
+                recordingUseGlobal={recordingUseGlobal}
+                setRecordingUseGlobal={setRecordingUseGlobal}
+                recordingAutoStart={recordingAutoStart}
+                setRecordingAutoStart={setRecordingAutoStart}
+                recordingMode={recordingMode}
+                setRecordingMode={setRecordingMode}
                 connectionId={initialData?.id || editId}
                 encoding={encoding}
                 setEncoding={setEncoding}
@@ -1499,6 +1556,12 @@ export default function NewSessionPage() {
                 setShellArgs={setShellArgs}
                 workingDir={workingDir}
                 setWorkingDir={setWorkingDir}
+                recordingUseGlobal={recordingUseGlobal}
+                setRecordingUseGlobal={setRecordingUseGlobal}
+                recordingAutoStart={recordingAutoStart}
+                setRecordingAutoStart={setRecordingAutoStart}
+                recordingMode={recordingMode}
+                setRecordingMode={setRecordingMode}
                 encoding={encoding}
                 setEncoding={setEncoding}
               />
@@ -1536,6 +1599,12 @@ export default function NewSessionPage() {
                 setSendNaws={setTelnetSendNaws}
                 sendSga={telnetSendSga}
                 setSendSga={setTelnetSendSga}
+                recordingUseGlobal={recordingUseGlobal}
+                setRecordingUseGlobal={setRecordingUseGlobal}
+                recordingAutoStart={recordingAutoStart}
+                setRecordingAutoStart={setRecordingAutoStart}
+                recordingMode={recordingMode}
+                setRecordingMode={setRecordingMode}
                 connectionId={initialData?.id || editId}
                 encoding={encoding}
                 setEncoding={setEncoding}
@@ -1565,6 +1634,12 @@ export default function NewSessionPage() {
                 setStopBits={setStopBits}
                 backspaceMode={serialBackspaceMode}
                 setBackspaceMode={setSerialBackspaceMode}
+                recordingUseGlobal={recordingUseGlobal}
+                setRecordingUseGlobal={setRecordingUseGlobal}
+                recordingAutoStart={recordingAutoStart}
+                setRecordingAutoStart={setRecordingAutoStart}
+                recordingMode={recordingMode}
+                setRecordingMode={setRecordingMode}
                 encoding={encoding}
                 setEncoding={setEncoding}
               />
@@ -1578,20 +1653,30 @@ export default function NewSessionPage() {
                 setPort={setRdpPort}
                 username={username}
                 setUsername={setUsername}
+                domain={rdpDomain}
+                setDomain={setRdpDomain}
+                passwordId={passwordId}
+                setPasswordId={setPasswordId}
+                password={password}
+                setPassword={setPassword}
+                hasPassword={hasPassword}
+                setHasPassword={setHasPassword}
+                useNla={rdpUseNla}
+                setUseNla={setRdpUseNla}
+                certificatePolicy={rdpCertificatePolicy}
+                setCertificatePolicy={setRdpCertificatePolicy}
+                displayWidth={rdpDisplayWidth}
+                setDisplayWidth={setRdpDisplayWidth}
+                displayHeight={rdpDisplayHeight}
+                setDisplayHeight={setRdpDisplayHeight}
                 displayMode={rdpDisplayMode}
                 setDisplayMode={setRdpDisplayMode}
-                resolutionPreset={rdpResolutionPreset}
-                setResolutionPreset={setRdpResolutionPreset}
-                width={rdpWidth}
-                setWidth={setRdpWidth}
-                height={rdpHeight}
-                setHeight={setRdpHeight}
-                preferredClient={rdpPreferredClient}
-                setPreferredClient={setRdpPreferredClient}
-                redirects={rdpRedirects}
-                setRedirects={(patch) =>
-                  setRdpRedirects((prev) => normalizeRdpRedirectSettings({ ...prev, ...patch }))
-                }
+                clipboardMode={rdpClipboardMode}
+                setClipboardMode={setRdpClipboardMode}
+                reconnectEnabled={rdpReconnectEnabled}
+                setReconnectEnabled={setRdpReconnectEnabled}
+                reconnectMaxAttempts={rdpReconnectMaxAttempts}
+                setReconnectMaxAttempts={setRdpReconnectMaxAttempts}
               />
             </TabsContent>
 

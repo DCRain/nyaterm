@@ -1,5 +1,7 @@
 /** Type of terminal session. */
 export type SessionType = "SSH" | "Local" | "Telnet" | "Serial";
+export type WorkspaceSessionType = SessionType | "RDP";
+export type WorkspacePaneKind = "terminal" | "rdp";
 
 export interface AppRuntimeInfo {
   portable: boolean;
@@ -19,13 +21,9 @@ export interface AppSupportInfo {
 }
 
 /** AI Agent command execution wrapper profile. */
-export type AIExecutionProfile =
-  | "auto"
-  | "posix"
-  | "powershell"
-  | "cmd"
-  | "send_only"
-  | "disabled";
+export type AIExecutionProfile = "auto" | "posix" | "powershell" | "cmd" | "send_only" | "disabled";
+export type SshProfile = "standard" | "network_device";
+export type SshTerminalType = "xterm-256color" | "xterm" | "vt100" | "vt220" | "ansi" | "linux";
 
 /** A group of sessions whose terminal input is broadcast to all members. */
 export interface SyncGroup {
@@ -54,7 +52,8 @@ export type ConnectionTypeTag =
 export interface SessionInfo {
   id: string;
   name: string;
-  session_type: SessionType;
+  session_type: WorkspaceSessionType;
+  connection_id?: string | null;
   connected: boolean;
   owner_window_label?: string | null;
   ai_execution_profile: AIExecutionProfile;
@@ -62,18 +61,23 @@ export interface SessionInfo {
   injection_active: boolean;
   /** True when the remote file browser is enabled for this session. */
   remote_file_browser_enabled: boolean;
+  /** True when Linux-style remote resource stats are enabled for this session. */
+  remote_stats_enabled: boolean;
+  /** SSH runtime profile used for capability gating. */
+  ssh_profile?: SshProfile | null;
 }
 
-/** Leaf node representing one terminal session inside a workspace tab. */
 /** Workspace leaf content mode. Default / omitted is the terminal. */
 export type SessionPaneView = "terminal" | "sftp";
 
-export interface SessionPane {
+/** Shared fields for one session-like leaf inside a workspace tab. */
+export interface WorkspacePaneBase {
   id: string;
   kind: "leaf";
+  paneKind: WorkspacePaneKind;
   sessionId: string;
   name: string;
-  type: SessionType;
+  type: WorkspaceSessionType;
   connectionId?: string;
   /** Main-area content: terminal shell or dual-pane SFTP. Default is terminal. */
   view?: SessionPaneView;
@@ -84,6 +88,25 @@ export interface SessionPane {
   /** Populated when session creation failed and the pane should stay visible as an error state. */
   connectError?: string;
 }
+
+/** Leaf node representing one terminal session inside a workspace tab. */
+export interface TerminalSessionPane extends WorkspacePaneBase {
+  paneKind: "terminal";
+  type: SessionType;
+}
+
+/** Leaf node representing one graphical RDP session inside a workspace tab. */
+export interface RdpSessionPane extends WorkspacePaneBase {
+  paneKind: "rdp";
+  type: "RDP";
+  display?: {
+    remoteWidth: number;
+    remoteHeight: number;
+    scaleMode: "fit" | "actual" | "stretch";
+  };
+}
+
+export type SessionPane = TerminalSessionPane | RdpSessionPane;
 
 /** Split node containing two child panes. */
 export interface SplitPane {
@@ -126,18 +149,30 @@ export interface SshConfig {
   backspace_mode?: string;
   x11_forwarding?: boolean;
   x11_display?: string;
+  agent_endpoint?: SshAgentEndpoint;
+  agent_forwarding?: boolean;
   proxy?: ProxySettings | null;
   proxy_jump?: SshConfig | null;
   post_login?: { command: string; delay_ms: number } | null;
   ssh_algorithms?: SshAlgorithmPreferences | null;
+  ssh_profile?: SshProfile;
+  terminal_type?: SshTerminalType;
   sftp?: SftpSettings;
   encoding?: string;
 }
 
-/** SSH authentication: none, password, or private key (PEM content). */
+/** SSH authentication: none, password, private key (PEM content), or SSH Agent. */
+export type SshAgentEndpoint =
+  | { type: "auto" }
+  | { type: "environment"; variable: string }
+  | { type: "unix_socket"; path: string }
+  | { type: "pageant" }
+  | { type: "windows_open_ssh" };
+
 export type SshAuth =
   | { type: "none" }
   | { type: "password"; password?: string | null }
+  | { type: "agent" }
   | {
       type: "key";
       key_data: string;
@@ -344,7 +379,12 @@ export interface SavedConnection {
   auth?: ConnectionAuth;
   network?: ConnectionNetwork;
   post_login?: ConnectionPostLogin;
+  recording?: ConnectionRecordingSettings;
   ssh_algorithms?: SshAlgorithmPreferences;
+  /** SSH-only: runtime profile. Network devices skip Linux-only probes and integrations. */
+  ssh_profile?: SshProfile;
+  /** SSH-only: PTY terminal type. Omitted means profile default. */
+  terminal_type?: SshTerminalType;
   sftp?: SftpSettings;
   asset?: AssetMetadata;
   /** SSH-specific fields (present when type === "ssh"). */
@@ -383,36 +423,117 @@ export interface SavedConnection {
   auto_login?: TelnetAutoLoginConfig;
   /** SSH-only: enables X11 forwarding for remote graphical applications. */
   x11_forwarding?: boolean;
-  /** RDP-only: "fullscreen" or "windowed". */
+  /** SSH-only: local Agent endpoint used for authentication and forwarding. */
+  agent_endpoint?: SshAgentEndpoint;
+  /** SSH-only: request server-side SSH Agent forwarding for the interactive shell. */
+  agent_forwarding?: boolean;
+  /** Legacy external RDP: "fullscreen" or "windowed". */
   display_mode?: string;
-  /** RDP-only: desktop width (defaults to 1920). */
+  /** Legacy external RDP: desktop width (defaults to 1920). */
   width?: number;
-  /** RDP-only: desktop height (defaults to 1080). */
+  /** Legacy external RDP: desktop height (defaults to 1080). */
   height?: number;
-  /** RDP-only: clipboard redirection. */
+  /** Legacy external RDP: clipboard redirection. */
   redirect_clipboard?: boolean;
-  /** RDP-only: printer redirection. */
+  /** Legacy external RDP: printer redirection. */
   redirect_printers?: boolean;
-  /** RDP-only: COM port redirection. */
+  /** Legacy external RDP: COM port redirection. */
   redirect_com_ports?: boolean;
-  /** RDP-only: smart card redirection. */
+  /** Legacy external RDP: smart card redirection. */
   redirect_smart_cards?: boolean;
-  /** RDP-only: drive redirect (`*` / `` / `C:;D:;`). */
+  /** Legacy external RDP: drive redirect (`*` / `` / `C:;D:;`). */
   drive_redirect?: string;
-  /** RDP-only: PnP device redirect (`*` or empty). */
+  /** Legacy external RDP: PnP device redirect (`*` or empty). */
   device_redirect?: string;
-  /** RDP-only: camera redirect (`*` or empty). */
+  /** Legacy external RDP: camera redirect (`*` or empty). */
   camera_redirect?: string;
-  /** RDP-only: audio output mode (0 local / 1 remote / 2 off). */
+  /** Legacy external RDP: audio output mode (0 local / 1 remote / 2 off). */
   audio_mode?: number;
-  /** RDP-only: microphone capture redirection. */
+  /** Legacy external RDP: microphone capture redirection. */
   audio_capture?: boolean;
-  /** RDP-only: keyboard hook (0 local / 1 remote / 2 fullscreen-only remote). */
+  /** Legacy external RDP: keyboard hook (0 local / 1 remote / 2 fullscreen-only remote). */
   keyboard_hook?: number;
-  /** RDP-only: preferred external client id (`mstsc`, `windows-app`, …). Empty = auto. */
+  /** Legacy external RDP: preferred external client id (`mstsc`, `windows-app`, …). Empty = auto. */
   preferred_client?: string;
   /** Per-connection encoding override. Empty string means follow global setting. */
   encoding?: string;
+  /** RDP-only: optional Windows/domain part for authentication. */
+  domain?: string;
+  /** RDP-only security options. */
+  security?: RdpSecuritySettings;
+  /** RDP-only display options. */
+  display?: RdpDisplaySettings;
+  /** RDP-only clipboard options. */
+  clipboard?: RdpClipboardSettings;
+  /** RDP-only reconnect options. */
+  reconnect?: RdpReconnectSettings;
+}
+
+export type RdpCertificatePolicy = "strict" | "prompt" | "accept-temporarily";
+export type RdpDisplayMode = "fit-window" | "fixed" | "native";
+export type RdpClipboardMode = "disabled" | "text-only";
+
+export interface RdpSecuritySettings {
+  use_nla: boolean;
+  certificate_policy: RdpCertificatePolicy;
+}
+
+export interface RdpDisplaySettings {
+  mode: RdpDisplayMode;
+  width: number;
+  height: number;
+  color_depth: 16 | 24 | 32;
+}
+
+export interface RdpClipboardSettings {
+  mode: RdpClipboardMode;
+}
+
+export interface RdpReconnectSettings {
+  enabled: boolean;
+  max_attempts: number;
+}
+
+export type RecordingMode = "transcript" | "raw";
+export type RecordingState = "starting" | "recording" | "degraded" | "failed" | "stopping";
+export type ExistingFileBehavior = "unique" | "append" | "overwrite";
+export type RotationPolicy =
+  | { type: "session" }
+  | { type: "daily" }
+  | { type: "size"; max_bytes: number };
+
+export interface RecordingSettings {
+  auto_start: boolean;
+  default_mode: RecordingMode;
+  base_path: string;
+  path_template: string;
+  include_timestamps: boolean;
+  include_io_labels: boolean;
+  include_session_metadata: boolean;
+  rotation: RotationPolicy;
+  existing_file_behavior: ExistingFileBehavior;
+  memory_limit_bytes: number;
+  include_binary_transfer_payloads: boolean;
+}
+
+export interface ConnectionRecordingSettings {
+  auto_start?: boolean | null;
+  mode?: RecordingMode | null;
+  path_template?: string | null;
+  include_timestamps?: boolean | null;
+  rotation?: RotationPolicy | null;
+}
+
+export interface RecordingStatus {
+  sessionId: string;
+  state: RecordingState;
+  mode: RecordingMode;
+  filePath: string;
+  startedAt: string;
+  writtenBytes: number;
+  queuedBytes: number;
+  droppedBytes: number;
+  lastError?: string | null;
 }
 
 /** Stored OTP entry for two-factor authentication. */
@@ -444,8 +565,9 @@ export interface OtpCodeResult {
 export interface RestorableSessionPane {
   id?: string;
   kind: "leaf";
+  pane_kind?: WorkspacePaneKind;
   title: string;
-  session_type: SessionType | "local";
+  session_type: WorkspaceSessionType | "local";
   connection_id?: string;
   /** Persist dual-pane SFTP workspace leaves; omitted means terminal. */
   view?: SessionPaneView;
@@ -497,11 +619,7 @@ export type RightPanelId =
   | "recording"
   | "syncBackupHistory";
 
-export type ActivityBarZone =
-  | "left_top"
-  | "left_bottom"
-  | "right_top"
-  | "right_bottom";
+export type ActivityBarZone = "left_top" | "left_bottom" | "right_top" | "right_bottom";
 
 export interface ActivityBarLayout {
   left_top: string[];
@@ -521,13 +639,7 @@ export interface ActivityBarLayout {
 /** Layout preferences: panel widths, active panels, theme. */
 export type QuickCommandViewMode = "list" | "compact" | "tile";
 export type QuickCommandSortMode = "created" | "name" | "useCount";
-export type HeaderStatusMode =
-  | "session"
-  | "resources"
-  | "host"
-  | "datetime"
-  | "gpu"
-  | "npu";
+export type HeaderStatusMode = "session" | "resources" | "host" | "datetime" | "gpu" | "npu";
 
 export type RestorableTerminalWindowNode =
   | {
@@ -587,6 +699,7 @@ export interface UiConfig {
   show_docker_manager: boolean;
   docker_manager_interval: number;
   saved_connections_sort_mode?: string;
+  saved_connections_expanded_group_ids?: string[];
   saved_connections_last_opened_connection_id?: string | null;
   recent_connection_ids: string[];
   transfer_height: number;
@@ -871,10 +984,7 @@ export interface QuickCommandsConfig {
   categories: QuickCommandCategory[];
 }
 
-export type QuickCommandImportSource =
-  | "windterm_quickbar"
-  | "xshell_xts"
-  | "nyaterm_json";
+export type QuickCommandImportSource = "windterm_quickbar" | "xshell_xts" | "nyaterm_json";
 
 export interface QuickCommandImportResult {
   imported_commands: number;
@@ -1147,13 +1257,7 @@ export type AIMode = "ask" | "agent";
 export type AIAgentCommandExecutionMode = "confirm_each" | "smart" | "auto";
 export type AIAgentKind = "nyaterm" | "codex" | "claude_code" | "opencode";
 export type AIPermissionMode = "observer" | "confirm" | "auto";
-export type AIReasoningEffort =
-  | "auto"
-  | "none"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh";
+export type AIReasoningEffort = "auto" | "none" | "low" | "medium" | "high" | "xhigh";
 export type AIModelSource = "rust-genai" | "manual";
 export type AIBackendKind = "genai" | "codex";
 export type CodexThreadMode = "persistent" | "ephemeral";
@@ -1384,12 +1488,7 @@ export interface AIStreamEventPayload {
 }
 
 export type AgentActionKind = "execute_command" | "final_answer";
-export type AgentStepStatus =
-  | "running"
-  | "completed"
-  | "needs_approval"
-  | "rejected"
-  | "failed";
+export type AgentStepStatus = "running" | "completed" | "needs_approval" | "rejected" | "failed";
 
 export interface AgentStepAction {
   kind: AgentActionKind;
@@ -1486,6 +1585,7 @@ export interface AppSettings {
   security: SecuritySettings;
   terminal: TerminalSettings;
   interaction: InteractionSettings;
+  recording: RecordingSettings;
   transfer: TransferSettings;
   diagnostics: DiagnosticsSettings;
   ai: AISettings;
@@ -1580,6 +1680,7 @@ export interface CloudSyncSettings {
   device_name: string;
   auto_check_on_startup: boolean;
   auto_push_on_change: boolean;
+  auto_pull_remote_changes: boolean;
   sync_debounce_seconds: number;
   webdav: WebdavSyncSettings;
   s3: S3SyncSettings;
@@ -1611,11 +1712,15 @@ export interface GithubGistDeviceFlowPoll {
 export interface CloudConflictPreview {
   detected_at_ms: number;
   provider: string;
+  kind?: "content_conflict" | "remote_inconsistent";
   local_payload_hash: string;
   remote_payload_hash: string;
   remote_revision: string;
   remote_created_at_ms: number;
   remote_device_id: string;
+  recovery_revision?: string | null;
+  recovery_payload_hash?: string | null;
+  recovery_created_at_ms?: number | null;
   message: string;
 }
 

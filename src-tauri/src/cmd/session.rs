@@ -1,12 +1,15 @@
 use crate::config;
 use crate::core::monitoring::stats::RemoteStatsSampler;
 use crate::core::ssh::{
-    self, HostKeyVerifyManager, PendingAuthManager, PendingSshAuthManager, SshAuthResponse,
+    self, HostKeyVerifyManager, PendingAuthManager, PendingSshAgentAuthManager,
+    PendingSshAuthManager, SshAgentAuthAction, SshAuthResponse,
 };
 use crate::core::zmodem::ZmodemUploadConflictMode;
 use crate::core::{
-    self, QuickCommandsStore, RecordingManager, SessionCommand, SessionInfo, SessionManager,
-    TerminalHistorySearchRequest, TerminalHistorySearchResponse,
+    self, ExistingFileBehavior, InputOrigin, InputSensitivity, QuickCommandsStore,
+    RecordingContext, RecordingManager, RecordingMode, RecordingProfile, SessionCommand,
+    SessionInfo, SessionManager, SessionReadyHook, TerminalHistorySearchRequest,
+    TerminalHistorySearchResponse,
 };
 use crate::error::{AppError, AppResult};
 use crate::observability::{self, StructuredLog, StructuredLogLevel};
@@ -23,6 +26,14 @@ use tauri::{Emitter, Manager};
 pub struct StartupCommandPayload {
     command: String,
     delay_ms: u64,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartRecordingRequest {
+    session_id: String,
+    mode: RecordingMode,
+    explicit_path: Option<String>,
 }
 
 #[tauri::command]
@@ -53,19 +64,16 @@ pub async fn create_ssh_session(
             command: command.command,
             delay_ms: command.delay_ms,
         }),
+        Some(build_auto_recording_hook(
+            app.clone(),
+            recording_state.inner().clone(),
+        )),
     )
     .await?;
     drop(guard);
     if let Err(error) = crate::storage::mark_connection_used(&connection_id) {
         tracing::warn!(connection_id, %error, "Failed to mark connection as recently used");
     }
-    maybe_start_auto_recording(
-        &app,
-        state.inner().as_ref(),
-        recording_state.inner().clone(),
-        &session_id,
-    )
-    .await;
     Ok(session_id)
 }
 
@@ -96,16 +104,13 @@ pub async fn create_temporary_ssh_session(
         Some(window.label().to_string()),
         cancel_rx,
         None,
+        Some(build_auto_recording_hook(
+            app.clone(),
+            recording_state.inner().clone(),
+        )),
     )
     .await?;
     drop(guard);
-    maybe_start_auto_recording(
-        &app,
-        state.inner().as_ref(),
-        recording_state.inner().clone(),
-        &session_id,
-    )
-    .await;
     Ok(session_id)
 }
 
@@ -119,10 +124,17 @@ fn normalize_temporary_ssh_config(mut config: ssh::SshConfig, encoding: &str) ->
     };
     config.x11_forwarding = false;
     config.x11_display = String::new();
+    config.agent_endpoint = crate::config::SshAgentEndpoint::Auto;
+    config.agent_forwarding = false;
     config.proxy = None;
     config.proxy_jump = None;
     config.post_login = None;
     config.ssh_algorithms = None;
+    if config.ssh_profile == crate::config::SshProfile::NetworkDevice
+        && config.terminal_type == crate::config::SshTerminalType::Xterm256Color
+    {
+        config.terminal_type = crate::config::resolve_ssh_terminal_type(&config.ssh_profile, None);
+    }
     // Inherit encoding from global settings only when no explicit value was provided.
     if config.encoding.trim().is_empty() {
         config.encoding = encoding.to_string();
@@ -146,15 +158,12 @@ pub async fn create_multiplexed_ssh_session(
             command: command.command,
             delay_ms: command.delay_ms,
         }),
+        Some(build_auto_recording_hook(
+            app.clone(),
+            recording_state.inner().clone(),
+        )),
     )
     .await?;
-    maybe_start_auto_recording(
-        &app,
-        state.inner().as_ref(),
-        recording_state.inner().clone(),
-        &session_id,
-    )
-    .await;
     Ok(session_id)
 }
 
@@ -187,6 +196,7 @@ pub async fn create_local_session(
                 working_dir,
                 ..
             } => Some(core::LocalSessionConfig {
+                connection_id: Some(cid.clone()),
                 shell_path,
                 shell_args,
                 working_dir,
@@ -204,6 +214,7 @@ pub async fn create_local_session(
             .map(|settings| settings.interaction.default_encoding)
             .unwrap_or_else(|_| "UTF-8".to_string());
         Some(core::LocalSessionConfig {
+            connection_id: None,
             shell_path: shell_path.unwrap_or_default(),
             shell_args: shell_args.unwrap_or_default(),
             working_dir: working_dir.filter(|value| !value.trim().is_empty()),
@@ -221,6 +232,10 @@ pub async fn create_local_session(
         state.inner().clone(),
         config,
         Some(window.label().to_string()),
+        Some(build_auto_recording_hook(
+            app.clone(),
+            recording_state.inner().clone(),
+        )),
     )
     .await?;
     drop(guard);
@@ -229,13 +244,6 @@ pub async fn create_local_session(
             tracing::warn!(connection_id, %error, "Failed to mark connection as recently used");
         }
     }
-    maybe_start_auto_recording(
-        &app,
-        state.inner().as_ref(),
-        recording_state.inner().clone(),
-        &session_id,
-    )
-    .await;
     Ok(session_id)
 }
 
@@ -323,6 +331,10 @@ pub async fn create_telnet_session(
             command: command.command,
             delay_ms: command.delay_ms,
         }),
+        Some(build_auto_recording_hook(
+            app.clone(),
+            recording_state.inner().clone(),
+        )),
     )
     .await?;
     drop(guard);
@@ -331,13 +343,6 @@ pub async fn create_telnet_session(
             tracing::warn!(connection_id, %error, "Failed to mark connection as recently used");
         }
     }
-    maybe_start_auto_recording(
-        &app,
-        state.inner().as_ref(),
-        recording_state.inner().clone(),
-        &session_id,
-    )
-    .await;
     Ok(session_id)
 }
 
@@ -442,6 +447,10 @@ pub async fn create_serial_session(
         cfg,
         connection_id,
         Some(window.label().to_string()),
+        Some(build_auto_recording_hook(
+            app.clone(),
+            recording_state.inner().clone(),
+        )),
     )
     .await?;
     drop(guard);
@@ -450,100 +459,222 @@ pub async fn create_serial_session(
             tracing::warn!(connection_id, %error, "Failed to mark connection as recently used");
         }
     }
-    maybe_start_auto_recording(
-        &app,
-        state.inner().as_ref(),
-        recording_state.inner().clone(),
-        &session_id,
-    )
-    .await;
     Ok(session_id)
 }
 
-async fn maybe_start_auto_recording(
-    app: &tauri::AppHandle,
-    session_manager: &SessionManager,
+fn build_auto_recording_hook(
+    app: tauri::AppHandle,
     recording_manager: Arc<RecordingManager>,
-    session_id: &str,
-) {
-    let settings = match config::load_app_settings(app) {
-        Ok(settings) => settings,
-        Err(error) => {
-            tracing::warn!(session_id, %error, "Failed to load settings for auto recording");
-            return;
-        }
-    };
-    let transfer = settings.transfer;
-    if !transfer.recording_auto_start {
-        return;
-    }
-
-    let session_info = match session_manager.session_info(session_id).await {
-        Ok(info) => info,
-        Err(error) => {
-            tracing::warn!(session_id, %error, "Failed to load session info for auto recording");
-            return;
-        }
-    };
-
-    let file_path =
-        match build_auto_recording_file_path(app, &transfer.recording_path, &session_info.name) {
-            Ok(path) => path,
+) -> SessionReadyHook {
+    Arc::new(move |session_info: &SessionInfo| {
+        let settings = match config::load_app_settings(&app) {
+            Ok(settings) => settings,
             Err(error) => {
-                tracing::warn!(session_id, %error, "Failed to build auto recording path");
+                tracing::warn!(
+                    session_id = %session_info.id,
+                    %error,
+                    "Failed to load settings for auto recording"
+                );
                 return;
             }
         };
-    let file_path = file_path.to_string_lossy().to_string();
-    let include_io_labels = transfer.recording_include_io_labels;
-    let include_timestamps = transfer.recording_include_timestamps;
-    let task_session_id = session_id.to_string();
-    let log_session_id = task_session_id.clone();
+        if !profile_auto_start(&app, session_info, &settings.recording) {
+            return;
+        }
 
-    let result = tokio::task::spawn_blocking(move || {
-        recording_manager.start(
-            &task_session_id,
-            &file_path,
-            include_io_labels,
-            include_timestamps,
-        )
+        let (profile, context) = match build_recording_profile_and_context(&app, session_info, None)
+        {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(
+                    session_id = %session_info.id,
+                    %error,
+                    "Failed to resolve auto recording profile"
+                );
+                return;
+            }
+        };
+
+        match recording_manager.start_with_profile(&session_info.id, context, profile, None) {
+            Ok(_path) => {
+                let _ = app.emit("sessions-changed", ());
+            }
+            Err(error) => {
+                tracing::warn!(
+                    session_id = %session_info.id,
+                    %error,
+                    "Failed to auto-start recording"
+                );
+            }
+        }
     })
-    .await;
+}
 
-    match result {
-        Ok(Ok(())) => {
-            let _ = app.emit("sessions-changed", ());
+fn profile_auto_start(
+    app: &tauri::AppHandle,
+    session_info: &SessionInfo,
+    global: &config::RecordingSettings,
+) -> bool {
+    let Some(connection_id) = session_info.connection_id.as_deref() else {
+        return global.auto_start;
+    };
+    let Ok(connection) = config::load_connection_by_id(app, connection_id) else {
+        return global.auto_start;
+    };
+    connection
+        .recording
+        .and_then(|recording| recording.auto_start)
+        .unwrap_or(global.auto_start)
+}
+
+fn build_recording_profile_and_context(
+    app: &tauri::AppHandle,
+    session_info: &SessionInfo,
+    requested_mode: Option<RecordingMode>,
+) -> AppResult<(RecordingProfile, RecordingContext)> {
+    let settings = config::load_app_settings(app)?;
+    let connection = session_info
+        .connection_id
+        .as_deref()
+        .and_then(|id| config::load_connection_by_id(app, id).ok());
+    let recording_override = connection.as_ref().and_then(|conn| conn.recording.clone());
+
+    let base_path = if settings.recording.base_path.trim().is_empty() {
+        default_recording_dir(app)?
+    } else {
+        PathBuf::from(&settings.recording.base_path)
+    };
+    let mode = requested_mode
+        .or_else(|| {
+            recording_override
+                .as_ref()
+                .and_then(|override_| override_.mode)
+        })
+        .unwrap_or(settings.recording.default_mode);
+    let path_template = recording_override
+        .as_ref()
+        .and_then(|override_| override_.path_template.clone())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| settings.recording.path_template.clone());
+    let include_timestamps = recording_override
+        .as_ref()
+        .and_then(|override_| override_.include_timestamps)
+        .unwrap_or(settings.recording.include_timestamps);
+    let rotation = recording_override
+        .as_ref()
+        .and_then(|override_| override_.rotation.clone())
+        .unwrap_or_else(|| settings.recording.rotation.clone());
+
+    let context = build_recording_context(app, session_info, connection.as_ref());
+    let profile = RecordingProfile {
+        mode,
+        base_path,
+        path_template,
+        include_timestamps,
+        include_io_labels: settings.recording.include_io_labels,
+        include_session_metadata: settings.recording.include_session_metadata,
+        rotation,
+        existing_file_behavior: settings.recording.existing_file_behavior,
+        include_binary_transfer_payloads: settings.recording.include_binary_transfer_payloads,
+    };
+
+    Ok((profile, context))
+}
+
+fn build_recording_context(
+    app: &tauri::AppHandle,
+    session_info: &SessionInfo,
+    connection: Option<&config::SavedConnection>,
+) -> RecordingContext {
+    let (protocol, host, port, username) = match connection.map(|conn| &conn.config) {
+        Some(config::ConnectionType::Ssh {
+            host,
+            port,
+            username,
+            ..
+        }) => (
+            "ssh".to_string(),
+            Some(host.clone()),
+            Some(*port),
+            Some(username.clone()),
+        ),
+        Some(config::ConnectionType::Telnet {
+            host,
+            port,
+            username,
+            ..
+        }) => (
+            "telnet".to_string(),
+            Some(host.clone()),
+            Some(*port),
+            Some(username.clone()),
+        ),
+        Some(config::ConnectionType::Rdp {
+            host,
+            port,
+            username,
+            ..
+        }) => (
+            "rdp".to_string(),
+            Some(host.clone()),
+            Some(*port),
+            Some(username.clone()),
+        ),
+        Some(config::ConnectionType::Vnc { host, port }) => (
+            "vnc".to_string(),
+            Some(host.clone()),
+            Some(*port),
+            None,
+        ),
+        Some(config::ConnectionType::Serial { port_name, .. }) => {
+            ("serial".to_string(), Some(port_name.clone()), None, None)
         }
-        Ok(Err(error)) => {
-            tracing::warn!(session_id = %log_session_id, %error, "Failed to auto-start recording");
+        Some(config::ConnectionType::LocalTerminal { .. }) => {
+            ("local".to_string(), None, None, None)
         }
-        Err(error) => {
-            tracing::warn!(session_id = %log_session_id, %error, "Auto recording task failed");
-        }
+        None => (
+            match session_info.session_type {
+                core::SessionType::SSH => "ssh",
+                core::SessionType::Local => "local",
+                core::SessionType::Telnet => "telnet",
+                core::SessionType::Serial => "serial",
+            }
+            .to_string(),
+            None,
+            None,
+            None,
+        ),
+    };
+
+    RecordingContext {
+        session_id: session_info.id.clone(),
+        session_name: session_info.name.clone(),
+        connection_id: session_info.connection_id.clone(),
+        connection_name: connection.map(|conn| conn.name.clone()),
+        group_path: connection.and_then(|conn| resolve_group_path(app, conn.group_id.as_deref())),
+        protocol,
+        host,
+        port,
+        username,
+        started_at: time::OffsetDateTime::now_local()
+            .unwrap_or_else(|_| time::OffsetDateTime::now_utc()),
     }
 }
 
-fn build_auto_recording_file_path(
-    app: &tauri::AppHandle,
-    configured_dir: &str,
-    session_name: &str,
-) -> AppResult<PathBuf> {
-    let dir = if configured_dir.trim().is_empty() {
-        default_recording_dir(app)?
-    } else {
-        PathBuf::from(configured_dir)
-    };
-    let timestamp = time::OffsetDateTime::now_local()
-        .unwrap_or_else(|_| time::OffsetDateTime::now_utc())
-        .format(time::macros::format_description!(
-            "[year]-[month]-[day]T[hour]-[minute]-[second]"
-        ))
-        .unwrap_or_else(|_| "1970-01-01T00-00-00".to_string());
-
-    Ok(dir.join(format!(
-        "recording-{}-{timestamp}.log",
-        safe_recording_name(session_name)
-    )))
+fn resolve_group_path(app: &tauri::AppHandle, group_id: Option<&str>) -> Option<String> {
+    let mut current = group_id?;
+    let config = config::load_config(app).ok()?;
+    let mut names = Vec::new();
+    for _ in 0..32 {
+        let group = config.groups.iter().find(|group| group.id == current)?;
+        names.push(group.name.clone());
+        let Some(parent) = group.parent_id.as_deref() else {
+            break;
+        };
+        current = parent;
+    }
+    names.reverse();
+    (!names.is_empty()).then(|| names.join("/"))
 }
 
 fn default_recording_dir(app: &tauri::AppHandle) -> AppResult<PathBuf> {
@@ -555,42 +686,10 @@ fn default_recording_dir(app: &tauri::AppHandle) -> AppResult<PathBuf> {
     }
 }
 
-fn safe_recording_name(name: &str) -> String {
-    let mut safe = String::new();
-    let mut last_was_replacement = false;
-
-    for ch in name.chars() {
-        if ch.is_alphanumeric() || matches!(ch, '.' | '_' | '-') {
-            safe.push(ch);
-            last_was_replacement = false;
-        } else if !last_was_replacement {
-            safe.push('_');
-            last_was_replacement = true;
-        }
-    }
-
-    if safe.is_empty() {
-        "session".to_string()
-    } else {
-        safe
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        normalize_temporary_ssh_config, resolve_telnet_connection_password_with,
-        safe_recording_name,
-    };
+    use super::{normalize_temporary_ssh_config, resolve_telnet_connection_password_with};
     use crate::config::ConnectionAuth;
-
-    #[test]
-    fn safe_recording_name_preserves_readable_parts() {
-        assert_eq!(safe_recording_name(""), "session");
-        assert_eq!(safe_recording_name("my session!/prod"), "my_session_prod");
-        assert_eq!(safe_recording_name("中台 算法库"), "中台_算法库");
-        assert_eq!(safe_recording_name("ssh.host_01-prod"), "ssh.host_01-prod");
-    }
 
     #[test]
     fn temporary_ssh_config_drops_saved_connection_features() {
@@ -704,16 +803,51 @@ pub async fn write_to_session(
     state: tauri::State<'_, Arc<SessionManager>>,
     session_id: String,
     data: String,
+    origin: Option<InputOrigin>,
+    sensitivity: Option<InputSensitivity>,
 ) -> AppResult<()> {
-    state
+    let origin = origin.unwrap_or(InputOrigin::Keyboard);
+    let sensitivity = sensitivity.unwrap_or_default();
+    let automated = !matches!(origin, InputOrigin::Keyboard | InputOrigin::SyncInput);
+    let result = state
         .send_command(
             &session_id,
             SessionCommand::Write {
                 data: data.into_bytes(),
-                automated: false,
+                automated,
+                origin,
+                sensitivity,
             },
         )
-        .await
+        .await;
+
+    if let Err(error) = &result {
+        match error {
+            AppError::SessionNotFound(_) => {
+                tracing::warn!(
+                    session_id = %session_id,
+                    reason = "session_not_found",
+                    "Terminal input rejected because SSH session is no longer active"
+                );
+            }
+            AppError::Channel(_) => {
+                tracing::warn!(
+                    session_id = %session_id,
+                    reason = "command_channel_closed",
+                    "Terminal input rejected because SSH session is no longer active"
+                );
+            }
+            _ => {
+                tracing::warn!(
+                    session_id = %session_id,
+                    error = %error,
+                    "Terminal input rejected"
+                );
+            }
+        }
+    }
+
+    result
 }
 
 #[tauri::command]
@@ -1010,20 +1144,21 @@ pub async fn fuzzy_search_candidates(
 
 #[tauri::command]
 pub async fn start_recording(
+    app: tauri::AppHandle,
+    session_manager: tauri::State<'_, Arc<SessionManager>>,
     state: tauri::State<'_, Arc<RecordingManager>>,
-    session_id: String,
-    file_path: String,
-    include_io_labels: bool,
-    include_timestamps: bool,
-) -> AppResult<()> {
+    request: StartRecordingRequest,
+) -> AppResult<String> {
+    let session_info = session_manager.session_info(&request.session_id).await?;
+    let (mut profile, context) =
+        build_recording_profile_and_context(&app, &session_info, Some(request.mode))?;
+    let explicit_path = request.explicit_path.map(PathBuf::from);
+    if explicit_path.is_some() {
+        profile.existing_file_behavior = ExistingFileBehavior::Unique;
+    }
     let mgr = state.inner().clone();
     tokio::task::spawn_blocking(move || {
-        mgr.start(
-            &session_id,
-            &file_path,
-            include_io_labels,
-            include_timestamps,
-        )
+        mgr.start_with_profile(&request.session_id, context, profile, explicit_path)
     })
     .await
     .map_err(|e| AppError::Config(format!("Task join error: {e}")))?
@@ -1085,6 +1220,35 @@ pub async fn list_recording_sessions(
     state: tauri::State<'_, Arc<RecordingManager>>,
 ) -> AppResult<Vec<String>> {
     Ok(state.list_recording_sessions())
+}
+
+#[tauri::command]
+pub async fn get_recording_status(
+    state: tauri::State<'_, Arc<RecordingManager>>,
+    session_id: String,
+) -> AppResult<Option<core::RecordingStatus>> {
+    Ok(state.get_recording_status(&session_id))
+}
+
+#[tauri::command]
+pub async fn list_recording_statuses(
+    state: tauri::State<'_, Arc<RecordingManager>>,
+) -> AppResult<Vec<core::RecordingStatus>> {
+    Ok(state.list_recording_statuses())
+}
+
+#[tauri::command]
+pub async fn open_recording_file(file_path: String) -> AppResult<()> {
+    open::that(file_path)
+        .map_err(|error| AppError::Config(format!("Failed to open recording file: {error}")))
+}
+
+#[tauri::command]
+pub async fn show_recording_in_folder(file_path: String) -> AppResult<()> {
+    let path = PathBuf::from(file_path);
+    let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    open::that(dir)
+        .map_err(|error| AppError::Config(format!("Failed to show recording folder: {error}")))
 }
 
 #[tauri::command]
@@ -1218,6 +1382,46 @@ pub async fn cancel_ssh_auth_request(
         client_timestamp: None,
     });
     Ok(())
+}
+
+#[tauri::command]
+pub async fn respond_ssh_agent_auth(
+    state: tauri::State<'_, Arc<PendingSshAgentAuthManager>>,
+    request_id: String,
+    action: String,
+) -> AppResult<()> {
+    let action = match action.as_str() {
+        "retry" => SshAgentAuthAction::Retry,
+        "cancel" => SshAgentAuthAction::Cancel,
+        _ => {
+            return Err(AppError::Config(
+                "Unknown SSH Agent auth action".to_string(),
+            ));
+        }
+    };
+    if state.respond(&request_id, action).await {
+        Ok(())
+    } else {
+        Err(AppError::Auth(format!(
+            "No pending SSH Agent authentication request with id '{}'",
+            request_id
+        )))
+    }
+}
+
+#[tauri::command]
+pub async fn cancel_ssh_agent_auth(
+    state: tauri::State<'_, Arc<PendingSshAgentAuthManager>>,
+    request_id: String,
+) -> AppResult<()> {
+    if state.respond(&request_id, SshAgentAuthAction::Cancel).await {
+        Ok(())
+    } else {
+        Err(AppError::Auth(format!(
+            "No pending SSH Agent authentication request with id '{}'",
+            request_id
+        )))
+    }
 }
 
 #[tauri::command]

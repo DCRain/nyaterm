@@ -23,6 +23,7 @@ export const DEFAULT_CLOUD_SYNC_SETTINGS: CloudSyncSettings = {
   device_name: "This Device",
   auto_check_on_startup: true,
   auto_push_on_change: true,
+  auto_pull_remote_changes: true,
   sync_debounce_seconds: 15,
   webdav: {
     endpoint: "",
@@ -231,4 +232,8 @@ export function shortValue(value?: string | null, size = 8) {
 
 export function hasConflict(conflict?: CloudConflictPreview | null) {
   return Boolean(conflict?.remote_revision);
+}
+
+export function isRemoteInconsistentConflict(conflict?: CloudConflictPreview | null) {
+  return conflict?.kind === "remote_inconsistent";
 }

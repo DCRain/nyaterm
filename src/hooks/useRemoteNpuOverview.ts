@@ -22,10 +22,12 @@ export function useRemoteNpuOverview(
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fetchingRef = useRef(false);
   const failCountRef = useRef(0);
+  const unavailableSessionRef = useRef<string | null>(null);
   const pollIntervalMs = Math.max(3, intervalSeconds) * 1000;
 
   const fetchOverview = useCallback(async (sessionId: string, manual = false) => {
-    if (fetchingRef.current) return;
+    if (!manual && unavailableSessionRef.current === sessionId) return null;
+    if (fetchingRef.current) return null;
     fetchingRef.current = true;
     if (manual) setIsManualRefreshing(true);
 
@@ -36,12 +38,25 @@ export function useRemoteNpuOverview(
       setOverview(data);
       setError(false);
       failCountRef.current = 0;
+
+      if (data.available) {
+        unavailableSessionRef.current = null;
+      } else {
+        unavailableSessionRef.current = sessionId;
+        if (pollRef.current) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+      }
+
+      return data;
     } catch {
       failCountRef.current += 1;
       setError(true);
       if (failCountRef.current >= MAX_CONSECUTIVE_FAILURES) {
         setOverview(null);
       }
+      return null;
     } finally {
       fetchingRef.current = false;
       if (manual) setIsManualRefreshing(false);
@@ -50,8 +65,11 @@ export function useRemoteNpuOverview(
 
   const refresh = useCallback(() => {
     if (!enabled || !activeSessionId) return;
-    void fetchOverview(activeSessionId, true);
-  }, [activeSessionId, enabled, fetchOverview]);
+    void fetchOverview(activeSessionId, true).then((data) => {
+      if (!data?.available || pollRef.current) return;
+      pollRef.current = setInterval(() => fetchOverview(activeSessionId), pollIntervalMs);
+    });
+  }, [activeSessionId, enabled, fetchOverview, pollIntervalMs]);
 
   useEffect(() => {
     if (pollRef.current) {
@@ -63,14 +81,22 @@ export function useRemoteNpuOverview(
       setOverview(null);
       setError(false);
       failCountRef.current = 0;
+      unavailableSessionRef.current = null;
       return;
     }
 
-    void fetchOverview(activeSessionId);
+    if (unavailableSessionRef.current !== activeSessionId) {
+      void fetchOverview(activeSessionId);
+    }
+    if (unavailableSessionRef.current === activeSessionId) return;
+
     pollRef.current = setInterval(() => fetchOverview(activeSessionId), pollIntervalMs);
 
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
     };
   }, [activeSessionId, enabled, fetchOverview, pollIntervalMs]);
 

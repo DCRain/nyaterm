@@ -184,6 +184,8 @@ export function useCredentialAutofill(
         await sendSessionInput(session, `${credential.username}\r`, {
           preview: null,
           registerSubmission: null,
+          origin: "credential_autofill",
+          sensitivity: "secret",
         });
         return;
       }
@@ -195,6 +197,8 @@ export function useCredentialAutofill(
       await sendSessionInput(session, `${password}\r`, {
         preview: null,
         registerSubmission: null,
+        origin: "credential_autofill",
+        sensitivity: "secret",
       });
     },
     [sessionIdRef],

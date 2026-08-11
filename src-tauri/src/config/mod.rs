@@ -28,10 +28,12 @@ pub use cloud_sync::{
 pub use connection::{
     AiExecutionProfile, AppConfig, AssetAccelerator, AssetAcceleratorType, AssetDeviceType,
     AssetDisk, AssetDiskKind, AssetDiskPurpose, AssetMetadata, ConnectionAuth, ConnectionNetwork,
-    ConnectionType, Group, MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS,
+    ConnectionRecordingSettings, ConnectionType, Group, MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS,
     MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS, SavedConnection, SessionsConfig, SftpCwdFollowMode,
-    SftpSettings, SshAlgorithmMode, SshAlgorithmPreferences, TelnetAutoLoginConfig, load_config,
-    load_connection_by_id, load_sessions, resolve_connection_encoding, save_config, save_sessions,
+    SftpSettings, SshAgentEndpoint, SshAlgorithmMode, SshAlgorithmPreferences, SshProfile,
+    SshTerminalType, TelnetAutoLoginConfig, effective_cwd_follow_mode,
+    effective_cwd_follow_mode_for_profile, load_config, load_connection_by_id, load_sessions,
+    resolve_connection_encoding, resolve_ssh_terminal_type, save_config, save_sessions,
 };
 #[allow(unused_imports)]
 pub use credential::{
@@ -72,9 +74,9 @@ pub use settings::{
     AiSettings, AppSettings, AppearanceSettings, ClaudeCodeIntegrationSettings,
     CodexIntegrationSettings, CodexThreadMode, DiagnosticsLogLevel, DiagnosticsSettings,
     OpenCodeIntegrationSettings,
-    GeneralSettings, InteractionSettings, KeywordHighlightRule, ProxySettings, RiskLevel,
-    SearchEngine, SearchSettings, SecuritySettings, TerminalColorsConfig, TerminalSettings,
-    ThemeColorsConfig, ThemeConfig, TransferSettings, TranslationSettings,
+    GeneralSettings, InteractionSettings, KeywordHighlightRule, ProxySettings, RecordingSettings,
+    RiskLevel, SearchEngine, SearchSettings, SecuritySettings, TerminalColorsConfig,
+    TerminalSettings, ThemeColorsConfig, ThemeConfig, TransferSettings, TranslationSettings,
     ai_model_id_for_credential, ai_model_id_for_provider, decrypt_ai_settings, encrypt_ai_settings,
     load_app_settings, mask_ai_settings, merge_masked_ai_settings, normalize_ai_settings,
     save_app_settings,

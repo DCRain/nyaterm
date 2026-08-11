@@ -21,7 +21,7 @@ import type { RemoteNpuOverviewState } from "@/hooks/useRemoteNpuOverview";
 import type { RemoteStatsState } from "@/hooks/useRemoteStats";
 import type { AIOpenIntent } from "@/lib/aiEvents";
 import type { NewSessionTarget } from "@/lib/windowManager";
-import type { SavedConnection, SessionInfo, SessionPane } from "@/types/global";
+import type { RecordingMode, RecordingStatus, SavedConnection, SessionInfo, SessionPane } from "@/types/global";
 
 interface AppPanelContentProps {
   panelId: string | null;
@@ -35,7 +35,7 @@ interface AppPanelContentProps {
   gpuOverviewState: RemoteGpuOverviewState;
   npuMonitorEnabled: boolean;
   npuOverviewState: RemoteNpuOverviewState;
-  recordingSessions: Set<string>;
+  recordingStatuses: RecordingStatus[];
   aiIntent: AIOpenIntent | null;
   transferHeight: number;
   onTransferResize: (delta: number) => void;
@@ -53,7 +53,7 @@ interface AppPanelContentProps {
   onSessionDisconnect: (sessionId: string) => Promise<void> | void;
   canReconnect: (sessionId: string) => boolean;
   onCommandSend: (command: string, execute?: boolean) => void;
-  onToggleSessionRecording: (session: SessionInfo) => Promise<void> | void;
+  onToggleSessionRecording: (session: SessionInfo, mode?: RecordingMode) => Promise<void> | void;
   onSaveSessionTranscript: (session: SessionInfo) => Promise<void> | void;
 }
 
@@ -69,7 +69,7 @@ export default function AppPanelContent({
   gpuOverviewState,
   npuMonitorEnabled,
   npuOverviewState,
-  recordingSessions,
+  recordingStatuses,
   aiIntent,
   transferHeight,
   onTransferResize,
@@ -88,6 +88,7 @@ export default function AppPanelContent({
 }: AppPanelContentProps) {
   const liveActivePane =
     activePane && !activePane.connecting && !activePane.connectError ? activePane : null;
+  const liveTerminalPane = liveActivePane?.paneKind === "terminal" ? liveActivePane : null;
 
   const aiEverMounted = useRef(false);
   if (panelId === "aiAssistant") aiEverMounted.current = true;
@@ -100,9 +101,9 @@ export default function AppPanelContent({
             <div className="flex-1 min-h-0 overflow-hidden">
               <FileExplorer
                 activeSessionId={activeSessionId}
-                activeSessionType={liveActivePane ? liveActivePane.type : null}
-                activeConnectionId={liveActivePane?.connectionId ?? null}
-                activeSessionName={liveActivePane?.name ?? null}
+                activeSessionType={liveTerminalPane ? liveTerminalPane.type : null}
+                activeConnectionId={liveTerminalPane?.connectionId ?? null}
+                activeSessionName={liveTerminalPane?.name ?? null}
               />
             </div>
             <ResizeHandle direction="vertical" onResize={onTransferResize} />
@@ -142,7 +143,7 @@ export default function AppPanelContent({
         return (
           <RecordingPanel
             activeSessionId={activeSessionId}
-            recordingSessions={recordingSessions}
+            recordingStatuses={recordingStatuses}
             onSessionClick={onSessionClick}
             onToggleRecording={onToggleSessionRecording}
             onSaveTranscript={onSaveSessionTranscript}
@@ -193,7 +194,7 @@ export default function AppPanelContent({
       {aiEverMounted.current && (
         <div className={isAiActive ? "h-full" : "hidden"}>
           <AIAssistantPanel
-            activePane={liveActivePane}
+            activePane={liveTerminalPane}
             activeConnection={activeConnection}
             intent={aiIntent}
             isActive={isAiActive}

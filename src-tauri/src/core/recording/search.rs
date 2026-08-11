@@ -116,9 +116,33 @@ fn context_records(
         .collect()
 }
 
+#[cfg(test)]
 fn strip_terminal_control_sequences(text: &str) -> String {
-    let bytes = text.as_bytes();
+    let replayed = replay_terminal_output(text, "", 0);
     let mut out = String::with_capacity(text.len());
+    for line in replayed.lines {
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out.push_str(&replayed.tail);
+    out
+}
+
+struct TerminalReplayResult {
+    lines: Vec<String>,
+    tail: String,
+    cursor: usize,
+}
+
+fn replay_terminal_output(
+    text: &str,
+    initial_line: &str,
+    initial_cursor: usize,
+) -> TerminalReplayResult {
+    let bytes = text.as_bytes();
+    let mut line = initial_line.chars().collect::<Vec<_>>();
+    let mut cursor = initial_cursor.min(line.len());
+    let mut lines = Vec::new();
     let mut i = 0;
 
     while i < bytes.len() {
@@ -131,10 +155,18 @@ fn strip_terminal_control_sequences(text: &str) -> String {
                 match bytes[i] {
                     b'[' => {
                         i += 1;
+                        let params_start = i;
                         while i < bytes.len() {
                             let b = bytes[i];
                             i += 1;
                             if (0x40..=0x7e).contains(&b) {
+                                apply_csi_sequence(
+                                    &text[params_start..i - 1],
+                                    b,
+                                    &mut line,
+                                    &mut cursor,
+                                    &mut lines,
+                                );
                                 break;
                             }
                         }
@@ -169,22 +201,28 @@ fn strip_terminal_control_sequences(text: &str) -> String {
                 }
             }
             b'\r' => {
-                if i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
-                    out.push('\n');
-                    i += 2;
-                } else {
-                    i += 1;
-                }
+                cursor = 0;
+                i += 1;
             }
-            b'\n' | b'\t' => {
-                out.push(bytes[i] as char);
+            b'\n' => {
+                lines.push(line.iter().collect());
+                line.clear();
+                cursor = 0;
+                i += 1;
+            }
+            b'\t' => {
+                write_terminal_char(&mut line, &mut cursor, '\t');
+                i += 1;
+            }
+            b'\x08' => {
+                cursor = cursor.saturating_sub(1);
                 i += 1;
             }
             b if b.is_ascii_control() => {
                 i += 1;
             }
             b if b.is_ascii() => {
-                out.push(b as char);
+                write_terminal_char(&mut line, &mut cursor, b as char);
                 i += 1;
             }
             _ => {
@@ -195,13 +233,110 @@ fn strip_terminal_control_sequences(text: &str) -> String {
                 let Some(ch) = text[i..].chars().next() else {
                     break;
                 };
-                out.push(ch);
+                write_terminal_char(&mut line, &mut cursor, ch);
                 i += ch.len_utf8();
             }
         }
     }
 
-    out
+    TerminalReplayResult {
+        lines,
+        tail: line.iter().collect(),
+        cursor,
+    }
+}
+
+const MAX_REPLAY_CURSOR_COLUMNS: usize = 4096;
+
+fn write_terminal_char(line: &mut Vec<char>, cursor: &mut usize, ch: char) {
+    while *cursor > line.len() {
+        line.push(' ');
+    }
+
+    if *cursor == line.len() {
+        line.push(ch);
+    } else {
+        line[*cursor] = ch;
+    }
+    *cursor += 1;
+}
+
+fn apply_csi_sequence(
+    params: &str,
+    final_byte: u8,
+    line: &mut Vec<char>,
+    cursor: &mut usize,
+    lines: &mut Vec<String>,
+) {
+    match final_byte {
+        b'B' | b'E' => {
+            let count = csi_param(params, 0, 1).max(1);
+            for _ in 0..count {
+                lines.push(line.iter().collect());
+                line.clear();
+            }
+            *cursor = 0;
+        }
+        b'C' => {
+            let count = csi_param(params, 0, 1);
+            *cursor = cursor
+                .saturating_add(count)
+                .min(MAX_REPLAY_CURSOR_COLUMNS);
+        }
+        b'D' => {
+            let count = csi_param(params, 0, 1);
+            *cursor = cursor.saturating_sub(count);
+        }
+        b'G' => {
+            let column = csi_param(params, 0, 1);
+            *cursor = column
+                .saturating_sub(1)
+                .min(MAX_REPLAY_CURSOR_COLUMNS);
+        }
+        b'K' => match csi_param(params, 0, 0) {
+            0 => {
+                line.truncate(*cursor);
+            }
+            1 => {
+                let end = (*cursor).saturating_add(1).min(line.len());
+                line.drain(..end);
+                *cursor = 0;
+            }
+            2 | 3 => {
+                line.clear();
+                *cursor = 0;
+            }
+            _ => {}
+        },
+        b'P' => {
+            let count = csi_param(params, 0, 1);
+            let end = (*cursor).saturating_add(count).min(line.len());
+            if *cursor < end {
+                line.drain(*cursor..end);
+            }
+        }
+        b'@' => {
+            let count = csi_param(params, 0, 1);
+            for _ in 0..count {
+                line.insert((*cursor).min(line.len()), ' ');
+            }
+        }
+        _ => {}
+    }
+}
+
+fn csi_param(params: &str, index: usize, default: usize) -> usize {
+    params
+        .split(';')
+        .nth(index)
+        .map(|part| {
+            part.trim_start_matches(|ch: char| {
+                matches!(ch, '?' | '>' | '<' | '=')
+            })
+        })
+        .filter(|part| !part.is_empty())
+        .and_then(|part| part.parse::<usize>().ok())
+        .unwrap_or(default)
 }
 
 fn advance_one_char(text: &str, index: &mut usize) {

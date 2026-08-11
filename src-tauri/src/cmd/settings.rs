@@ -146,6 +146,7 @@ pub async fn persist_app_settings(
     settings.appearance.normalize_window_transparency();
     settings.terminal.normalize_scrollback_lines();
     settings.terminal.normalize_timestamp_format();
+    settings.recording.normalize();
 
     let existing = match config::load_app_settings(app) {
         Ok(existing) => existing,

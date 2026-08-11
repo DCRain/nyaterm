@@ -163,7 +163,7 @@ function compareSortOrder(left: { sort_order?: number }, right: { sort_order?: n
 
 function canSpawnSessionFromTab(tab: Tab): boolean {
   const pane = getActivePane(tab);
-  return !!pane && (pane.type === "Local" || !!pane.connectionId);
+  return !!pane && pane.paneKind === "terminal" && (pane.type === "Local" || !!pane.connectionId);
 }
 
 function getTabConnection(tab: Tab, savedConnections: SavedConnection[]) {
@@ -197,7 +197,7 @@ function canMultiplexTab(tab: Tab, savedConnections: SavedConnection[]): boolean
 
 function canReconnectTab(tab: Tab): boolean {
   const pane = getActivePane(tab);
-  return !!pane && !pane.connecting && canSpawnSessionFromTab(tab);
+  return !!pane && !pane.connecting && (pane.type === "Local" || !!pane.connectionId);
 }
 
 function canDisconnectTab(tab: Tab): boolean {

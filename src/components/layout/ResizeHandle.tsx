@@ -50,12 +50,14 @@ export default function ResizeHandle({ direction, onResize, className = "" }: Re
     <div
       className={cn("group/rh relative shrink-0", isHorizontal ? "w-px" : "h-px", className)}
     >
-      {/* 1px visual line — layout size stays thin */}
+      {/* 1px visual line — expands on hover/active for easier targeting */}
       <div
         aria-hidden
         className={cn(
-          "pointer-events-none absolute bg-[var(--df-border)] transition-colors group-hover/rh:bg-[var(--df-primary)]",
-          isHorizontal ? "inset-y-0 left-0 w-px" : "inset-x-0 top-0 h-px",
+          "pointer-events-none absolute bg-[var(--df-border)] transition-[width,height,background-color]",
+          isHorizontal
+            ? "inset-y-0 left-1/2 w-px -translate-x-1/2 group-hover/rh:w-[3px] group-hover/rh:bg-[var(--df-primary)] group-active/rh:w-[3px] group-active/rh:bg-[var(--df-primary)]"
+            : "inset-x-0 top-1/2 h-px -translate-y-1/2 group-hover/rh:h-[3px] group-hover/rh:bg-[var(--df-primary)] group-active/rh:h-[3px] group-active/rh:bg-[var(--df-primary)]",
         )}
       />
       {/* Wider invisible hit target so a thin line stays easy to grab */}

@@ -1,42 +1,121 @@
 pub struct RecordingManager {
-    sessions: Mutex<HashMap<String, SessionCaptureState>>,
-    memory_limit_bytes: Mutex<usize>,
+    sessions: RwLock<HashMap<String, Arc<SessionRecorder>>>,
+    memory_limit_bytes: AtomicUsize,
+    app_handle: OnceLock<tauri::AppHandle>,
 }
 
 impl RecordingManager {
     pub fn new() -> Self {
         Self {
-            sessions: Mutex::new(HashMap::new()),
-            memory_limit_bytes: Mutex::new(DEFAULT_MEMORY_LIMIT_BYTES),
+            sessions: RwLock::new(HashMap::new()),
+            memory_limit_bytes: AtomicUsize::new(DEFAULT_MEMORY_LIMIT_BYTES),
+            app_handle: OnceLock::new(),
         }
     }
 
-    pub fn start(
+    pub fn set_app_handle(&self, app: tauri::AppHandle) {
+        let _ = self.app_handle.set(app);
+    }
+
+    pub fn start_with_profile(
         &self,
         session_id: &str,
-        file_path: &str,
-        include_io_labels: bool,
-        include_timestamps: bool,
-    ) -> AppResult<()> {
-        let path = prepare_output_file_path(file_path)?;
-        let file = File::create(&path)
-            .map_err(|e| AppError::Config(format!("Failed to create recording file: {e}")))?;
-        let memory_limit_bytes = *lock_recover(&self.memory_limit_bytes);
+        context: RecordingContext,
+        profile: RecordingProfile,
+        explicit_path: Option<PathBuf>,
+    ) -> AppResult<String> {
+        let recorder = self.get_or_create_recorder(session_id);
+        recorder.set_memory_limit(self.memory_limit_bytes.load(Ordering::Relaxed));
 
-        let mut sessions = lock_recover(&self.sessions);
-        let state = sessions
-            .entry(session_id.to_string())
-            .or_insert_with(|| SessionCaptureState::new(memory_limit_bytes));
-        state.set_memory_limit(memory_limit_bytes);
-        state.start_recording(file, path, include_io_labels, include_timestamps)
+        if lock_recover(&recorder.runtime).is_recording() {
+            return Err(AppError::Config("Recording is already active".to_string()));
+        }
+        {
+            let mut transcript = lock_recover(&recorder.transcript);
+            let _ = transcript.flush_output_lines(true);
+        }
+        let mut runtime = lock_recover(&recorder.runtime);
+        if runtime.is_recording() {
+            return Err(AppError::Config("Recording is already active".to_string()));
+        }
+
+        let path = match explicit_path {
+            Some(path) => path,
+            None => resolve_recording_path(&profile, &context, None)?,
+        };
+
+        let initial_bytes = match profile.mode {
+            RecordingMode::Transcript if profile.include_session_metadata => {
+                Some(format_session_header(&context).into_bytes())
+            }
+            _ => None,
+        };
+        let mode = profile.mode;
+        let sink = RecordingSink::start(
+            session_id,
+            mode,
+            path,
+            profile.existing_file_behavior,
+            self.app_handle.get(),
+            initial_bytes,
+        )?;
+        let actual_path = sink.status.snapshot().file_path.clone();
+        runtime.daily_key = local_day_key(context.started_at);
+        runtime.context = Some(context);
+        runtime.profile = Some(profile);
+        runtime.sink = Some(sink);
+        drop(runtime);
+
+        self.record_system(
+            session_id,
+            format!(
+                "Recording started ({})",
+                match mode {
+                    RecordingMode::Transcript => "transcript",
+                    RecordingMode::Raw => "raw",
+                }
+            ),
+        );
+        Ok(actual_path)
     }
 
     pub fn stop(&self, session_id: &str) -> AppResult<String> {
-        let mut sessions = lock_recover(&self.sessions);
-        let state = sessions
-            .get_mut(session_id)
+        let recorder = self
+            .get_recorder(session_id)
             .ok_or_else(|| AppError::Config("No active recording".to_string()))?;
-        state.stop_recording()
+
+        let flushed = {
+            let mut transcript = lock_recover(&recorder.transcript);
+            transcript.finish()
+        };
+        self.write_transcript_records(&recorder, &flushed);
+
+        let (sink, footer) = {
+            let mut runtime = lock_recover(&recorder.runtime);
+            let Some(sink) = runtime.sink.take() else {
+                return Err(AppError::Config("No active recording".to_string()));
+            };
+            let footer = match (runtime.profile.as_ref(), runtime.context.as_ref()) {
+                (Some(profile), Some(context))
+                    if profile.mode == RecordingMode::Transcript
+                        && profile.include_session_metadata =>
+                {
+                    Some(format_session_footer(context, "Stopped").into_bytes())
+                }
+                _ => None,
+            };
+            runtime.profile = None;
+            runtime.context = None;
+            (sink, footer)
+        };
+
+        let status = sink.stop(footer);
+        if let Some(error) = status.last_error {
+            return Err(AppError::Config(format!(
+                "Recording stopped with errors: {error}"
+            )));
+        }
+        Ok(status.file_path)
     }
 
     pub fn save_transcript(
@@ -47,13 +126,10 @@ impl RecordingManager {
         include_timestamps: bool,
     ) -> AppResult<String> {
         let path = prepare_output_file_path(file_path)?;
-        let records = {
-            let mut sessions = lock_recover(&self.sessions);
-            sessions
-                .get_mut(session_id)
-                .map(SessionCaptureState::snapshot_records)
-                .unwrap_or_default()
-        };
+        let records = self
+            .get_recorder(session_id)
+            .map(|recorder| lock_recover(&recorder.transcript).snapshot_records())
+            .unwrap_or_default();
 
         let mut writer = BufWriter::new(
             File::create(&path)
@@ -96,13 +172,10 @@ impl RecordingManager {
             .max_lines
             .unwrap_or(DEFAULT_HISTORY_SEARCH_LINES)
             .clamp(1, MAX_HISTORY_SEARCH_LINES);
-        let records = {
-            let mut sessions = lock_recover(&self.sessions);
-            sessions
-                .get_mut(&request.session_id)
-                .map(SessionCaptureState::snapshot_records)
-                .unwrap_or_default()
-        };
+        let records = self
+            .get_recorder(&request.session_id)
+            .map(|recorder| lock_recover(&recorder.transcript).snapshot_records())
+            .unwrap_or_default();
         let start_index = records.len().saturating_sub(max_lines);
         let searched_records = &records[start_index..];
         let matcher = HistoryMatcher::new(
@@ -127,7 +200,7 @@ impl RecordingManager {
                         preview: record.data.clone(),
                         before: context_records(&records, absolute_index, context_before, true),
                         after: context_records(&records, absolute_index, context_after, false),
-                        source: record.label.to_ascii_lowercase(),
+                        source: record.kind.label().to_ascii_lowercase(),
                     });
                 }
             }
@@ -143,58 +216,273 @@ impl RecordingManager {
 
     pub fn set_memory_limit(&self, max_bytes: usize) {
         let bounded = max_bytes.max(1);
-        *lock_recover(&self.memory_limit_bytes) = bounded;
+        self.memory_limit_bytes.store(bounded, Ordering::Relaxed);
 
-        let mut sessions = lock_recover(&self.sessions);
-        for state in sessions.values_mut() {
+        for state in rw_read_recover(&self.sessions).values() {
             state.set_memory_limit(bounded);
         }
     }
 
     pub fn is_recording(&self, session_id: &str) -> bool {
-        self.sessions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get(session_id)
-            .is_some_and(|state| state.recording.is_some())
+        self.get_recorder(session_id)
+            .is_some_and(|recorder| lock_recover(&recorder.runtime).is_recording())
     }
 
     pub fn list_recording_sessions(&self) -> Vec<String> {
-        self.sessions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        rw_read_recover(&self.sessions)
             .iter()
-            .filter_map(|(id, state)| state.recording.as_ref().map(|_| id.clone()))
+            .filter_map(|(id, state)| {
+                lock_recover(&state.runtime)
+                    .is_recording()
+                    .then(|| id.clone())
+            })
+            .collect()
+    }
+
+    pub fn get_recording_status(&self, session_id: &str) -> Option<RecordingStatus> {
+        let recorder = self.get_recorder(session_id)?;
+        let runtime = lock_recover(&recorder.runtime);
+        runtime.sink.as_ref().map(|sink| sink.status.snapshot())
+    }
+
+    pub fn list_recording_statuses(&self) -> Vec<RecordingStatus> {
+        rw_read_recover(&self.sessions)
+            .values()
+            .filter_map(|recorder| {
+                lock_recover(&recorder.runtime)
+                    .sink
+                    .as_ref()
+                    .map(|sink| sink.status.snapshot())
+            })
             .collect()
     }
 
     pub fn write_output(&self, session_id: &str, data: &str) {
-        let memory_limit_bytes = *lock_recover(&self.memory_limit_bytes);
-        let mut sessions = lock_recover(&self.sessions);
-        let state = sessions
-            .entry(session_id.to_string())
-            .or_insert_with(|| SessionCaptureState::new(memory_limit_bytes));
-        state.set_memory_limit(memory_limit_bytes);
-        state.write_output(data);
+        let recorder = self.get_or_create_recorder(session_id);
+        recorder.set_memory_limit(self.memory_limit_bytes.load(Ordering::Relaxed));
+        let records = {
+            let mut transcript = lock_recover(&recorder.transcript);
+            transcript.write_output(data)
+        };
+        self.write_transcript_records(&recorder, &records);
     }
 
-    pub fn write_input(&self, session_id: &str, data: &[u8]) {
-        let memory_limit_bytes = *lock_recover(&self.memory_limit_bytes);
-        let mut sessions = lock_recover(&self.sessions);
-        let state = sessions
-            .entry(session_id.to_string())
-            .or_insert_with(|| SessionCaptureState::new(memory_limit_bytes));
-        state.set_memory_limit(memory_limit_bytes);
-        state.write_input(data);
+    pub fn write_raw_output(&self, session_id: &str, bytes: &[u8]) {
+        let Some(recorder) = self.get_recorder(session_id) else {
+            return;
+        };
+        let data = bytes.to_vec();
+        let mut runtime = lock_recover(&recorder.runtime);
+        if !should_write_raw(&runtime) {
+            return;
+        }
+        maybe_rotate(&mut runtime);
+        if let Some(sink) = runtime.sink.as_ref() {
+            sink.enqueue(data);
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn write_input(&self, _session_id: &str, _data: &[u8]) {
+        // Keystrokes are intentionally not recorded. Commands enter transcript
+        // only through record_command_submission after submission/confirmation.
+    }
+
+    pub fn record_command_submission(
+        &self,
+        session_id: &str,
+        command: String,
+        sensitivity: InputSensitivity,
+    ) {
+        if sensitivity == InputSensitivity::Secret {
+            return;
+        }
+        let recorder = self.get_or_create_recorder(session_id);
+        let records = {
+            let mut transcript = lock_recover(&recorder.transcript);
+            transcript.record_command(command)
+        };
+        self.write_transcript_records(&recorder, &records);
+    }
+
+    pub fn record_system(&self, session_id: &str, message: impl Into<String>) {
+        let recorder = self.get_or_create_recorder(session_id);
+        let record = {
+            let mut transcript = lock_recover(&recorder.transcript);
+            transcript.record_system(message.into())
+        };
+        if let Some(record) = record {
+            self.write_transcript_records(&recorder, &[record]);
+        }
     }
 
     pub fn cleanup_session(&self, session_id: &str) {
         let removed = {
-            let mut sessions = lock_recover(&self.sessions);
+            let mut sessions = rw_write_recover(&self.sessions);
             sessions.remove(session_id)
         };
-        if let Some(mut state) = removed {
-            state.finish();
+        if let Some(recorder) = removed {
+            let flushed = {
+                let mut transcript = lock_recover(&recorder.transcript);
+                transcript.finish()
+            };
+            self.write_transcript_records(&recorder, &flushed);
+            let (sink, footer) = {
+                let mut runtime = lock_recover(&recorder.runtime);
+                let sink = runtime.sink.take();
+                let footer = match (runtime.profile.as_ref(), runtime.context.as_ref()) {
+                    (Some(profile), Some(context))
+                        if profile.mode == RecordingMode::Transcript
+                            && profile.include_session_metadata =>
+                    {
+                        Some(format_session_footer(context, "Session closed").into_bytes())
+                    }
+                    _ => None,
+                };
+                (sink, footer)
+            };
+            if let Some(sink) = sink {
+                let _ = sink.stop(footer);
+            }
+        }
+    }
+
+    fn get_recorder(&self, session_id: &str) -> Option<Arc<SessionRecorder>> {
+        rw_read_recover(&self.sessions).get(session_id).cloned()
+    }
+
+    fn get_or_create_recorder(&self, session_id: &str) -> Arc<SessionRecorder> {
+        if let Some(recorder) = self.get_recorder(session_id) {
+            return recorder;
+        }
+        let mut sessions = rw_write_recover(&self.sessions);
+        sessions
+            .entry(session_id.to_string())
+            .or_insert_with(|| {
+                Arc::new(SessionRecorder::new(
+                    self.memory_limit_bytes.load(Ordering::Relaxed),
+                ))
+            })
+            .clone()
+    }
+
+    fn write_transcript_records(&self, recorder: &Arc<SessionRecorder>, records: &[TranscriptRecord]) {
+        if records.is_empty() {
+            return;
+        }
+        let mut runtime = lock_recover(&recorder.runtime);
+        if !should_write_transcript(&runtime) {
+            return;
+        }
+        maybe_rotate(&mut runtime);
+        let Some(sink) = runtime.sink.as_ref() else {
+            return;
+        };
+        let Some(profile) = runtime.profile.as_ref() else {
+            return;
+        };
+        for record in records {
+            sink.enqueue(
+                record
+                    .format(profile.include_io_labels, profile.include_timestamps)
+                    .into_bytes(),
+            );
+        }
+    }
+}
+
+fn should_write_transcript(runtime: &RecordingRuntime) -> bool {
+    runtime
+        .profile
+        .as_ref()
+        .is_some_and(|profile| profile.mode == RecordingMode::Transcript)
+}
+
+fn should_write_raw(runtime: &RecordingRuntime) -> bool {
+    runtime
+        .profile
+        .as_ref()
+        .is_some_and(|profile| {
+            let _include_binary_transfer_payloads = profile.include_binary_transfer_payloads;
+            profile.mode == RecordingMode::Raw
+        })
+}
+
+fn maybe_rotate(runtime: &mut RecordingRuntime) {
+    let Some(profile) = runtime.profile.clone() else {
+        return;
+    };
+    let Some(context) = runtime.context.clone() else {
+        return;
+    };
+    let Some(sink) = runtime.sink.as_ref() else {
+        return;
+    };
+
+    match profile.rotation {
+        RotationPolicy::Session => {}
+        RotationPolicy::Daily => {
+            let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+            let next_key = local_day_key(now);
+            if next_key != runtime.daily_key {
+                let mut next_context = context.clone();
+                next_context.started_at = now;
+                if let Ok(path) = resolve_recording_path(&profile, &next_context, None)
+                    .and_then(|path| open_collision_safe_path(&path, profile.existing_file_behavior))
+                {
+                    sink.enqueue(
+                        format_record_parts(
+                            &chrono_timestamp(),
+                            TranscriptEventKind::System.label(),
+                            "Recording rotated",
+                            profile.include_io_labels,
+                            profile.include_timestamps,
+                        )
+                        .into_bytes(),
+                    );
+                    let header = (profile.mode == RecordingMode::Transcript
+                        && profile.include_session_metadata)
+                        .then(|| format_session_header(&next_context).into_bytes());
+                    sink.rotate(path, profile.existing_file_behavior, header);
+                    runtime.context = Some(next_context);
+                    runtime.daily_key = next_key;
+                }
+            }
+        }
+        RotationPolicy::Size { max_bytes } => {
+            if max_bytes > 0
+                && sink
+                    .status
+                    .written_bytes
+                    .load(Ordering::Relaxed)
+                    .saturating_add(sink.status.queued_bytes.load(Ordering::Relaxed))
+                    >= max_bytes
+            {
+                runtime.size_rotation_index = runtime.size_rotation_index.saturating_add(1);
+                if let Ok(path) = resolve_recording_path(
+                    &profile,
+                    &context,
+                    Some(runtime.size_rotation_index),
+                )
+                .and_then(|path| open_collision_safe_path(&path, profile.existing_file_behavior))
+                {
+                    sink.enqueue(
+                        format_record_parts(
+                            &chrono_timestamp(),
+                            TranscriptEventKind::System.label(),
+                            &format!("Recording rotated ({})", runtime.size_rotation_index),
+                            profile.include_io_labels,
+                            profile.include_timestamps,
+                        )
+                        .into_bytes(),
+                    );
+                    let header = (profile.mode == RecordingMode::Transcript
+                        && profile.include_session_metadata)
+                        .then(|| format_session_header(&context).into_bytes());
+                    sink.rotate(path, profile.existing_file_behavior, header);
+                    sink.status.written_bytes.store(0, Ordering::Relaxed);
+                }
+            }
         }
     }
 }

@@ -4,13 +4,13 @@ sidebar_position: 0
 
 # Session Types
 
-NyaTerm is not just an SSH client. It is a desktop app that puts multiple terminal workflows and remote desktop connections into one workspace. It currently supports:
+NyaTerm is not just an SSH client. It is a desktop app that puts multiple terminal and remote-desktop workflows into one workspace. It currently supports:
 
 - **SSH**
 - **Local Terminal**
 - **Telnet**
 - **Serial**
-- **RDP** (external client)
+- **RDP**
 - **VNC** (external client)
 
 Understanding the differences helps explain why some panels or enhancements only appear for certain tabs.
@@ -23,7 +23,7 @@ Understanding the differences helps explain why some panels or enhancements only
 | Local Terminal | Local shell work, scripts, builds | Shared terminal UI, command history, split panes |
 | Telnet | Legacy devices, lab environments, compatibility troubleshooting | Terminal workspace features with `Backspace Mode`, but not SSH-only features |
 | Serial | Routers, switches, boards, embedded debug ports | Serial port settings, `Backspace Mode`, and terminal workspace features |
-| RDP | Windows remote desktop | Saved connections launch an external RDP client; not embedded in tabs |
+| RDP | Windows Remote Desktop or graphical administration entry points | Embedded remote desktop display, NLA/CredSSP, certificate verification, text clipboard, window fitting, reconnects; can also launch external RDP clients per platform |
 | VNC | Graphical remote desktop | Saved connections launch an external VNC client; not embedded in tabs |
 
 ## SSH
@@ -103,19 +103,40 @@ When creating a serial session, you can configure:
 
 Serial sessions still live inside NyaTerm's tabbed and split workspace, so you can watch serial output in one pane while running commands in an SSH or local terminal pane.
 
-## RDP / VNC (external clients)
+## RDP
 
-RDP and VNC connections can be saved in the connection list, but they are **not** embedded as desktop views inside NyaTerm tabs. When you connect, NyaTerm detects an available client for your platform and launches it externally. Passwords are prompted by the external client.
+RDP sessions are for Windows hosts or other environments that expose a Remote Desktop endpoint. They share NyaTerm's saved-connection, tab, and split-pane workspace model, but the underlying session is a graphical desktop instead of a text terminal.
 
-### Recommended clients
+When creating an RDP session, you can configure:
 
-**RDP**
+- Host, port, username, password, and domain
+- Network Level Authentication (NLA / CredSSP)
+- Certificate policy: ask on unknown certificates, strict rejection, or accept for this session
+- Display mode: fit to window or fixed size
+- Text clipboard mode
+- Automatic reconnect attempts
+
+When connecting to an RDP host with an unknown certificate, NyaTerm opens a certificate verification dialog. You can accept the certificate for the current connection only or accept and remember it. If a remembered certificate changes later, NyaTerm prompts again before connecting.
+
+RDP does not provide terminal command history, the SFTP file explorer, SSH proxy/jump-host behavior, or remote resource monitoring. If you need command-line enhancements, use SSH, Local Terminal, Telnet, or Serial instead.
+
+### External RDP clients
+
+Some connection configurations can also detect an available platform client and launch it externally (such as `mstsc` or FreeRDP). Passwords are prompted by the external client.
+
+**Recommended clients**
 
 - Windows: built-in `mstsc`, then FreeRDP (`xfreerdp` / `wfreerdp`)
 - macOS: temporary `.rdp` file via `open` (Microsoft Remote Desktop and similar), then FreeRDP
 - Linux: `xfreerdp` / `wlfreerdp` / `freerdp`, or Remmina
 
-**VNC**
+If no client is found, NyaTerm shows an install prompt with platform-specific commands and download links.
+
+## VNC (external client)
+
+VNC connections can be saved in the connection list, but they are **not** embedded as desktop views inside NyaTerm tabs. When you connect, NyaTerm detects an available client for your platform and launches it externally. Passwords are prompted by the external client.
+
+### Recommended clients
 
 - macOS: built-in `open vnc://host:port` (Screen Sharing), then TigerVNC Viewer / `vncviewer`
 - Windows: TigerVNC / UltraVNC / TightVNC / RealVNC `vncviewer`
@@ -131,7 +152,8 @@ A simple rule of thumb:
 - Need a local shell? Use **Local Terminal**
 - Need a traditional remote terminal? Use **Telnet**
 - Need a device console or debug port? Use **Serial**
-- Need a graphical remote desktop? Use **RDP** or **VNC** (external clients)
+- Need a graphical Windows remote desktop? Use **RDP**
+- Need another graphical remote desktop? Use **VNC** (external client)
 
 ## Mix them in one workspace
 
@@ -140,7 +162,8 @@ One of NyaTerm's strengths is that you can mix these session types in the same w
 - SSH on the left to watch remote logs
 - Local Terminal on the right to run packaging or Git commands
 - A Serial tab open to watch device boot output
-- Launch RDP / VNC from the connection list when you need a full desktop
+- An RDP pane open to inspect a Windows remote desktop
+- Launch VNC from the connection list when you need a full desktop
 
 That is why some features are documented as session-specific. The workspace is shared, but the capability boundary still depends on the underlying session type.
 

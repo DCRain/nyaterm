@@ -44,17 +44,22 @@ import type {
   AppSettings,
   Group,
   PaneSplitDirection,
+  RdpSessionPane,
   SavedConnection,
   SessionPane,
-  SessionType,
   SyncGroup,
   Tab,
   UiConfig,
+  WorkspaceSessionType,
 } from "@/types/global";
 import { invoke } from "../lib/invoke";
 import { logger, setLoggerLevel } from "../lib/logger";
 import { DEFAULT_TERMINAL_FONT_SIZE } from "../lib/terminalFontSize";
 import { isPrimaryMainWindow } from "../lib/windowManager";
+
+type PaneConnectingUpdates = Partial<Pick<SessionPane, "name" | "type" | "connectionId">> & {
+  display?: RdpSessionPane["display"];
+};
 
 interface AppContextType {
   // Tabs
@@ -64,7 +69,7 @@ interface AppContextType {
   addTab: (
     sessionId: string,
     name: string,
-    type: SessionType,
+    type: WorkspaceSessionType,
     connectionId?: string,
     extra?: Partial<Pick<Tab, "customName" | "tabColor">>,
     options?: { afterTabId?: string },
@@ -72,10 +77,11 @@ interface AppContextType {
   /** Immediately add a "connecting" tab and make it active. Returns the new tabId. */
   addPendingTab: (
     name: string,
-    type: SessionType,
+    type: WorkspaceSessionType,
     connectionId?: string,
     extra?: Partial<Pick<Tab, "customName" | "tabColor">>,
     options?: { afterTabId?: string; view?: SessionPane["view"] },
+    paneOverrides?: Partial<SessionPane>,
   ) => PendingTabCreation;
   /** Swap the active pane's temporary sessionId for the real one and clear the connecting flag. */
   updateTabSession: (tabId: string, sessionId: string) => void;
@@ -89,7 +95,7 @@ interface AppContextType {
   markPaneConnecting: (
     tabId: string,
     paneId: string,
-    updates?: Partial<Pick<SessionPane, "name" | "type" | "connectionId">>,
+    updates?: PaneConnectingUpdates,
   ) => string | null;
   hasTab: (tabId: string) => boolean;
   hasPane: (tabId: string, paneId: string) => boolean;
@@ -285,6 +291,19 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     tab_middle_click_action: DEFAULT_TAB_MIDDLE_CLICK_ACTION,
     tab_right_click_action: DEFAULT_TAB_RIGHT_CLICK_ACTION,
   },
+  recording: {
+    auto_start: false,
+    default_mode: "transcript",
+    base_path: "",
+    path_template: "{group}/{session}/{yyyy}-{MM}-{dd}/{HH}-{mm}-{ss}-{SSS}-{session_short_id}.log",
+    include_timestamps: true,
+    include_io_labels: true,
+    include_session_metadata: true,
+    rotation: { type: "session" },
+    existing_file_behavior: "unique",
+    memory_limit_bytes: 5 * 1024 * 1024,
+    include_binary_transfer_payloads: false,
+  },
   transfer: {
     editor_type: "external",
     download_threads: 3,
@@ -350,7 +369,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     show_docker_manager: false,
     docker_manager_interval: 10,
     saved_connections_sort_mode: "default",
-    saved_connections_last_opened_connection_id: null,
+    saved_connections_expanded_group_ids: [],
     recent_connection_ids: [],
     transfer_height: 180,
     file_explorer_show_hidden_files: true,
@@ -575,7 +594,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setLoggerLevel(cfg.diagnostics.level);
         appSettingsLoaded.current = true;
         setSettingsLoaded(true);
-        if (cfg.security?.enable_screen_lock) {
+        if (isPrimaryMainWindow() && cfg.security?.enable_screen_lock) {
           setIsLocked(true);
         }
       })
@@ -798,7 +817,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     (
       sessionId: string,
       name: string,
-      type: SessionType,
+      type: WorkspaceSessionType,
       connectionId?: string,
       extra?: Partial<Pick<Tab, "customName" | "tabColor">>,
       options?: { afterTabId?: string },
@@ -822,16 +841,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const addPendingTab = useCallback(
     (
       name: string,
-      type: SessionType,
+      type: WorkspaceSessionType,
       connectionId?: string,
       extra?: Partial<Pick<Tab, "customName" | "tabColor">>,
       options?: { afterTabId?: string; view?: SessionPane["view"] },
+      paneOverrides?: Partial<SessionPane>,
     ): PendingTabCreation => {
       const createRequestId = createSessionRequestId();
       const pane = createSessionPane(name, type, connectionId, {
+        ...paneOverrides,
         connecting: true,
         createRequestId,
-        view: options?.view,
+        view: options?.view ?? paneOverrides?.view,
       });
       const newTab = createWorkspaceTab(pane, getNextPersistOrder(tabsRef.current), extra);
       const nextTabs = options?.afterTabId
@@ -929,11 +950,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   const markPaneConnecting = useCallback(
-    (
-      tabId: string,
-      paneId: string,
-      updates?: Partial<Pick<SessionPane, "name" | "type" | "connectionId">>,
-    ) => {
+    (tabId: string, paneId: string, updates?: PaneConnectingUpdates) => {
       const createRequestId = createSessionRequestId();
       const nextTabs = tabsRef.current.map((tab) =>
         tab.id === tabId
@@ -1168,7 +1185,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     (
       tabId: string,
       paneId: string,
-      sessionType: SessionType,
+      sessionType: WorkspaceSessionType,
       connectionId: string | undefined,
       error: unknown,
     ) => {
@@ -1259,6 +1276,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId))
                 .catch((e) =>
                   handleRestoredSessionFailed(tab.id, pane.id, "Serial", pane.connectionId, e),
+                );
+              break;
+            case "RDP":
+              if (!cid) {
+                markPaneConnectionFailed(tab.id, pane.id, "Missing RDP connection id");
+                return;
+              }
+              invoke<string>("create_rdp_session", {
+                connectionId: cid,
+                createRequestId: pane.createRequestId,
+              })
+                .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId, cid))
+                .catch((e) =>
+                  handleRestoredSessionFailed(tab.id, pane.id, "RDP", pane.connectionId, e),
                 );
               break;
           }

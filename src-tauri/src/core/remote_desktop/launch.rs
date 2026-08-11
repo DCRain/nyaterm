@@ -142,46 +142,10 @@ fn resolve_launch_target(
     if let Some(connection_id) = request.connection_id.as_deref().filter(|id| !id.is_empty()) {
         let connection = load_connection_by_id(app, connection_id)?;
         return match connection.config {
-            ConnectionType::Rdp {
-                host,
-                port,
-                username,
-                display_mode,
-                width,
-                height,
-                redirect_clipboard,
-                redirect_printers,
-                redirect_com_ports,
-                redirect_smart_cards,
-                drive_redirect,
-                device_redirect,
-                camera_redirect,
-                audio_mode,
-                audio_capture,
-                keyboard_hook,
-                preferred_client,
-            } => Ok(LaunchTarget {
-                protocol: RemoteDesktopProtocol::Rdp,
-                host,
-                port,
-                username: Some(normalize_rdp_username(username)),
-                preferred_client,
-                rdp: Some(RdpLaunchOptions {
-                    display_mode: normalize_display_mode(display_mode),
-                    width,
-                    height,
-                    redirect_clipboard,
-                    redirect_printers,
-                    redirect_com_ports,
-                    redirect_smart_cards,
-                    drive_redirect,
-                    device_redirect,
-                    camera_redirect,
-                    audio_mode: normalize_audio_mode(audio_mode),
-                    audio_capture,
-                    keyboard_hook: normalize_keyboard_hook(keyboard_hook),
-                }),
-            }),
+            ConnectionType::Rdp { .. } => Err(AppError::Config(
+                "RDP connections use the built-in RDP session; external client launch is not supported"
+                    .into(),
+            )),
             ConnectionType::Vnc { host, port } => Ok(LaunchTarget {
                 protocol: RemoteDesktopProtocol::Vnc,
                 host,

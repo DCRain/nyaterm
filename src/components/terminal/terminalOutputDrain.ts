@@ -1,0 +1,424 @@
+import { XTERM_PERFORMANCE_CONFIG } from "@/lib/xtermPerformance";
+import {
+  createOutputQueue,
+  hasOutputQueueItems,
+  type OutputQueue,
+  peekOutputQueue,
+  pushOutputQueue,
+  type QueuedOutputChunk,
+  replaceOutputQueueHead,
+  shiftOutputQueue,
+  splitOutputChunk,
+} from "./xterminalOutputQueue";
+
+export type TerminalOutputDrainMode = "foreground" | "background" | "hibernating" | "hibernated";
+
+interface TerminalLike {
+  write(data: string, callback?: () => void): void;
+}
+
+interface TerminalOutputDrainTimers {
+  requestAnimationFrame: (callback: FrameRequestCallback) => number;
+  cancelAnimationFrame: (handle: number) => void;
+  setTimeout: (callback: () => void, delay: number) => number;
+  clearTimeout: (handle: number) => void;
+  queueMicrotask: (callback: () => void) => void;
+  now: () => number;
+}
+
+interface TerminalOutputDrainOptions<TWriteContext = unknown> {
+  sessionId: string;
+  getTerminal: () => TerminalLike | null;
+  getWriteChunkBytes: () => number;
+  getForegroundDelayMs?: () => number;
+  shouldUseLowLatencyFlush?: () => boolean;
+  onAck: (bytes: number) => void;
+  onWriteStart?: (payload: QueuedOutputChunk) => TWriteContext;
+  onWriteComplete?: (payload: QueuedOutputChunk, context: TWriteContext | undefined) => void;
+  onWriteError?: (payload: QueuedOutputChunk, error: unknown) => void;
+  onPressureChange?: (pendingBytes: number) => void;
+  onModeChange?: (mode: TerminalOutputDrainMode) => void;
+  onBackgroundDrain?: (queueBytes: number, writingBytes: number, unackedBytes: number) => void;
+  timers?: Partial<TerminalOutputDrainTimers>;
+}
+
+const DEFAULT_ACK_DEBOUNCE_MS = 40;
+const DEFAULT_ACK_BATCH_BYTES = 64 * 1024;
+const IDLE_POLL_MS = 8;
+
+function defaultTimers(): TerminalOutputDrainTimers {
+  return {
+    requestAnimationFrame: (callback) => window.requestAnimationFrame(callback),
+    cancelAnimationFrame: (handle) => window.cancelAnimationFrame(handle),
+    setTimeout: (callback, delay) => window.setTimeout(callback, delay),
+    clearTimeout: (handle) => window.clearTimeout(handle),
+    queueMicrotask: (callback) => queueMicrotask(callback),
+    now: () => Date.now(),
+  };
+}
+
+function dequeueOutputChunk(queue: OutputQueue, maxBytes: number): QueuedOutputChunk | null {
+  if (maxBytes <= 0 || !hasOutputQueueItems(queue)) {
+    return null;
+  }
+
+  let remaining = maxBytes;
+  const parts: string[] = [];
+  let bytes = 0;
+
+  while (remaining > 0 && hasOutputQueueItems(queue)) {
+    const chunk = peekOutputQueue(queue);
+    if (!chunk) break;
+
+    if (chunk.bytes <= remaining) {
+      parts.push(chunk.data);
+      shiftOutputQueue(queue);
+      remaining -= chunk.bytes;
+      bytes += chunk.bytes;
+      continue;
+    }
+
+    const [head, tail] = splitOutputChunk(chunk, remaining);
+    parts.push(head.data);
+    replaceOutputQueueHead(queue, tail);
+    queue.bytes = Math.max(0, queue.bytes - head.bytes);
+    bytes += head.bytes;
+    remaining -= head.bytes;
+  }
+
+  return parts.length > 0 ? { data: parts.join(""), bytes } : null;
+}
+
+export class TerminalOutputDrain<TWriteContext = unknown> {
+  private readonly timers: TerminalOutputDrainTimers;
+  private queue = createOutputQueue();
+  private mode: TerminalOutputDrainMode = "foreground";
+  private writingBytes = 0;
+  private backendUnackedBytes = 0;
+  private pendingAckBytes = 0;
+  private writeInFlight = false;
+  private writeQueue = Promise.resolve();
+  private foregroundFrame: number | null = null;
+  private foregroundTimer: number | null = null;
+  private backgroundTimer: number | null = null;
+  private ackTimer: number | null = null;
+  private microtaskPending = false;
+  private disposed = false;
+
+  constructor(private readonly options: TerminalOutputDrainOptions<TWriteContext>) {
+    this.timers = { ...defaultTimers(), ...options.timers };
+  }
+
+  setMode(mode: TerminalOutputDrainMode) {
+    if (this.disposed) return;
+    if (this.mode === mode) {
+      this.schedule();
+      return;
+    }
+
+    this.mode = mode;
+    this.options.onModeChange?.(mode);
+
+    if (mode !== "foreground") {
+      this.cancelForeground();
+    }
+    if (mode !== "background") {
+      this.cancelBackground();
+    }
+
+    this.schedule();
+  }
+
+  enqueue(chunk: QueuedOutputChunk) {
+    if (this.disposed || chunk.bytes <= 0 || !chunk.data) return;
+    pushOutputQueue(this.queue, chunk);
+    this.backendUnackedBytes += chunk.bytes;
+    this.notifyPressure();
+    this.schedule();
+  }
+
+  getPendingBytes() {
+    return this.queue.bytes + this.writingBytes + this.pendingAckBytes;
+  }
+
+  getQueueBytes() {
+    return this.queue.bytes;
+  }
+
+  hasQueuedOutput() {
+    return hasOutputQueueItems(this.queue);
+  }
+
+  isWriteInFlight() {
+    return this.writeInFlight;
+  }
+
+  waitForIdle(timeoutMs: number) {
+    const deadline = this.timers.now() + timeoutMs;
+    return new Promise<boolean>((resolve) => {
+      const poll = () => {
+        if (this.disposed) {
+          resolve(false);
+          return;
+        }
+
+        if (this.timers.now() > deadline) {
+          resolve(false);
+          return;
+        }
+
+        if (hasOutputQueueItems(this.queue)) {
+          const payload = dequeueOutputChunk(this.queue, this.options.getWriteChunkBytes());
+          if (payload) {
+            void this.writePayload(payload).then(() => {
+              this.flushPendingAck(true);
+              poll();
+            });
+            return;
+          }
+        }
+
+        if (this.writeInFlight || this.writingBytes > 0) {
+          this.timers.setTimeout(poll, IDLE_POLL_MS);
+          return;
+        }
+
+        this.flushPendingAck(true);
+        resolve(this.queue.bytes === 0 && this.writingBytes === 0);
+      };
+
+      this.cancelForeground();
+      this.cancelBackground();
+      poll();
+    });
+  }
+
+  writeExternal(write: () => Promise<void> | void) {
+    this.writeQueue = this.writeQueue.catch(() => {}).then(() => write());
+    return this.writeQueue;
+  }
+
+  dispose(options: { ackRemaining?: boolean } = {}) {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.cancelForeground();
+    this.cancelBackground();
+    this.clearAckTimer();
+    this.microtaskPending = false;
+
+    this.flushPendingAck(true);
+    if (options.ackRemaining) {
+      this.sendAck(this.backendUnackedBytes);
+    }
+
+    this.queue = createOutputQueue();
+    this.writingBytes = 0;
+    this.pendingAckBytes = 0;
+    this.backendUnackedBytes = 0;
+    this.writeInFlight = false;
+    this.writeQueue = Promise.resolve();
+    this.notifyPressure();
+  }
+
+  private schedule() {
+    if (this.disposed) return;
+    if (!hasOutputQueueItems(this.queue)) {
+      this.flushPendingAck(true);
+      this.notifyPressure();
+      return;
+    }
+    if (this.writeInFlight || this.mode === "hibernating" || this.mode === "hibernated") {
+      this.notifyPressure();
+      return;
+    }
+
+    if (this.mode === "background") {
+      this.scheduleBackground();
+    } else {
+      this.scheduleForeground();
+    }
+  }
+
+  private scheduleForeground() {
+    if (
+      this.foregroundFrame !== null ||
+      this.foregroundTimer !== null ||
+      this.microtaskPending ||
+      this.disposed
+    ) {
+      return;
+    }
+
+    const delayMs = Math.max(0, this.options.getForegroundDelayMs?.() ?? 0);
+    if (delayMs > 0) {
+      this.foregroundTimer = this.timers.setTimeout(() => {
+        this.foregroundTimer = null;
+        this.flushForeground();
+      }, delayMs);
+      return;
+    }
+
+    if (this.options.shouldUseLowLatencyFlush?.()) {
+      this.microtaskPending = true;
+      this.timers.queueMicrotask(() => {
+        this.microtaskPending = false;
+        this.flushForeground();
+      });
+      return;
+    }
+
+    this.foregroundFrame = this.timers.requestAnimationFrame(() => {
+      this.foregroundFrame = null;
+      this.flushForeground();
+    });
+  }
+
+  private scheduleBackground() {
+    if (this.backgroundTimer !== null || this.disposed) return;
+    this.backgroundTimer = this.timers.setTimeout(() => {
+      this.backgroundTimer = null;
+      this.flushBackground();
+    }, XTERM_PERFORMANCE_CONFIG.output.backgroundDrainIntervalMs);
+  }
+
+  private flushForeground() {
+    if (this.mode !== "foreground" || this.disposed) {
+      this.schedule();
+      return;
+    }
+    this.flushOne(this.options.getWriteChunkBytes());
+  }
+
+  private flushBackground() {
+    if (this.mode !== "background" || this.disposed) {
+      this.schedule();
+      return;
+    }
+    this.options.onBackgroundDrain?.(this.queue.bytes, this.writingBytes, this.backendUnackedBytes);
+    this.flushOne(XTERM_PERFORMANCE_CONFIG.output.backgroundWriteChunkBytes);
+  }
+
+  private flushOne(maxBytes: number) {
+    if (this.writeInFlight || this.disposed) {
+      this.schedule();
+      return;
+    }
+
+    const payload = dequeueOutputChunk(this.queue, maxBytes);
+    if (!payload) {
+      this.flushPendingAck(true);
+      this.notifyPressure();
+      return;
+    }
+
+    void this.writePayload(payload).then(() => this.schedule());
+  }
+
+  private writePayload(payload: QueuedOutputChunk) {
+    this.writingBytes += payload.bytes;
+    this.writeInFlight = true;
+    this.notifyPressure();
+
+    this.writeQueue = this.writeQueue
+      .catch(() => {})
+      .then(
+        () =>
+          new Promise<void>((resolve) => {
+            const terminal = this.options.getTerminal();
+            if (!terminal || this.disposed) {
+              this.writingBytes = Math.max(0, this.writingBytes - payload.bytes);
+              this.writeInFlight = false;
+              this.notifyPressure();
+              resolve();
+              return;
+            }
+
+            let context: TWriteContext | undefined;
+            try {
+              context = this.options.onWriteStart?.(payload);
+              terminal.write(payload.data, () => {
+                this.writingBytes = Math.max(0, this.writingBytes - payload.bytes);
+                this.pendingAckBytes += payload.bytes;
+                this.writeInFlight = false;
+                this.options.onWriteComplete?.(payload, context);
+                this.flushPendingAck(this.queue.bytes === 0);
+                this.notifyPressure();
+                resolve();
+              });
+            } catch (error) {
+              this.writingBytes = Math.max(0, this.writingBytes - payload.bytes);
+              this.writeInFlight = false;
+              this.options.onWriteError?.(payload, error);
+              this.notifyPressure();
+              resolve();
+            }
+          }),
+      );
+
+    return this.writeQueue;
+  }
+
+  private scheduleAckFlush() {
+    if (this.ackTimer !== null || this.disposed) return;
+    this.ackTimer = this.timers.setTimeout(() => {
+      this.ackTimer = null;
+      this.flushPendingAck(true);
+    }, DEFAULT_ACK_DEBOUNCE_MS);
+  }
+
+  private flushPendingAck(force = false) {
+    const bytes = this.pendingAckBytes;
+    if (bytes <= 0) {
+      if (force) this.clearAckTimer();
+      return;
+    }
+
+    if (!force && bytes < DEFAULT_ACK_BATCH_BYTES) {
+      this.scheduleAckFlush();
+      return;
+    }
+
+    this.clearAckTimer();
+    this.pendingAckBytes = 0;
+    this.sendAck(bytes);
+    this.notifyPressure();
+  }
+
+  private sendAck(bytes: number) {
+    if (bytes <= 0) return;
+    const ackBytes = Math.min(bytes, this.backendUnackedBytes);
+    if (ackBytes <= 0) return;
+    this.backendUnackedBytes = Math.max(0, this.backendUnackedBytes - ackBytes);
+    this.options.onAck(ackBytes);
+  }
+
+  private cancelForeground() {
+    if (this.foregroundFrame !== null) {
+      this.timers.cancelAnimationFrame(this.foregroundFrame);
+      this.foregroundFrame = null;
+    }
+    if (this.foregroundTimer !== null) {
+      this.timers.clearTimeout(this.foregroundTimer);
+      this.foregroundTimer = null;
+    }
+    this.microtaskPending = false;
+  }
+
+  private cancelBackground() {
+    if (this.backgroundTimer !== null) {
+      this.timers.clearTimeout(this.backgroundTimer);
+      this.backgroundTimer = null;
+    }
+  }
+
+  private clearAckTimer() {
+    if (this.ackTimer !== null) {
+      this.timers.clearTimeout(this.ackTimer);
+      this.ackTimer = null;
+    }
+  }
+
+  private notifyPressure() {
+    this.options.onPressureChange?.(this.getPendingBytes());
+  }
+}

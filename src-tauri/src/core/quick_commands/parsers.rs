@@ -84,16 +84,19 @@ fn parse_windterm_quickbar(raw: &str) -> AppResult<ImportConfig> {
 }
 
 fn split_windterm_command(raw: &str) -> (&str, bool) {
-    if let Some(command) = raw.strip_suffix("\r\n") {
-        return (command, true);
-    }
+    const TERMINATORS: [&str; 6] = [
+        "\\r\\n",
+        "\\n",
+        "\\r",
+        "\r\n",
+        "\n",
+        "\r",
+    ];
 
-    if let Some(command) = raw.strip_suffix('\n') {
-        return (command, true);
-    }
-
-    if let Some(command) = raw.strip_suffix('\r') {
-        return (command, true);
+    for terminator in TERMINATORS {
+        if let Some(command) = raw.strip_suffix(terminator) {
+            return (command, true);
+        }
     }
 
     (raw, false)

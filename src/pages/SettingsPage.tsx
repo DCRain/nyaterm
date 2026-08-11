@@ -57,6 +57,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AppContext, useApp } from "@/context/AppContext";
 import { SettingsDraftContext } from "@/context/SettingsDraftContext";
+import { useSettingsDraftState } from "@/hooks/useSettingsDraftState";
 import { type CloudSyncValidationCode, getCloudSyncValidationErrors } from "@/lib/cloudSync";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
@@ -102,7 +103,8 @@ export default function SettingsPage() {
   const ownerWindowLabel = params.get("owner") || "main";
   const initialTab = requestedInitialTab === "ai" ? "ai-general" : requestedInitialTab;
   const [activeTab, setActiveTab] = useState(initialTab);
-  const [draftSettings, setDraftSettings] = useState<AppSettings>(committedSettings);
+  const { draftSettings, isDirty, updateDraftSettings, acceptSavedSettings, discardDraftSettings } =
+    useSettingsDraftState<AppSettings>(committedSettings);
   const [isSaving, setIsSaving] = useState(false);
   const [closeConfirmOpen, setCloseConfirmOpen] = useState(false);
 
@@ -187,26 +189,6 @@ export default function SettingsPage() {
   const toggleGroup = useCallback((groupId: string) => {
     setExpandedGroups((prev) => ({ ...prev, [groupId]: !prev[groupId] }));
   }, []);
-
-  const committedSerialized = useMemo(() => JSON.stringify(committedSettings), [committedSettings]);
-  const draftSerialized = useMemo(() => JSON.stringify(draftSettings), [draftSettings]);
-  const isDirty = committedSerialized !== draftSerialized;
-
-  useEffect(() => {
-    if (!isDirty) {
-      setDraftSettings(committedSettings);
-    }
-  }, [committedSettings, isDirty]);
-
-  const updateDraftSettings = useCallback(
-    (updates: Partial<AppSettings> | ((prev: AppSettings) => Partial<AppSettings>)) => {
-      setDraftSettings((prev) => {
-        const nextUpdates = typeof updates === "function" ? updates(prev) : updates;
-        return { ...prev, ...nextUpdates };
-      });
-    },
-    [],
-  );
 
   const updateDraftUi = useCallback(
     (updates: Partial<UiConfig> | ((prev: UiConfig) => Partial<UiConfig>)) => {
@@ -382,7 +364,7 @@ export default function SettingsPage() {
         });
         const nextSettings = await invoke<AppSettings>("get_app_settings");
         app.replaceAppSettings(nextSettings);
-        setDraftSettings(nextSettings);
+        acceptSavedSettings(nextSettings);
 
         if (closeAfterSave) {
           setIsSaving(false);
@@ -397,13 +379,13 @@ export default function SettingsPage() {
         setIsSaving(false);
       }
     },
-    [app, closeSettingsWindow, draftSettings, getDraftSaveBlockState, t],
+    [acceptSavedSettings, app, closeSettingsWindow, draftSettings, getDraftSaveBlockState, t],
   );
 
   const handleCancel = useCallback(async () => {
-    setDraftSettings(committedSettings);
+    discardDraftSettings();
     await closeSettingsWindow();
-  }, [closeSettingsWindow, committedSettings]);
+  }, [closeSettingsWindow, discardDraftSettings]);
 
   const requestClose = useCallback(() => {
     if (isDirty) {

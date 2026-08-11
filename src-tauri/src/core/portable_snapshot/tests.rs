@@ -210,6 +210,60 @@ mod tests {
         assert_eq!(port_name, "COM3");
     }
 
+    #[test]
+    fn sync_sessions_strip_and_preserve_ssh_agent_device_fields() {
+        let mut current = sample_sessions_with_asset_metadata();
+        let mut incoming = sample_sessions_with_asset_metadata();
+
+        let config::ConnectionType::Ssh {
+            agent_endpoint,
+            agent_forwarding,
+            ..
+        } = &mut current.connections[0].config
+        else {
+            panic!("expected SSH connection");
+        };
+        *agent_endpoint = config::SshAgentEndpoint::Pageant;
+        *agent_forwarding = true;
+
+        let config::ConnectionType::Ssh {
+            agent_endpoint,
+            agent_forwarding,
+            ..
+        } = &mut incoming.connections[0].config
+        else {
+            panic!("expected SSH connection");
+        };
+        *agent_endpoint = config::SshAgentEndpoint::UnixSocket {
+            path: "/Users/me/.ssh/agent.sock".to_string(),
+        };
+        *agent_forwarding = true;
+
+        strip_device_local_sessions(&mut incoming);
+        let config::ConnectionType::Ssh {
+            agent_endpoint,
+            agent_forwarding,
+            ..
+        } = &incoming.connections[0].config
+        else {
+            panic!("expected SSH connection");
+        };
+        assert_eq!(agent_endpoint, &config::SshAgentEndpoint::Auto);
+        assert!(!agent_forwarding);
+
+        preserve_device_local_sessions(&mut incoming, &current);
+        let config::ConnectionType::Ssh {
+            agent_endpoint,
+            agent_forwarding,
+            ..
+        } = &incoming.connections[0].config
+        else {
+            panic!("expected SSH connection");
+        };
+        assert_eq!(agent_endpoint, &config::SshAgentEndpoint::Pageant);
+        assert!(*agent_forwarding);
+    }
+
     fn sample_portable_settings() -> PortableAppSettings {
         PortableAppSettings {
             general: config::GeneralSettings::default(),
@@ -295,7 +349,10 @@ mod tests {
                     auth: None,
                     network: None,
                     post_login: None,
+                    recording: None,
                     ssh_algorithms: None,
+                    ssh_profile: Default::default(),
+                    terminal_type: None,
                     sftp: config::SftpSettings::default(),
                     asset: None,
                     created_at_ms: None,
@@ -324,7 +381,10 @@ mod tests {
                     auth: None,
                     network: None,
                     post_login: None,
+                    recording: None,
                     ssh_algorithms: None,
+                    ssh_profile: Default::default(),
+                    terminal_type: None,
                     sftp: config::SftpSettings::default(),
                     asset: None,
                     created_at_ms: None,
@@ -348,6 +408,8 @@ mod tests {
                     username: "root".to_string(),
                     backspace_mode: "del".to_string(),
                     x11_forwarding: false,
+                    agent_endpoint: config::SshAgentEndpoint::Auto,
+                    agent_forwarding: false,
                     encoding: String::new(),
                 },
                 group_id: None,
@@ -358,7 +420,10 @@ mod tests {
                 auth: None,
                 network: None,
                 post_login: None,
+                recording: None,
                 ssh_algorithms: None,
+                ssh_profile: Default::default(),
+                terminal_type: None,
                 sftp: config::SftpSettings::default(),
                 asset: Some(config::AssetMetadata {
                     device_type: Some(config::AssetDeviceType::Physical),

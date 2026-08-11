@@ -24,7 +24,21 @@ interface SessionCommandHistoryDetail {
 export interface SendSessionInputOptions {
   preview?: SessionInputPreview | null;
   registerSubmission?: string | null;
+  origin?: InputOrigin;
+  sensitivity?: InputSensitivity;
 }
+
+export type InputOrigin =
+  | "keyboard"
+  | "quick_command"
+  | "startup_command"
+  | "post_login"
+  | "ai_agent"
+  | "credential_autofill"
+  | "otp_autofill"
+  | "sync_input";
+
+export type InputSensitivity = "normal" | "secret";
 
 function inferPreview(data: string): SessionInputPreview {
   return { kind: "data", data };
@@ -144,8 +158,6 @@ export async function sendSessionInput(
     emitSessionInputPreview(sessionId, preview);
   }
 
-  await invoke("write_to_session", { sessionId, data });
-
   if (options.registerSubmission) {
     registerSessionCommandSubmission(sessionId, options.registerSubmission);
     await invoke("register_command_submission", {
@@ -153,6 +165,13 @@ export async function sendSessionInput(
       command: options.registerSubmission,
     });
   }
+
+  await invoke("write_to_session", {
+    sessionId,
+    data,
+    origin: options.origin,
+    sensitivity: options.sensitivity,
+  });
 }
 
 /**
@@ -169,7 +188,14 @@ export async function sendSessionInputWithSync(
 
   if (peerSessionIds.length > 0) {
     await Promise.allSettled(
-      peerSessionIds.map((sid) => invoke("write_to_session", { sessionId: sid, data })),
+      peerSessionIds.map((sid) =>
+        invoke("write_to_session", {
+          sessionId: sid,
+          data,
+          origin: "sync_input",
+          sensitivity: options.sensitivity,
+        }),
+      ),
     );
   }
 }

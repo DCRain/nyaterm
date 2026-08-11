@@ -8,7 +8,7 @@ import {
 import { invoke } from "@/lib/invoke";
 import { getTrackedCommand, type TerminalInputState } from "@/lib/terminalInputTracker";
 import type { SuggestionCursorPosition } from "@/lib/terminalSuggestionPosition";
-import type { FuzzyResult } from "@/types/global";
+import type { FuzzyResult, QuickCommandsConfig } from "@/types/global";
 
 interface XTermCoreWithRenderDimensions {
   _core?: {
@@ -25,8 +25,14 @@ interface XTermCoreWithRenderDimensions {
   };
 }
 
+interface CommandHistorySearchOptions {
+  manual?: boolean;
+}
+
 /** Debounce keystrokes before hitting the backend fuzzy search. */
 const SUGGESTION_SEARCH_DEBOUNCE_MS = 160;
+const EMPTY_MANUAL_HISTORY_LIMIT = 8;
+const EMPTY_MANUAL_QUICK_COMMAND_LIMIT = 8;
 
 function sameSuggestions(a: FuzzyResult[], b: FuzzyResult[]): boolean {
   if (a.length !== b.length) {
@@ -62,11 +68,22 @@ function sameCursorPosition(
   return a.top === b.top && a.left === b.left && a.lineTop === b.lineTop;
 }
 
+function isWithinCommandLengthLimits(command: string, minLength: number, maxLength: number) {
+  const length = command.trim().length;
+  return length >= minLength && length <= maxLength;
+}
+
+function quickCommandRank(command: QuickCommandsConfig["commands"][number]) {
+  const useCount = command.use_count ?? 0;
+  const updatedAt = command.updated_at ?? command.created_at ?? 0;
+  return (command.pinned ? 1_000_000_000 : 0) + useCount * 1_000_000 + updatedAt;
+}
+
 export function useCommandHistory(
   terminalRef: React.RefObject<Terminal | null>,
   inputStateRef: React.RefObject<TerminalInputState>,
   applySuggestion: (command: string, execute: boolean) => void,
-  canShowSuggestions: () => boolean,
+  canShowSuggestions: (options?: { allowEmpty?: boolean }) => boolean,
   enabled: boolean,
   minCommandLength: number,
   maxCommandLength: number,
@@ -196,7 +213,69 @@ export function useCommandHistory(
   );
 
   const runSearch = useCallback(
-    async (pattern: string, requestId: number) => {
+    async (requestId: number, options: CommandHistorySearchOptions = {}) => {
+      if (requestId !== searchRequestIdRef.current) {
+        return;
+      }
+
+      if (!enabledRef.current) {
+        dismissSuggestions();
+        return;
+      }
+
+      const pattern = getTrackedCommand(inputStateRef.current);
+      if (!pattern.trim() && options.manual) {
+        try {
+          const [history, quickCommands] = await Promise.all([
+            invoke<string[]>("get_command_history"),
+            invoke<QuickCommandsConfig>("get_quick_commands"),
+          ]);
+          if (requestId !== searchRequestIdRef.current || !enabledRef.current) {
+            return;
+          }
+
+          const historyResults: FuzzyResult[] = history
+            .filter((command) =>
+              isWithinCommandLengthLimits(
+                command,
+                minCommandLengthRef.current,
+                maxCommandLengthRef.current,
+              ),
+            )
+            .filter((command) => !deletedHistoryCommandsRef.current.has(command))
+            .slice(0, EMPTY_MANUAL_HISTORY_LIMIT)
+            .map((command, index) => ({
+              command,
+              display: command,
+              indices: [],
+              score: 2_000 - index,
+              source: "history",
+            }));
+
+          const quickCommandResults: FuzzyResult[] = quickCommands.commands
+            .filter((command) => command.command.trim())
+            .sort((left, right) => quickCommandRank(right) - quickCommandRank(left))
+            .slice(0, EMPTY_MANUAL_QUICK_COMMAND_LIMIT)
+            .map((quickCommand, index) => ({
+              command: quickCommand.command,
+              display: quickCommand.label || quickCommand.command,
+              indices: [],
+              score: 1_000 - index,
+              source: "quickCommand",
+            }));
+
+          applySearchResults([...historyResults, ...quickCommandResults].slice(0, 12));
+        } catch {
+          // Ignore errors
+        }
+        return;
+      }
+
+      if (!pattern.trim() || !canShowSuggestions()) {
+        dismissSuggestions();
+        return;
+      }
+
       if (searchInFlightRef.current) {
         pendingPatternRef.current = pattern;
         return;
@@ -206,8 +285,6 @@ export function useCommandHistory(
       lastSearchedPatternRef.current = pattern;
 
       try {
-        // Parallel search across all suggestion providers.
-        // To add a new provider, append another invoke() call here.
         const [historyResults, commandResults] = await Promise.all([
           invoke<FuzzyResult[]>("fuzzy_search_history", {
             pattern,
@@ -221,7 +298,6 @@ export function useCommandHistory(
           return;
         }
 
-        // Merge, sort by score descending, and cap total
         const merged = [...historyResults, ...commandResults]
           .filter(
             (result) =>
@@ -249,63 +325,72 @@ export function useCommandHistory(
           canShowSuggestions()
         ) {
           const nextRequestId = ++searchRequestIdRef.current;
-          void runSearch(pendingPattern, nextRequestId);
+          void runSearch(nextRequestId, options);
         }
       }
     },
-    [applySearchResults, canShowSuggestions, dismissSuggestions],
+    [applySearchResults, canShowSuggestions, dismissSuggestions, inputStateRef],
   );
 
-  const triggerSearch = useCallback(() => {
-    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    const requestId = ++searchRequestIdRef.current;
-
-    if (!enabledRef.current) {
-      dismissSuggestions();
-      return;
-    }
-
-    if (!canShowSuggestions()) {
-      dismissSuggestions();
-      return;
-    }
-
-    searchTimerRef.current = setTimeout(() => {
-      if (requestId !== searchRequestIdRef.current) {
-        return;
-      }
+  const triggerSearch = useCallback(
+    (options: CommandHistorySearchOptions = {}) => {
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+      searchTimerRef.current = null;
+      const requestId = ++searchRequestIdRef.current;
 
       if (!enabledRef.current) {
         dismissSuggestions();
         return;
       }
 
-      const pattern = getTrackedCommand(inputStateRef.current);
-      if (!pattern.trim() || !canShowSuggestions()) {
+      if (!canShowSuggestions({ allowEmpty: options.manual })) {
         dismissSuggestions();
         return;
       }
 
-      if (pattern === lastSearchedPatternRef.current) {
-        if (showSuggestionsRef.current) {
-          const nextPosition = getCursorViewportPosition();
-          if (!sameCursorPosition(cursorPositionRef.current, nextPosition)) {
-            cursorPositionRef.current = nextPosition;
-            setCursorPosition(nextPosition);
-          }
-        }
+      if (options.manual) {
+        void runSearch(requestId, options);
         return;
       }
 
-      void runSearch(pattern, requestId);
-    }, SUGGESTION_SEARCH_DEBOUNCE_MS);
-  }, [
-    canShowSuggestions,
-    dismissSuggestions,
-    getCursorViewportPosition,
-    inputStateRef,
-    runSearch,
-  ]);
+      searchTimerRef.current = setTimeout(() => {
+        if (requestId !== searchRequestIdRef.current) {
+          return;
+        }
+
+        if (!enabledRef.current) {
+          dismissSuggestions();
+          return;
+        }
+
+        const pattern = getTrackedCommand(inputStateRef.current);
+        if (!pattern.trim() || !canShowSuggestions()) {
+          dismissSuggestions();
+          return;
+        }
+
+        if (pattern === lastSearchedPatternRef.current) {
+          if (showSuggestionsRef.current) {
+            const nextPosition = getCursorViewportPosition();
+            if (!sameCursorPosition(cursorPositionRef.current, nextPosition)) {
+              cursorPositionRef.current = nextPosition;
+              setCursorPosition(nextPosition);
+            }
+          }
+          return;
+        }
+
+        void runSearch(requestId, options);
+      }, SUGGESTION_SEARCH_DEBOUNCE_MS);
+    },
+    [
+      canShowSuggestions,
+      dismissSuggestions,
+      getCursorViewportPosition,
+      inputStateRef,
+      runSearch,
+    ],
+  );
 
   useEffect(() => {
     minCommandLengthRef.current = normalizeCommandSuggestionMinChars(

@@ -14,6 +14,7 @@ import {
 import { ConnectionCombobox, type ConnectionOption } from "@/components/network/shared";
 import { KeyManagementTab } from "@/components/panel/security-auth/KeyManagementTab";
 import { PasswordManagementTab } from "@/components/panel/security-auth/PasswordManagementTab";
+import { ConnectionRecordingSettings } from "@/components/sessions/ConnectionRecordingSettings";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -47,16 +48,21 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { invoke } from "@/lib/invoke";
+import { isLinux, isMacOS, isWindows } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import type {
   AlgorithmOption,
   OtpEntry,
   ProxyConfig,
+  RecordingMode,
   SavedPassword,
   SftpSettings,
   SshAlgorithmDefaults,
   SshAlgorithmPreferences,
+  SshAgentEndpoint,
   SshKey,
+  SshProfile,
+  SshTerminalType,
   SupportedSshAlgorithms,
 } from "@/types/global";
 
@@ -64,8 +70,15 @@ const MASKED_PASSWORD_PLACEHOLDER = "••••••••";
 const DEFAULT_SFTP_SHELL_DETECTION_TIMEOUT_MS = 3000;
 const MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS = 100;
 const MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS = 60_000;
-export type SshAuthMode = "none" | "password" | "key";
+export type SshAuthMode = "none" | "password" | "key" | "agent";
 type PasswordSource = "ask" | "direct" | "saved";
+type SshTerminalTypeSelection = SshTerminalType | "default";
+
+function isSupportedSshAgentEndpoint(type: SshAgentEndpoint["type"]): boolean {
+  if (type === "auto") return true;
+  if (isWindows) return type === "pageant" || type === "windows_open_ssh";
+  return (isMacOS || isLinux) && (type === "environment" || type === "unix_socket");
+}
 
 interface SshFormProps {
   host: string;
@@ -107,10 +120,24 @@ interface SshFormProps {
   setBackspaceMode: (v: string) => void;
   x11Forwarding: boolean;
   setX11Forwarding: (v: boolean) => void;
+  agentEndpoint: SshAgentEndpoint;
+  setAgentEndpoint: (v: SshAgentEndpoint) => void;
+  agentForwarding: boolean;
+  setAgentForwarding: (v: boolean) => void;
   sshAlgorithms: SshAlgorithmPreferences;
   setSshAlgorithms: (v: SshAlgorithmPreferences) => void;
+  sshProfile: SshProfile;
+  setSshProfile: (v: SshProfile) => void;
+  sshTerminalType: SshTerminalTypeSelection;
+  setSshTerminalType: (v: SshTerminalTypeSelection) => void;
   sftpSettings: SftpSettings;
   setSftpSettings: (v: SftpSettings) => void;
+  recordingUseGlobal: boolean;
+  setRecordingUseGlobal: (v: boolean) => void;
+  recordingAutoStart: boolean;
+  setRecordingAutoStart: (v: boolean) => void;
+  recordingMode: RecordingMode;
+  setRecordingMode: (v: RecordingMode) => void;
   connectionId?: string;
   encoding: string;
   setEncoding: (v: string) => void;
@@ -330,8 +357,8 @@ function AlgorithmOrderList({
           <div
             key={option.id}
             className={cn(
-              "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-border/50 px-2 py-1.5",
-              enabled ? "bg-transparent" : "opacity-70",
+              "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md border px-2 py-1.5",
+              enabled ? "bg-accent/50" : "bg-muted/20 opacity-70",
             )}
           >
             <Checkbox
@@ -429,10 +456,24 @@ export function SshForm({
   setBackspaceMode,
   x11Forwarding,
   setX11Forwarding,
+  agentEndpoint,
+  setAgentEndpoint,
+  agentForwarding,
+  setAgentForwarding,
   sshAlgorithms,
   setSshAlgorithms,
+  sshProfile,
+  setSshProfile,
+  sshTerminalType,
+  setSshTerminalType,
   sftpSettings,
   setSftpSettings,
+  recordingUseGlobal,
+  setRecordingUseGlobal,
+  recordingAutoStart,
+  setRecordingAutoStart,
+  recordingMode,
+  setRecordingMode,
   connectionId,
   encoding,
   setEncoding,
@@ -529,8 +570,22 @@ export function SshForm({
     }
   }, [setSshAlgorithms, sshAlgorithms, supportedAlgorithms]);
 
+  useEffect(() => {
+    if (!isSupportedSshAgentEndpoint(agentEndpoint.type)) {
+      setAgentEndpoint({ type: "auto" });
+    }
+  }, [agentEndpoint.type, setAgentEndpoint]);
+
   const selectedKeyName = sshKeys.find((k) => k.id === keyId)?.name;
   const selectedPasswordName = savedPasswords.find((p) => p.id === passwordId)?.name;
+  const availableAgentEndpointTypes: SshAgentEndpoint["type"][] = isWindows
+    ? ["auto", "pageant", "windows_open_ssh"]
+    : isMacOS || isLinux
+      ? ["auto", "environment", "unix_socket"]
+      : ["auto"];
+  const visibleAgentEndpointType = isSupportedSshAgentEndpoint(agentEndpoint.type)
+    ? agentEndpoint.type
+    : "auto";
   const proxyOptions = proxies.map((proxy) => ({
     id: proxy.id,
     label: proxy.name,
@@ -566,6 +621,9 @@ export function SshForm({
       [key]: value,
     });
   };
+  const networkDeviceProfile = sshProfile === "network_device";
+  const sftpDisabled = !sftpSettings.enabled || networkDeviceProfile;
+  const defaultTerminalType = networkDeviceProfile ? "vt100" : "xterm-256color";
 
   const toggleDirectPasswordVisibility = async () => {
     if (showDirectPassword) {
@@ -651,10 +709,7 @@ export function SshForm({
           }}
           className="w-full mt-1"
         >
-          <TabsList
-            variant="line"
-            className="grid h-8 w-full grid-cols-3 bg-transparent pointer-events-auto"
-          >
+          <TabsList className="grid h-8 w-full grid-cols-4 pointer-events-auto">
             <TabsTrigger value="none" className="text-xs">
               {t("dialog.noAuthentication", "None")}
             </TabsTrigger>
@@ -664,15 +719,18 @@ export function SshForm({
             <TabsTrigger value="key" className="text-xs">
               {t("dialog.privateKey")}
             </TabsTrigger>
+            <TabsTrigger value="agent" className="text-xs">
+              {t("dialog.sshAgent", "SSH Agent")}
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="none" className="mt-3 border-0 outline-none">
-            <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+            <div className="rounded-md border border-dashed bg-accent/25 px-3 py-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
               {t(
                 "dialog.noAuthenticationDescription",
                 "Connect without a password or private key. Use this only for SSH servers that allow none authentication or will request credentials interactively.",
               )}
-            </p>
+            </div>
           </TabsContent>
 
           <TabsContent value="password" className="mt-3 border-0 outline-none">
@@ -697,10 +755,7 @@ export function SshForm({
               }}
               className="mt-1 w-full"
             >
-              <TabsList
-                variant="line"
-                className="grid h-8 w-full grid-cols-3 bg-transparent pointer-events-auto"
-              >
+              <TabsList className="grid h-8 w-full grid-cols-3 pointer-events-auto">
                 <TabsTrigger value="ask" className="text-xs">
                   {t("dialog.askWhenConnecting")}
                 </TabsTrigger>
@@ -713,9 +768,9 @@ export function SshForm({
               </TabsList>
 
               <TabsContent value="ask" className="mt-3 border-0 outline-none">
-                <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+                <div className="rounded-md border border-dashed bg-accent/25 px-3 py-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
                   {t("dialog.askPasswordDescription")}
-                </p>
+                </div>
               </TabsContent>
 
               <TabsContent value="direct" className="mt-3 border-0 outline-none">
@@ -862,8 +917,7 @@ export function SshForm({
                   className="mt-1 h-8 w-full justify-between text-xs font-normal"
                 >
                   <span className={`truncate ${keyId ? "" : "text-muted-foreground"}`}>
-                    {selectedKeyName ||
-                      t("dialog.sshKeyUseSystemDefault", "Use system default (~/.ssh)")}
+                    {selectedKeyName || t("dialog.selectKey")}
                   </span>
                   <MdExpandMore className="shrink-0 text-xs text-muted-foreground" />
                 </Button>
@@ -884,7 +938,7 @@ export function SshForm({
                       setShowKeyDropdown(false);
                     }}
                   >
-                    {t("dialog.sshKeyUseSystemDefault", "Use system default (~/.ssh)")}
+                    {t("dialog.none")}
                   </button>
                   {sshKeys.map((k) => (
                     <button
@@ -918,12 +972,11 @@ export function SshForm({
                 </button>
               </PopoverContent>
             </Popover>
-            <p className="mt-1.5 text-[0.6875rem] leading-relaxed text-muted-foreground">
-              {t(
-                "dialog.sshKeyUseSystemDefaultDesc",
-                "When no app key is selected, connection tries ~/.ssh defaults: id_ed25519, id_rsa, id_ecdsa, id_dsa.",
-              )}
-            </p>
+          </TabsContent>
+          <TabsContent value="agent" className="mt-3 border-0 outline-none">
+            <div className="rounded-lg border bg-accent/25 p-3 text-xs text-muted-foreground">
+              {t("dialog.sshAgentAuthDesc", "Use an identity managed by the local SSH Agent.")}
+            </div>
           </TabsContent>
         </Tabs>
       </div>
@@ -937,10 +990,7 @@ export function SshForm({
         </CollapsibleTrigger>
         <CollapsibleContent className="mt-3 space-y-3">
           <Tabs defaultValue="proxy" className="w-full">
-            <TabsList
-              variant="line"
-              className="flex h-auto w-full flex-wrap justify-start gap-1 bg-transparent pointer-events-auto"
-            >
+            <TabsList className="grid h-8 w-full grid-cols-4 pointer-events-auto">
               <TabsTrigger value="proxy" className="text-xs">
                 {t("dialog.proxySelect")}
               </TabsTrigger>
@@ -950,88 +1000,190 @@ export function SshForm({
               <TabsTrigger value="two-factor" className="text-xs">
                 {t("dialog.twoFactorAuth")}
               </TabsTrigger>
+              <TabsTrigger value="agent" className="text-xs">
+                {t("dialog.sshAgent", "SSH Agent")}
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="proxy" className="mt-3 border-0 outline-none">
-              <Label className="text-xs font-medium text-foreground/80">
-                {t("dialog.proxySelect")}
-              </Label>
-              <div className="mt-1">
-                <AdvancedCombobox
-                  value={proxyId}
-                  options={proxyOptions}
-                  placeholder={t("dialog.noProxy")}
-                  searchPlaceholder={t("network.searchProxies")}
-                  emptyText={t("network.noProxyConfigs")}
-                  missingSelectionLabel={t("dialog.selectedItemMissing")}
-                  clearLabel={t("dialog.noProxy")}
-                  onChange={setProxyId}
-                />
+              <div className="rounded-lg border bg-accent/25 p-3">
+                <div>
+                  <Label className="text-xs font-medium text-foreground/80">
+                    {t("dialog.proxySelect")}
+                  </Label>
+                  <div className="mt-1">
+                    <AdvancedCombobox
+                      value={proxyId}
+                      options={proxyOptions}
+                      placeholder={t("dialog.noProxy")}
+                      searchPlaceholder={t("network.searchProxies")}
+                      emptyText={t("network.noProxyConfigs")}
+                      missingSelectionLabel={t("dialog.selectedItemMissing")}
+                      clearLabel={t("dialog.noProxy")}
+                      onChange={setProxyId}
+                    />
+                  </div>
+                </div>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="agent" className="mt-3 border-0 outline-none">
+              <div className="space-y-3 rounded-lg border bg-accent/25 p-3">
+                <div>
+                  <Label className="text-xs font-medium text-foreground/80">
+                    {t("dialog.sshAgentEndpoint", "Agent endpoint")}
+                  </Label>
+                  <Select
+                    value={visibleAgentEndpointType}
+                    onValueChange={(type) => {
+                      if (type === "auto") setAgentEndpoint({ type: "auto" });
+                      if (type === "environment")
+                        setAgentEndpoint({ type: "environment", variable: "SSH_AUTH_SOCK" });
+                      if (type === "unix_socket")
+                        setAgentEndpoint({ type: "unix_socket", path: "" });
+                      if (type === "pageant") setAgentEndpoint({ type: "pageant" });
+                      if (type === "windows_open_ssh")
+                        setAgentEndpoint({ type: "windows_open_ssh" });
+                    }}
+                  >
+                    <SelectTrigger className="mt-1 h-8 text-xs font-normal">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="auto">{t("dialog.sshAgentAuto", "Automatic")}</SelectItem>
+                      {availableAgentEndpointTypes.includes("environment") && (
+                        <SelectItem value="environment">
+                          {t("dialog.sshAgentEnvironment", "Environment variable")}
+                        </SelectItem>
+                      )}
+                      {availableAgentEndpointTypes.includes("unix_socket") && (
+                        <SelectItem value="unix_socket">
+                          {t("dialog.sshAgentUnixSocket", "Unix domain socket")}
+                        </SelectItem>
+                      )}
+                      {availableAgentEndpointTypes.includes("pageant") && (
+                        <SelectItem value="pageant">
+                          {t("dialog.sshAgentPageant", "Pageant")}
+                        </SelectItem>
+                      )}
+                      {availableAgentEndpointTypes.includes("windows_open_ssh") && (
+                        <SelectItem value="windows_open_ssh">
+                          {t("dialog.sshAgentWindowsOpenSsh", "Windows OpenSSH Agent")}
+                        </SelectItem>
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {agentEndpoint.type === "environment" && (
+                  <Input
+                    value={agentEndpoint.variable}
+                    onChange={(event) =>
+                      setAgentEndpoint({ type: "environment", variable: event.target.value })
+                    }
+                    placeholder="SSH_AUTH_SOCK"
+                    className="h-8 text-xs"
+                  />
+                )}
+                {agentEndpoint.type === "unix_socket" && (
+                  <Input
+                    value={agentEndpoint.path}
+                    onChange={(event) =>
+                      setAgentEndpoint({ type: "unix_socket", path: event.target.value })
+                    }
+                    placeholder="/tmp/ssh-XXXXXX/agent.YYYY"
+                    className="h-8 text-xs"
+                  />
+                )}
+                <div className="flex items-start justify-between gap-3 border-t pt-3">
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium">
+                      {t("dialog.sshAgentForwarding", "Allow agent forwarding")}
+                    </div>
+                    <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+                      {t(
+                        "dialog.sshAgentForwardingDesc",
+                        "Forward this local Agent to the remote server.",
+                      )}
+                    </p>
+                  </div>
+                  <Switch checked={agentForwarding} onCheckedChange={setAgentForwarding} />
+                </div>
+                <p className="mt-2 text-[0.6875rem] leading-relaxed text-amber-600 dark:text-amber-300">
+                  {t(
+                    "dialog.sshAgentForwardingWarning",
+                    "Agent forwarding lets remote processes use the local Agent's signing capability through SSH. Enable it only for trusted servers and keep it disabled when it is not needed. The Agent endpoint and forwarding switch are device-local connection settings; hardware keys and private keys are never synchronized to the cloud.",
+                  )}
+                </p>
               </div>
             </TabsContent>
 
             <TabsContent value="jump-host" className="mt-3 border-0 outline-none">
-              <Label className="text-xs font-medium text-foreground/80">
-                {t("dialog.selectProxyJump")}
-              </Label>
-              <div className="mt-1">
-                <ConnectionCombobox
-                  value={jumpHostId}
-                  options={jumpHostOptions}
-                  placeholder={t("dialog.noProxyJump")}
-                  searchPlaceholder={t("network.searchConnections")}
-                  emptyText={t("dialog.proxyJumpSshOnly")}
-                  missingSelectionLabel={t("network.connectionMissing")}
-                  clearLabel={t("dialog.noProxyJump")}
-                  onChange={setJumpHostId}
-                />
+              <div className="rounded-lg border bg-accent/25 p-3">
+                <div>
+                  <Label className="text-xs font-medium text-foreground/80">
+                    {t("dialog.selectProxyJump")}
+                  </Label>
+                  <div className="mt-1">
+                    <ConnectionCombobox
+                      value={jumpHostId}
+                      options={jumpHostOptions}
+                      placeholder={t("dialog.noProxyJump")}
+                      searchPlaceholder={t("network.searchConnections")}
+                      emptyText={t("dialog.proxyJumpSshOnly")}
+                      missingSelectionLabel={t("network.connectionMissing")}
+                      clearLabel={t("dialog.noProxyJump")}
+                      onChange={setJumpHostId}
+                    />
+                  </div>
+                </div>
               </div>
             </TabsContent>
 
-            <TabsContent value="two-factor" className="mt-3 space-y-3 border-0 outline-none">
-              <div>
-                <Label className="text-xs font-medium text-foreground/80">
-                  {t("dialog.selectOtp")}
-                </Label>
-                <div className="mt-1">
-                  <AdvancedCombobox
-                    value={otpId}
-                    options={otpOptions}
-                    placeholder={t("dialog.noOtp")}
-                    searchPlaceholder={t("dialog.searchOtpEntries")}
-                    emptyText={t("dialog.noOtpEntries")}
-                    missingSelectionLabel={t("dialog.selectedItemMissing")}
-                    clearLabel={t("dialog.noOtp")}
-                    onChange={(id) => {
-                      setOtpId(id);
-                      if (!id) setAutoFillOtp(false);
-                    }}
-                  />
-                </div>
-              </div>
+            <TabsContent value="two-factor" className="mt-3 border-0 outline-none">
+              <div className="rounded-lg border bg-accent/25 p-3">
+                <div className="space-y-3">
+                  <div>
+                    <Label className="text-xs font-medium text-foreground/80">
+                      {t("dialog.selectOtp")}
+                    </Label>
+                    <div className="mt-1">
+                      <AdvancedCombobox
+                        value={otpId}
+                        options={otpOptions}
+                        placeholder={t("dialog.noOtp")}
+                        searchPlaceholder={t("dialog.searchOtpEntries")}
+                        emptyText={t("dialog.noOtpEntries")}
+                        missingSelectionLabel={t("dialog.selectedItemMissing")}
+                        clearLabel={t("dialog.noOtp")}
+                        onChange={(id) => {
+                          setOtpId(id);
+                          if (!id) setAutoFillOtp(false);
+                        }}
+                      />
+                    </div>
+                  </div>
 
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <Label className="text-xs font-medium text-foreground/80">
-                    {t("dialog.autoFillOtp")}
-                  </Label>
-                  <p className="text-[0.625rem] text-muted-foreground">
-                    {otpId ? t("dialog.twoFactorAuth") : t("dialog.noOtp")}
-                  </p>
+                  <div className="rounded-md border border-dashed bg-background/70 px-3 py-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-xs font-medium">{t("dialog.autoFillOtp")}</div>
+                        <div className="text-[0.625rem] text-muted-foreground">
+                          {otpId ? t("dialog.twoFactorAuth") : t("dialog.noOtp")}
+                        </div>
+                      </div>
+                      <Switch
+                        checked={otpId ? autoFillOtp : false}
+                        onCheckedChange={setAutoFillOtp}
+                        disabled={!otpId}
+                      />
+                    </div>
+                  </div>
                 </div>
-                <Switch
-                  checked={otpId ? autoFillOtp : false}
-                  onCheckedChange={setAutoFillOtp}
-                  disabled={!otpId}
-                />
               </div>
             </TabsContent>
           </Tabs>
           <Tabs defaultValue="post-login" className="w-full">
-            <TabsList
-              variant="line"
-              className="flex h-auto w-full flex-wrap justify-start gap-1 bg-transparent pointer-events-auto"
-            >
+            <TabsList className="grid h-8 w-full grid-cols-5 pointer-events-auto">
               <TabsTrigger value="post-login" className="text-xs">
                 {t("dialog.commandExecution")}
               </TabsTrigger>
@@ -1049,249 +1201,331 @@ export function SshForm({
               </TabsTrigger>
             </TabsList>
 
-            <TabsContent value="post-login" className="mt-3 space-y-3 border-0 outline-none">
-              <div className="flex items-start justify-between gap-3 border-b border-border/40 pb-3">
-                <div className="min-w-0 space-y-0.5">
-                  <div className="text-xs font-medium">{t("dialog.postLoginCommand")}</div>
-                  <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
-                    {t("dialog.postLoginCommandDesc")}
-                  </p>
+            <TabsContent value="post-login" className="mt-3 border-0 outline-none">
+              <div className="rounded-lg border bg-accent/25 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 space-y-0.5">
+                    <div className="text-xs font-medium">{t("dialog.postLoginCommand")}</div>
+                    <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+                      {t("dialog.postLoginCommandDesc")}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <Switch checked={postLoginEnabled} onCheckedChange={setPostLoginEnabled} />
+                    <span className="text-xs text-muted-foreground">
+                      {t("dialog.enabled", "Enabled")}
+                    </span>
+                  </div>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <Switch checked={postLoginEnabled} onCheckedChange={setPostLoginEnabled} />
-                  <span className="text-xs text-muted-foreground">
-                    {t("dialog.enabled", "Enabled")}
-                  </span>
-                </div>
-              </div>
 
-              <div
-                className={cn(
-                  "grid gap-3 sm:grid-cols-[minmax(0,1fr)_8rem]",
-                  !postLoginEnabled && "pointer-events-none opacity-50",
-                )}
-              >
-                <div>
-                  <Label className="text-xs font-medium text-foreground/80">
-                    {t("dialog.postLoginCommandContent")}
-                  </Label>
-                  <Textarea
-                    rows={4}
-                    className="mt-1 min-h-24 resize-y font-mono text-xs"
-                    placeholder={"cd /opt/app\nclear"}
-                    value={postLoginCommand}
-                    onChange={(event) => setPostLoginCommand(event.target.value)}
-                    disabled={!postLoginEnabled}
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs font-medium text-foreground/80">
-                    {t("dialog.postLoginDelay")}
-                  </Label>
-                  <div className="mt-1 flex items-center gap-2">
-                    <NumberInput
-                      className="min-w-0 flex-1 [&_button]:h-8 [&_button]:w-8 [&_input]:h-8 [&_input]:text-xs"
-                      value={postLoginDelayMs}
-                      onChange={setPostLoginDelayMs}
-                      min={minPostLoginDelayMs}
-                      max={maxPostLoginDelayMs}
-                      step={100}
+                <div
+                  className={cn(
+                    "mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_8rem]",
+                    !postLoginEnabled && "pointer-events-none opacity-50",
+                  )}
+                >
+                  <div>
+                    <Label className="text-xs font-medium text-foreground/80">
+                      {t("dialog.postLoginCommandContent")}
+                    </Label>
+                    <Textarea
+                      rows={4}
+                      className="mt-1 min-h-24 resize-y font-mono text-xs"
+                      placeholder={"cd /opt/app\nclear"}
+                      value={postLoginCommand}
+                      onChange={(event) => setPostLoginCommand(event.target.value)}
                       disabled={!postLoginEnabled}
                     />
-                    <span className="shrink-0 text-[0.625rem] text-muted-foreground">ms</span>
+                  </div>
+                  <div>
+                    <Label className="text-xs font-medium text-foreground/80">
+                      {t("dialog.postLoginDelay")}
+                    </Label>
+                    <div className="mt-1 flex items-center gap-2">
+                      <NumberInput
+                        className="min-w-0 flex-1 [&_button]:h-8 [&_button]:w-8 [&_input]:h-8 [&_input]:text-xs"
+                        value={postLoginDelayMs}
+                        onChange={setPostLoginDelayMs}
+                        min={minPostLoginDelayMs}
+                        max={maxPostLoginDelayMs}
+                        step={100}
+                        disabled={!postLoginEnabled}
+                      />
+                      <span className="shrink-0 text-[0.625rem] text-muted-foreground">ms</span>
+                    </div>
                   </div>
                 </div>
               </div>
             </TabsContent>
 
             <TabsContent value="terminal" className="mt-3 border-0 outline-none">
-              <div className="max-w-md">
-                <Label className="text-xs font-medium text-foreground/80">
-                  {t("connection.encoding")}
-                </Label>
-                <Select value={encoding} onValueChange={setEncoding}>
-                  <SelectTrigger className="mt-1 h-8 w-full text-xs">
-                    <SelectValue placeholder={t("connection.encodingFollowGlobal")} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="global">{t("connection.encodingFollowGlobal")}</SelectItem>
-                    <SelectItem value="UTF-8">UTF-8</SelectItem>
-                    <SelectItem value="GBK">GBK</SelectItem>
-                    <SelectItem value="GB2312">GB2312</SelectItem>
-                    <SelectItem value="GB18030">GB18030</SelectItem>
-                  </SelectContent>
-                </Select>
+              <div className="space-y-3 rounded-lg border bg-accent/25 p-3">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <Label className="text-xs font-medium text-foreground/80">
+                      {t("dialog.sshProfile")}
+                    </Label>
+                    <Select
+                      value={sshProfile}
+                      onValueChange={(value) => setSshProfile(value as SshProfile)}
+                    >
+                      <SelectTrigger className="mt-1 h-8 text-xs font-normal">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="standard">{t("dialog.sshProfileStandard")}</SelectItem>
+                        <SelectItem value="network_device">
+                          {t("dialog.sshProfileNetworkDevice")}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="mt-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
+                      {networkDeviceProfile
+                        ? t("dialog.sshProfileNetworkDeviceDesc")
+                        : t("dialog.sshProfileStandardDesc")}
+                    </p>
+                  </div>
+                  <div>
+                    <Label className="text-xs font-medium text-foreground/80">
+                      {t("dialog.sshTerminalType")}
+                    </Label>
+                    <Select
+                      value={sshTerminalType}
+                      onValueChange={(value) =>
+                        setSshTerminalType(value as SshTerminalTypeSelection)
+                      }
+                    >
+                      <SelectTrigger className="mt-1 h-8 text-xs font-normal">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="default">
+                          {t("dialog.sshTerminalTypeDefault", { value: defaultTerminalType })}
+                        </SelectItem>
+                        <SelectItem value="xterm-256color">xterm-256color</SelectItem>
+                        <SelectItem value="xterm">xterm</SelectItem>
+                        <SelectItem value="vt100">vt100</SelectItem>
+                        <SelectItem value="vt220">vt220</SelectItem>
+                        <SelectItem value="ansi">ansi</SelectItem>
+                        <SelectItem value="linux">linux</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="mt-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
+                      {t("dialog.sshTerminalTypeDesc")}
+                    </p>
+                  </div>
+                </div>
+                {networkDeviceProfile && (
+                  <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[0.6875rem] leading-relaxed text-amber-800 dark:text-amber-200">
+                    {t("dialog.sshProfileNetworkDeviceRuntimeDesc")}
+                  </div>
+                )}
+                <div className="max-w-md">
+                  <Label className="text-xs font-medium text-foreground/80">
+                    {t("connection.encoding")}
+                  </Label>
+                  <Select value={encoding} onValueChange={setEncoding}>
+                    <SelectTrigger className="mt-1 h-8 w-full text-xs">
+                      <SelectValue placeholder={t("connection.encodingFollowGlobal")} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="global">{t("connection.encodingFollowGlobal")}</SelectItem>
+                      <SelectItem value="UTF-8">UTF-8</SelectItem>
+                      <SelectItem value="GBK">GBK</SelectItem>
+                      <SelectItem value="GB2312">GB2312</SelectItem>
+                      <SelectItem value="GB18030">GB18030</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <ConnectionRecordingSettings
+                  useGlobal={recordingUseGlobal}
+                  onUseGlobalChange={setRecordingUseGlobal}
+                  autoStart={recordingAutoStart}
+                  onAutoStartChange={setRecordingAutoStart}
+                  mode={recordingMode}
+                  onModeChange={setRecordingMode}
+                />
               </div>
             </TabsContent>
 
-            <TabsContent value="sftp" className="mt-3 space-y-3 border-0 outline-none">
-              <div className="flex items-start justify-between gap-3 border-b border-border/40 pb-3">
-                <div className="min-w-0 space-y-0.5">
-                  <div className="text-xs font-medium">{t("dialog.sftpAdvanced")}</div>
-                  <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
-                    {t("dialog.sftpAdvancedDesc")}
+            <TabsContent value="sftp" className="mt-3 border-0 outline-none">
+              <div className="rounded-lg border bg-accent/25 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 space-y-0.5">
+                    <div className="text-xs font-medium">{t("dialog.sftpAdvanced")}</div>
+                    <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+                      {t("dialog.sftpAdvancedDesc")}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <Switch
+                      checked={sftpSettings.enabled}
+                      disabled={networkDeviceProfile}
+                      onCheckedChange={(enabled) =>
+                        setSftpSettings({
+                          ...sftpSettings,
+                          enabled,
+                        })
+                      }
+                    />
+                    <span className="text-xs text-muted-foreground">
+                      {t("dialog.enabled", "Enabled")}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="mt-3 max-w-md">
+                  <Label className="text-xs font-medium text-foreground/80">
+                    {t("dialog.sftpCwdFollowMode")}
+                  </Label>
+                  <Select
+                    disabled={sftpDisabled}
+                    value={sftpSettings.cwd_follow_mode}
+                    onValueChange={(cwd_follow_mode) =>
+                      setSftpSettings({
+                        ...sftpSettings,
+                        cwd_follow_mode: cwd_follow_mode as SftpSettings["cwd_follow_mode"],
+                      })
+                    }
+                  >
+                    <SelectTrigger className="mt-1 h-8 text-xs font-normal">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="off">{t("dialog.sftpCwdFollowOff")}</SelectItem>
+                      <SelectItem value="shell_integration">
+                        {t("dialog.sftpCwdFollowShellIntegration")}
+                      </SelectItem>
+                      <SelectItem value="rc_file">{t("dialog.sftpCwdFollowRcFile")}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="mt-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
+                    {sftpSettings.cwd_follow_mode === "off"
+                      ? t("dialog.sftpCwdFollowOffDesc")
+                      : sftpSettings.cwd_follow_mode === "rc_file"
+                        ? t("dialog.sftpCwdFollowRcFileDesc")
+                        : t("dialog.sftpCwdFollowShellIntegrationDesc")}
                   </p>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <Switch
-                    checked={sftpSettings.enabled}
-                    onCheckedChange={(enabled) =>
+                <div className="mt-3 max-w-xs">
+                  <Label className="text-xs font-medium text-foreground/80">
+                    {t("dialog.sftpShellDetectionTimeout")}
+                  </Label>
+                  <div className="mt-1 flex items-center gap-2">
+                    <NumberInput
+                      className="min-w-0 flex-1 [&_button]:h-8 [&_button]:w-8 [&_input]:h-8 [&_input]:text-xs"
+                      value={
+                        sftpSettings.shell_detection_timeout_ms ??
+                        DEFAULT_SFTP_SHELL_DETECTION_TIMEOUT_MS
+                      }
+                      onChange={(shell_detection_timeout_ms) =>
+                        setSftpSettings({
+                          ...sftpSettings,
+                          shell_detection_timeout_ms,
+                        })
+                      }
+                      min={MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS}
+                      max={MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS}
+                      step={100}
+                      disabled={sftpDisabled || sftpSettings.cwd_follow_mode === "off"}
+                    />
+                    <span className="shrink-0 text-[0.625rem] text-muted-foreground">ms</span>
+                  </div>
+                  <p className="mt-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
+                    {t("dialog.sftpShellDetectionTimeoutDesc")}
+                  </p>
+                </div>
+                <div className="mt-3 max-w-md">
+                  <Label className="text-xs font-medium text-foreground/80">
+                    {t("dialog.sftpFilenameEncoding")}
+                  </Label>
+                  <Select
+                    disabled={sftpDisabled}
+                    value={sftpSettings.filename_encoding || "terminal"}
+                    onValueChange={(filename_encoding) =>
                       setSftpSettings({
                         ...sftpSettings,
-                        enabled,
+                        filename_encoding:
+                          filename_encoding === "terminal" ? "" : filename_encoding,
                       })
                     }
-                  />
-                  <span className="text-xs text-muted-foreground">
-                    {t("dialog.enabled", "Enabled")}
-                  </span>
+                  >
+                    <SelectTrigger className="mt-1 h-8 text-xs font-normal">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="terminal">
+                        {t("dialog.sftpFilenameEncodingFollowTerminal")}
+                      </SelectItem>
+                      <SelectItem value="UTF-8">UTF-8</SelectItem>
+                      <SelectItem value="GBK">GBK</SelectItem>
+                      <SelectItem value="GB2312">GB2312</SelectItem>
+                      <SelectItem value="GB18030">GB18030</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="mt-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
+                    {t("dialog.sftpFilenameEncodingDesc")}
+                  </p>
                 </div>
-              </div>
-
-              <div className="max-w-md border-b border-border/40 pb-3">
-                <Label className="text-xs font-medium text-foreground/80">
-                  {t("dialog.sftpCwdFollowMode")}
-                </Label>
-                <Select
-                  value={sftpSettings.cwd_follow_mode}
-                  onValueChange={(cwd_follow_mode) =>
-                    setSftpSettings({
-                      ...sftpSettings,
-                      cwd_follow_mode: cwd_follow_mode as SftpSettings["cwd_follow_mode"],
-                    })
-                  }
-                >
-                  <SelectTrigger className="mt-1 h-8 text-xs font-normal">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="off">{t("dialog.sftpCwdFollowOff")}</SelectItem>
-                    <SelectItem value="shell_integration">
-                      {t("dialog.sftpCwdFollowShellIntegration")}
-                    </SelectItem>
-                    <SelectItem value="rc_file">{t("dialog.sftpCwdFollowRcFile")}</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="mt-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
-                  {sftpSettings.cwd_follow_mode === "off"
-                    ? t("dialog.sftpCwdFollowOffDesc")
-                    : sftpSettings.cwd_follow_mode === "rc_file"
-                      ? t("dialog.sftpCwdFollowRcFileDesc")
-                      : t("dialog.sftpCwdFollowShellIntegrationDesc")}
-                </p>
-              </div>
-              <div className="max-w-xs border-b border-border/40 pb-3">
-                <Label className="text-xs font-medium text-foreground/80">
-                  {t("dialog.sftpShellDetectionTimeout")}
-                </Label>
-                <div className="mt-1 flex items-center gap-2">
-                  <NumberInput
-                    className="min-w-0 flex-1 [&_button]:h-8 [&_button]:w-8 [&_input]:h-8 [&_input]:text-xs"
-                    value={
-                      sftpSettings.shell_detection_timeout_ms ??
-                      DEFAULT_SFTP_SHELL_DETECTION_TIMEOUT_MS
-                    }
-                    onChange={(shell_detection_timeout_ms) =>
-                      setSftpSettings({
-                        ...sftpSettings,
-                        shell_detection_timeout_ms,
-                      })
-                    }
-                    min={MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS}
-                    max={MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS}
-                    step={100}
-                    disabled={sftpSettings.cwd_follow_mode === "off"}
-                  />
-                  <span className="shrink-0 text-[0.625rem] text-muted-foreground">ms</span>
-                </div>
-                <p className="mt-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
-                  {t("dialog.sftpShellDetectionTimeoutDesc")}
-                </p>
-              </div>
-              <div className="max-w-md">
-                <Label className="text-xs font-medium text-foreground/80">
-                  {t("dialog.sftpFilenameEncoding")}
-                </Label>
-                <Select
-                  value={sftpSettings.filename_encoding || "terminal"}
-                  onValueChange={(filename_encoding) =>
-                    setSftpSettings({
-                      ...sftpSettings,
-                      filename_encoding: filename_encoding === "terminal" ? "" : filename_encoding,
-                    })
-                  }
-                >
-                  <SelectTrigger className="mt-1 h-8 text-xs font-normal">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="terminal">
-                      {t("dialog.sftpFilenameEncodingFollowTerminal")}
-                    </SelectItem>
-                    <SelectItem value="UTF-8">UTF-8</SelectItem>
-                    <SelectItem value="GBK">GBK</SelectItem>
-                    <SelectItem value="GB2312">GB2312</SelectItem>
-                    <SelectItem value="GB18030">GB18030</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="mt-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
-                  {t("dialog.sftpFilenameEncodingDesc")}
-                </p>
               </div>
             </TabsContent>
 
             <TabsContent value="x11" className="mt-3 border-0 outline-none">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 space-y-0.5">
-                  <div className="text-xs font-medium">{t("dialog.x11Forwarding")}</div>
-                  <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
-                    {t("dialog.x11ForwardingDesc")}
-                  </p>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <Switch checked={x11Forwarding} onCheckedChange={setX11Forwarding} />
-                  <span className="text-xs text-muted-foreground">
-                    {t("dialog.enabled", "Enabled")}
-                  </span>
+              <div className="rounded-lg border bg-accent/25 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 space-y-0.5">
+                    <div className="text-xs font-medium">{t("dialog.x11Forwarding")}</div>
+                    <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+                      {t("dialog.x11ForwardingDesc")}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <Switch checked={x11Forwarding} onCheckedChange={setX11Forwarding} />
+                    <span className="text-xs text-muted-foreground">
+                      {t("dialog.enabled", "Enabled")}
+                    </span>
+                  </div>
                 </div>
               </div>
             </TabsContent>
 
-            <TabsContent value="backspace" className="mt-3 space-y-3 border-0 outline-none">
-              <div className="space-y-0.5 border-b border-border/40 pb-3">
-                <div className="text-xs font-medium">
-                  {t("dialog.backspaceMode", "Backspace Mode")}
+            <TabsContent value="backspace" className="mt-3 border-0 outline-none">
+              <div className="rounded-lg border bg-accent/25 p-3">
+                <div className="space-y-0.5">
+                  <div className="text-xs font-medium">
+                    {t("dialog.backspaceMode", "Backspace Mode")}
+                  </div>
+                  <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+                    {t("dialog.sshBackspaceModeDesc")}
+                  </p>
                 </div>
-                <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
-                  {t("dialog.sshBackspaceModeDesc")}
-                </p>
-              </div>
-              <div className="max-w-xs">
-                <Label className="text-xs font-medium text-foreground/80">
-                  {t("dialog.backspaceMode", "Backspace Mode")}
-                </Label>
-                <Select value={backspaceMode} onValueChange={setBackspaceMode}>
-                  <SelectTrigger className="mt-1 h-8 text-xs font-normal">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="del">{t("dialog.backspaceDel", "DEL (0x7F)")}</SelectItem>
-                    <SelectItem value="ctrl_h">
-                      {t("dialog.backspaceCtrlH", "Ctrl+H (BS)")}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
+                <div className="mt-3 max-w-xs">
+                  <Label className="text-xs font-medium text-foreground/80">
+                    {t("dialog.backspaceMode", "Backspace Mode")}
+                  </Label>
+                  <Select value={backspaceMode} onValueChange={setBackspaceMode}>
+                    <SelectTrigger className="mt-1 h-8 text-xs font-normal">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="del">{t("dialog.backspaceDel", "DEL (0x7F)")}</SelectItem>
+                      <SelectItem value="ctrl_h">
+                        {t("dialog.backspaceCtrlH", "Ctrl+H (BS)")}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
             </TabsContent>
           </Tabs>
-          <div className="space-y-3">
-            <div className="space-y-0.5 border-b border-border/40 pb-3">
+          <div className="rounded-lg border bg-accent/25 p-3">
+            <div className="space-y-0.5">
               <div className="text-xs font-medium">{t("dialog.sshAlgorithms")}</div>
               <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
                 {t("dialog.sshAlgorithmsDesc")}
               </p>
             </div>
-            <div className="max-w-xs">
+            <div className="mt-3 max-w-xs">
               <Label className="text-xs font-medium text-foreground/80">
                 {t("dialog.algorithmMode")}
               </Label>
@@ -1311,7 +1545,7 @@ export function SshForm({
                 </SelectContent>
               </Select>
             </div>
-            <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+            <p className="mt-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
               {sshAlgorithms.mode === "secure"
                 ? t("dialog.algorithmModeSecureDesc")
                 : sshAlgorithms.mode === "custom"
@@ -1319,11 +1553,8 @@ export function SshForm({
                   : t("dialog.algorithmModeCompatibleDesc")}
             </p>
             {sshAlgorithms.mode === "custom" && supportedAlgorithms && (
-              <Tabs defaultValue="kex" className="w-full">
-                <TabsList
-                  variant="line"
-                  className="flex h-auto w-full flex-wrap justify-start gap-1 bg-transparent pointer-events-auto"
-                >
+              <Tabs defaultValue="kex" className="mt-3 w-full">
+                <TabsList className="grid h-8 w-full grid-cols-4 pointer-events-auto">
                   <TabsTrigger value="kex" className="min-w-0 px-1 text-[0.6875rem]">
                     <span className="truncate">{t("dialog.algorithmKexTab")}</span>
                   </TabsTrigger>
@@ -1368,7 +1599,9 @@ export function SshForm({
               </Tabs>
             )}
             {sshAlgorithms.mode === "custom" && !supportedAlgorithms && (
-              <p className="text-[0.6875rem] text-muted-foreground">{t("dialog.algorithmLoading")}</p>
+              <div className="mt-3 rounded-md border border-dashed bg-background/70 px-3 py-2 text-[0.6875rem] text-muted-foreground">
+                {t("dialog.algorithmLoading")}
+              </div>
             )}
           </div>
         </CollapsibleContent>

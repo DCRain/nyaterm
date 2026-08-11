@@ -4,6 +4,7 @@ pub async fn create_local_session(
     manager: Arc<SessionManager>,
     config: Option<LocalSessionConfig>,
     owner_window_label: Option<String>,
+    session_ready_hook: Option<SessionReadyHook>,
 ) -> AppResult<String> {
     tracing::info!("Creating local PTY session");
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -30,16 +31,19 @@ pub async fn create_local_session(
         id: session_id.clone(),
         name: session_name,
         session_type: SessionType::Local,
+        connection_id: config.as_ref().and_then(|cfg| cfg.connection_id.clone()),
         connected: true,
         owner_window_label,
         ai_execution_profile,
         injection_active,
         remote_file_browser_enabled: false,
+        remote_stats_enabled: false,
+        ssh_profile: None,
     };
 
     let cwd: SharedCwd = Arc::new(tokio::sync::Mutex::new(None));
     let session_handle = SessionHandle {
-        info: session_info,
+        info: session_info.clone(),
         cmd_tx,
         ssh_config: None,
         ssh_handle: None,
@@ -47,6 +51,9 @@ pub async fn create_local_session(
         remote_fs: None,
     };
     manager.add_session(session_handle).await;
+    if let Some(hook) = session_ready_hook.as_ref() {
+        hook(&session_info);
+    }
 
     let sid = session_id.clone();
     let mgr = manager.clone();
@@ -291,6 +298,9 @@ fn pty_session_thread(
                                 initial_bytes,
                             } => {
                                 if !passthrough.is_empty() {
+                                    if let Some(rec) = recording_mgr_reader.as_ref() {
+                                        rec.write_raw_output(&sid_for_rec_reader, &passthrough);
+                                    }
                                     let pre = output_decoder.decode(&passthrough);
                                     if !pre.is_empty() {
                                         output_reader.push_owned(pre);
@@ -328,6 +338,9 @@ fn pty_session_thread(
                             ZmodemDetectResult::NoMatch { passthrough } => {
                                 if passthrough.is_empty() {
                                     continue;
+                                }
+                                if let Some(rec) = recording_mgr_reader.as_ref() {
+                                    rec.write_raw_output(&sid_for_rec_reader, &passthrough);
                                 }
                                 passthrough
                             }
@@ -463,9 +476,6 @@ fn pty_session_thread(
                     continue;
                 }
                 let send_data = encode_terminal_input(&data, &encoding);
-                if let Some(ref rec) = recording_mgr {
-                    rec.write_input(&session_id, &data);
-                }
                 if let Err(error) = write_to_pty(&mut *writer, &send_data) {
                     tracing::warn!(
                         session_id = %session_id,

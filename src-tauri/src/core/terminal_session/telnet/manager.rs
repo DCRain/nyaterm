@@ -5,6 +5,7 @@ pub async fn create_telnet_session(
     connection_id: Option<String>,
     owner_window_label: Option<String>,
     startup_command: Option<TelnetStartupCommand>,
+    session_ready_hook: Option<SessionReadyHook>,
 ) -> AppResult<String> {
     let host = config.host.clone();
     let port = config.port;
@@ -32,16 +33,19 @@ pub async fn create_telnet_session(
         id: session_id.clone(),
         name: config.name.clone(),
         session_type: SessionType::Telnet,
+        connection_id: connection_id.clone(),
         connected: true,
         owner_window_label,
         ai_execution_profile: AiExecutionProfile::SendOnly,
         injection_active: false,
         remote_file_browser_enabled: false,
+        remote_stats_enabled: false,
+        ssh_profile: None,
     };
 
     let cwd: SharedCwd = Arc::new(tokio::sync::Mutex::new(None));
     let session_handle = SessionHandle {
-        info: session_info,
+        info: session_info.clone(),
         cmd_tx,
         ssh_config: None,
         ssh_handle: None,
@@ -49,6 +53,9 @@ pub async fn create_telnet_session(
         remote_fs: None,
     };
     manager.add_session(session_handle).await;
+    if let Some(hook) = session_ready_hook.as_ref() {
+        hook(&session_info);
+    }
 
     let sid = session_id.clone();
     let mgr = manager.clone();

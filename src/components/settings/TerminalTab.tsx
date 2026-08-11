@@ -1,6 +1,15 @@
-import { useMemo, useState } from "react";
+import { downloadDir } from "@tauri-apps/api/path";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { MdAdd, MdDelete, MdExpandLess, MdExpandMore, MdFileUpload } from "react-icons/md";
+import {
+  MdAdd,
+  MdDelete,
+  MdExpandLess,
+  MdExpandMore,
+  MdFileUpload,
+  MdFolderOpen,
+} from "react-icons/md";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -36,6 +45,55 @@ const KEEP_ALIVE_MODE_DESCRIPTION_KEYS: Record<SshKeepAliveMode, string> = {
 const DEFAULT_TIMESTAMP_FORMAT = "[HH:mm:ss]";
 const MAX_TIMESTAMP_FORMAT_LENGTH = 64;
 
+function PathPickerInput({
+  label,
+  desc,
+  value,
+  placeholder,
+  onChange,
+}: {
+  label: string;
+  desc?: string;
+  value: string;
+  placeholder?: string;
+  onChange: (v: string) => void;
+}) {
+  const { t } = useTranslation();
+
+  const handleBrowse = async () => {
+    const selected = await openDialog({ directory: true });
+    if (selected && typeof selected === "string") {
+      onChange(selected);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="min-w-0">
+        <Label className="text-sm font-medium leading-5">{label}</Label>
+        {desc && <p className="mt-1 text-xs leading-5 text-muted-foreground">{desc}</p>}
+      </div>
+      <div className="flex max-w-2xl flex-col gap-2 sm:flex-row">
+        <Input
+          className="flex-1 text-sm"
+          placeholder={placeholder}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
+        <Button
+          variant="outline"
+          size="sm"
+          className="w-full shrink-0 gap-1.5 sm:w-auto"
+          onClick={handleBrowse}
+        >
+          <MdFolderOpen className="text-sm" />
+          {t("settings.browse")}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function normalizeKeepAliveMode(value: string): SshKeepAliveMode {
   if (value === "strict" || value === "disabled") return value;
   return "compatible";
@@ -51,6 +109,7 @@ export function TerminalTab() {
   const { terminalTheme } = useTheme();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showImportDialog, setShowImportDialog] = useState(false);
+  const [defaultDownloadDir, setDefaultDownloadDir] = useState("");
 
   const isDark = useMemo(
     () => hexLuminance(terminalTheme.colors.terminal.background) < 0.5,
@@ -65,6 +124,27 @@ export function TerminalTab() {
   const actionLinkMatchers =
     appSettings.terminal.action_links_matchers ?? DEFAULT_ACTION_LINK_MATCHERS;
   const keepAliveMode = normalizeKeepAliveMode(appSettings.terminal.keep_alive_mode);
+  const recording = appSettings.recording;
+  const recordingMemoryLimitMiB = Math.max(
+    1,
+    Math.round((recording.memory_limit_bytes || 5 * 1024 * 1024) / (1024 * 1024)),
+  );
+  const rotationValue =
+    recording.rotation?.type === "daily"
+      ? "daily"
+      : recording.rotation?.type === "size"
+        ? "size"
+        : "session";
+
+  useEffect(() => {
+    downloadDir()
+      .then(setDefaultDownloadDir)
+      .catch(() => {});
+  }, []);
+
+  function updateRecording(patch: Partial<typeof recording>) {
+    updateAppSettings({ recording: { ...recording, ...patch } });
+  }
 
   function updateRules(next: KeywordHighlightRule[]) {
     updateAppSettings({ terminal: { ...appSettings.terminal, keyword_highlights: next } });
@@ -383,6 +463,151 @@ export function TerminalTab() {
             onChange={(v) => updateUi({ docker_manager_interval: v || 10 })}
           />
         )}
+      </SettingSection>
+
+      <SettingSection
+        title={t("settings.recordingSettings")}
+        desc={t("settings.recordingSettingsDesc")}
+        contentClassName="space-y-5"
+      >
+        <SettingRow
+          label={t("settings.recordingAutoStart")}
+          desc={t("settings.recordingAutoStartDesc")}
+        >
+          <SettingSwitch
+            checked={recording.auto_start}
+            onChange={(v) => updateRecording({ auto_start: v })}
+          />
+        </SettingRow>
+
+        <SettingSelect
+          label={t("settings.recordingDefaultMode")}
+          desc={t("settings.recordingDefaultModeDesc")}
+          value={recording.default_mode || "transcript"}
+          controlClassName="max-w-sm"
+          onValueChange={(v) => updateRecording({ default_mode: v as "transcript" | "raw" })}
+        >
+          <SelectItem value="transcript">{t("settings.recordingModeTranscript")}</SelectItem>
+          <SelectItem value="raw">{t("settings.recordingModeRaw")}</SelectItem>
+        </SettingSelect>
+
+        <PathPickerInput
+          label={t("settings.recordingPath")}
+          desc={t("settings.recordingPathDesc")}
+          value={recording.base_path}
+          placeholder={defaultDownloadDir}
+          onChange={(v) => updateRecording({ base_path: v })}
+        />
+
+        <SettingInput
+          label={t("settings.recordingPathTemplate")}
+          desc={t("settings.recordingPathTemplateDesc")}
+          value={recording.path_template}
+          controlClassName="max-w-2xl"
+          className="font-mono text-xs"
+          onChange={(event) => updateRecording({ path_template: event.target.value })}
+        />
+
+        <SettingRow
+          label={t("settings.recordingIncludeTimestamps")}
+          desc={t("settings.recordingIncludeTimestampsDesc")}
+        >
+          <SettingSwitch
+            checked={recording.include_timestamps}
+            onChange={(v) => updateRecording({ include_timestamps: v })}
+          />
+        </SettingRow>
+
+        <SettingRow
+          label={t("settings.recordingIncludeIoLabels")}
+          desc={t("settings.recordingIncludeIoLabelsDesc")}
+        >
+          <SettingSwitch
+            checked={recording.include_io_labels}
+            onChange={(v) => updateRecording({ include_io_labels: v })}
+          />
+        </SettingRow>
+
+        <SettingRow
+          label={t("settings.recordingIncludeMetadata")}
+          desc={t("settings.recordingIncludeMetadataDesc")}
+        >
+          <SettingSwitch
+            checked={recording.include_session_metadata}
+            onChange={(v) => updateRecording({ include_session_metadata: v })}
+          />
+        </SettingRow>
+
+        <SettingSelect
+          label={t("settings.recordingRotation")}
+          desc={t("settings.recordingRotationDesc")}
+          value={rotationValue}
+          controlClassName="max-w-sm"
+          onValueChange={(v) =>
+            updateRecording({
+              rotation:
+                v === "daily"
+                  ? { type: "daily" }
+                  : v === "size"
+                    ? { type: "size", max_bytes: 10 * 1024 * 1024 }
+                    : { type: "session" },
+            })
+          }
+        >
+          <SelectItem value="session">{t("settings.recordingRotationSession")}</SelectItem>
+          <SelectItem value="daily">{t("settings.recordingRotationDaily")}</SelectItem>
+          <SelectItem value="size">{t("settings.recordingRotationSize")}</SelectItem>
+        </SettingSelect>
+
+        {recording.rotation?.type === "size" && (
+          <SettingNumberInput
+            label={t("settings.recordingRotationSizeLimit")}
+            desc={t("settings.recordingRotationSizeLimitDesc")}
+            min={1}
+            max={10240}
+            value={Math.max(1, Math.round(recording.rotation.max_bytes / (1024 * 1024)))}
+            controlClassName="max-w-sm"
+            onChange={(v) =>
+              updateRecording({
+                rotation: { type: "size", max_bytes: Math.max(1, v) * 1024 * 1024 },
+              })
+            }
+          />
+        )}
+
+        <SettingSelect
+          label={t("settings.recordingExistingFileBehavior")}
+          desc={t("settings.recordingExistingFileBehaviorDesc")}
+          value={recording.existing_file_behavior || "unique"}
+          controlClassName="max-w-sm"
+          onValueChange={(v) =>
+            updateRecording({ existing_file_behavior: v as "unique" | "append" | "overwrite" })
+          }
+        >
+          <SelectItem value="unique">{t("settings.recordingExistingUnique")}</SelectItem>
+          <SelectItem value="append">{t("settings.recordingExistingAppend")}</SelectItem>
+          <SelectItem value="overwrite">{t("settings.recordingExistingOverwrite")}</SelectItem>
+        </SettingSelect>
+
+        <SettingNumberInput
+          label={t("settings.recordingMemoryLimit")}
+          desc={t("settings.recordingMemoryLimitDesc")}
+          min={1}
+          max={100}
+          value={recordingMemoryLimitMiB}
+          controlClassName="max-w-sm"
+          onChange={(v) => updateRecording({ memory_limit_bytes: Math.max(1, v) * 1024 * 1024 })}
+        />
+
+        <SettingRow
+          label={t("settings.recordingIncludeBinaryTransfers")}
+          desc={t("settings.recordingIncludeBinaryTransfersDesc")}
+        >
+          <SettingSwitch
+            checked={recording.include_binary_transfer_payloads}
+            onChange={(v) => updateRecording({ include_binary_transfer_payloads: v })}
+          />
+        </SettingRow>
       </SettingSection>
 
       <SettingSection contentClassName="space-y-4">

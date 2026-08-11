@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MdChevronRight, MdClose, MdSettings } from "react-icons/md";
 import { PasswordManagementTab } from "@/components/panel/security-auth/PasswordManagementTab";
+import { ConnectionRecordingSettings } from "@/components/sessions/ConnectionRecordingSettings";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -27,7 +28,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { invoke } from "@/lib/invoke";
 import { cn } from "@/lib/utils";
-import type { SavedPassword } from "@/types/global";
+import type { RecordingMode, SavedPassword } from "@/types/global";
 
 const MASKED_PASSWORD_PLACEHOLDER = "••••••••";
 type TelnetEnterMode = "crlf" | "cr" | "lf";
@@ -65,6 +66,12 @@ interface TelnetFormProps {
   setSendNaws: (v: boolean) => void;
   sendSga: boolean;
   setSendSga: (v: boolean) => void;
+  recordingUseGlobal: boolean;
+  setRecordingUseGlobal: (v: boolean) => void;
+  recordingAutoStart: boolean;
+  setRecordingAutoStart: (v: boolean) => void;
+  recordingMode: RecordingMode;
+  setRecordingMode: (v: RecordingMode) => void;
   connectionId?: string;
   encoding: string;
   setEncoding: (v: string) => void;
@@ -108,6 +115,12 @@ export function TelnetForm({
   setSendNaws,
   sendSga,
   setSendSga,
+  recordingUseGlobal,
+  setRecordingUseGlobal,
+  recordingAutoStart,
+  setRecordingAutoStart,
+  recordingMode,
+  setRecordingMode,
   connectionId,
   encoding,
   setEncoding,
@@ -195,17 +208,19 @@ export function TelnetForm({
     onCheckedChange: (checked: boolean) => void,
     disabled = false,
   ) => (
-    <div className={cn("flex items-start justify-between gap-3", disabled && "opacity-55")}>
-      <div className="min-w-0 space-y-0.5">
-        <Label className="text-xs font-medium text-foreground/80">{label}</Label>
-        <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">{description}</p>
+    <div className={cn("rounded-md border bg-background/70 px-3 py-2", disabled && "opacity-55")}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 space-y-0.5">
+          <div className="text-xs font-medium">{label}</div>
+          <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">{description}</p>
+        </div>
+        <Switch
+          className="mt-0.5"
+          checked={checked}
+          onCheckedChange={onCheckedChange}
+          disabled={disabled}
+        />
       </div>
-      <Switch
-        className="mt-0.5"
-        checked={checked}
-        onCheckedChange={onCheckedChange}
-        disabled={disabled}
-      />
     </div>
   );
 
@@ -265,10 +280,7 @@ export function TelnetForm({
           }}
           className="mt-1 w-full"
         >
-          <TabsList
-            variant="line"
-            className="grid h-8 w-full grid-cols-2 bg-transparent pointer-events-auto"
-          >
+          <TabsList className="grid h-8 w-full grid-cols-2 pointer-events-auto">
             <TabsTrigger value="none" className="text-xs">
               {t("dialog.noAuthentication", "None")}
             </TabsTrigger>
@@ -278,9 +290,9 @@ export function TelnetForm({
           </TabsList>
 
           <TabsContent value="none" className="mt-3 border-0 outline-none">
-            <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+            <div className="rounded-md border border-dashed bg-accent/25 px-3 py-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
               {t("dialog.telnetNoAuthenticationDescription")}
-            </p>
+            </div>
           </TabsContent>
 
           <TabsContent value="password" className="mt-3 border-0 outline-none">
@@ -301,10 +313,7 @@ export function TelnetForm({
               }}
               className="mt-1 w-full"
             >
-              <TabsList
-                variant="line"
-                className="grid h-8 w-full grid-cols-2 bg-transparent pointer-events-auto"
-              >
+              <TabsList className="grid h-8 w-full grid-cols-2 pointer-events-auto">
                 <TabsTrigger value="direct" className="text-xs">
                   {t("dialog.directPassword")}
                 </TabsTrigger>
@@ -425,10 +434,7 @@ export function TelnetForm({
         </CollapsibleTrigger>
         <CollapsibleContent className="mt-3">
           <Tabs defaultValue="input" className="w-full">
-            <TabsList
-              variant="line"
-              className="grid h-8 w-full grid-cols-3 bg-transparent pointer-events-auto"
-            >
+            <TabsList className="grid h-8 w-full grid-cols-3 pointer-events-auto">
               <TabsTrigger value="input" className="text-xs">
                 {t("dialog.telnetInputSettings", "Input")}
               </TabsTrigger>
@@ -440,120 +446,140 @@ export function TelnetForm({
               </TabsTrigger>
             </TabsList>
 
-            <TabsContent value="input" className="mt-3 space-y-3 border-0 outline-none">
-              <div className="text-xs font-medium">{t("dialog.telnetInputBehavior", "Key input")}</div>
-              <div className="grid grid-cols-2 gap-2 sm:gap-3">
-                <div className="min-w-0">
-                  <Label className="text-xs font-medium text-foreground/80">
-                    {t("dialog.backspaceMode", "Backspace Mode")}
-                  </Label>
-                  <Select value={backspaceMode} onValueChange={setBackspaceMode}>
-                    <SelectTrigger className="mt-1 h-8 text-xs font-normal">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="ctrl_h">
-                        {t("dialog.backspaceCtrlH", "Ctrl+H (BS)")}
-                      </SelectItem>
-                      <SelectItem value="del">{t("dialog.backspaceDel", "DEL (0x7F)")}</SelectItem>
-                    </SelectContent>
-                  </Select>
+            <TabsContent value="input" className="mt-3 border-0 outline-none">
+              <div className="rounded-lg border bg-accent/25 p-3">
+                <div className="space-y-0.5">
+                  <div className="text-xs font-medium">
+                    {t("dialog.telnetInputBehavior", "Key input")}
+                  </div>
                 </div>
-                <div className="min-w-0">
-                  <Label className="text-xs font-medium text-foreground/80">
-                    {t("dialog.telnetEnterMode", "Enter sends")}
-                  </Label>
-                  <Select
-                    value={enterMode}
-                    onValueChange={(value) => setEnterMode(value as TelnetEnterMode)}
-                  >
-                    <SelectTrigger className="mt-1 h-8 text-xs font-normal">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="crlf">CRLF (\r\n)</SelectItem>
-                      <SelectItem value="cr">CR (\r)</SelectItem>
-                      <SelectItem value="lf">LF (\n)</SelectItem>
-                    </SelectContent>
-                  </Select>
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:gap-3">
+                  <div className="min-w-0">
+                    <Label className="text-xs font-medium text-foreground/80">
+                      {t("dialog.backspaceMode", "Backspace Mode")}
+                    </Label>
+                    <Select value={backspaceMode} onValueChange={setBackspaceMode}>
+                      <SelectTrigger className="mt-1 h-8 text-xs font-normal">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="ctrl_h">
+                          {t("dialog.backspaceCtrlH", "Ctrl+H (BS)")}
+                        </SelectItem>
+                        <SelectItem value="del">
+                          {t("dialog.backspaceDel", "DEL (0x7F)")}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="min-w-0">
+                    <Label className="text-xs font-medium text-foreground/80">
+                      {t("dialog.telnetEnterMode", "Enter sends")}
+                    </Label>
+                    <Select
+                      value={enterMode}
+                      onValueChange={(value) => setEnterMode(value as TelnetEnterMode)}
+                    >
+                      <SelectTrigger className="mt-1 h-8 text-xs font-normal">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="crlf">CRLF (\r\n)</SelectItem>
+                        <SelectItem value="cr">CR (\r)</SelectItem>
+                        <SelectItem value="lf">LF (\n)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
               </div>
             </TabsContent>
 
             <TabsContent value="terminal" className="mt-3 border-0 outline-none">
-              <div className="max-w-md">
-                <Label className="text-xs font-medium text-foreground/80">
-                  {t("connection.encoding")}
-                </Label>
-                <Select value={encoding} onValueChange={setEncoding}>
-                  <SelectTrigger className="mt-1 h-8 w-full text-xs">
-                    <SelectValue placeholder={t("connection.encodingFollowGlobal")} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="global">{t("connection.encodingFollowGlobal")}</SelectItem>
-                    <SelectItem value="UTF-8">UTF-8</SelectItem>
-                    <SelectItem value="GBK">GBK</SelectItem>
-                    <SelectItem value="GB2312">GB2312</SelectItem>
-                    <SelectItem value="GB18030">GB18030</SelectItem>
-                  </SelectContent>
-                </Select>
+              <div className="space-y-3 rounded-lg border bg-accent/25 p-3">
+                <div className="max-w-md">
+                  <Label className="text-xs font-medium text-foreground/80">
+                    {t("connection.encoding")}
+                  </Label>
+                  <Select value={encoding} onValueChange={setEncoding}>
+                    <SelectTrigger className="mt-1 h-8 w-full text-xs">
+                      <SelectValue placeholder={t("connection.encodingFollowGlobal")} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="global">{t("connection.encodingFollowGlobal")}</SelectItem>
+                      <SelectItem value="UTF-8">UTF-8</SelectItem>
+                      <SelectItem value="GBK">GBK</SelectItem>
+                      <SelectItem value="GB2312">GB2312</SelectItem>
+                      <SelectItem value="GB18030">GB18030</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <ConnectionRecordingSettings
+                  useGlobal={recordingUseGlobal}
+                  onUseGlobalChange={setRecordingUseGlobal}
+                  autoStart={recordingAutoStart}
+                  onAutoStartChange={setRecordingAutoStart}
+                  mode={recordingMode}
+                  onModeChange={setRecordingMode}
+                />
               </div>
             </TabsContent>
 
-            <TabsContent value="telnet" className="mt-3 space-y-3 border-0 outline-none">
-              <div className="space-y-0.5">
-                <div className="text-xs font-medium">
-                  {t("dialog.telnetCompatibility", "Compatibility")}
+            <TabsContent value="telnet" className="mt-3 border-0 outline-none">
+              <div className="rounded-lg border bg-accent/25 p-3">
+                <div className="space-y-0.5">
+                  <div className="text-xs font-medium">
+                    {t("dialog.telnetCompatibility", "Compatibility")}
+                  </div>
+                  <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+                    {t("dialog.telnetRawTcpCliDesc")}
+                  </p>
                 </div>
-                <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
-                  {t("dialog.telnetRawTcpCliDesc")}
-                </p>
-              </div>
 
-              <div className="grid gap-3">
-                {renderSwitchRow(
-                  t("dialog.telnetRawTcpCli", "Embedded debug port / Raw TCP CLI"),
-                  t("dialog.telnetRawTcpCliLongDesc"),
-                  rawTcpCli,
-                  (checked) => {
-                    setRawTcpCli(checked);
-                    if (checked) setEnterMode("cr");
-                  },
-                )}
+                <div className="mt-3 grid gap-2">
+                  {renderSwitchRow(
+                    t("dialog.telnetRawTcpCli", "Embedded debug port / Raw TCP CLI"),
+                    t("dialog.telnetRawTcpCliLongDesc"),
+                    rawTcpCli,
+                    (checked) => {
+                      setRawTcpCli(checked);
+                      if (checked) setEnterMode("cr");
+                    },
+                  )}
 
-                <div className="grid gap-3 md:grid-cols-2">
-                  {renderSwitchRow(
-                    t("dialog.telnetLocalEcho", "Local Echo"),
-                    t("dialog.telnetLocalEchoDesc"),
-                    localEcho,
-                    setLocalEcho,
-                  )}
-                  {renderSwitchRow(
-                    t("dialog.telnetLocalLineEdit", "Local line editing / Send line on Enter"),
-                    t("dialog.telnetLocalLineEditDesc"),
-                    localLineEdit,
-                    setLocalLineEdit,
-                  )}
-                  {renderSwitchRow(
-                    t("dialog.telnetForceCharAtATime", "Force character-at-a-time"),
-                    t("dialog.telnetForceCharAtATimeDesc"),
-                    forceCharacterAtATime,
-                    setForceCharacterAtATime,
-                  )}
-                  {renderSwitchRow(
-                    t("dialog.telnetSendNaws", "Send NAWS"),
-                    t("dialog.telnetSendNawsDesc"),
-                    sendNaws,
-                    setSendNaws,
-                    rawTcpCli,
-                  )}
-                  {renderSwitchRow(
-                    t("dialog.telnetSendSga", "Send SGA"),
-                    t("dialog.telnetSendSgaDesc"),
-                    sendSga,
-                    setSendSga,
-                    rawTcpCli,
-                  )}
+                  <div className="grid gap-2 md:grid-cols-2">
+                    {renderSwitchRow(
+                      t("dialog.telnetLocalEcho", "Local Echo"),
+                      t("dialog.telnetLocalEchoDesc"),
+                      localEcho,
+                      setLocalEcho,
+                    )}
+                    {renderSwitchRow(
+                      t("dialog.telnetLocalLineEdit", "Local line editing / Send line on Enter"),
+                      t("dialog.telnetLocalLineEditDesc"),
+                      localLineEdit,
+                      setLocalLineEdit,
+                    )}
+                    {renderSwitchRow(
+                      t("dialog.telnetForceCharAtATime", "Force character-at-a-time"),
+                      t("dialog.telnetForceCharAtATimeDesc"),
+                      forceCharacterAtATime,
+                      setForceCharacterAtATime,
+                    )}
+                    {renderSwitchRow(
+                      t("dialog.telnetSendNaws", "Send NAWS"),
+                      t("dialog.telnetSendNawsDesc"),
+                      sendNaws,
+                      setSendNaws,
+                      rawTcpCli,
+                    )}
+                    {renderSwitchRow(
+                      t("dialog.telnetSendSga", "Send SGA"),
+                      t("dialog.telnetSendSgaDesc"),
+                      sendSga,
+                      setSendSga,
+                      rawTcpCli,
+                    )}
+                  </div>
                 </div>
               </div>
             </TabsContent>

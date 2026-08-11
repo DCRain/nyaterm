@@ -208,7 +208,12 @@ export function OtpManagementTab({ activeSessionId = null, onCountChange }: OtpM
 
       try {
         const result = await invoke<OtpCodeResult>("generate_otp_code", { id: entry.id });
-        await sendSessionInput(activeSessionId, result.code);
+        await sendSessionInput(activeSessionId, result.code, {
+          preview: null,
+          registerSubmission: null,
+          origin: "otp_autofill",
+          sensitivity: "secret",
+        });
         await emit(`focus-terminal-${activeSessionId}`);
         if (entry.otp_type === "hotp") {
           await loadEntries();

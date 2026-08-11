@@ -86,9 +86,9 @@ import TerminalGutter from "./TerminalGutter";
 import TerminalSearchBar from "./TerminalSearchBar";
 import {
   createTerminalFitScheduler,
-  TerminalResizeDeduper,
   type TerminalFitResult,
   type TerminalFitScheduler,
+  TerminalResizeDeduper,
 } from "./terminalFitScheduler";
 import {
   getInputIndexAtBufferPosition,
@@ -102,6 +102,7 @@ import {
   readRecentOutput,
 } from "./terminalInputSelection";
 import { createTerminalLinkHandlers } from "./terminalLinkHandlers";
+import { TerminalOutputDrain, type TerminalOutputDrainMode } from "./terminalOutputDrain";
 import { useTerminalExternalDrop } from "./useTerminalExternalDrop";
 import { useTerminalRefreshEffects } from "./useTerminalRefreshEffects";
 import {
@@ -109,20 +110,7 @@ import {
   decodeOsc52ClipboardText,
   quotePosixPath,
 } from "./xterminalClipboard";
-import {
-  createOutputQueue,
-  hasOutputQueueItems,
-  type OutputQueue,
-  outputQueueToBoundedString,
-  peekOutputQueue,
-  pushOutputQueue,
-  type QueuedOutputChunk,
-  replaceOutputQueueHead,
-  serializeTerminalSnapshot,
-  shiftOutputQueue,
-  splitOutputChunk,
-  writeTextInFrames,
-} from "./xterminalOutputQueue";
+import { serializeTerminalSnapshot, writeTextInFrames } from "./xterminalOutputQueue";
 import type { PerformanceMode, XTerminalProps } from "./xterminalTypes";
 import { createZmodemEventHandler, type ZmodemEventPayload } from "./zmodemTerminalEvents";
 import "@xterm/xterm/css/xterm.css";
@@ -191,6 +179,9 @@ type HibernationLogEvent =
   | "success"
   | "wake"
   | "rollback"
+  | "drain_start"
+  | "drain_complete"
+  | "drain_timeout"
   | "fail"
   | "cancel";
 
@@ -200,6 +191,16 @@ function isLocalBackspaceEvent(event: KeyboardEvent, sessionType: SessionType): 
   }
 
   return event.key === "Backspace" || (event.key === "Delete" && event.code === "Backspace");
+}
+
+function isSessionNotFoundError(error: unknown): boolean {
+  const message =
+    typeof error === "string"
+      ? error
+      : error instanceof Error
+        ? error.message
+        : String(error ?? "");
+  return message.toLowerCase().includes("session") && message.toLowerCase().includes("not found");
 }
 
 /**
@@ -281,8 +282,9 @@ export default function XTerminal({
   const hibernatedRef = useRef(hibernated);
   const pendingWakeEventsRef = useRef<PendingWakeEvent[]>([]);
   const zmodemActiveRef = useRef(false);
-  const outputWriteQueueRef = useRef(Promise.resolve());
-  const outputWriteInFlightRef = useRef(false);
+  const outputDrainRef = useRef<TerminalOutputDrain<{ beforeLine: number; ts: number }> | null>(
+    null,
+  );
   const lineTimestampsRef = useRef<Map<number, number>>(new Map());
   const gutterLineOffsetRef = useRef(0);
   const sessionTypeRef = useRef(sessionType);
@@ -295,14 +297,6 @@ export default function XTerminal({
   const visibleRef = useRef(visible);
   const activeRef = useRef(active);
   const performanceModeRef = useRef<PerformanceMode>("normal");
-  const outputQueueRef = useRef<OutputQueue>(createOutputQueue());
-  const writingOutputBytesRef = useRef(0);
-  const backendUnackedOutputBytesRef = useRef(0);
-  const pendingOutputAckBytesRef = useRef(0);
-  const outputAckTimerRef = useRef<number | null>(null);
-  const pendingOutputFlushRef = useRef<number | null>(null);
-  const pendingOutputMicrotaskRef = useRef(false);
-  const pendingOutputFlushTimerRef = useRef<number | null>(null);
   const lastAlternateScreenWriteAtRef = useRef(0);
   const handleVisibilityChangeRef = useRef<(() => void) | null>(null);
   const replaceInputCommandRef = useRef<((command: string) => void) | null>(null);
@@ -592,7 +586,7 @@ export default function XTerminal({
 
   // Shell integration state
   const { shellIntegrationRef } = useShellIntegration();
-  const canShowCommandSuggestions = useCallback(() => {
+  const canShowCommandSuggestions = useCallback((options?: { allowEmpty?: boolean }) => {
     if (credentialPromptInputUntilRef.current > Date.now()) {
       return false;
     }
@@ -614,6 +608,14 @@ export default function XTerminal({
     }
     if (isPagerSearchOrCommandInput(inputState.value)) {
       return false;
+    }
+
+    if (options?.allowEmpty) {
+      return (
+        !inputState.desynced &&
+        !inputState.multiline &&
+        inputState.cursor === inputState.value.length
+      );
     }
 
     return canSuggestFromTracker(inputState);
@@ -701,14 +703,9 @@ export default function XTerminal({
     setTerminalReady(false);
     lineTimestampsRef.current = new Map();
     gutterLineOffsetRef.current = 0;
-    outputQueueRef.current = createOutputQueue();
-    writingOutputBytesRef.current = 0;
-    backendUnackedOutputBytesRef.current = 0;
-    pendingOutputAckBytesRef.current = 0;
+    outputDrainRef.current?.dispose({ ackRemaining: true });
+    outputDrainRef.current = null;
     lastAlternateScreenWriteAtRef.current = 0;
-    outputWriteInFlightRef.current = false;
-    outputWriteQueueRef.current = Promise.resolve();
-    pendingOutputMicrotaskRef.current = false;
     disconnectedRef.current = false;
     disconnectedNoticeShownRef.current = false;
     disconnectedCloseRequestedRef.current = false;
@@ -799,6 +796,14 @@ export default function XTerminal({
     const getCurrentAbsoluteLine = () =>
       gutterLineOffsetRef.current + terminal.buffer.active.baseY + terminal.buffer.active.cursorY;
 
+    const requestGutterRefresh = () => {
+      if (disposed || terminalRef.current !== terminal) return;
+      if (performanceModeRef.current !== "normal") return;
+      const terminalSettings = terminalAppSettingsRef.current?.terminal;
+      if (!terminalSettings?.show_line_numbers && !terminalSettings?.show_timestamps) return;
+      window.dispatchEvent(new CustomEvent("nyaterm:refresh-gutter", { detail: { sessionId } }));
+    };
+
     const captureReconnectSnapshot = (contentSuffix = ""): TerminalReconnectSnapshot => {
       const serialized = serializeTerminalSnapshot(terminal, serializeAddon);
       const captureStartLine = gutterLineOffsetRef.current + serialized.captureStartLine;
@@ -825,13 +830,15 @@ export default function XTerminal({
     };
 
     const restoreLineTimestampsFromSnapshot = (snapshot: TerminalReconnectSnapshot) => {
+      const map = lineTimestampsRef.current;
+      map.clear();
+
       if (snapshot.lineTimestamps.length === 0) return;
 
       const restoredEndLine = getCurrentAbsoluteLine();
       const lineDelta = restoredEndLine - snapshot.captureEndLine;
       const minLine = gutterLineOffsetRef.current;
       const maxLine = restoredEndLine;
-      const next = new Map<number, number>();
 
       for (const [line, timestamp] of snapshot.lineTimestamps) {
         const restoredLine = line + lineDelta;
@@ -841,11 +848,9 @@ export default function XTerminal({
           restoredLine >= minLine &&
           restoredLine <= maxLine
         ) {
-          next.set(restoredLine, timestamp);
+          map.set(restoredLine, timestamp);
         }
       }
-
-      lineTimestampsRef.current = next;
     };
 
     const preservedReconnectSnapshot =
@@ -857,11 +862,9 @@ export default function XTerminal({
     const initialReplayPromise = preservedReconnectSnapshot?.content
       ? writeTextInFrames(terminal, preservedReconnectSnapshot.content).then(() => {
           restoreLineTimestampsFromSnapshot(preservedReconnectSnapshot);
+          requestGutterRefresh();
         })
       : Promise.resolve();
-    if (preservedReconnectSnapshot?.content) {
-      outputWriteQueueRef.current = initialReplayPromise.catch(() => {});
-    }
     const unregisterReconnectCapture = registerTerminalReconnectCapture(sessionId, () =>
       captureReconnectSnapshot(),
     );
@@ -1238,6 +1241,14 @@ export default function XTerminal({
 
       const kb = terminalAppSettingsRef.current.keybindings;
 
+      if (matchesKeyEvent(resolveShortcutKeys("terminal.showCommandSuggestions", kb), e)) {
+        e.preventDefault();
+        if (!disconnectedRef.current) {
+          triggerSearch({ manual: true });
+        }
+        return false;
+      }
+
       if (
         disconnectedRef.current &&
         e.ctrlKey &&
@@ -1554,13 +1565,22 @@ export default function XTerminal({
         "tab.next",
         "tab.prev",
         "tab.newLocalTerminal",
+        "tab.temporarySshLink",
+        "tab.quickSwitch",
+        "tab.duplicateSession",
+        "tab.multiplexSsh",
+        "tab.duplicateSessionWithCommand",
+        "tab.multiplexSshWithCommand",
         "view.toggleLeftSidebar",
         "view.toggleRightSidebar",
         "view.zoomIn",
         "view.zoomOut",
         "view.resetZoom",
         "view.openSettings",
+        "view.openChat",
+        "view.showAllCommands",
         "terminal.manageSyncGroups",
+        "terminal.showCommandSuggestions",
         "special.lockScreen",
       ];
       for (const sid of swallowIds) {
@@ -1713,10 +1733,7 @@ export default function XTerminal({
 
     const refreshGutter = () => {
       if (!isTerminalAlive()) return;
-      if (performanceModeRef.current !== "normal") return;
-      const terminalSettings = terminalAppSettingsRef.current?.terminal;
-      if (!terminalSettings?.show_line_numbers && !terminalSettings?.show_timestamps) return;
-      window.dispatchEvent(new CustomEvent("nyaterm:refresh-gutter", { detail: { sessionId } }));
+      requestGutterRefresh();
     };
 
     resizeDeduperRef.current.reset(sessionId, terminalGeneration);
@@ -1813,19 +1830,7 @@ export default function XTerminal({
       }
     };
 
-    const outputAckBatchBytes = 64 * 1024;
-    const outputAckDebounceMs = 16;
-
     const isAlternateScreenActive = () => terminal.buffer.active.type === "alternate";
-
-    const getBacklogCapBytes = () => {
-      if (!visibleRef.current) {
-        return XTERM_PERFORMANCE_CONFIG.output.hiddenBacklogCapBytes;
-      }
-      return isAlternateScreenActive()
-        ? XTERM_PERFORMANCE_CONFIG.output.alternateScreenBacklogCapBytes
-        : XTERM_PERFORMANCE_CONFIG.output.visibleBacklogCapBytes;
-    };
 
     const getWriteChunkBytes = () =>
       isAlternateScreenActive()
@@ -1837,7 +1842,7 @@ export default function XTerminal({
 
     const shouldThrottleAlternateScreenWrite = () =>
       isAlternateScreenActive() &&
-      outputQueueRef.current.bytes >
+      (outputDrainRef.current?.getQueueBytes() ?? 0) >
         XTERM_PERFORMANCE_CONFIG.output.alternateScreenThrottleBacklogBytes;
 
     const getRecoveryThresholdBytes = () =>
@@ -1845,10 +1850,7 @@ export default function XTerminal({
         ? XTERM_PERFORMANCE_CONFIG.output.visibleRecoveryThresholdBytes
         : XTERM_PERFORMANCE_CONFIG.output.hiddenRecoveryThresholdBytes;
 
-    const getPendingOutputBytes = () =>
-      outputQueueRef.current.bytes +
-      writingOutputBytesRef.current +
-      pendingOutputAckBytesRef.current;
+    const getPendingOutputBytes = () => outputDrainRef.current?.getPendingBytes() ?? 0;
 
     const getNonOverloadedPressureMode = (): PerformanceMode =>
       getPendingOutputBytes() >= XTERM_PERFORMANCE_CONFIG.output.strainedBacklogBytes
@@ -1867,111 +1869,7 @@ export default function XTerminal({
 
     const sendOutputAck = (bytes: number) => {
       if (bytes <= 0) return;
-      const ackBytes = Math.min(bytes, backendUnackedOutputBytesRef.current);
-      if (ackBytes <= 0) return;
-      backendUnackedOutputBytesRef.current = Math.max(
-        0,
-        backendUnackedOutputBytesRef.current - ackBytes,
-      );
-      tauriInvoke("ack_session_output", { sessionId, bytes: ackBytes }).catch(() => {});
-    };
-
-    const clearOutputAckTimer = () => {
-      if (outputAckTimerRef.current !== null) {
-        window.clearTimeout(outputAckTimerRef.current);
-        outputAckTimerRef.current = null;
-      }
-    };
-
-    const clearPendingOutputFlushTimer = () => {
-      if (pendingOutputFlushTimerRef.current !== null) {
-        window.clearTimeout(pendingOutputFlushTimerRef.current);
-        pendingOutputFlushTimerRef.current = null;
-      }
-    };
-
-    const scheduleOutputAckFlush = () => {
-      if (outputAckTimerRef.current !== null) return;
-      outputAckTimerRef.current = window.setTimeout(() => {
-        outputAckTimerRef.current = null;
-        flushPendingOutputAck(true);
-      }, outputAckDebounceMs);
-    };
-
-    const flushPendingOutputAck = (force = false) => {
-      const bytes = pendingOutputAckBytesRef.current;
-      if (bytes <= 0) {
-        if (force) {
-          clearOutputAckTimer();
-        }
-        return;
-      }
-      if (!force && bytes < outputAckBatchBytes) {
-        scheduleOutputAckFlush();
-        return;
-      }
-      clearOutputAckTimer();
-      pendingOutputAckBytesRef.current = 0;
-      sendOutputAck(bytes);
-    };
-
-    const trimQueuedOutput = (maxBytes: number) => {
-      let dropped = 0;
-
-      while (
-        outputQueueRef.current.bytes > maxBytes &&
-        hasOutputQueueItems(outputQueueRef.current)
-      ) {
-        const overflow = outputQueueRef.current.bytes - maxBytes;
-        const chunk = peekOutputQueue(outputQueueRef.current);
-        if (!chunk) break;
-
-        if (chunk.bytes <= overflow) {
-          shiftOutputQueue(outputQueueRef.current);
-          dropped += chunk.bytes;
-          continue;
-        }
-
-        const [head, tail] = splitOutputChunk(chunk, overflow);
-        replaceOutputQueueHead(outputQueueRef.current, tail);
-        outputQueueRef.current.bytes = Math.max(0, outputQueueRef.current.bytes - head.bytes);
-        dropped += head.bytes;
-      }
-
-      sendOutputAck(dropped);
-      return dropped;
-    };
-
-    const dequeueOutputChunk = (maxBytes: number): QueuedOutputChunk | null => {
-      if (maxBytes <= 0 || !hasOutputQueueItems(outputQueueRef.current)) {
-        return null;
-      }
-
-      let remaining = maxBytes;
-      const parts: string[] = [];
-      let bytes = 0;
-
-      while (remaining > 0 && hasOutputQueueItems(outputQueueRef.current)) {
-        const chunk = peekOutputQueue(outputQueueRef.current);
-        if (!chunk) break;
-
-        if (chunk.bytes <= remaining) {
-          parts.push(chunk.data);
-          shiftOutputQueue(outputQueueRef.current);
-          remaining -= chunk.bytes;
-          bytes += chunk.bytes;
-          continue;
-        }
-
-        const [head, tail] = splitOutputChunk(chunk, remaining);
-        parts.push(head.data);
-        replaceOutputQueueHead(outputQueueRef.current, tail);
-        outputQueueRef.current.bytes = Math.max(0, outputQueueRef.current.bytes - head.bytes);
-        bytes += head.bytes;
-        remaining -= head.bytes;
-      }
-
-      return parts.length > 0 ? { data: parts.join(""), bytes } : null;
+      tauriInvoke("ack_session_output", { sessionId, bytes }).catch(() => {});
     };
 
     const maybeRecoverPerformanceMode = () => {
@@ -1987,128 +1885,127 @@ export default function XTerminal({
       performanceModeRef.current !== "overloaded" &&
       getPendingOutputBytes() <= XTERM_PERFORMANCE_CONFIG.output.lowLatencyFlushBacklogBytes;
 
-    const writeChunkToTerminal = (payload: QueuedOutputChunk) => {
-      writingOutputBytesRef.current += payload.bytes;
-      outputWriteInFlightRef.current = true;
-      outputWriteQueueRef.current = outputWriteQueueRef.current
-        .catch(() => {})
-        .then(
-          () =>
-            new Promise<void>((resolve) => {
-              if (!isTerminalAlive()) {
-                writingOutputBytesRef.current = Math.max(
-                  0,
-                  writingOutputBytesRef.current - payload.bytes,
-                );
-                outputWriteInFlightRef.current = false;
-                resolve();
-                return;
-              }
-
-              const ts = Date.now();
-              const beforeOffset = gutterLineOffsetRef.current;
-              const beforeLine =
-                beforeOffset + terminal.buffer.active.baseY + terminal.buffer.active.cursorY;
-
-              try {
-                terminal.write(payload.data, () => {
-                  writingOutputBytesRef.current = Math.max(
-                    0,
-                    writingOutputBytesRef.current - payload.bytes,
-                  );
-                  pendingOutputAckBytesRef.current += payload.bytes;
-                  outputWriteInFlightRef.current = false;
-
-                  if (!isTerminalAlive()) {
-                    resolve();
-                    return;
-                  }
-
-                  const afterOffset = gutterLineOffsetRef.current;
-                  const afterLine =
-                    afterOffset + terminal.buffer.active.baseY + terminal.buffer.active.cursorY;
-
-                  stampWrittenLines(beforeLine, afterLine, ts);
-
-                  flushPendingOutputAck(outputQueueRef.current.bytes === 0);
-                  maybeRecoverPerformanceMode();
-                  refreshOutputPressureMode();
-                  resolve();
-
-                  if (
-                    visibleRef.current &&
-                    isTerminalAlive() &&
-                    outputQueueRef.current.bytes > 0 &&
-                    pendingOutputFlushRef.current === null &&
-                    !pendingOutputMicrotaskRef.current
-                  ) {
-                    schedulePendingOutputFlush();
-                  }
-                });
-              } catch {
-                writingOutputBytesRef.current = Math.max(
-                  0,
-                  writingOutputBytesRef.current - payload.bytes,
-                );
-                pendingOutputAckBytesRef.current += payload.bytes;
-                outputWriteInFlightRef.current = false;
-                noteSkippedOutput(payload.bytes);
-                flushPendingOutputAck(true);
-                maybeRecoverPerformanceMode();
-                refreshOutputPressureMode();
-                resolve();
-              }
-            }),
-        );
+    const resolveOutputDrainMode = (): TerminalOutputDrainMode => {
+      if (hibernatedRef.current) return "hibernated";
+      if (
+        hibernationPhaseRef.current === "preparing" ||
+        hibernationPhaseRef.current === "detached"
+      ) {
+        return "hibernating";
+      }
+      return visibleRef.current ? "foreground" : "background";
     };
 
-    const writeTerminalTextAfterOutputQueue = (data: string) => {
-      outputWriteQueueRef.current = outputWriteQueueRef.current
-        .catch(() => {})
-        .then(
-          () =>
-            new Promise<void>((resolve) => {
-              if (!isTerminalAlive()) {
-                resolve();
-                return;
-              }
+    const getForegroundDelayMs = () => {
+      if (!shouldThrottleAlternateScreenWrite()) return 0;
+      const now = Date.now();
+      const intervalMs = getAlternateScreenWriteIntervalMs();
+      const elapsedMs = now - lastAlternateScreenWriteAtRef.current;
+      return lastAlternateScreenWriteAtRef.current > 0 && elapsedMs < intervalMs
+        ? Math.max(1, intervalMs - elapsedMs)
+        : 0;
+    };
 
-              try {
-                const ts = Date.now();
-                const beforeLine = getCurrentAbsoluteLine();
-                terminal.write(data, () => {
-                  if (isTerminalAlive()) {
-                    stampWrittenLines(beforeLine, getCurrentAbsoluteLine(), ts);
-                  }
-                  resolve();
-                });
-              } catch {
+    const updateOutputDrainMode = () => {
+      outputDrainRef.current?.setMode(resolveOutputDrainMode());
+    };
+
+    const outputDrain = new TerminalOutputDrain<{ beforeLine: number; ts: number }>({
+      sessionId,
+      getTerminal: () => (isTerminalAlive() ? terminal : null),
+      getWriteChunkBytes,
+      getForegroundDelayMs,
+      shouldUseLowLatencyFlush,
+      onAck: sendOutputAck,
+      onWriteStart: () => {
+        if (visibleRef.current && isAlternateScreenActive()) {
+          lastAlternateScreenWriteAtRef.current = Date.now();
+        }
+        return { beforeLine: getCurrentAbsoluteLine(), ts: Date.now() };
+      },
+      onWriteComplete: (_payload, context) => {
+        if (!isTerminalAlive() || !context) return;
+        stampWrittenLines(context.beforeLine, getCurrentAbsoluteLine(), context.ts);
+        maybeRecoverPerformanceMode();
+        refreshOutputPressureMode();
+      },
+      onWriteError: (payload, error) => {
+        logger.warn({
+          domain: "terminal.input",
+          event: "terminal.output.write_failed",
+          message: "Failed to write terminal output to xterm",
+          ids: { session_id: sessionId },
+          data: { bytes: payload.bytes },
+          error,
+        });
+        noteSkippedOutput(payload.bytes);
+      },
+      onPressureChange: () => {
+        maybeRecoverPerformanceMode();
+        refreshOutputPressureMode();
+      },
+      onModeChange: (mode) => {
+        logger.debug({
+          domain: "terminal.input",
+          event: "terminal.output.mode_changed",
+          message: "Terminal output drain mode changed",
+          ids: { session_id: sessionId },
+          data: {
+            mode,
+            visible: visibleRef.current,
+            queue_bytes: outputDrainRef.current?.getQueueBytes() ?? 0,
+            pending_bytes: outputDrainRef.current?.getPendingBytes() ?? 0,
+            performance_mode: performanceModeRef.current,
+          },
+        });
+      },
+      onBackgroundDrain: (queueBytes, writingBytes, unackedBytes) => {
+        logger.debug({
+          domain: "terminal.input",
+          event: "terminal.output.background_drain",
+          message: "Background terminal output drain cycle",
+          ids: { session_id: sessionId },
+          data: {
+            queue_bytes: queueBytes,
+            writing_bytes: writingBytes,
+            unacked_bytes: unackedBytes,
+            performance_mode: performanceModeRef.current,
+            buffer_type: terminal.buffer.active.type,
+          },
+        });
+      },
+    });
+    outputDrainRef.current = outputDrain;
+    updateOutputDrainMode();
+
+    const writeTerminalTextAfterOutputQueue = (data: string) => {
+      return outputDrain.writeExternal(
+        () =>
+          new Promise<void>((resolve) => {
+            if (!isTerminalAlive()) {
+              resolve();
+              return;
+            }
+
+            try {
+              const ts = Date.now();
+              const beforeLine = getCurrentAbsoluteLine();
+              terminal.write(data, () => {
+                if (isTerminalAlive()) {
+                  stampWrittenLines(beforeLine, getCurrentAbsoluteLine(), ts);
+                }
                 resolve();
-              }
-            }),
-        );
-      return outputWriteQueueRef.current;
+              });
+            } catch {
+              resolve();
+            }
+          }),
+      );
     };
 
     const flushQueuedOutputBeforeStatusNotice = async () => {
-      if (pendingOutputFlushRef.current !== null) {
-        cancelAnimationFrame(pendingOutputFlushRef.current);
-        pendingOutputFlushRef.current = null;
-      }
-      clearPendingOutputFlushTimer();
       clearHibernateTimer();
-
-      const dropped = trimQueuedOutput(getBacklogCapBytes());
-      noteSkippedOutput(dropped);
-
-      while (hasOutputQueueItems(outputQueueRef.current)) {
-        const payload = dequeueOutputChunk(getWriteChunkBytes());
-        if (!payload) break;
-        writeChunkToTerminal(payload);
-      }
-
-      await outputWriteQueueRef.current.catch(() => {});
-      flushPendingOutputAck(true);
+      await outputDrain.waitForIdle(XTERM_PERFORMANCE_CONFIG.output.hibernateDrainTimeoutMs);
       maybeRecoverPerformanceMode();
       refreshOutputPressureMode();
     };
@@ -2158,70 +2055,14 @@ export default function XTerminal({
       })();
     };
 
-    const flushPendingOutput = () => {
-      pendingOutputFlushRef.current = null;
-      if (!visibleRef.current || !isTerminalAlive() || outputWriteInFlightRef.current) {
-        refreshOutputPressureMode();
-        return;
-      }
-
-      const dropped = trimQueuedOutput(getBacklogCapBytes());
-      noteSkippedOutput(dropped);
-      refreshOutputPressureMode();
-
-      if (shouldThrottleAlternateScreenWrite()) {
-        const now = Date.now();
-        const intervalMs = getAlternateScreenWriteIntervalMs();
-        const elapsedMs = now - lastAlternateScreenWriteAtRef.current;
-        if (lastAlternateScreenWriteAtRef.current > 0 && elapsedMs < intervalMs) {
-          clearPendingOutputFlushTimer();
-          pendingOutputFlushTimerRef.current = window.setTimeout(
-            () => {
-              pendingOutputFlushTimerRef.current = null;
-              schedulePendingOutputFlush();
-            },
-            Math.max(1, intervalMs - elapsedMs),
-          );
-          return;
-        }
-      }
-
-      const payload = dequeueOutputChunk(getWriteChunkBytes());
-
-      if (!payload) {
-        flushPendingOutputAck(true);
-        maybeRecoverPerformanceMode();
-        refreshOutputPressureMode();
-        return;
-      }
-
-      if (isAlternateScreenActive()) {
-        lastAlternateScreenWriteAtRef.current = Date.now();
-      }
-      writeChunkToTerminal(payload);
-    };
-
-    const schedulePendingOutputFlush = (preferImmediate = false) => {
-      if (!visibleRef.current || !isTerminalAlive()) return;
-      if (
-        outputWriteInFlightRef.current ||
-        pendingOutputFlushRef.current !== null ||
-        pendingOutputFlushTimerRef.current !== null ||
-        pendingOutputMicrotaskRef.current
-      ) {
-        return;
-      }
-
-      if (preferImmediate || shouldUseLowLatencyFlush()) {
-        pendingOutputMicrotaskRef.current = true;
-        queueMicrotask(() => {
-          pendingOutputMicrotaskRef.current = false;
-          flushPendingOutput();
-        });
-        return;
-      }
-
-      pendingOutputFlushRef.current = requestAnimationFrame(flushPendingOutput);
+    const enterDisconnectedStateIfAttachSessionMissing = (error: unknown) => {
+      if (!isSessionNotFoundError(error)) return false;
+      enterDisconnectedState({
+        title: tRef.current("terminal.sessionDisconnected"),
+        titleColor: "31",
+        showReconnectPrompt: true,
+      });
+      return true;
     };
 
     const repaintVisibleTerminal = () => {
@@ -2304,7 +2145,7 @@ export default function XTerminal({
       if (showSearchBar || activeMode === "history") return false;
       if (aiCapturingRef.current || zmodemActiveRef.current) return false;
       if (syncPeerSessionIdsRef.current?.length) return false;
-      if (outputWriteInFlightRef.current) return false;
+      if (outputDrainRef.current?.isWriteInFlight()) return false;
       if (disconnectedRef.current || reconnectingRef.current) return false;
       return true;
     };
@@ -2317,6 +2158,7 @@ export default function XTerminal({
         hibernationPhaseRef.current = "idle";
         logHibernation("rollback", "Rolled back detached terminal renderer", { reason, epoch });
       } catch (error) {
+        if (enterDisconnectedStateIfAttachSessionMissing(error)) return;
         hibernationPhaseRef.current = "failed";
         logHibernation(
           "fail",
@@ -2341,9 +2183,28 @@ export default function XTerminal({
       logHibernation("start", "Starting terminal renderer hibernation", { epoch });
 
       try {
+        updateOutputDrainMode();
+        logHibernation("drain_start", "Draining terminal output before hibernation", { epoch });
+        const drainedBeforeDetach = await outputDrain.waitForIdle(
+          XTERM_PERFORMANCE_CONFIG.output.hibernateDrainTimeoutMs,
+        );
+        if (!drainedBeforeDetach) {
+          hibernationPhaseRef.current = "idle";
+          logHibernation("drain_timeout", "Timed out draining terminal output before hibernation", {
+            epoch,
+            queue_bytes: outputDrain.getQueueBytes(),
+            pending_bytes: outputDrain.getPendingBytes(),
+          });
+          return;
+        }
+        logHibernation("drain_complete", "Drained terminal output before backend detach", {
+          epoch,
+        });
+
         await invoke("detach_session_renderer", { sessionId });
         detachedHibernateEpochRef.current = epoch;
         hibernationPhaseRef.current = "detached";
+        updateOutputDrainMode();
         logHibernation("detached", "Detached terminal renderer from backend output", { epoch });
 
         if (
@@ -2355,10 +2216,27 @@ export default function XTerminal({
           return;
         }
 
-        const queuedTail = outputQueueToBoundedString(outputQueueRef.current);
-        hibernationSnapshotRef.current = captureReconnectSnapshot(queuedTail);
+        const drainedAfterDetach = await outputDrain.waitForIdle(
+          XTERM_PERFORMANCE_CONFIG.output.hibernateDrainTimeoutMs,
+        );
+        if (!drainedAfterDetach) {
+          logHibernation(
+            "drain_timeout",
+            "Timed out draining terminal output after backend detach",
+            {
+              epoch,
+              queue_bytes: outputDrain.getQueueBytes(),
+              pending_bytes: outputDrain.getPendingBytes(),
+            },
+          );
+          await restoreDetachedRenderer(epoch, "drain_timeout");
+          return;
+        }
+
+        hibernationSnapshotRef.current = captureReconnectSnapshot();
         hibernationCleanupRef.current = true;
         hibernationPhaseRef.current = "hibernated";
+        outputDrain.setMode("hibernated");
         logHibernation("success", "Terminal renderer hibernated", { epoch });
         hibernatedRef.current = true;
         setTerminalReady(false);
@@ -2406,23 +2284,11 @@ export default function XTerminal({
         clearHibernateTimer();
       }
 
-      if (!visibleRef.current && pendingOutputFlushRef.current !== null) {
-        cancelAnimationFrame(pendingOutputFlushRef.current);
-        pendingOutputFlushRef.current = null;
-      }
-      if (!visibleRef.current) {
-        clearPendingOutputFlushTimer();
-      }
-
-      const dropped = trimQueuedOutput(getBacklogCapBytes());
-      noteSkippedOutput(dropped);
-      flushPendingOutputAck(!visibleRef.current);
+      updateOutputDrainMode();
       maybeRecoverPerformanceMode();
       refreshOutputPressureMode();
 
       if (visibleRef.current) {
-        flushPendingOutput();
-        schedulePendingOutputFlush();
         repaintVisibleTerminal();
       } else {
         scheduleHibernate();
@@ -2443,11 +2309,10 @@ export default function XTerminal({
             return;
           }
 
-          pushOutputQueue(outputQueueRef.current, {
+          outputDrain.enqueue({
             data: payload.data,
             bytes: payload.bytes,
           });
-          backendUnackedOutputBytesRef.current += payload.bytes;
 
           const recentPayload =
             payload.data.length > 4096 ? payload.data.slice(-4096) : payload.data;
@@ -2467,9 +2332,6 @@ export default function XTerminal({
           noteSkippedOutput(payload.droppedBytes ?? 0);
 
           if (!visibleRef.current) {
-            const dropped = trimQueuedOutput(getBacklogCapBytes());
-            noteSkippedOutput(dropped);
-            flushPendingOutputAck(true);
             maybeRecoverPerformanceMode();
             refreshOutputPressureMode();
             window.dispatchEvent(
@@ -2480,10 +2342,7 @@ export default function XTerminal({
             return;
           }
 
-          const dropped = trimQueuedOutput(getBacklogCapBytes());
-          noteSkippedOutput(dropped);
           refreshOutputPressureMode();
-          schedulePendingOutputFlush();
         },
       );
       if (disposed) {
@@ -2613,6 +2472,7 @@ export default function XTerminal({
           });
         }
         hibernationPhaseRef.current = "idle";
+        updateOutputDrainMode();
       } catch (error) {
         hibernationPhaseRef.current = "failed";
         logHibernation(
@@ -2621,7 +2481,7 @@ export default function XTerminal({
           { reason: "terminal_ready" },
           error,
         );
-        // The session may already be gone during mount/unmount races.
+        enterDisconnectedStateIfAttachSessionMissing(error);
       }
     };
     void setupListeners();
@@ -2779,7 +2639,12 @@ export default function XTerminal({
         }
       }
 
-      const command = data === "\r" ? getTrackedSubmissionCommand(inputStateRef.current) : "";
+      let command = "";
+      if (data === "\r") {
+        const currentInputState = inputStateRef.current;
+        const recovered = resyncFromTerminalLine(currentInputState, readCurrentInputLine(terminal));
+        command = getTrackedSubmissionCommand(recovered ?? currentInputState);
+      }
       if (data === "\r") {
         refreshCommandLineTimestamp();
       }
@@ -3068,22 +2933,11 @@ export default function XTerminal({
       if (zmodemUnlisten) zmodemUnlisten();
       if (commandAcceptedUnlisten) commandAcceptedUnlisten();
       zmodemHandler.dispose();
-      if (pendingOutputFlushRef.current !== null) {
-        cancelAnimationFrame(pendingOutputFlushRef.current);
-        pendingOutputFlushRef.current = null;
+      outputDrain.dispose();
+      if (outputDrainRef.current === outputDrain) {
+        outputDrainRef.current = null;
       }
-      clearPendingOutputFlushTimer();
-      pendingOutputMicrotaskRef.current = false;
-      flushPendingOutputAck(true);
-      sendOutputAck(backendUnackedOutputBytesRef.current);
-      outputQueueRef.current = createOutputQueue();
-      writingOutputBytesRef.current = 0;
-      pendingOutputAckBytesRef.current = 0;
-      backendUnackedOutputBytesRef.current = 0;
       lastAlternateScreenWriteAtRef.current = 0;
-      outputWriteInFlightRef.current = false;
-      outputWriteQueueRef.current = Promise.resolve();
-      pendingOutputMicrotaskRef.current = false;
       const latestLifecycleState = terminalLifecycleStateRef.current;
       if (
         !hibernationCleanupRef.current &&
@@ -3311,7 +3165,11 @@ export default function XTerminal({
 
         <CommandSuggestions
           suggestions={suggestions}
-          visible={commandSuggestionsEnabled && showSuggestions && canShowCommandSuggestions()}
+          visible={
+            commandSuggestionsEnabled &&
+            showSuggestions &&
+            canShowCommandSuggestions({ allowEmpty: suggestions.length > 0 })
+          }
           selectedIndex={selectedIndex}
           cursorPosition={cursorPosition}
           onSelect={handleSelectSuggestion}

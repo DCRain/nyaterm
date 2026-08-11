@@ -2,6 +2,7 @@ use super::{
     ProxyConfig, ProxySettings, load_app_settings, load_proxies, save_app_settings, save_proxies,
     uuid_v4,
 };
+use crate::core::{RecordingMode, RotationPolicy};
 use crate::error::{AppError, AppResult};
 use crate::storage;
 use serde::{Deserialize, Serialize};
@@ -45,6 +46,29 @@ pub struct SshAlgorithmPreferences {
     pub host_keys: Vec<String>,
 }
 
+/// Source used to connect to the local SSH Agent.
+///
+/// `Auto` selects the platform default: Unix uses `SSH_AUTH_SOCK`, while
+/// Windows tries the OpenSSH Agent named pipe followed by Pageant.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SshAgentEndpoint {
+    #[default]
+    Auto,
+    Environment {
+        variable: String,
+    },
+    UnixSocket {
+        path: String,
+    },
+    Pageant,
+    WindowsOpenSsh,
+}
+
+fn is_default_ssh_agent_endpoint(value: &SshAgentEndpoint) -> bool {
+    matches!(value, SshAgentEndpoint::Auto)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SftpCwdFollowMode {
@@ -52,6 +76,44 @@ pub enum SftpCwdFollowMode {
     #[default]
     ShellIntegration,
     RcFile,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SshProfile {
+    #[default]
+    Standard,
+    NetworkDevice,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum SshTerminalType {
+    #[default]
+    #[serde(rename = "xterm-256color")]
+    Xterm256Color,
+    #[serde(rename = "xterm")]
+    Xterm,
+    #[serde(rename = "vt100")]
+    Vt100,
+    #[serde(rename = "vt220")]
+    Vt220,
+    #[serde(rename = "ansi")]
+    Ansi,
+    #[serde(rename = "linux")]
+    Linux,
+}
+
+impl SshTerminalType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Xterm256Color => "xterm-256color",
+            Self::Xterm => "xterm",
+            Self::Vt100 => "vt100",
+            Self::Vt220 => "vt220",
+            Self::Ansi => "ansi",
+            Self::Linux => "linux",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -80,6 +142,41 @@ impl Default for SftpSettings {
     }
 }
 
+pub fn effective_cwd_follow_mode(settings: &SftpSettings) -> SftpCwdFollowMode {
+    if settings.enabled {
+        settings.cwd_follow_mode.clone()
+    } else {
+        SftpCwdFollowMode::Off
+    }
+}
+
+pub fn effective_cwd_follow_mode_for_profile(
+    settings: &SftpSettings,
+    profile: &SshProfile,
+) -> SftpCwdFollowMode {
+    if *profile == SshProfile::NetworkDevice {
+        SftpCwdFollowMode::Off
+    } else {
+        effective_cwd_follow_mode(settings)
+    }
+}
+
+pub fn default_terminal_type_for_profile(profile: &SshProfile) -> SshTerminalType {
+    match profile {
+        SshProfile::Standard => SshTerminalType::Xterm256Color,
+        SshProfile::NetworkDevice => SshTerminalType::Vt100,
+    }
+}
+
+pub fn resolve_ssh_terminal_type(
+    profile: &SshProfile,
+    terminal_type: Option<&SshTerminalType>,
+) -> SshTerminalType {
+    terminal_type
+        .cloned()
+        .unwrap_or_else(|| default_terminal_type_for_profile(profile))
+}
+
 pub const MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS: u64 = 100;
 pub const MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS: u64 = 60_000;
 
@@ -93,6 +190,10 @@ fn is_default_sftp_shell_detection_timeout_ms(value: &u64) -> bool {
 
 fn is_default_sftp_settings(value: &SftpSettings) -> bool {
     value == &SftpSettings::default()
+}
+
+fn is_standard_ssh_profile(value: &SshProfile) -> bool {
+    *value == SshProfile::Standard
 }
 
 /// Type-specific configuration for each connection kind.
@@ -109,6 +210,10 @@ pub enum ConnectionType {
         backspace_mode: String,
         #[serde(default, skip_serializing_if = "is_false")]
         x11_forwarding: bool,
+        #[serde(default, skip_serializing_if = "is_default_ssh_agent_endpoint")]
+        agent_endpoint: SshAgentEndpoint,
+        #[serde(default, skip_serializing_if = "is_false")]
+        agent_forwarding: bool,
         #[serde(default)]
         encoding: String,
     },
@@ -179,40 +284,16 @@ pub enum ConnectionType {
         port: u16,
         #[serde(default)]
         username: String,
-        #[serde(
-            default = "default_rdp_display_mode",
-            skip_serializing_if = "is_default_rdp_display_mode"
-        )]
-        display_mode: String,
-        #[serde(default = "default_rdp_width")]
-        width: u16,
-        #[serde(default = "default_rdp_height")]
-        height: u16,
-        // Always serialize so the edit dialog receives explicit booleans
-        // (skip_serializing_if would omit `true` and the UI looked unchecked).
-        #[serde(default = "default_true")]
-        redirect_clipboard: bool,
-        #[serde(default, skip_serializing_if = "is_false")]
-        redirect_printers: bool,
-        #[serde(default, skip_serializing_if = "is_false")]
-        redirect_com_ports: bool,
-        #[serde(default, skip_serializing_if = "is_false")]
-        redirect_smart_cards: bool,
-        #[serde(default = "default_rdp_drive_redirect")]
-        drive_redirect: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
-        device_redirect: String,
-        #[serde(default, skip_serializing_if = "String::is_empty")]
-        camera_redirect: String,
-        #[serde(default, skip_serializing_if = "is_zero_u8")]
-        audio_mode: u8,
-        #[serde(default = "default_true")]
-        audio_capture: bool,
-        #[serde(default = "default_rdp_keyboard_hook")]
-        keyboard_hook: u8,
-        /// Preferred external client id (`mstsc`, `windows-app`, `wfreerdp`, …). Empty = auto.
-        #[serde(default, skip_serializing_if = "String::is_empty")]
-        preferred_client: String,
+        domain: String,
+        #[serde(default)]
+        security: RdpSecuritySettings,
+        #[serde(default)]
+        display: RdpDisplaySettings,
+        #[serde(default)]
+        clipboard: RdpClipboardSettings,
+        #[serde(default)]
+        reconnect: RdpReconnectSettings,
     },
     Vnc {
         host: String,
@@ -235,27 +316,6 @@ fn default_telnet_port() -> u16 {
 }
 fn default_rdp_port() -> u16 {
     3389
-}
-fn default_rdp_display_mode() -> String {
-    "fullscreen".to_string()
-}
-fn is_default_rdp_display_mode(value: &str) -> bool {
-    value == "fullscreen"
-}
-fn default_rdp_width() -> u16 {
-    1920
-}
-fn default_rdp_height() -> u16 {
-    1080
-}
-fn default_rdp_drive_redirect() -> String {
-    "*".to_string()
-}
-fn default_rdp_keyboard_hook() -> u8 {
-    2
-}
-fn is_zero_u8(value: &u8) -> bool {
-    *value == 0
 }
 fn default_vnc_port() -> u16 {
     5900
@@ -286,6 +346,99 @@ fn is_ai_execution_profile_auto(value: &AiExecutionProfile) -> bool {
 }
 fn default_true() -> bool {
     true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RdpSecuritySettings {
+    #[serde(default = "default_true")]
+    pub use_nla: bool,
+    #[serde(default = "default_rdp_certificate_policy")]
+    pub certificate_policy: String,
+}
+
+impl Default for RdpSecuritySettings {
+    fn default() -> Self {
+        Self {
+            use_nla: true,
+            certificate_policy: default_rdp_certificate_policy(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RdpDisplaySettings {
+    #[serde(default = "default_rdp_display_mode")]
+    pub mode: String,
+    #[serde(default = "default_rdp_width")]
+    pub width: u32,
+    #[serde(default = "default_rdp_height")]
+    pub height: u32,
+    #[serde(default = "default_rdp_color_depth")]
+    pub color_depth: u8,
+}
+
+impl Default for RdpDisplaySettings {
+    fn default() -> Self {
+        Self {
+            mode: default_rdp_display_mode(),
+            width: default_rdp_width(),
+            height: default_rdp_height(),
+            color_depth: default_rdp_color_depth(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RdpClipboardSettings {
+    #[serde(default = "default_rdp_clipboard_mode")]
+    pub mode: String,
+}
+
+impl Default for RdpClipboardSettings {
+    fn default() -> Self {
+        Self {
+            mode: default_rdp_clipboard_mode(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RdpReconnectSettings {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_rdp_reconnect_attempts")]
+    pub max_attempts: u32,
+}
+
+impl Default for RdpReconnectSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_attempts: default_rdp_reconnect_attempts(),
+        }
+    }
+}
+
+fn default_rdp_certificate_policy() -> String {
+    "prompt".to_string()
+}
+fn default_rdp_display_mode() -> String {
+    "fit-window".to_string()
+}
+fn default_rdp_width() -> u32 {
+    1920
+}
+fn default_rdp_height() -> u32 {
+    1080
+}
+fn default_rdp_color_depth() -> u8 {
+    32
+}
+fn default_rdp_clipboard_mode() -> String {
+    "text-only".to_string()
+}
+fn default_rdp_reconnect_attempts() -> u32 {
+    5
 }
 
 // ── Auth block ──────────────────────────────────────────────────────────────
@@ -393,6 +546,20 @@ pub struct ConnectionPostLogin {
 
 fn default_post_login_delay_ms() -> u64 {
     1000
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ConnectionRecordingSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_start: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<RecordingMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_template: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_timestamps: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<RotationPolicy>,
 }
 
 // ── Static asset metadata ─────────────────────────────────────────────────
@@ -532,7 +699,13 @@ pub struct SavedConnection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub post_login: Option<ConnectionPostLogin>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recording: Option<ConnectionRecordingSettings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh_algorithms: Option<SshAlgorithmPreferences>,
+    #[serde(default, skip_serializing_if = "is_standard_ssh_profile")]
+    pub ssh_profile: SshProfile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_type: Option<SshTerminalType>,
     #[serde(default, skip_serializing_if = "is_default_sftp_settings")]
     pub sftp: SftpSettings,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -715,7 +888,9 @@ pub fn save_config(app: &AppHandle, config: &AppConfig) -> AppResult<()> {
 mod tests {
     use super::{
         AssetAcceleratorType, AssetDeviceType, AssetDiskKind, AssetDiskPurpose, ConnectionType,
-        SavedConnection, SftpCwdFollowMode, SshAlgorithmMode,
+        SavedConnection, SftpCwdFollowMode, SftpSettings, SshAgentEndpoint, SshAlgorithmMode,
+        SshProfile, SshTerminalType, effective_cwd_follow_mode,
+        effective_cwd_follow_mode_for_profile, resolve_ssh_terminal_type,
     };
 
     #[test]
@@ -749,6 +924,99 @@ mod tests {
         assert!(matches!(connection.config, ConnectionType::Ssh { .. }));
         assert!(connection.ssh_algorithms.is_none());
         assert_eq!(SshAlgorithmMode::default(), SshAlgorithmMode::Compatible);
+    }
+
+    #[test]
+    fn ssh_agent_forwarding_is_opt_in_and_endpoint_is_preserved() {
+        let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "conn-1",
+            "name": "Agent",
+            "type": "ssh",
+            "host": "example.com",
+            "agent_endpoint": {
+                "type": "unix_socket",
+                "path": "/tmp/agent.sock"
+            }
+        }))
+        .expect("connection");
+
+        let ConnectionType::Ssh {
+            agent_endpoint,
+            agent_forwarding,
+            ..
+        } = connection.config
+        else {
+            panic!("expected ssh connection");
+        };
+
+        assert_eq!(
+            agent_endpoint,
+            SshAgentEndpoint::UnixSocket {
+                path: "/tmp/agent.sock".to_string()
+            }
+        );
+        assert!(!agent_forwarding);
+    }
+
+    #[test]
+    fn saved_connection_defaults_missing_ssh_profile_to_standard() {
+        let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "conn-1",
+            "name": "Test",
+            "type": "ssh",
+            "host": "example.com",
+            "port": 22,
+            "username": "root"
+        }))
+        .expect("connection");
+
+        assert_eq!(connection.ssh_profile, SshProfile::Standard);
+        assert!(connection.terminal_type.is_none());
+        assert_eq!(
+            resolve_ssh_terminal_type(&connection.ssh_profile, connection.terminal_type.as_ref()),
+            SshTerminalType::Xterm256Color
+        );
+    }
+
+    #[test]
+    fn network_device_defaults_terminal_type_to_vt100() {
+        let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "conn-1",
+            "name": "Switch",
+            "type": "ssh",
+            "host": "example.com",
+            "port": 22,
+            "username": "admin",
+            "ssh_profile": "network_device"
+        }))
+        .expect("connection");
+
+        assert_eq!(connection.ssh_profile, SshProfile::NetworkDevice);
+        assert_eq!(
+            resolve_ssh_terminal_type(&connection.ssh_profile, connection.terminal_type.as_ref()),
+            SshTerminalType::Vt100
+        );
+    }
+
+    #[test]
+    fn custom_terminal_type_is_preserved() {
+        let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "conn-1",
+            "name": "Switch",
+            "type": "ssh",
+            "host": "example.com",
+            "port": 22,
+            "username": "admin",
+            "ssh_profile": "network_device",
+            "terminal_type": "vt220"
+        }))
+        .expect("connection");
+
+        assert_eq!(connection.terminal_type, Some(SshTerminalType::Vt220));
+        assert_eq!(
+            resolve_ssh_terminal_type(&connection.ssh_profile, connection.terminal_type.as_ref()),
+            SshTerminalType::Vt220
+        );
     }
 
     #[test]
@@ -789,6 +1057,64 @@ mod tests {
         .expect("connection");
 
         assert_eq!(connection.sftp.shell_detection_timeout_ms, 5000);
+    }
+
+    #[test]
+    fn effective_cwd_follow_is_off_when_sftp_disabled_without_mutating_setting() {
+        let settings = SftpSettings {
+            enabled: false,
+            cwd_follow_mode: SftpCwdFollowMode::ShellIntegration,
+            ..SftpSettings::default()
+        };
+
+        assert_eq!(effective_cwd_follow_mode(&settings), SftpCwdFollowMode::Off);
+        assert_eq!(
+            settings.cwd_follow_mode,
+            SftpCwdFollowMode::ShellIntegration
+        );
+    }
+
+    #[test]
+    fn effective_cwd_follow_keeps_off_when_sftp_enabled_and_mode_off() {
+        let settings = SftpSettings {
+            enabled: true,
+            cwd_follow_mode: SftpCwdFollowMode::Off,
+            ..SftpSettings::default()
+        };
+
+        assert_eq!(effective_cwd_follow_mode(&settings), SftpCwdFollowMode::Off);
+    }
+
+    #[test]
+    fn effective_cwd_follow_keeps_shell_integration_when_sftp_enabled() {
+        let settings = SftpSettings {
+            enabled: true,
+            cwd_follow_mode: SftpCwdFollowMode::ShellIntegration,
+            ..SftpSettings::default()
+        };
+
+        assert_eq!(
+            effective_cwd_follow_mode(&settings),
+            SftpCwdFollowMode::ShellIntegration
+        );
+    }
+
+    #[test]
+    fn network_device_effective_cwd_follow_is_off_without_mutating_setting() {
+        let settings = SftpSettings {
+            enabled: true,
+            cwd_follow_mode: SftpCwdFollowMode::ShellIntegration,
+            ..SftpSettings::default()
+        };
+
+        assert_eq!(
+            effective_cwd_follow_mode_for_profile(&settings, &SshProfile::NetworkDevice),
+            SftpCwdFollowMode::Off
+        );
+        assert_eq!(
+            settings.cwd_follow_mode,
+            SftpCwdFollowMode::ShellIntegration
+        );
     }
 
     #[test]
@@ -1059,6 +1385,40 @@ mod tests {
         assert!(force_character_at_a_time);
         assert!(!send_naws);
         assert!(!send_sga);
+    }
+
+    #[test]
+    fn rdp_connection_defaults_mvp_options() {
+        let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "rdp-1",
+            "name": "Windows",
+            "type": "rdp",
+            "host": "192.168.1.20",
+            "username": "Administrator"
+        }))
+        .expect("connection");
+
+        let ConnectionType::Rdp {
+            port,
+            security,
+            display,
+            clipboard,
+            reconnect,
+            ..
+        } = connection.config
+        else {
+            panic!("expected rdp connection");
+        };
+
+        assert_eq!(port, 3389);
+        assert!(security.use_nla);
+        assert_eq!(security.certificate_policy, "prompt");
+        assert_eq!(display.width, 1920);
+        assert_eq!(display.height, 1080);
+        assert_eq!(display.color_depth, 32);
+        assert_eq!(clipboard.mode, "text-only");
+        assert!(reconnect.enabled);
+        assert_eq!(reconnect.max_attempts, 5);
     }
 
     #[test]

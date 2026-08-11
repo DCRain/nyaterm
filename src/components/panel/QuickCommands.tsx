@@ -1,8 +1,9 @@
 import { listen } from "@tauri-apps/api/event";
+import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { MoreHorizontalIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { BiImport } from "react-icons/bi";
+import { BiExport, BiImport } from "react-icons/bi";
 import { BsFillSendPlusFill } from "react-icons/bs";
 import {
   MdAdd,
@@ -69,6 +70,7 @@ import { useApp } from "@/context/AppContext";
 import { openAIAssistant } from "@/lib/aiEvents";
 import { writeClipboardText } from "@/lib/clipboard";
 import { invoke } from "@/lib/invoke";
+import { logger } from "@/lib/logger";
 import {
   buildQuickCommandCategoryList,
   buildQuickCommandCategoryPath,
@@ -423,6 +425,30 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
       setRestoringBuiltins(false);
     }
   }, [loadQuickCommands, t]);
+
+  const handleExportQuickCommands = useCallback(async () => {
+    try {
+      const outputPath = await saveFileDialog({
+        defaultPath: "nyaterm-quick-commands.json",
+        filters: [{ name: "NyaTerm JSON", extensions: ["json"] }],
+      });
+      if (!outputPath) return;
+
+      await invoke("export_quick_commands", {
+        outputPath,
+        config: { commands, categories: savedCategories },
+      });
+      toast.success(t("quickCommands.exportSuccess"));
+    } catch (error) {
+      logger.error({
+        domain: "settings.persistence",
+        event: "quick_commands.export_failed",
+        message: "Export quick commands failed",
+        error,
+      });
+      toast.error(t("quickCommands.exportFailed", { error: String(error) }));
+    }
+  }, [commands, savedCategories, t]);
 
   useEffect(() => {
     const unsub = listen("quick-commands-changed", () => {
@@ -1184,6 +1210,24 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
                   </TooltipTrigger>
                   <TooltipContent side="top">
                     {t("quickCommands.addCommand")}
+                  </TooltipContent>
+                </Tooltip>
+
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      className="h-6 w-6 shrink-0 rounded-md p-0 transition-colors hover:bg-[var(--df-bg-hover)]"
+                      style={{ color: "var(--df-text-muted)" }}
+                      aria-label={t("quickCommands.export")}
+                      onClick={() => void handleExportQuickCommands()}
+                    >
+                      <BiExport className="text-[1.05rem]" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    {t("quickCommands.export")}
                   </TooltipContent>
                 </Tooltip>
 

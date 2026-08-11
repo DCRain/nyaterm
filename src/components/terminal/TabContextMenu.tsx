@@ -108,9 +108,11 @@ export default function TabContextMenu({
 
   const activePane = getActivePane(tab);
   const tabIndex = tabs.findIndex((item) => item.id === tab.id);
+  const isTerminalPane = activePane?.paneKind === "terminal";
   const canSpawnSession =
-    !!activePane && (activePane.type === "Local" || !!activePane.connectionId);
-  const canReconnect = !!activePane && !activePane.connecting && canSpawnSession;
+    !!activePane && isTerminalPane && (activePane.type === "Local" || !!activePane.connectionId);
+  const canReconnect =
+    !!activePane && !activePane.connecting && (activePane.type === "Local" || !!activePane.connectionId);
   const canMultiplexSsh =
     !!activePane &&
     activePane.type === "SSH" &&
@@ -123,7 +125,8 @@ export default function TabContextMenu({
   const canMultiplexSshSftp = canMultiplexSsh && !sftpDisabledForConnection;
   const canDisconnect = !!activePane && !activePane.connecting && !activePane.connectError;
   const canSplit = canSpawnSession && activePane?.view !== "sftp";
-  const canUseAI = !!activePane && !activePane.connecting && !activePane.connectError;
+  const canUseAI =
+    !!activePane && isTerminalPane && !activePane.connecting && !activePane.connectError;
   const canCloseInactive = tabs.length > 1;
   const canCloseRight = tabIndex !== -1 && tabIndex < tabs.length - 1;
   const canCloseTab = !!activePane && !tab.locked;

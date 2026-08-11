@@ -327,6 +327,7 @@ fn close_scoped_child_windows(app: &tauri::AppHandle, main_label: &str) {
 pub fn setup(
     app: &mut tauri::App,
     session_manager: Arc<SessionManager>,
+    recording_manager: Arc<crate::core::RecordingManager>,
     quick_commands_store: Arc<QuickCommandsStore>,
     cloud_sync_manager: Arc<CloudSyncManager>,
     runtime: AppRuntime,
@@ -358,6 +359,8 @@ pub fn setup(
     }
 
     session_manager.set_app_handle(app.handle().clone());
+    session_manager.set_recording_manager(recording_manager.clone());
+    recording_manager.set_app_handle(app.handle().clone());
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     install_external_open_handlers(app.handle(), &runtime);
 
@@ -481,6 +484,14 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                     window.app_handle(),
                     window.label(),
                 );
+            }
+            tauri::WindowEvent::Focused(true) => {
+                if let Some(manager) = window.app_handle().try_state::<Arc<CloudSyncManager>>() {
+                    let manager = manager.inner().clone();
+                    tauri::async_runtime::spawn(async move {
+                        manager.request_focus_remote_check().await;
+                    });
+                }
             }
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 if let Err(error) = crate::window_state::save_main_window_state(window) {

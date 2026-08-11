@@ -51,6 +51,7 @@ pub fn save_connection(
     validate_local_terminal_config(&connection)?;
     validate_ssh_algorithm_config(&connection)?;
     validate_sftp_settings_config(&connection)?;
+    validate_rdp_config(&connection)?;
 
     if let Some(ref mut auth) = connection.auth {
         // password_id: Some("") means explicitly cleared, None means preserve existing
@@ -308,6 +309,65 @@ fn validate_local_terminal_config(connection: &SavedConnection) -> AppResult<()>
     Ok(())
 }
 
+fn validate_rdp_config(connection: &SavedConnection) -> AppResult<()> {
+    let config::ConnectionType::Rdp {
+        host,
+        port,
+        username,
+        security,
+        display,
+        clipboard,
+        reconnect,
+        ..
+    } = &connection.config
+    else {
+        return Ok(());
+    };
+
+    if host.trim().is_empty() {
+        return Err(AppError::Config("RDP host is required".to_string()));
+    }
+    if *port == 0 {
+        return Err(AppError::Config(
+            "RDP port must be between 1 and 65535".to_string(),
+        ));
+    }
+    if username.trim().is_empty() {
+        return Err(AppError::Config("RDP username is required".to_string()));
+    }
+    if !matches!(
+        security.certificate_policy.as_str(),
+        "strict" | "prompt" | "accept-temporarily"
+    ) {
+        return Err(AppError::Config(
+            "RDP certificate policy is invalid".to_string(),
+        ));
+    }
+    if !matches!(display.mode.as_str(), "fit-window" | "fixed" | "native") {
+        return Err(AppError::Config("RDP display mode is invalid".to_string()));
+    }
+    if !(640..=7680).contains(&display.width) || !(480..=4320).contains(&display.height) {
+        return Err(AppError::Config(
+            "RDP display size is outside the supported range".to_string(),
+        ));
+    }
+    if !matches!(display.color_depth, 16 | 24 | 32) {
+        return Err(AppError::Config("RDP color depth is invalid".to_string()));
+    }
+    if !matches!(clipboard.mode.as_str(), "disabled" | "text-only") {
+        return Err(AppError::Config(
+            "RDP clipboard mode is invalid".to_string(),
+        ));
+    }
+    if reconnect.max_attempts > 20 {
+        return Err(AppError::Config(
+            "RDP reconnect attempts must be 20 or fewer".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 fn should_validate_shell_path(value: &str) -> bool {
     let path = Path::new(trim_wrapping_quotes(value));
     path.is_absolute() || value.contains('\\') || value.contains('/')
@@ -522,6 +582,8 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
                 username: "root".to_string(),
                 backspace_mode: "del".to_string(),
                 x11_forwarding: false,
+                agent_endpoint: crate::config::SshAgentEndpoint::Auto,
+                agent_forwarding: false,
                 encoding: String::new(),
             },
             group_id: None,
@@ -535,7 +597,10 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
                 proxy_jump_id: Some(jump_id.to_string()),
             }),
             post_login: None,
+            recording: None,
             ssh_algorithms: None,
+            ssh_profile: Default::default(),
+            terminal_type: None,
             sftp: SftpSettings::default(),
             asset: None,
             created_at_ms: None,
@@ -576,7 +641,10 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
                 proxy_jump_id: Some(jump_id.to_string()),
             }),
             post_login: None,
+            recording: None,
             ssh_algorithms: None,
+            ssh_profile: Default::default(),
+            terminal_type: None,
             sftp: SftpSettings::default(),
             asset: None,
             created_at_ms: None,
@@ -605,7 +673,10 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
             auth: None,
             network: None,
             post_login: None,
+            recording: None,
             ssh_algorithms: None,
+            ssh_profile: Default::default(),
+            terminal_type: None,
             sftp: SftpSettings::default(),
             asset: None,
             created_at_ms: None,
@@ -1268,6 +1339,86 @@ pub fn get_quick_commands(
     state: tauri::State<'_, Arc<QuickCommandsStore>>,
 ) -> AppResult<QuickCommandsConfig> {
     Ok(state.snapshot())
+}
+
+#[derive(serde::Serialize)]
+struct QuickCommandsExportConfig {
+    categories: Vec<QuickCommandCategoryExport>,
+    commands: Vec<QuickCommandExport>,
+}
+
+#[derive(serde::Serialize)]
+struct QuickCommandCategoryExport {
+    id: String,
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_id: Option<String>,
+    sort_order: i32,
+}
+
+#[derive(serde::Serialize)]
+struct QuickCommandExport {
+    id: String,
+    label: String,
+    command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    category_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    color_tag: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    icon_tag: Option<String>,
+    pinned: bool,
+    execution_mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    risk_level: Option<String>,
+}
+
+impl From<QuickCommandsConfig> for QuickCommandsExportConfig {
+    fn from(config: QuickCommandsConfig) -> Self {
+        Self {
+            categories: config
+                .categories
+                .into_iter()
+                .map(|category| QuickCommandCategoryExport {
+                    id: category.id,
+                    name: category.name,
+                    parent_id: category.parent_id,
+                    sort_order: category.sort_order,
+                })
+                .collect(),
+            commands: config
+                .commands
+                .into_iter()
+                .map(|command| QuickCommandExport {
+                    id: command.id,
+                    label: command.label,
+                    command: command.command,
+                    category_id: command.category_id,
+                    description: command.description,
+                    color_tag: command.color_tag,
+                    icon_tag: command.icon_tag,
+                    pinned: command.pinned,
+                    execution_mode: command.execution_mode,
+                    source: command.source,
+                    risk_level: command.risk_level,
+                })
+                .collect(),
+        }
+    }
+}
+
+#[tauri::command]
+pub fn export_quick_commands(output_path: String, config: QuickCommandsConfig) -> AppResult<()> {
+    let export_config = QuickCommandsExportConfig::from(config);
+    let raw = serde_json::to_string_pretty(&export_config).map_err(|error| {
+        AppError::Config(format!("Failed to serialize quick commands: {error}"))
+    })?;
+    std::fs::write(output_path, raw)
+        .map_err(|error| AppError::Config(format!("Failed to write quick commands file: {error}")))
 }
 
 #[tauri::command]

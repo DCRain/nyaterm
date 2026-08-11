@@ -25,9 +25,12 @@ use crate::core::ai::AgentApprovalManager;
 use crate::core::monitoring::stats::RemoteStatsSampler;
 use crate::core::sftp::TransferDuplicateManager;
 use crate::core::ssh::{
-    HostKeyVerifyManager, PendingAuthManager, PendingSshAuthManager, TunnelManager,
+    HostKeyVerifyManager, PendingAuthManager, PendingSshAgentAuthManager, PendingSshAuthManager,
+    TunnelManager,
 };
-use crate::core::{CloudSyncManager, QuickCommandsStore, RecordingManager, SessionManager};
+use crate::core::{
+    CloudSyncManager, QuickCommandsStore, RdpSessionManager, RecordingManager, SessionManager,
+};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -36,10 +39,12 @@ pub fn run() {
     runtime::prepare_webview_environment(&runtime);
 
     let session_manager = Arc::new(SessionManager::new());
+    let rdp_session_manager = Arc::new(RdpSessionManager::new());
     let tunnel_manager = Arc::new(TunnelManager::new());
     let recording_manager = Arc::new(RecordingManager::new());
     let pending_auth_manager = Arc::new(PendingAuthManager::new());
     let pending_ssh_auth_manager = Arc::new(PendingSshAuthManager::new());
+    let pending_ssh_agent_auth_manager = Arc::new(PendingSshAgentAuthManager::new());
     let host_key_verify_manager = Arc::new(HostKeyVerifyManager::new());
     let quick_commands_store = Arc::new(QuickCommandsStore::new());
     let cloud_sync_manager = Arc::new(CloudSyncManager::new());
@@ -85,10 +90,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(session_manager.clone())
+        .manage(rdp_session_manager.clone())
         .manage(tunnel_manager.clone())
         .manage(recording_manager.clone())
         .manage(pending_auth_manager.clone())
         .manage(pending_ssh_auth_manager.clone())
+        .manage(pending_ssh_agent_auth_manager.clone())
         .manage(host_key_verify_manager.clone())
         .manage(quick_commands_store.clone())
         .manage(cloud_sync_manager.clone())
@@ -103,10 +110,12 @@ pub fn run() {
         .manage(app_lock_state)
         .manage(external_open_state)
         .manage(portable_update_state)
+        .on_menu_event(cmd::macos_menu::handle_menu_event)
         .setup(move |a| {
             app::setup(
                 a,
                 session_manager,
+                recording_manager,
                 quick_commands_store,
                 cloud_sync_manager,
                 runtime_for_setup.clone(),
@@ -128,6 +137,7 @@ pub fn run() {
             cmd::app::open_transfer_target_directory,
             cmd::app::resolve_local_drop_paths,
             cmd::app::read_background_image_data_url,
+            cmd::macos_menu::set_macos_app_menu,
             cmd::external_open::claim_external_open_requests,
             cmd::updater::check_portable_update,
             cmd::updater::download_portable_update,
@@ -186,6 +196,15 @@ pub fn run() {
             cmd::session::list_local_shells,
             cmd::session::create_telnet_session,
             cmd::session::create_serial_session,
+            cmd::rdp::create_rdp_session,
+            cmd::rdp::rdp_attach_frame_channel,
+            cmd::rdp::rdp_input_batch,
+            cmd::rdp::rdp_set_keyboard_capture,
+            cmd::rdp::rdp_resize,
+            cmd::rdp::rdp_set_clipboard_text,
+            cmd::rdp::rdp_reconnect,
+            cmd::rdp::close_rdp_session,
+            cmd::rdp::respond_rdp_certificate,
             cmd::session::cancel_session_creation,
             cmd::session::list_serial_ports,
             cmd::session::write_to_session,
@@ -209,11 +228,17 @@ pub fn run() {
             cmd::session::save_session_transcript,
             cmd::session::terminal_history_search,
             cmd::session::list_recording_sessions,
+            cmd::session::get_recording_status,
+            cmd::session::list_recording_statuses,
+            cmd::session::open_recording_file,
+            cmd::session::show_recording_in_folder,
             cmd::session::set_recording_memory_limit,
             cmd::session::submit_otp_response,
             cmd::session::cancel_otp_request,
             cmd::session::submit_ssh_auth_response,
             cmd::session::cancel_ssh_auth_request,
+            cmd::session::respond_ssh_agent_auth,
+            cmd::session::cancel_ssh_agent_auth,
             cmd::session::respond_host_key_verify,
             cmd::session::zmodem_accept_download,
             cmd::session::zmodem_accept_upload,
@@ -274,6 +299,7 @@ pub fn run() {
             cmd::connection::delete_group,
             cmd::connection::clear_all_connections,
             cmd::connection::get_quick_commands,
+            cmd::connection::export_quick_commands,
             cmd::connection::save_quick_commands,
             cmd::connection::upsert_quick_command,
             cmd::connection::increment_quick_command_use_count,

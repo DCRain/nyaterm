@@ -99,6 +99,9 @@ fn serial_session_thread(
                             initial_bytes,
                         } => {
                             if !passthrough.is_empty() {
+                                if let Some(ref recorder) = recording_mgr_reader {
+                                    recorder.write_raw_output(&sid_reader, &passthrough);
+                                }
                                 let pre = output_decoder.decode(&passthrough);
                                 if !pre.is_empty() {
                                     if let Some(ref recorder) = recording_mgr_reader {
@@ -136,6 +139,9 @@ fn serial_session_thread(
                         ZmodemDetectResult::NoMatch { passthrough } => {
                             if passthrough.is_empty() {
                                 continue;
+                            }
+                            if let Some(ref recorder) = recording_mgr_reader {
+                                recorder.write_raw_output(&sid_reader, &passthrough);
                             }
                             passthrough
                         }
@@ -199,9 +205,6 @@ fn serial_session_thread(
                     remap_del_to_bs(&mut data);
                 }
                 let send_data = encode_terminal_input(&data, &encoding);
-                if let Some(ref recorder) = recording_mgr {
-                    recorder.write_input(&session_id, &data);
-                }
                 let mut p = port_writer.lock().unwrap();
                 let _ = p.write_all(&send_data);
                 let _ = p.flush();

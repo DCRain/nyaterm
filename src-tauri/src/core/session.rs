@@ -4,7 +4,8 @@
 //! confirmation, and persists history for fuzzy search.
 
 use super::history::{CommandHistoryStore, sanitize_history_command};
-use crate::config::AiExecutionProfile;
+use super::{InputOrigin, InputSensitivity, RecordingManager};
+use crate::config::{AiExecutionProfile, SshProfile};
 use crate::core::capture::CapturedOutput;
 use crate::core::zmodem::{ZmodemPreparedUpload, ZmodemUploadConflictMode};
 use crate::error::{AppError, AppResult};
@@ -22,6 +23,7 @@ const HISTORY_SAVE_DEBOUNCE: Duration = Duration::from_millis(100);
 const HISTORY_EVENT_DEBOUNCE: Duration = Duration::from_millis(500);
 
 pub type SharedCwd = Arc<Mutex<Option<String>>>;
+pub type SessionReadyHook = Arc<dyn Fn(&SessionInfo) + Send + Sync>;
 
 pub(crate) fn normalize_cwd_path(path: &str) -> String {
     if path.is_empty() || path == "/" || is_windows_drive_root(path) {
@@ -76,6 +78,8 @@ pub struct SessionInfo {
     pub id: String,
     pub name: String,
     pub session_type: SessionType,
+    #[serde(default)]
+    pub connection_id: Option<String>,
     pub connected: bool,
     #[serde(default)]
     pub owner_window_label: Option<String>,
@@ -89,9 +93,19 @@ pub struct SessionInfo {
     /// True when the remote file browser is enabled for this session.
     #[serde(default = "default_remote_file_browser_enabled")]
     pub remote_file_browser_enabled: bool,
+    /// True when Linux-style remote system statistics are enabled for this session.
+    #[serde(default = "default_remote_stats_enabled")]
+    pub remote_stats_enabled: bool,
+    /// SSH runtime profile used for capability gating on the frontend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_profile: Option<SshProfile>,
 }
 
 fn default_remote_file_browser_enabled() -> bool {
+    true
+}
+
+fn default_remote_stats_enabled() -> bool {
     true
 }
 
@@ -102,7 +116,12 @@ pub enum SessionCommand {
     /// Frontend renderer has been hibernated; keep the session alive but stop emitting output.
     DetachRenderer,
     /// Input to send to the terminal.
-    Write { data: Vec<u8>, automated: bool },
+    Write {
+        data: Vec<u8>,
+        automated: bool,
+        origin: InputOrigin,
+        sensitivity: InputSensitivity,
+    },
     /// Temporarily stop reading output from the underlying terminal source.
     PauseOutput,
     /// Resume reading output from the underlying terminal source.
@@ -182,6 +201,7 @@ pub struct SessionManager {
     history_event_worker_started: AtomicBool,
     pending_creations: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>>,
     app_handle: OnceLock<tauri::AppHandle>,
+    recording_manager: OnceLock<Arc<RecordingManager>>,
 }
 
 impl SessionManager {
@@ -198,6 +218,7 @@ impl SessionManager {
             history_event_worker_started: AtomicBool::new(false),
             pending_creations: Arc::new(Mutex::new(HashMap::new())),
             app_handle: OnceLock::new(),
+            recording_manager: OnceLock::new(),
         }
     }
 
@@ -231,6 +252,10 @@ impl SessionManager {
     /// Store the app handle so the manager can emit events to the frontend.
     pub fn set_app_handle(&self, app: tauri::AppHandle) {
         let _ = self.app_handle.set(app);
+    }
+
+    pub fn set_recording_manager(&self, recording_manager: Arc<RecordingManager>) {
+        let _ = self.recording_manager.set(recording_manager);
     }
 
     /// Loads command history from redb for fuzzy search.
@@ -311,6 +336,14 @@ impl SessionManager {
 
     /// Sends a command to a session's I/O loop; errors if session not found.
     pub async fn send_command(&self, id: &str, cmd: SessionCommand) -> AppResult<()> {
+        if let SessionCommand::Write {
+            origin,
+            sensitivity,
+            ..
+        } = &cmd
+        {
+            let _ = (*origin, *sensitivity);
+        }
         let sessions = self.sessions.lock().await;
         if let Some(handle) = sessions.get(id) {
             handle
@@ -367,6 +400,7 @@ impl SessionManager {
         };
 
         if should_add_immediately {
+            self.record_command_transcript(session_id, &command);
             self.add_history_entry(command).await;
         }
     }
@@ -400,6 +434,7 @@ impl SessionManager {
         };
 
         if let Some(command) = should_add {
+            self.record_command_transcript(session_id, &command);
             self.add_history_entry(command).await;
         }
     }
@@ -416,6 +451,7 @@ impl SessionManager {
         };
 
         for command in pending_commands {
+            self.record_command_transcript(session_id, &command);
             self.add_history_entry(command).await;
         }
     }
@@ -538,6 +574,16 @@ impl SessionManager {
     fn request_history_save(&self) {
         self.ensure_history_save_worker();
         self.history_save_notify.notify_one();
+    }
+
+    fn record_command_transcript(&self, session_id: &str, command: &str) {
+        if let Some(recording_manager) = self.recording_manager.get() {
+            recording_manager.record_command_submission(
+                session_id,
+                command.to_string(),
+                InputSensitivity::Normal,
+            );
+        }
     }
 
     /// Flushes pending shell-submission fallbacks and history state
@@ -724,11 +770,14 @@ mod tests {
                 id: id.to_string(),
                 name: id.to_string(),
                 session_type,
+                connection_id: None,
                 connected: true,
                 owner_window_label: None,
                 ai_execution_profile: AiExecutionProfile::Auto,
                 injection_active,
                 remote_file_browser_enabled: true,
+                remote_stats_enabled: true,
+                ssh_profile: None,
             },
             cmd_tx,
             ssh_config: None,

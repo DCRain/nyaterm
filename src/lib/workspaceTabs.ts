@@ -4,9 +4,9 @@ import type {
   RestorablePaneNode,
   RestorableTab,
   SessionPane,
-  SessionType,
   SplitPane,
   Tab,
+  WorkspaceSessionType,
 } from "@/types/global";
 
 let workspaceIdCounter = 0;
@@ -24,24 +24,44 @@ export function isSessionPane(node: PaneNode): node is SessionPane {
   return node.kind === "leaf";
 }
 
+export function isTerminalPane(
+  node: PaneNode,
+): node is Extract<SessionPane, { paneKind: "terminal" }> {
+  return isSessionPane(node) && node.paneKind === "terminal";
+}
+
+export function isRdpPane(node: PaneNode): node is Extract<SessionPane, { paneKind: "rdp" }> {
+  return isSessionPane(node) && node.paneKind === "rdp";
+}
+
 export function createSessionPane(
   name: string,
-  type: SessionType,
+  type: WorkspaceSessionType,
   connectionId?: string,
   overrides?: Partial<SessionPane>,
 ): SessionPane {
+  const paneKind = type === "RDP" ? "rdp" : "terminal";
   return {
     id: overrides?.id ?? createWorkspaceId("pane"),
     kind: "leaf",
+    paneKind,
     sessionId: overrides?.sessionId ?? createWorkspaceId("session"),
     name,
     type,
     connectionId,
     view: overrides?.view,
+    display:
+      type === "RDP"
+        ? ((overrides && "display" in overrides ? overrides.display : undefined) ?? {
+            remoteWidth: 1920,
+            remoteHeight: 1080,
+            scaleMode: "fit",
+          })
+        : undefined,
     connecting: overrides?.connecting,
     createRequestId: overrides?.createRequestId,
     connectError: overrides?.connectError,
-  };
+  } as SessionPane;
 }
 
 export function createWorkspaceTab(
@@ -120,7 +140,7 @@ export function updateSessionPane(
   >,
 ): PaneNode {
   return updatePaneTree(root, paneId, (current) =>
-    isSessionPane(current) ? { ...current, ...updates } : current,
+    isSessionPane(current) ? ({ ...current, ...updates } as SessionPane) : current,
   );
 }
 
@@ -226,6 +246,7 @@ function serializePane(node: PaneNode): RestorablePaneNode {
     return {
       id: node.id,
       kind: "leaf",
+      pane_kind: node.paneKind,
       title: node.name,
       session_type: node.type,
       connection_id: node.connectionId,
@@ -270,7 +291,7 @@ function createLegacyPaneNode(tab: RestorableTab): RestorablePaneNode | null {
   };
 }
 
-export function normalizeSessionType(value: string): SessionType | null {
+export function normalizeSessionType(value: string): WorkspaceSessionType | null {
   switch (value) {
     case "SSH":
       return "SSH";
@@ -281,6 +302,9 @@ export function normalizeSessionType(value: string): SessionType | null {
       return "Telnet";
     case "Serial":
       return "Serial";
+    case "RDP":
+    case "rdp":
+      return "RDP";
     default:
       return null;
   }
@@ -290,17 +314,28 @@ function restorePane(node: RestorablePaneNode): PaneNode | null {
   if (node.kind === "leaf") {
     const type = normalizeSessionType(node.session_type);
     if (!type) return null;
+    const paneKind = node.pane_kind ?? (type === "RDP" ? "rdp" : "terminal");
+    if ((paneKind === "rdp") !== (type === "RDP")) return null;
     return {
       id: node.id || createWorkspaceId("pane"),
       kind: "leaf",
+      paneKind,
       sessionId: createWorkspaceId("pending"),
       name: node.title,
       type,
       connectionId: node.connection_id,
       view: node.view === "sftp" ? "sftp" : undefined,
+      display:
+        paneKind === "rdp"
+          ? {
+              remoteWidth: 1920,
+              remoteHeight: 1080,
+              scaleMode: "fit",
+            }
+          : undefined,
       connecting: true,
       createRequestId: crypto.randomUUID(),
-    };
+    } as SessionPane;
   }
 
   const first = restorePane(node.first);

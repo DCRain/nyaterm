@@ -20,6 +20,8 @@ import {
   MdSearch,
   MdSort,
   MdSortByAlpha,
+  MdUnfoldLess,
+  MdUnfoldMore,
 } from "react-icons/md";
 import { TiFlashOutline } from "react-icons/ti";
 import { toast } from "sonner";
@@ -114,6 +116,14 @@ interface PointerSavedDragState {
 function shouldUsePointerSavedConnectionsDrag() {
   if (typeof navigator === "undefined") return false;
   return /Mac/.test(navigator.platform) && /AppleWebKit/.test(navigator.userAgent);
+}
+
+function areStringSetsEqual(left: Set<string>, right: Set<string>) {
+  if (left.size !== right.size) return false;
+  for (const value of left) {
+    if (!right.has(value)) return false;
+  }
+  return true;
 }
 
 function HeaderActionButton({ tooltip, children, ...props }: HeaderActionButtonProps) {
@@ -306,6 +316,15 @@ export default function SavedConnections({
       ungrouped: noGroup,
     };
   }, [savedConnections, savedGroups, keyword, typeFilter, isFiltering, sortMode]);
+
+  useEffect(() => {
+    const persistedExpandedGroups = new Set(
+      appSettings.ui.saved_connections_expanded_group_ids ?? [],
+    );
+    setExpandedGroups((prev) => {
+      return areStringSetsEqual(prev, persistedExpandedGroups) ? prev : persistedExpandedGroups;
+    });
+  }, [appSettings.ui.saved_connections_expanded_group_ids]);
 
   useEffect(() => {
     const connectionId = appSettings.ui.saved_connections_last_opened_connection_id;
@@ -581,13 +600,34 @@ export default function SavedConnections({
   }, [savedConnections]);
 
   // ── Actions ───────────────────────────────────────────────────────────────
+  const persistExpandedGroups = useCallback(
+    (next: Set<string>) => {
+      setExpandedGroups(next);
+      updateUi({ saved_connections_expanded_group_ids: Array.from(next) });
+    },
+    [updateUi],
+  );
+
   const toggleGroup = (groupId: string) => {
-    setExpandedGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(groupId)) next.delete(groupId);
-      else next.add(groupId);
-      return next;
-    });
+    const next = new Set(expandedGroups);
+    if (next.has(groupId)) next.delete(groupId);
+    else next.add(groupId);
+    persistExpandedGroups(next);
+  };
+
+  const allGroupIds = useMemo(() => new Set(savedGroups.map((group) => group.id)), [savedGroups]);
+
+  const allGroupsExpanded = useMemo(() => {
+    if (savedGroups.length === 0) return false;
+    return savedGroups.every((group) => expandedGroups.has(group.id));
+  }, [expandedGroups, savedGroups]);
+
+  const expandAllGroups = () => {
+    persistExpandedGroups(allGroupIds);
+  };
+
+  const collapseAllGroups = () => {
+    persistExpandedGroups(new Set());
   };
 
   const getConnectionRangeSelection = (
@@ -1604,7 +1644,25 @@ export default function SavedConnections({
                   <MdMoreVert className="text-[1.125rem]" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="text-xs w-40">
+              <DropdownMenuContent align="end" className="text-xs w-48">
+                {savedGroups.length > 0 && (
+                  <>
+                    <DropdownMenuItem
+                      onClick={allGroupsExpanded ? collapseAllGroups : expandAllGroups}
+                      className="cursor-pointer gap-2 py-1.5 focus:bg-[var(--df-bg-hover)]"
+                    >
+                      {allGroupsExpanded ? (
+                        <MdUnfoldLess className="text-sm text-[var(--df-text-muted)]" />
+                      ) : (
+                        <MdUnfoldMore className="text-sm text-[var(--df-text-muted)]" />
+                      )}
+                      {allGroupsExpanded
+                        ? t("savedConnections.collapseAllFolders")
+                        : t("savedConnections.expandAllFolders")}
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
                 <DropdownMenuItem
                   onClick={handleExport}
                   className="cursor-pointer gap-2 py-1.5 focus:bg-[var(--df-bg-hover)]"

@@ -14,26 +14,47 @@ export interface NumberInputProps
 
 export const NumberInput = React.forwardRef<HTMLInputElement, NumberInputProps>(
   ({ className, value, onChange, min = -Infinity, max = Infinity, step = 1, ...props }, ref) => {
+    const [inputValue, setInputValue] = React.useState(() => String(value));
+    const [isFocused, setIsFocused] = React.useState(false);
+
+    React.useEffect(() => {
+      if (!isFocused) {
+        setInputValue(String(value));
+      }
+    }, [isFocused, value]);
+
+    const commitValue = (nextValue: number) => {
+      const clampedValue = Math.min(max, Math.max(min, nextValue));
+      onChange(clampedValue);
+      setInputValue(String(clampedValue));
+    };
+
     const handleIncrement = () => {
       const newValue = value + step;
-      if (newValue <= max) onChange(newValue);
+      if (newValue <= max) commitValue(newValue);
     };
 
     const handleDecrement = () => {
       const newValue = value - step;
-      if (newValue >= min) onChange(newValue);
+      if (newValue >= min) commitValue(newValue);
     };
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      setInputValue(e.target.value);
       const val = Number.parseInt(e.target.value, 10);
       if (!Number.isNaN(val)) onChange(val);
-      else onChange(0);
     };
 
     const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
-      if (value < min) onChange(min);
-      else if (value > max) onChange(max);
+      setIsFocused(false);
+      const val = Number.parseInt(e.target.value, 10);
+      commitValue(Number.isNaN(val) ? value : val);
       props.onBlur?.(e);
+    };
+
+    const handleFocus = (e: React.FocusEvent<HTMLInputElement>) => {
+      setIsFocused(true);
+      props.onFocus?.(e);
     };
 
     return (
@@ -49,16 +70,17 @@ export const NumberInput = React.forwardRef<HTMLInputElement, NumberInputProps>(
           <MdRemove className="text-sm" />
         </Button>
         <Input
+          {...props}
           type="number"
           ref={ref}
-          value={value === 0 && min > 0 ? "" : value}
+          value={value === 0 && min > 0 && !isFocused ? "" : inputValue}
           onChange={handleChange}
           onBlur={handleBlur}
+          onFocus={handleFocus}
           className="rounded-none text-center px-1 w-full focus-visible:z-10 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
           min={min}
           max={max}
           step={step}
-          {...props}
         />
         <Button
           type="button"

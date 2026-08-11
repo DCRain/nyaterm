@@ -9,6 +9,7 @@ import {
   MdLink,
   MdPlayCircleOutline,
 } from "react-icons/md";
+import { toast } from "sonner";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -23,6 +24,7 @@ import { useSavedConnectionsContext } from "./context";
 import { MoveToGroupContextMenu } from "./MoveToGroupMenu";
 
 const TOOLTIP_OPEN_DELAY_MS = 350;
+const TOOLTIP_CLOSE_DELAY_MS = 120;
 
 interface ConnectionItemProps {
   conn: SavedConnection;
@@ -34,11 +36,14 @@ interface ConnectionDetailsTooltipProps {
   conn: SavedConnection;
   savedConnections: SavedConnection[];
   t: TFunction;
+  onPointerEnter: () => void;
+  onPointerLeave: () => void;
 }
 
 interface ConnectionDetailRow {
   label: string;
   value: string;
+  copyValue?: string;
   multiline?: boolean;
 }
 
@@ -55,6 +60,12 @@ function formatOptionalDetailValue(value: string | number | null | undefined): s
   if (value === null || value === undefined) return null;
   const text = String(value).trim();
   return text || null;
+}
+
+function getCopyDetailValue(value: string | number | null | undefined): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  const text = String(value).trim();
+  return text || undefined;
 }
 
 function formatJumpHostChain(
@@ -128,8 +139,21 @@ function getConnectionDetailRows(
     }
     case "telnet":
       return [
-        { label: t("savedConnections.host"), value: formatRequiredDetailValue(conn.host, t) },
-        { label: t("savedConnections.port"), value: formatRequiredDetailValue(conn.port, t) },
+        {
+          label: t("savedConnections.host"),
+          value: formatRequiredDetailValue(conn.host, t),
+          copyValue: getCopyDetailValue(conn.host),
+        },
+        {
+          label: t("savedConnections.port"),
+          value: formatRequiredDetailValue(conn.port, t),
+          copyValue: getCopyDetailValue(conn.port),
+        },
+        {
+          label: t("savedConnections.user"),
+          value: formatRequiredDetailValue(conn.username, t),
+          copyValue: getCopyDetailValue(conn.username),
+        },
         {
           label: t("savedConnections.description"),
           value: description,
@@ -137,8 +161,16 @@ function getConnectionDetailRows(
         },
       ];
     case "rdp": {
-      const sizedWidth = conn.width && conn.width > 0 ? conn.width : 1920;
-      const sizedHeight = conn.height && conn.height > 0 ? conn.height : 1080;
+      const displayWidth = conn.display?.width ?? conn.width;
+      const displayHeight = conn.display?.height ?? conn.height;
+      const sizedWidth = displayWidth && displayWidth > 0 ? displayWidth : 1920;
+      const sizedHeight = displayHeight && displayHeight > 0 ? displayHeight : 1080;
+      const displayMode =
+        conn.display?.mode === "fit-window"
+          ? t("dialog.rdpDisplayFitWindow", "Fit window")
+          : conn.display_mode === "windowed" || conn.display?.mode === "fixed"
+            ? t("dialog.rdpWindowed", "Windowed")
+            : t("dialog.rdpFullscreen", "Fullscreen");
       return [
         { label: t("savedConnections.host"), value: formatRequiredDetailValue(conn.host, t) },
         { label: t("savedConnections.port"), value: formatRequiredDetailValue(conn.port, t) },
@@ -148,10 +180,7 @@ function getConnectionDetailRows(
         },
         {
           label: t("dialog.rdpDisplayMode", "Display mode"),
-          value:
-            conn.display_mode === "windowed"
-              ? t("dialog.rdpWindowed", "Windowed")
-              : t("dialog.rdpFullscreen", "Fullscreen"),
+          value: displayMode,
         },
         {
           label: t("dialog.rdpResolution", "Resolution"),
@@ -202,9 +231,21 @@ function getConnectionDetailRows(
     }
     default: {
       const rows: ConnectionDetailRow[] = [
-        { label: t("savedConnections.host"), value: formatRequiredDetailValue(conn.host, t) },
-        { label: t("savedConnections.port"), value: formatRequiredDetailValue(conn.port, t) },
-        { label: t("savedConnections.user"), value: formatRequiredDetailValue(conn.username, t) },
+        {
+          label: t("savedConnections.host"),
+          value: formatRequiredDetailValue(conn.host, t),
+          copyValue: getCopyDetailValue(conn.host),
+        },
+        {
+          label: t("savedConnections.port"),
+          value: formatRequiredDetailValue(conn.port, t),
+          copyValue: getCopyDetailValue(conn.port),
+        },
+        {
+          label: t("savedConnections.user"),
+          value: formatRequiredDetailValue(conn.username, t),
+          copyValue: getCopyDetailValue(conn.username),
+        },
       ];
       const jumpHostChain = formatJumpHostChain(conn, savedConnections, t);
       if (jumpHostChain) {
@@ -224,10 +265,28 @@ function getConnectionDetailRows(
   }
 }
 
-function ConnectionDetailsTooltip({ conn, savedConnections, t }: ConnectionDetailsTooltipProps) {
+function ConnectionDetailsTooltip({
+  conn,
+  savedConnections,
+  t,
+  onPointerEnter,
+  onPointerLeave,
+}: ConnectionDetailsTooltipProps) {
   const rows = useMemo(
     () => getConnectionDetailRows(conn, savedConnections, t),
     [conn, savedConnections, t],
+  );
+
+  const handleCopyDetailValue = useCallback(
+    async (value: string) => {
+      try {
+        await navigator.clipboard.writeText(value);
+        toast.success(t("common.copied"));
+      } catch {
+        toast.error(t("savedConnections.copyFailed"));
+      }
+    },
+    [t],
   );
 
   return (
@@ -236,25 +295,49 @@ function ConnectionDetailsTooltip({ conn, savedConnections, t }: ConnectionDetai
       align="center"
       sideOffset={6}
       collisionPadding={12}
-      className="pointer-events-none w-[200px] max-w-[min(200px,calc(100vw-2rem))] px-2 py-1.5"
+      className="w-[220px] max-w-[min(220px,calc(100vw-2rem))] px-2 py-1.5"
+      onPointerEnter={onPointerEnter}
+      onPointerLeave={onPointerLeave}
     >
-      <div className="grid grid-cols-[4rem_minmax(0,1fr)] gap-x-2 gap-y-1.5">
-        {rows.map((row) => (
-          <div className="contents" key={row.label}>
-            <span className="text-[0.6875rem] leading-4 text-[var(--df-text-dimmed)]">
-              {row.label}
-            </span>
-            <span
-              className={`min-w-0 text-[0.6875rem] leading-4 text-[var(--df-text)] ${
-                row.multiline
-                  ? "overflow-hidden [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]"
-                  : "truncate"
-              }`}
-            >
-              {row.value}
-            </span>
-          </div>
-        ))}
+      <div className="grid grid-cols-[4rem_minmax(0,1fr)_1.25rem] gap-x-2 gap-y-1.5">
+        {rows.map((row) => {
+          const copyValue = row.copyValue;
+
+          return (
+            <div className="contents" key={row.label}>
+              <span className="text-[0.6875rem] leading-4 text-[var(--df-text-dimmed)]">
+                {row.label}
+              </span>
+              <span
+                className={`min-w-0 text-[0.6875rem] leading-4 text-[var(--df-text)] ${
+                  row.multiline
+                    ? "overflow-hidden [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]"
+                    : "truncate"
+                }`}
+              >
+                {row.value}
+              </span>
+              <span className="flex h-4 w-5 items-center justify-center">
+                {copyValue && (
+                  <button
+                    type="button"
+                    className="flex h-5 w-5 items-center justify-center rounded text-[var(--df-text-dimmed)] transition-colors hover:bg-accent hover:text-[var(--df-primary)]"
+                    aria-label={t("savedConnections.copy")}
+                    onPointerDown={(event) => {
+                      event.stopPropagation();
+                    }}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void handleCopyDetailValue(copyValue);
+                    }}
+                  >
+                    <MdContentCopy className="text-[12px]" />
+                  </button>
+                )}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </TooltipContent>
   );
@@ -312,6 +395,7 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
   const indentLeft = indented ? `${8 + depth * 16 + 16}px` : "0.5rem";
   const [detailsOpen, setDetailsOpen] = useState(false);
   const detailsOpenTimerRef = useRef<number | null>(null);
+  const detailsCloseTimerRef = useRef<number | null>(null);
   const suppressDetailsUntilLeaveRef = useRef(false);
   const registerSelf = useCallback(
     (element: HTMLDivElement | null) => {
@@ -327,17 +411,26 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
     }
   }, []);
 
+  const clearDetailsCloseTimer = useCallback(() => {
+    if (detailsCloseTimerRef.current) {
+      window.clearTimeout(detailsCloseTimerRef.current);
+      detailsCloseTimerRef.current = null;
+    }
+  }, []);
+
   const closeDetails = useCallback(
     (suppressUntilLeave = false) => {
       clearDetailsOpenTimer();
+      clearDetailsCloseTimer();
       if (suppressUntilLeave) suppressDetailsUntilLeaveRef.current = true;
       setDetailsOpen(false);
     },
-    [clearDetailsOpenTimer],
+    [clearDetailsCloseTimer, clearDetailsOpenTimer],
   );
 
   const scheduleDetailsOpen = useCallback(() => {
     if (suppressDetailsUntilLeaveRef.current) return;
+    clearDetailsCloseTimer();
     clearDetailsOpenTimer();
     detailsOpenTimerRef.current = window.setTimeout(() => {
       if (!suppressDetailsUntilLeaveRef.current) {
@@ -345,18 +438,38 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
       }
       detailsOpenTimerRef.current = null;
     }, TOOLTIP_OPEN_DELAY_MS);
-  }, [clearDetailsOpenTimer]);
+  }, [clearDetailsCloseTimer, clearDetailsOpenTimer]);
+
+  const keepDetailsOpen = useCallback(() => {
+    if (suppressDetailsUntilLeaveRef.current) return;
+    clearDetailsCloseTimer();
+  }, [clearDetailsCloseTimer]);
+
+  const scheduleDetailsClose = useCallback(() => {
+    clearDetailsOpenTimer();
+    clearDetailsCloseTimer();
+    detailsCloseTimerRef.current = window.setTimeout(() => {
+      setDetailsOpen(false);
+      detailsCloseTimerRef.current = null;
+    }, TOOLTIP_CLOSE_DELAY_MS);
+  }, [clearDetailsCloseTimer, clearDetailsOpenTimer]);
 
   const handlePointerLeave = useCallback(() => {
     suppressDetailsUntilLeaveRef.current = false;
-    closeDetails(false);
-  }, [closeDetails]);
+    scheduleDetailsClose();
+  }, [scheduleDetailsClose]);
 
   const closeAndSuppressDetails = useCallback(() => {
     closeDetails(true);
   }, [closeDetails]);
 
-  useEffect(() => clearDetailsOpenTimer, [clearDetailsOpenTimer]);
+  useEffect(
+    () => () => {
+      clearDetailsOpenTimer();
+      clearDetailsCloseTimer();
+    },
+    [clearDetailsCloseTimer, clearDetailsOpenTimer],
+  );
 
   return (
     <ContextMenu>
@@ -484,7 +597,13 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
                   ) : null}
                 </span>
               </TooltipTrigger>
-              <ConnectionDetailsTooltip conn={conn} savedConnections={savedConnections} t={t} />
+              <ConnectionDetailsTooltip
+                conn={conn}
+                savedConnections={savedConnections}
+                t={t}
+                onPointerEnter={keepDetailsOpen}
+                onPointerLeave={scheduleDetailsClose}
+              />
             </Tooltip>
             <div
               className="pointer-events-none sticky right-2 z-10 ml-auto flex shrink-0 items-center gap-1 rounded px-1 opacity-0 backdrop-blur-sm transition-opacity group-hover/item:pointer-events-auto group-hover/item:opacity-100"
