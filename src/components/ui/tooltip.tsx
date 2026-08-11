@@ -38,7 +38,7 @@ function TooltipContent({
         data-slot="tooltip-content"
         sideOffset={sideOffset}
         className={cn(
-          "bg-popover text-popover-foreground origin-(--radix-tooltip-content-transform-origin) animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[side=bottom]:slide-in-from-top-2 data-[side=inline-end]:slide-in-from-left-2 data-[side=inline-start]:slide-in-from-right-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 z-50 overflow-visible rounded-md border px-3 py-1.5 text-xs shadow-md",
+          "nyaterm-solid-surface bg-popover text-popover-foreground origin-(--radix-tooltip-content-transform-origin) animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[side=bottom]:slide-in-from-top-2 data-[side=inline-end]:slide-in-from-left-2 data-[side=inline-start]:slide-in-from-right-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 z-50 overflow-visible rounded-md border px-3 py-1.5 text-xs shadow-md",
           className,
         )}
         {...props}
@@ -49,7 +49,10 @@ function TooltipContent({
             data-slot="tooltip-arrow"
             width={10}
             height={6}
-            className={cn("fill-popover stroke-border [stroke-width:1px]", arrowClassName)}
+            className={cn(
+              "fill-[var(--df-bg-panel-solid,var(--df-bg-panel))] stroke-border [stroke-width:1px]",
+              arrowClassName,
+            )}
           />
         )}
       </TooltipPrimitive.Content>

@@ -7,7 +7,7 @@
 //! visible — that is handled on the frontend via the `--df-bg` CSS variable
 //! and the `data-window-transparency` attribute on the wallpaper shell.
 
-use tauri::WebviewWindow;
+use tauri::{Manager, WebviewWindow};
 
 #[cfg(windows)]
 use std::ffi::c_void;
@@ -190,13 +190,13 @@ enum LegacyAccentState {
     EnableAcrylicBlurBehind = 4,
 }
 
-/// Apply the effect to every main window managed by the app.
+/// Apply the effect to every webview window (main + child dialogs).
 pub fn apply_to_all_main_windows(
     app: &tauri::AppHandle,
     mode: WindowTransparency,
     acrylic_blur: bool,
 ) {
-    for window in crate::app::main_windows(app) {
+    for window in app.webview_windows().into_values() {
         apply_to_window(&window, mode, acrylic_blur);
     }
 }

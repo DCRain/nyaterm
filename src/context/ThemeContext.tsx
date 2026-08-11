@@ -51,6 +51,9 @@ export function applyThemeToDOM(colors: ThemeColors) {
   root.setProperty("--df-text", colors.text);
   root.setProperty("--df-text-muted", colors.textMuted);
   root.setProperty("--df-text-dimmed", colors.textDimmed);
+  root.setProperty("--df-text-solid", colors.text);
+  root.setProperty("--df-text-muted-solid", colors.textMuted);
+  root.setProperty("--df-text-dimmed-solid", colors.textDimmed);
   root.setProperty("--df-primary", colors.primary);
   root.setProperty("--df-primary-hover", colors.primaryHover);
   root.setProperty("--df-on-primary", colors.onPrimary);

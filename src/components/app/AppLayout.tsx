@@ -32,7 +32,9 @@ import {
 } from "@/lib/backgroundImage";
 import type { SendCommandPanelDraft } from "@/lib/sendCommandPanelEvents";
 import type { UpdateInfo } from "@/lib/updater";
+import { cn } from "@/lib/utils";
 import { bounceTopModalWindow } from "@/lib/windowManager";
+import { useWindowTransparencyDom } from "@/lib/windowTransparencyDom";
 import type {
   AppearanceSettings,
   SavedConnection,
@@ -188,6 +190,9 @@ export default function AppLayout({
     [effectiveAppearance, backgroundDataUrl],
   );
   const windowTransparencyEnabled = isWindowTransparencyEnabled(effectiveAppearance);
+  const windowTransparencyBlur =
+    windowTransparencyEnabled && Boolean(effectiveAppearance.window_transparency_blur);
+  useWindowTransparencyDom(theme.colors, effectiveAppearance);
   const shellStyle = useMemo(
     () => ({
       ...buildSurfaceCssVariables(theme.colors, effectiveAppearance),
@@ -208,32 +213,16 @@ export default function AppLayout({
     hasLeftActivityItems && (leftPanelIds.length > 0 || Boolean(leftOverlayPanelId));
   const rightPanelOpen =
     hasRightActivityItems && (rightPanelIds.length > 0 || Boolean(rightOverlayPanelId));
-
-  useEffect(() => {
-    const roots = [document.documentElement, document.body];
-    for (const root of roots) {
-      if (windowTransparencyEnabled) {
-        root.dataset.windowTransparency = "true";
-      } else {
-        delete root.dataset.windowTransparency;
-      }
-    }
-
-    return () => {
-      for (const root of roots) {
-        delete root.dataset.windowTransparency;
-      }
-    };
-  }, [windowTransparencyEnabled]);
+  // When side chrome is gone, round the terminal so it doesn't cover window corners.
+  const leftEdgeOccupied = (hasLeftActivityItems && leftActivityBarVisible) || leftPanelOpen;
+  const rightEdgeOccupied = (hasRightActivityItems && rightActivityBarVisible) || rightPanelOpen;
 
   return (
     <div
       className="nyaterm-wallpaper-shell font-display relative h-full min-h-0 overflow-hidden"
       data-wallpaper-enabled={backgroundEnabled ? "true" : "false"}
       data-window-transparency={windowTransparencyEnabled ? "true" : "false"}
-      data-window-transparency-blur={
-        windowTransparencyEnabled && effectiveAppearance.window_transparency_blur ? "true" : "false"
-      }
+      data-window-transparency-blur={windowTransparencyBlur ? "true" : "false"}
       style={shellStyle}
     >
       {backgroundEnabled && (
@@ -252,6 +241,7 @@ export default function AppLayout({
               {...leftActivityBar}
               side="left"
               zone={{ top: "left_top", bottom: "left_bottom" }}
+              className="rounded-bl-[var(--nyaterm-window-radius)]"
             />
           )}
 
@@ -262,7 +252,11 @@ export default function AppLayout({
                   width: uiConfig.left_width,
                   backgroundColor: "var(--df-bg-panel)",
                 }}
-                className="relative flex flex-col"
+                className={cn(
+                  "relative flex flex-col overflow-hidden",
+                  !(hasLeftActivityItems && leftActivityBarVisible) &&
+                    "rounded-bl-[var(--nyaterm-window-radius)]",
+                )}
               >
                 <div className="flex-1 min-h-0 overflow-hidden">
                   <PanelStack
@@ -281,7 +275,11 @@ export default function AppLayout({
           )}
 
           <section
-            className="flex-1 flex flex-col relative min-w-0 origin-top-left"
+            className={cn(
+              "relative flex min-w-0 flex-1 origin-top-left flex-col overflow-hidden",
+              !leftEdgeOccupied && "rounded-bl-[var(--nyaterm-window-radius)]",
+              !rightEdgeOccupied && "rounded-br-[var(--nyaterm-window-radius)]",
+            )}
             style={{
               backgroundColor: backgroundEnabled ? "transparent" : "var(--df-bg-terminal)",
             }}
@@ -390,9 +388,12 @@ export default function AppLayout({
                   backgroundColor: "var(--df-bg-panel)",
                   borderColor: "var(--df-border)",
                 }}
-                className={`relative flex flex-col overflow-hidden ${
-                  rightPanelOpen ? "border-l" : "hidden"
-                }`}
+                className={cn(
+                  "relative flex flex-col overflow-hidden",
+                  rightPanelOpen ? "border-l" : "hidden",
+                  !(hasRightActivityItems && rightActivityBarVisible) &&
+                    "rounded-br-[var(--nyaterm-window-radius)]",
+                )}
               >
                 <div className="flex-1 min-h-0 overflow-hidden">
                   <PanelStack
@@ -414,6 +415,7 @@ export default function AppLayout({
               {...rightActivityBar}
               side="right"
               zone={{ top: "right_top", bottom: "right_bottom" }}
+              className="rounded-br-[var(--nyaterm-window-radius)]"
             />
           )}
         </main>

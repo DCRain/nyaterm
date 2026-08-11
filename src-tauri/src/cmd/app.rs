@@ -360,6 +360,13 @@ pub async fn open_child_window(
     .resizable(resizable)
     .always_on_top(options.always_on_top.unwrap_or(false));
 
+    #[cfg(windows)]
+    {
+        // Match the main window: keep the webview transparency-capable so
+        // Acrylic / opacity settings apply to settings and other child dialogs.
+        builder = builder.transparent(true);
+    }
+
     #[cfg(target_os = "macos")]
     {
         builder = builder
@@ -387,6 +394,8 @@ pub async fn open_child_window(
     let window = builder
         .build()
         .map_err(|error| AppError::Config(error.to_string()))?;
+
+    crate::app::apply_window_transparency_for_window(&window);
 
     if let Some(placement) = placement {
         if window

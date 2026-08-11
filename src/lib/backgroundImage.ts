@@ -50,9 +50,7 @@ export function getWindowTransparencyOpacity(
 }
 
 export function windowTransparencyModeForOpacity(opacity: number): "none" | "transparent" {
-  return clampOpacity(opacity, DEFAULT_WINDOW_TRANSPARENCY_OPACITY) >= 1
-    ? "none"
-    : "transparent";
+  return clampOpacity(opacity, DEFAULT_WINDOW_TRANSPARENCY_OPACITY) >= 1 ? "none" : "transparent";
 }
 
 /** Native window transparency makes the window show through to the desktop.
@@ -158,12 +156,20 @@ function softBorderColor(border: string, surfaceOpacity: number) {
   return colorWithAlpha(border, borderOpacity);
 }
 
+function solidTextBackupCssVariables(colors: ThemeColors): CssVars {
+  return {
+    "--df-text-solid": colors.text,
+    "--df-text-muted-solid": colors.textMuted,
+    "--df-text-dimmed-solid": colors.textDimmed,
+  };
+}
+
 export function buildSurfaceCssVariables(
   colors: ThemeColors,
   appearance: AppearanceSettings,
 ): CssVars {
-  // Native window transparency uses translucent surfaces so apps behind the
-  // window show through while the terminal remains readable.
+  // Windows Terminal model: one opacity for the whole window over native
+  // acrylic/blur. Chrome, terminal, and portaled overlays share the same tint.
   if (isWindowTransparencyEnabled(appearance)) {
     const surfaceOpacity = getWindowTransparencyOpacity(appearance);
     const bg = colorWithAlpha(colors.bg, surfaceOpacity);
@@ -191,6 +197,7 @@ export function buildSurfaceCssVariables(
       "--accent": bgHover,
       "--border": border,
       "--input": border,
+      ...solidTextBackupCssVariables(colors),
     };
   }
   const surfaceOpacity = isBackgroundImageEnabled(appearance)
@@ -222,6 +229,7 @@ export function buildSurfaceCssVariables(
     "--accent": bgHover,
     "--border": border,
     "--input": border,
+    ...solidTextBackupCssVariables(colors),
   };
 }
 

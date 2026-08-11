@@ -34,6 +34,7 @@ import {
   MAX_TERMINAL_FONT_SIZE,
   MIN_TERMINAL_FONT_SIZE,
 } from "@/lib/terminalFontSize";
+import { ACRYLIC_PRESET_OPACITY, ACRYLIC_THEME_ID } from "@/lib/themes";
 import type { AppearanceSettings } from "@/types/global";
 import {
   SettingFieldGrid,
@@ -609,12 +610,20 @@ export function AppearanceTab() {
             label={t("settings.windowTransparencyOpacity")}
             desc={t("settings.windowTransparencyOpacityDesc")}
             value={getWindowTransparencyOpacity(appearance) ?? DEFAULT_WINDOW_TRANSPARENCY_OPACITY}
-            onChange={(value) =>
+            onChange={(value) => {
+              const wasOpaque = getWindowTransparencyOpacity(appearance) >= 1;
               updateAppearance({
                 window_transparency_tint: value,
                 window_transparency: windowTransparencyModeForOpacity(value),
-              })
-            }
+                // Entering transparency: enable acrylic by default (Windows Terminal–like).
+                // Returning to opaque: clear the material.
+                ...(value >= 1
+                  ? { window_transparency_blur: false }
+                  : wasOpaque
+                    ? { window_transparency_blur: true }
+                    : {}),
+              });
+            }}
           />
           <SettingRow
             label={t("settings.windowTransparencyBlur")}
@@ -624,6 +633,27 @@ export function AppearanceTab() {
               checked={appearance.window_transparency_blur ?? false}
               onChange={(v) => updateAppearance({ window_transparency_blur: v })}
             />
+          </SettingRow>
+          <SettingRow
+            label={t("settings.windowTransparencyAcrylicPreset")}
+            desc={t("settings.windowTransparencyAcrylicPresetDesc")}
+          >
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                updateAppearance({
+                  theme: ACRYLIC_THEME_ID,
+                  terminal_theme: null,
+                  window_transparency_tint: ACRYLIC_PRESET_OPACITY,
+                  window_transparency: "transparent",
+                  window_transparency_blur: true,
+                })
+              }
+            >
+              {t("settings.windowTransparencyAcrylicPresetApply")}
+            </Button>
           </SettingRow>
         </SettingSection>
       )}

@@ -122,6 +122,65 @@ const githubDark = {
   },
 } as const satisfies Theme;
 
+// ── Nya Acrylic ─────────────────────────────────────────────────────────────
+// Tuned for window transparency + system Acrylic: brighter chrome text, cooler
+// deep surfaces, and borders that stay visible when alpha-blended over frost.
+const nyaAcrylic = {
+  id: "nya-acrylic",
+  name: "Nya Acrylic",
+  label: "Acrylic",
+  swatch: "#0a121c",
+  colors: {
+    bg: "#0a121c",
+    bgPanel: "#121c28",
+    bgTerminal: "#071018",
+    bgHover: "#1a2736",
+    bgInput: "#0d1622",
+    bgSectionHeader: "#0f1824",
+    border: "#4a5d73",
+    text: "#f4f7fb",
+    textMuted: "#d5dee8",
+    textDimmed: "#b7c3d1",
+    primary: "#6cb6ff",
+    primaryHover: "#4f9ff0",
+    onPrimary: "#041018",
+    focusRing: "#8ec8ff",
+    danger: "#ff8b82",
+    dangerHover: "#ff6f64",
+    success: "#5dde9d",
+    warning: "#f0c14d",
+    link: "#8ec8ff",
+    shadow: "rgb(0 6 14 / 0.42)",
+    scrollThumb: "#4a5d73",
+    accent: "#7dd3fc",
+    terminal: {
+      background: "#071018",
+      foreground: "#eef3f8",
+      cursor: "#f8fafc",
+      selectionBackground: "#1f4b73",
+      lineHighlight: "#121c28",
+      findMatchBackground: "rgba(240, 193, 77, 0.32)",
+      findMatchBorder: "#f0c14d",
+      black: "#1b2734",
+      red: "#ff8b82",
+      green: "#5dde9d",
+      yellow: "#f0c14d",
+      blue: "#6cb6ff",
+      magenta: "#c4a1ff",
+      cyan: "#5fd4e8",
+      white: "#d7e0ea",
+      brightBlack: "#8b9aab",
+      brightRed: "#ffb0aa",
+      brightGreen: "#86ebb8",
+      brightYellow: "#f6d277",
+      brightBlue: "#93cdff",
+      brightMagenta: "#d8bfff",
+      brightCyan: "#8ae0f0",
+      brightWhite: "#ffffff",
+    },
+  },
+} as const satisfies Theme;
+
 // ── Nya High Contrast ─────────────────────────────────────────────────────
 const nyaHighContrast = {
   id: "nya-high-contrast",
@@ -1038,6 +1097,7 @@ const oneLight = {
 
 export const themeList = [
   githubDark,
+  nyaAcrylic,
   nyaHighContrast,
   nyaHighContrastWhite,
   dracula,
@@ -1065,6 +1125,12 @@ export const themes = Object.fromEntries(themeList.map((theme) => [theme.id, the
   Record<string, Theme | undefined>;
 
 export const DEFAULT_THEME_ID = "github-dark" satisfies ThemeId;
+
+/** Built-in theme tuned for transparent / Acrylic windows. */
+export const ACRYLIC_THEME_ID = "nya-acrylic" satisfies ThemeId;
+
+/** Suggested opacity when applying the Acrylic look (Windows Terminal–like). */
+export const ACRYLIC_PRESET_OPACITY = 0.55;
 
 export function isBuiltinThemeId(id: string) {
   return !!themes[id];

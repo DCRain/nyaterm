@@ -28,6 +28,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import type { ActivityBarZone } from "@/types/global";
 
 export interface ActivityBarItem {
@@ -114,6 +115,7 @@ interface ActivityBarProps {
   visible?: boolean;
   side: "left" | "right";
   zone: { top: ActivityBarZone; bottom: ActivityBarZone };
+  className?: string;
 }
 
 export default function ActivityBar({
@@ -130,6 +132,7 @@ export default function ActivityBar({
   showLabels,
   side,
   zone,
+  className,
 }: ActivityBarProps) {
   const { t } = useTranslation();
   const indicatorSide = side === "left" ? "left-0" : "right-0";
@@ -147,7 +150,10 @@ export default function ActivityBar({
   return (
     <TooltipProvider delayDuration={400}>
       <div
-        className="flex flex-col shrink-0 select-none transition-[width] duration-200"
+        className={cn(
+          "flex shrink-0 select-none flex-col overflow-hidden transition-[width] duration-200",
+          className,
+        )}
         style={{
           width: barWidth,
           backgroundColor: "var(--df-bg)",
@@ -604,9 +610,10 @@ function ActivityBarButton({
               style={{
                 color: active ? "var(--df-primary)" : "var(--df-text-muted)",
                 cursor: "default",
-                backgroundColor: active && showLabel
-                  ? "color-mix(in srgb, var(--df-primary) 10%, transparent)"
-                  : undefined,
+                backgroundColor:
+                  active && showLabel
+                    ? "color-mix(in srgb, var(--df-primary) 10%, transparent)"
+                    : undefined,
               }}
               onClick={() => {
                 if (suppressClickRef.current) {

@@ -19,7 +19,9 @@ import i18n from "../i18n";
 import { invoke } from "../lib/invoke";
 import { logger, setLoggerLevel } from "../lib/logger";
 import { DEFAULT_TERMINAL_FONT_SIZE } from "../lib/terminalFontSize";
+import { resolveTheme } from "../lib/themes";
 import { signalChildWindowReady } from "../lib/windowManager";
+import { useWindowTransparencyDom } from "../lib/windowTransparencyDom";
 import { AppContext } from "./AppContext";
 
 const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -454,6 +456,11 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
 
   const appStateReady = settingsLoaded && lockStateLoaded;
   const showContent = appStateReady && !isLocked;
+  const themeColors = resolveTheme(
+    appSettings.appearance.theme,
+    appSettings.appearance.custom_themes ?? [],
+  ).colors;
+  useWindowTransparencyDom(themeColors, appSettings.appearance);
 
   return (
     <AppContext.Provider value={contextValue}>
