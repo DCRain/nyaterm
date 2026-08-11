@@ -105,6 +105,7 @@ import { logger } from "./lib/logger";
 import { subscribeOpenSshTerminalAtPath } from "./lib/openSshTerminalAtPath";
 import {
   launchSavedRemoteDesktop,
+  shouldLaunchExternalRemoteDesktop,
   type RemoteDesktopClientInstallRecommendation,
   type RemoteDesktopProtocol,
 } from "./lib/remoteDesktop";
@@ -897,7 +898,7 @@ function App() {
             "get_saved_connections",
           );
           const conn = conns.find((c) => c.id === connectionId);
-          if (conn?.type === "vnc") {
+          if (conn && shouldLaunchExternalRemoteDesktop(conn)) {
             try {
               const result = await launchSavedRemoteDesktop(conn);
               if (result.status === "missing_client") {
@@ -1267,7 +1268,7 @@ function App() {
       connection: SavedConnection,
       options?: { failureContext?: string },
     ) => {
-      if (connection.type === "vnc") {
+      if (shouldLaunchExternalRemoteDesktop(connection)) {
         try {
           const result = await launchSavedRemoteDesktop(connection);
           if (result.status === "missing_client") {
@@ -1872,7 +1873,7 @@ function App() {
 
   const handleConnectConnectionFromLeaf = useCallback(
     async (leafId: string, connection: SavedConnection) => {
-      if (connection.type === "vnc") {
+      if (shouldLaunchExternalRemoteDesktop(connection)) {
         await connectSavedConnection(connection);
         return;
       }
@@ -4264,6 +4265,7 @@ function App() {
         t={t}
         uiConfig={uiConfig}
         appearance={appSettings.appearance}
+        keybindings={appSettings.keybindings}
         header={{
           onNewSession: () => handleNewSession(),
           onAbout: () => setShowAbout(true),

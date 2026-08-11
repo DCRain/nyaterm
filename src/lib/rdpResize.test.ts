@@ -31,26 +31,37 @@ describe("rdpResize", () => {
     ).toBe(false);
   });
 
-  it("clamps fit-window resize and skips duplicate sizes", () => {
+  it("matches container size with even width and skips duplicates", () => {
     expect(
       decideFitWindowResize({
         mode: "fit-window",
         visible: true,
-        containerWidth: 320,
-        containerHeight: 200,
+        containerWidth: 321.7,
+        containerHeight: 200.9,
       }),
-    ).toEqual({ shouldResize: true, width: 640, height: 480 });
+    ).toEqual({ shouldResize: true, width: 320, height: 200 });
 
     expect(
       decideFitWindowResize({
         mode: "fit-window",
         visible: true,
-        containerWidth: 640,
-        containerHeight: 480,
-        lastWidth: 640,
-        lastHeight: 480,
+        containerWidth: 1600,
+        containerHeight: 900,
+        lastWidth: 1600,
+        lastHeight: 900,
       }).shouldResize,
     ).toBe(false);
+  });
+
+  it("clamps tiny containers up to protocol minimum", () => {
+    expect(
+      decideFitWindowResize({
+        mode: "fit-window",
+        visible: true,
+        containerWidth: 120,
+        containerHeight: 80,
+      }),
+    ).toEqual({ shouldResize: true, width: 200, height: 200 });
   });
 
   it("keeps desktop object identity when the size is unchanged", () => {

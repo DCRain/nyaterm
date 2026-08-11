@@ -47,8 +47,9 @@ const MAX_CLIPBOARD_TEXT_BYTES: usize = 16 * 1024 * 1024;
 const CLIPBOARD_POLL_INTERVAL: Duration = Duration::from_millis(750);
 const CLIPBOARD_TIMEOUT: Duration = Duration::from_millis(1000);
 const CERTIFICATE_PROMPT_TIMEOUT: Duration = Duration::from_secs(120);
-const RDP_MIN_WIDTH: u32 = 640;
-const RDP_MIN_HEIGHT: u32 = 480;
+/// Match IronRDP / MS-RDPEDISP minima so fit-window can track small panes.
+const RDP_MIN_WIDTH: u32 = 200;
+const RDP_MIN_HEIGHT: u32 = 200;
 const RDP_MAX_WIDTH: u32 = 7680;
 const RDP_MAX_HEIGHT: u32 = 4320;
 
@@ -1632,6 +1633,16 @@ fn user_facing_connector_error(
     error: &ironrdp::connector::ConnectorError,
     kind: RdpErrorKind,
 ) -> String {
+    let text = format!("{error:?}");
+    let lowered = text.to_ascii_lowercase();
+    // FailureCode(2) / SSL_NOT_ALLOWED_BY_SERVER: remote only allows Standard RDP Security.
+    // IronRDP requires TLS or CredSSP and cannot speak Standard RDP Security.
+    if lowered.contains("failurecode(2)")
+        || lowered.contains("ssl_not_allowed")
+        || lowered.contains("ssl not allowed")
+    {
+        return "RDP negotiation failed: the server only allows Standard RDP Security, which the built-in client does not support. Open this connection with the system RDP client (mstsc), or enable TLS/NLA on the server.".to_string();
+    }
     match kind {
         RdpErrorKind::Certificate => format!("RDP certificate error: {error:?}"),
         RdpErrorKind::Authentication => "RDP authentication failed".to_string(),

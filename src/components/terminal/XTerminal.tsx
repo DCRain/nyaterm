@@ -1573,6 +1573,7 @@ export default function XTerminal({
         "tab.multiplexSshWithCommand",
         "view.toggleLeftSidebar",
         "view.toggleRightSidebar",
+        "view.toggleFullscreen",
         "view.zoomIn",
         "view.zoomOut",
         "view.resetZoom",

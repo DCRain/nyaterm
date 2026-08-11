@@ -208,6 +208,12 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     labelKey: "settings.shortcutLabels.showAllCommands",
     defaultKeys: "ctrl+shift+p, meta+shift+p",
   },
+  {
+    id: "view.toggleFullscreen",
+    category: "view",
+    labelKey: "settings.shortcutLabels.toggleFullscreen",
+    defaultKeys: "f11",
+  },
 
   // --- File Explorer ---
   {

@@ -1,5 +1,13 @@
 import type { TFunction } from "i18next";
-import { type ComponentProps, type ReactNode, useEffect, useMemo, useState } from "react";
+import {
+  type ComponentProps,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { MdChevronLeft, MdChevronRight, MdTerminal } from "react-icons/md";
 import PanelStack from "@/components/app/PanelStack";
 import AboutDialog from "@/components/dialog/app/AboutDialog";
@@ -28,6 +36,7 @@ import QuickCommands from "@/components/panel/QuickCommands";
 import SerialSendPanel from "@/components/panel/SendCommandPanel";
 import TabWindowsWorkspace from "@/components/terminal/TabWindowsWorkspace";
 import { useTheme } from "@/context/ThemeContext";
+import { resolveShortcutKeys } from "@/hooks/useShortcutMap";
 import {
   buildBackgroundImageLayerStyle,
   buildSurfaceCssVariables,
@@ -35,6 +44,7 @@ import {
   loadBackgroundImageDataUrl,
 } from "@/lib/backgroundImage";
 import type { SendCommandPanelDraft } from "@/lib/sendCommandPanelEvents";
+import { matchesKeyEvent } from "@/lib/shortcutRegistry";
 import type { UpdateInfo } from "@/lib/updater";
 import { cn } from "@/lib/utils";
 import { bounceTopModalWindow } from "@/lib/windowManager";
@@ -57,6 +67,7 @@ interface AppLayoutProps {
   t: TFunction;
   uiConfig: UiConfig;
   appearance: AppearanceSettings;
+  keybindings?: Record<string, string>;
   header: HeaderProps;
   leftActivityBar: ActivityBarSideProps;
   rightActivityBar: ActivityBarSideProps;
@@ -150,6 +161,7 @@ export default function AppLayout({
   t,
   uiConfig,
   appearance,
+  keybindings = {},
   header,
   leftActivityBar,
   rightActivityBar,
@@ -172,6 +184,53 @@ export default function AppLayout({
   const backgroundImagePath = appearance.background_image_path?.trim() ?? "";
   const [backgroundDataUrl, setBackgroundDataUrl] = useState("");
   const [serialSendRunning, setSerialSendRunning] = useState(false);
+  const [terminalFullscreen, setTerminalFullscreen] = useState(false);
+  const terminalAreaRef = useRef<HTMLElement | null>(null);
+
+  const toggleTerminalFullscreen = useCallback(async () => {
+    const area = terminalAreaRef.current;
+    if (!area) return;
+    try {
+      if (document.fullscreenElement === area) {
+        await document.exitFullscreen();
+        return;
+      }
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      }
+      await area.requestFullscreen();
+    } catch {
+      // WebView / user gesture restrictions — ignore.
+    }
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat) return;
+      const keys = resolveShortcutKeys("view.toggleFullscreen", keybindings);
+      if (!matchesKeyEvent(keys, event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void toggleTerminalFullscreen();
+    };
+    // Capture phase so F11 wins over RDP / xterm handlers.
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [keybindings, toggleTerminalFullscreen]);
+
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      setTerminalFullscreen(document.fullscreenElement === terminalAreaRef.current);
+      window.dispatchEvent(new CustomEvent("nyaterm:refresh-terminals"));
+    };
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
+      if (document.fullscreenElement === terminalAreaRef.current) {
+        void document.exitFullscreen().catch(() => {});
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -302,15 +361,17 @@ export default function AppLayout({
           )}
 
           <section
+            ref={terminalAreaRef}
             className={cn(
               "relative flex min-w-0 flex-1 origin-top-left flex-col overflow-hidden",
               !leftEdgeOccupied && "rounded-bl-[var(--nyaterm-window-radius)]",
               !rightEdgeOccupied && "rounded-br-[var(--nyaterm-window-radius)]",
             )}
             style={{
-              backgroundColor: backgroundEnabled
-                ? "transparent"
-                : "var(--df-bg-terminal)",
+              backgroundColor:
+                backgroundEnabled && !terminalFullscreen
+                  ? "transparent"
+                  : "var(--df-bg-terminal)",
             }}
           >
             {hasLeftActivityItems && !leftActivityBarVisible && (

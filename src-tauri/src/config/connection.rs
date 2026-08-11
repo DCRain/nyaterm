@@ -286,6 +286,9 @@ pub enum ConnectionType {
         username: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         domain: String,
+        /// `external` = system client (mstsc); `builtin` = in-app IronRDP.
+        #[serde(default = "default_rdp_client_mode")]
+        client_mode: String,
         #[serde(default)]
         security: RdpSecuritySettings,
         #[serde(default)]
@@ -294,6 +297,41 @@ pub enum ConnectionType {
         clipboard: RdpClipboardSettings,
         #[serde(default)]
         reconnect: RdpReconnectSettings,
+        // External (system client) options — kept flat for compatibility with legacy saves.
+        #[serde(
+            default = "default_rdp_external_display_mode",
+            skip_serializing_if = "is_default_rdp_external_display_mode"
+        )]
+        display_mode: String,
+        #[serde(default = "default_rdp_external_width")]
+        width: u16,
+        #[serde(default = "default_rdp_external_height")]
+        height: u16,
+        // Always serialize so the edit dialog receives explicit booleans
+        // (skip_serializing_if would omit `true` and the UI looked unchecked).
+        #[serde(default = "default_true")]
+        redirect_clipboard: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        redirect_printers: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        redirect_com_ports: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        redirect_smart_cards: bool,
+        #[serde(default = "default_rdp_drive_redirect")]
+        drive_redirect: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        device_redirect: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        camera_redirect: String,
+        #[serde(default, skip_serializing_if = "is_zero_u8")]
+        audio_mode: u8,
+        #[serde(default = "default_true")]
+        audio_capture: bool,
+        #[serde(default = "default_rdp_keyboard_hook")]
+        keyboard_hook: u8,
+        /// Preferred external client id (`mstsc`, `windows-app`, …). Empty = auto.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        preferred_client: String,
     },
     Vnc {
         host: String,
@@ -422,14 +460,38 @@ impl Default for RdpReconnectSettings {
 fn default_rdp_certificate_policy() -> String {
     "prompt".to_string()
 }
+fn default_rdp_client_mode() -> String {
+    "external".to_string()
+}
 fn default_rdp_display_mode() -> String {
     "fit-window".to_string()
+}
+fn default_rdp_external_display_mode() -> String {
+    "fullscreen".to_string()
+}
+fn is_default_rdp_external_display_mode(value: &str) -> bool {
+    value == "fullscreen"
 }
 fn default_rdp_width() -> u32 {
     1920
 }
 fn default_rdp_height() -> u32 {
     1080
+}
+fn default_rdp_external_width() -> u16 {
+    1920
+}
+fn default_rdp_external_height() -> u16 {
+    1080
+}
+fn default_rdp_drive_redirect() -> String {
+    "*".to_string()
+}
+fn default_rdp_keyboard_hook() -> u8 {
+    2
+}
+fn is_zero_u8(value: &u8) -> bool {
+    *value == 0
 }
 fn default_rdp_color_depth() -> u8 {
     32
@@ -1400,10 +1462,16 @@ mod tests {
 
         let ConnectionType::Rdp {
             port,
+            client_mode,
             security,
             display,
             clipboard,
             reconnect,
+            display_mode,
+            width,
+            height,
+            redirect_clipboard,
+            preferred_client,
             ..
         } = connection.config
         else {
@@ -1411,6 +1479,7 @@ mod tests {
         };
 
         assert_eq!(port, 3389);
+        assert_eq!(client_mode, "external");
         assert!(security.use_nla);
         assert_eq!(security.certificate_policy, "prompt");
         assert_eq!(display.width, 1920);
@@ -1419,6 +1488,11 @@ mod tests {
         assert_eq!(clipboard.mode, "text-only");
         assert!(reconnect.enabled);
         assert_eq!(reconnect.max_attempts, 5);
+        assert_eq!(display_mode, "fullscreen");
+        assert_eq!(width, 1920);
+        assert_eq!(height, 1080);
+        assert!(redirect_clipboard);
+        assert!(preferred_client.is_empty());
     }
 
     #[test]

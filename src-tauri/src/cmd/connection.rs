@@ -314,10 +314,14 @@ fn validate_rdp_config(connection: &SavedConnection) -> AppResult<()> {
         host,
         port,
         username,
+        client_mode,
         security,
         display,
         clipboard,
         reconnect,
+        display_mode,
+        width,
+        height,
         ..
     } = &connection.config
     else {
@@ -332,7 +336,10 @@ fn validate_rdp_config(connection: &SavedConnection) -> AppResult<()> {
             "RDP port must be between 1 and 65535".to_string(),
         ));
     }
-    if username.trim().is_empty() {
+    if !matches!(client_mode.as_str(), "external" | "builtin") {
+        return Err(AppError::Config("RDP client mode is invalid".to_string()));
+    }
+    if client_mode == "builtin" && username.trim().is_empty() {
         return Err(AppError::Config("RDP username is required".to_string()));
     }
     if !matches!(
@@ -353,6 +360,16 @@ fn validate_rdp_config(connection: &SavedConnection) -> AppResult<()> {
     }
     if !matches!(display.color_depth, 16 | 24 | 32) {
         return Err(AppError::Config("RDP color depth is invalid".to_string()));
+    }
+    if !matches!(display_mode.as_str(), "fullscreen" | "windowed") {
+        return Err(AppError::Config(
+            "RDP external display mode is invalid".to_string(),
+        ));
+    }
+    if !(640..=8192).contains(width) || !(480..=8192).contains(height) {
+        return Err(AppError::Config(
+            "RDP external resolution is outside the supported range".to_string(),
+        ));
     }
     if !matches!(clipboard.mode.as_str(), "disabled" | "text-only") {
         return Err(AppError::Config(

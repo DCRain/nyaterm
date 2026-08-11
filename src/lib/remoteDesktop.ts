@@ -37,6 +37,18 @@ export function isRemoteDesktopConnection(
   return connection?.type === "rdp" || connection?.type === "vnc";
 }
 
+/** VNC always external; RDP external unless explicitly set to builtin IronRDP. */
+export function shouldLaunchExternalRemoteDesktop(
+  connection: Pick<SavedConnection, "type" | "client_mode"> | null | undefined,
+): boolean {
+  if (!connection) return false;
+  if (connection.type === "vnc") return true;
+  if (connection.type === "rdp") {
+    return connection.client_mode !== "builtin";
+  }
+  return false;
+}
+
 export async function listRemoteDesktopClients(
   protocol: RemoteDesktopProtocol,
 ): Promise<RemoteDesktopClientInfo[]> {

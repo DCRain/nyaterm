@@ -427,6 +427,8 @@ export interface SavedConnection {
   agent_endpoint?: SshAgentEndpoint;
   /** SSH-only: request server-side SSH Agent forwarding for the interactive shell. */
   agent_forwarding?: boolean;
+  /** RDP-only: `external` (system client) or `builtin` (in-app IronRDP). Defaults to external. */
+  client_mode?: "external" | "builtin";
   /** Legacy external RDP: "fullscreen" or "windowed". */
   display_mode?: string;
   /** Legacy external RDP: desktop width (defaults to 1920). */

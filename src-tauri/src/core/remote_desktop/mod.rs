@@ -35,6 +35,12 @@ mod tests {
                 host: "h".into(),
                 port: 3389,
                 username: String::new(),
+                domain: String::new(),
+                client_mode: "external".into(),
+                security: Default::default(),
+                display: Default::default(),
+                clipboard: Default::default(),
+                reconnect: Default::default(),
                 display_mode: "fullscreen".into(),
                 width: 1920,
                 height: 1080,
@@ -68,6 +74,8 @@ mod tests {
                 username: "u".into(),
                 backspace_mode: "del".into(),
                 x11_forwarding: false,
+                agent_endpoint: Default::default(),
+                agent_forwarding: false,
                 encoding: String::new(),
             })
             .is_err()

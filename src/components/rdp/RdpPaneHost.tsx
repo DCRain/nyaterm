@@ -1,6 +1,6 @@
 import { Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Maximize2, Monitor, Power, RotateCcw, Send, ShieldAlert } from "lucide-react";
+import { Maximize2, Minimize2, Monitor, Power, RotateCcw, Send, ShieldAlert } from "lucide-react";
 import {
   memo,
   type FocusEvent as ReactFocusEvent,
@@ -12,6 +12,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { invoke } from "@/lib/invoke";
 import { decodeRdpFramePatch, type RdpFramePatch } from "@/lib/rdpFrame";
@@ -362,10 +363,11 @@ function RdpPaneHost({
   const cursorRafRef = useRef<number | null>(null);
   const pendingCursorRef = useRef<{ x: number; y: number } | null>(null);
   const remoteCursorBitmapRef = useRef<RemoteCursorBitmap | null>(null);
+  const { t } = useTranslation();
   const lastResizeRef = useRef<{ width: number; height: number } | null>(null);
-  const didPrimeResizeRef = useRef(false);
   const [state, setState] = useState<RdpSessionState>(pane.connectError ? "failed" : "connecting");
   const [message, setMessage] = useState<string | null>(pane.connectError ?? null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [desktopSize, setDesktopSize] = useState({
     width: pane.display?.remoteWidth ?? 1920,
     height: pane.display?.remoteHeight ?? 1080,
@@ -424,7 +426,6 @@ function RdpPaneHost({
   );
 
   useEffect(() => {
-    didPrimeResizeRef.current = false;
     lastResizeRef.current = null;
 
     const channel = new Channel<ArrayBuffer>((frame) => {
@@ -565,10 +566,6 @@ function RdpPaneHost({
         });
         if (!decision.shouldResize) return;
         lastResizeRef.current = { width: decision.width, height: decision.height };
-        if (!didPrimeResizeRef.current) {
-          didPrimeResizeRef.current = true;
-          return;
-        }
         void invoke("rdp_resize", {
           sessionId: pane.sessionId,
           width: decision.width,
@@ -585,6 +582,30 @@ function RdpPaneHost({
       if (timer !== null) window.clearTimeout(timer);
     };
   }, [active, pane.display?.scaleMode, pane.sessionId, state, visible]);
+
+  useEffect(() => {
+    const syncFullscreen = () => {
+      setIsFullscreen(document.fullscreenElement === containerRef.current);
+    };
+    document.addEventListener("fullscreenchange", syncFullscreen);
+    syncFullscreen();
+    return () => {
+      document.removeEventListener("fullscreenchange", syncFullscreen);
+      if (document.fullscreenElement === containerRef.current) {
+        void document.exitFullscreen().catch(() => {});
+      }
+    };
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    if (document.fullscreenElement === container) {
+      void document.exitFullscreen().catch(() => {});
+      return;
+    }
+    void container.requestFullscreen().catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!active || !visible) releaseAllKeys();
@@ -693,14 +714,18 @@ function RdpPaneHost({
     [flushMouseMove],
   );
 
-  const scaleStyle = useMemo(
-    () => ({
+  const fitWindow = pane.display?.scaleMode === "fit";
+  const scaleStyle = useMemo(() => {
+    if (fitWindow) {
+      // Fill the pane edge-to-edge; remote desktop is resized to the container.
+      return { width: "100%", height: "100%" };
+    }
+    return {
       aspectRatio: `${desktopSize.width} / ${desktopSize.height}`,
       maxWidth: "100%",
       maxHeight: "100%",
-    }),
-    [desktopSize.height, desktopSize.width],
-  );
+    };
+  }, [desktopSize.height, desktopSize.width, fitWindow]);
 
   const sendShortcut = (events: RdpInputEvent[]) => {
     void sendInputBatch(events);
@@ -764,7 +789,7 @@ function RdpPaneHost({
       />
       <canvas
         ref={canvasRef}
-        className="block object-contain"
+        className={fitWindow ? "block h-full w-full" : "block object-contain"}
         style={scaleStyle}
         onPointerMove={queueMouseMove}
         onPointerDown={(event) => {
@@ -840,7 +865,24 @@ function RdpPaneHost({
         >
           <Power className="h-3.5 w-3.5" />
         </Button>
-        <Maximize2 className="h-3.5 w-3.5 text-white/50" />
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          className="h-6 w-6 text-white"
+          title={
+            isFullscreen ? t("dialog.rdpExitFullscreen") : t("dialog.rdpFullscreen")
+          }
+          aria-label={
+            isFullscreen ? t("dialog.rdpExitFullscreen") : t("dialog.rdpFullscreen")
+          }
+          onClick={() => void toggleFullscreen()}
+        >
+          {isFullscreen ? (
+            <Minimize2 className="h-3.5 w-3.5" />
+          ) : (
+            <Maximize2 className="h-3.5 w-3.5" />
+          )}
+        </Button>
       </div>
 
       {state !== "active" && (

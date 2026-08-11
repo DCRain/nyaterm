@@ -17,12 +17,42 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { invoke } from "@/lib/invoke";
+import { listRemoteDesktopClients, type RemoteDesktopClientInfo } from "@/lib/remoteDesktop";
 import type {
   RdpCertificatePolicy,
   RdpClipboardMode,
   RdpDisplayMode,
   SavedPassword,
 } from "@/types/global";
+
+export type RdpExternalDisplayMode = "fullscreen" | "windowed";
+export type RdpResolutionPreset =
+  | "3840x2160"
+  | "2560x1440"
+  | "2560x1600"
+  | "2048x1152"
+  | "1920x1200"
+  | "1920x1080"
+  | "1600x900"
+  | "1280x720"
+  | "custom";
+
+export type RdpDriveRedirectMode = "all" | "off" | "custom";
+export type RdpStarOrOff = "all" | "off";
+
+export interface RdpRedirectSettings {
+  redirectClipboard: boolean;
+  redirectPrinters: boolean;
+  redirectComPorts: boolean;
+  redirectSmartCards: boolean;
+  driveRedirectMode: RdpDriveRedirectMode;
+  driveRedirectCustom: string;
+  deviceRedirect: RdpStarOrOff;
+  cameraRedirect: RdpStarOrOff;
+  audioMode: number;
+  audioCapture: boolean;
+  keyboardHook: number;
+}
 
 interface RdpFormProps {
   host: string;
@@ -33,6 +63,8 @@ interface RdpFormProps {
   setUsername: (value: string) => void;
   domain: string;
   setDomain: (value: string) => void;
+  clientMode: "external" | "builtin";
+  setClientMode: (value: "external" | "builtin") => void;
   passwordId: string;
   setPasswordId: (value: string) => void;
   password: string;
@@ -55,10 +87,126 @@ interface RdpFormProps {
   setReconnectEnabled: (value: boolean) => void;
   reconnectMaxAttempts: number;
   setReconnectMaxAttempts: (value: number) => void;
+  externalDisplayMode: RdpExternalDisplayMode;
+  setExternalDisplayMode: (value: RdpExternalDisplayMode) => void;
+  resolutionPreset: RdpResolutionPreset;
+  setResolutionPreset: (value: RdpResolutionPreset) => void;
+  width: number;
+  setWidth: (value: number) => void;
+  height: number;
+  setHeight: (value: number) => void;
+  preferredClient: string;
+  setPreferredClient: (value: string) => void;
+  redirects: RdpRedirectSettings;
+  setRedirects: (patch: Partial<RdpRedirectSettings>) => void;
 }
 
 function RequiredMark() {
   return <span className="ml-0.5 text-destructive">*</span>;
+}
+
+const RESOLUTION_PRESETS: Array<{ value: RdpResolutionPreset; width: number; height: number }> = [
+  { value: "3840x2160", width: 3840, height: 2160 },
+  { value: "2560x1440", width: 2560, height: 1440 },
+  { value: "2560x1600", width: 2560, height: 1600 },
+  { value: "2048x1152", width: 2048, height: 1152 },
+  { value: "1920x1200", width: 1920, height: 1200 },
+  { value: "1920x1080", width: 1920, height: 1080 },
+  { value: "1600x900", width: 1600, height: 900 },
+  { value: "1280x720", width: 1280, height: 720 },
+];
+
+export const DEFAULT_RDP_WIDTH = 1920;
+export const DEFAULT_RDP_HEIGHT = 1080;
+export const DEFAULT_RDP_USERNAME = "administrator";
+
+export function resolveRdpResolutionPreset(width: number, height: number): RdpResolutionPreset {
+  const w = width > 0 ? width : DEFAULT_RDP_WIDTH;
+  const h = height > 0 ? height : DEFAULT_RDP_HEIGHT;
+  const match = RESOLUTION_PRESETS.find((preset) => preset.width === w && preset.height === h);
+  return match?.value ?? "custom";
+}
+
+export function normalizeRdpSize(width: number, height: number): { width: number; height: number } {
+  return {
+    width: width > 0 ? width : DEFAULT_RDP_WIDTH,
+    height: height > 0 ? height : DEFAULT_RDP_HEIGHT,
+  };
+}
+
+export function driveRedirectFromStored(value: string | undefined): {
+  mode: RdpDriveRedirectMode;
+  custom: string;
+} {
+  const trimmed = (value ?? "*").trim();
+  if (trimmed === "*") return { mode: "all", custom: "" };
+  if (!trimmed) return { mode: "off", custom: "" };
+  return { mode: "custom", custom: trimmed };
+}
+
+export function driveRedirectToStored(mode: RdpDriveRedirectMode, custom: string): string {
+  if (mode === "all") return "*";
+  if (mode === "off") return "";
+  return custom.trim();
+}
+
+export function starOrOffFromStored(value: string | undefined): RdpStarOrOff {
+  return (value ?? "").trim() === "*" ? "all" : "off";
+}
+
+export function starOrOffToStored(value: RdpStarOrOff): string {
+  return value === "all" ? "*" : "";
+}
+
+export function defaultRdpRedirectSettings(): RdpRedirectSettings {
+  return {
+    redirectClipboard: true,
+    redirectPrinters: false,
+    redirectComPorts: false,
+    redirectSmartCards: false,
+    driveRedirectMode: "all",
+    driveRedirectCustom: "",
+    deviceRedirect: "off",
+    cameraRedirect: "off",
+    audioMode: 0,
+    audioCapture: true,
+    keyboardHook: 2,
+  };
+}
+
+/** Merge partial/stored values onto defaults so switches never get `undefined` checked state. */
+export function normalizeRdpRedirectSettings(
+  partial?: Partial<RdpRedirectSettings> | null,
+): RdpRedirectSettings {
+  return { ...defaultRdpRedirectSettings(), ...partial };
+}
+
+export function rdpRedirectSettingsFromSaved(connection: {
+  redirect_clipboard?: boolean;
+  redirect_printers?: boolean;
+  redirect_com_ports?: boolean;
+  redirect_smart_cards?: boolean;
+  drive_redirect?: string;
+  device_redirect?: string;
+  camera_redirect?: string;
+  audio_mode?: number;
+  audio_capture?: boolean;
+  keyboard_hook?: number;
+}): RdpRedirectSettings {
+  const drive = driveRedirectFromStored(connection.drive_redirect);
+  return normalizeRdpRedirectSettings({
+    redirectClipboard: connection.redirect_clipboard ?? true,
+    redirectPrinters: connection.redirect_printers ?? false,
+    redirectComPorts: connection.redirect_com_ports ?? false,
+    redirectSmartCards: connection.redirect_smart_cards ?? false,
+    driveRedirectMode: drive.mode,
+    driveRedirectCustom: drive.custom,
+    deviceRedirect: starOrOffFromStored(connection.device_redirect),
+    cameraRedirect: starOrOffFromStored(connection.camera_redirect),
+    audioMode: connection.audio_mode ?? 0,
+    audioCapture: connection.audio_capture ?? true,
+    keyboardHook: connection.keyboard_hook ?? 2,
+  });
 }
 
 export function RdpForm({
@@ -70,6 +218,8 @@ export function RdpForm({
   setUsername,
   domain,
   setDomain,
+  clientMode,
+  setClientMode,
   passwordId,
   setPasswordId,
   password,
@@ -92,11 +242,25 @@ export function RdpForm({
   setReconnectEnabled,
   reconnectMaxAttempts,
   setReconnectMaxAttempts,
+  externalDisplayMode,
+  setExternalDisplayMode,
+  resolutionPreset,
+  setResolutionPreset,
+  width,
+  setWidth,
+  height,
+  setHeight,
+  preferredClient,
+  setPreferredClient,
+  redirects,
+  setRedirects,
 }: RdpFormProps) {
   const { t } = useTranslation();
   const [passwords, setPasswords] = useState<SavedPassword[]>([]);
   const [showPassword, setShowPassword] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [redirectsOpen, setRedirectsOpen] = useState(true);
+  const [clients, setClients] = useState<RemoteDesktopClientInfo[]>([]);
 
   useEffect(() => {
     invoke<SavedPassword[]>("get_saved_passwords")
@@ -104,8 +268,79 @@ export function RdpForm({
       .catch(() => {});
   }, []);
 
+  useEffect(() => {
+    if (clientMode !== "external") {
+      return;
+    }
+
+    let cancelled = false;
+    void listRemoteDesktopClients("rdp")
+      .then((list) => {
+        if (!cancelled) setClients(list);
+      })
+      .catch(() => {
+        if (!cancelled) setClients([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [clientMode]);
+
+  const handlePresetChange = (value: RdpResolutionPreset) => {
+    setResolutionPreset(value);
+    if (value === "custom") {
+      if (width <= 0) setWidth(DEFAULT_RDP_WIDTH);
+      if (height <= 0) setHeight(DEFAULT_RDP_HEIGHT);
+      return;
+    }
+    const preset = RESOLUTION_PRESETS.find((item) => item.value === value);
+    if (preset) {
+      setWidth(preset.width);
+      setHeight(preset.height);
+    }
+  };
+
+  const clientSelectValue = preferredClient.trim() || "auto";
+
   return (
     <div className="space-y-3 w-full">
+      <div>
+        <Label className="text-xs font-medium text-foreground/80">
+          {t("dialog.rdpClientMode", "Connection mode")}
+        </Label>
+        <Select
+          value={clientMode}
+          onValueChange={(value) => setClientMode(value as "external" | "builtin")}
+        >
+          <SelectTrigger className="mt-1 h-8 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="external" className="text-xs">
+              {t("dialog.rdpClientExternal", "External client")}
+            </SelectItem>
+            <SelectItem value="builtin" className="text-xs">
+              {t("dialog.rdpClientBuiltin", "Built-in (IronRDP)")}
+            </SelectItem>
+          </SelectContent>
+        </Select>
+        {clientMode === "builtin" ? (
+          <p className="mt-1.5 text-[0.6875rem] leading-snug text-muted-foreground">
+            {t(
+              "dialog.rdpClientBuiltinDesc",
+              "Connect inside NyaTerm with password, certificate, and display options.",
+            )}
+          </p>
+        ) : (
+          <p className="mt-1.5 text-[0.6875rem] leading-snug text-muted-foreground">
+            {t(
+              "dialog.rdpExternalHint",
+              "Opens an external RDP client (such as mstsc or FreeRDP). Passwords are entered in the client.",
+            )}
+          </p>
+        )}
+      </div>
+
       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_8rem]">
         <div>
           <Label className="text-xs font-medium text-foreground/80">
@@ -138,11 +373,14 @@ export function RdpForm({
         <div>
           <Label className="text-xs font-medium text-foreground/80">
             {t("dialog.username")}
-            <RequiredMark />
+            {clientMode === "builtin" ? <RequiredMark /> : null}
           </Label>
           <Input
             className="mt-1 h-8 text-xs"
             value={username}
+            placeholder={
+              clientMode === "external" ? DEFAULT_RDP_USERNAME : t("dialog.rdpUsernamePlaceholder")
+            }
             onChange={(event) => setUsername(event.target.value)}
           />
         </div>
@@ -156,222 +394,564 @@ export function RdpForm({
         </div>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <div>
-          <Label className="text-xs font-medium text-foreground/80">{t("dialog.password")}</Label>
-          <div className="mt-1 flex gap-2">
-            <Input
-              className="h-8 text-xs"
-              type={showPassword ? "text" : "password"}
-              value={password}
-              placeholder={hasPassword ? "********" : ""}
-              disabled={!!passwordId}
-              onChange={(event) => {
-                setPassword(event.target.value);
-                setHasPassword(false);
-              }}
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="icon-sm"
-              className="h-8 w-8"
-              onClick={() => setShowPassword((value) => !value)}
+      {clientMode === "builtin" ? (
+        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <div>
+            <Label className="text-xs font-medium text-foreground/80">{t("dialog.password")}</Label>
+            <div className="mt-1 flex gap-2">
+              <Input
+                className="h-8 text-xs"
+                type={showPassword ? "text" : "password"}
+                value={password}
+                placeholder={hasPassword ? "********" : ""}
+                disabled={!!passwordId}
+                onChange={(event) => {
+                  setPassword(event.target.value);
+                  setHasPassword(false);
+                }}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="icon-sm"
+                className="h-8 w-8"
+                onClick={() => setShowPassword((value) => !value)}
+              >
+                {showPassword ? (
+                  <EyeOff className="h-3.5 w-3.5" />
+                ) : (
+                  <Eye className="h-3.5 w-3.5" />
+                )}
+              </Button>
+            </div>
+          </div>
+          <div>
+            <Label className="text-xs font-medium text-foreground/80">
+              {t("dialog.savedPassword")}
+            </Label>
+            <Select
+              value={passwordId || "inline"}
+              onValueChange={(value) => setPasswordId(value === "inline" ? "" : value)}
             >
-              {showPassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-            </Button>
+              <SelectTrigger className="mt-1 h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="inline">{t("dialog.passwordInline")}</SelectItem>
+                {passwords.map((item) => (
+                  <SelectItem key={item.id} value={item.id}>
+                    {item.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </div>
-        <div>
-          <Label className="text-xs font-medium text-foreground/80">
-            {t("dialog.savedPassword")}
-          </Label>
-          <Select
-            value={passwordId || "inline"}
-            onValueChange={(value) => setPasswordId(value === "inline" ? "" : value)}
-          >
-            <SelectTrigger className="mt-1 h-8 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="inline">{t("dialog.passwordInline")}</SelectItem>
-              {passwords.map((item) => (
-                <SelectItem key={item.id} value={item.id}>
-                  {item.name}
+      ) : null}
+
+      {clientMode === "external" ? (
+        <>
+          <div>
+            <Label className="text-xs font-medium text-foreground/80">
+              {t("dialog.rdpClient", "RDP client")}
+            </Label>
+            <Select
+              value={clientSelectValue}
+              onValueChange={(value) => setPreferredClient(value === "auto" ? "" : value)}
+            >
+              <SelectTrigger className="mt-1 h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto" className="text-xs">
+                  {t("dialog.rdpClientAuto", "Automatic (recommended)")}
                 </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
+                {preferredClient.trim() &&
+                !clients.some((client) => client.id === preferredClient.trim()) ? (
+                  <SelectItem value={preferredClient.trim()} className="text-xs">
+                    {`${preferredClient.trim()} (${t("dialog.rdpClientNotInstalled", "not installed")})`}
+                  </SelectItem>
+                ) : null}
+                {clients.map((client) => (
+                  <SelectItem key={client.id} value={client.id} className="text-xs">
+                    {client.available
+                      ? client.name
+                      : `${client.name} (${t("dialog.rdpClientNotInstalled", "not installed")})`}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {externalDisplayMode === "windowed" ? (
+              <p className="mt-1.5 text-[0.6875rem] leading-snug text-muted-foreground">
+                {t(
+                  "dialog.rdpDynamicResolutionHint",
+                  "Windowed mode writes dynamic resolution. Windows App and FreeRDP can resize the remote desktop with the window; mstsc usually keeps a fixed resolution and may show scrollbars.",
+                )}
+              </p>
+            ) : null}
+          </div>
 
-      <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
-        <CollapsibleTrigger className="group flex w-full items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground">
-          <MdChevronRight
-            className={`text-sm transition-transform duration-200 ${advancedOpen ? "rotate-90" : ""}`}
-          />
-          <span>{t("dialog.advancedConfig")}</span>
-        </CollapsibleTrigger>
-        <CollapsibleContent className="mt-3">
-          <Tabs defaultValue="security" className="w-full">
-            <TabsList className="grid h-8 w-full grid-cols-4 pointer-events-auto">
-              <TabsTrigger value="security" className="text-xs">
-                {t("dialog.rdpSecurity")}
-              </TabsTrigger>
-              <TabsTrigger value="display" className="text-xs">
-                {t("dialog.rdpDisplay")}
-              </TabsTrigger>
-              <TabsTrigger value="clipboard" className="text-xs">
-                {t("dialog.rdpClipboard")}
-              </TabsTrigger>
-              <TabsTrigger value="reconnect" className="text-xs">
-                {t("dialog.rdpReconnect")}
-              </TabsTrigger>
-            </TabsList>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <Label className="text-xs font-medium text-foreground/80">
+                {t("dialog.rdpDisplayMode", "Display mode")}
+              </Label>
+              <Select
+                value={externalDisplayMode}
+                onValueChange={(value) => setExternalDisplayMode(value as RdpExternalDisplayMode)}
+              >
+                <SelectTrigger className="mt-1 h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="fullscreen" className="text-xs">
+                    {t("dialog.rdpFullscreen", "Fullscreen")}
+                  </SelectItem>
+                  <SelectItem value="windowed" className="text-xs">
+                    {t("dialog.rdpWindowed", "Windowed")}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs font-medium text-foreground/80">
+                {t("dialog.rdpResolution", "Resolution")}
+              </Label>
+              <Select
+                value={resolutionPreset}
+                onValueChange={(value) => handlePresetChange(value as RdpResolutionPreset)}
+              >
+                <SelectTrigger className="mt-1 h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="3840x2160" className="text-xs">
+                    3840×2160 (4K)
+                  </SelectItem>
+                  <SelectItem value="2560x1440" className="text-xs">
+                    2560×1440 (2K)
+                  </SelectItem>
+                  <SelectItem value="2560x1600" className="text-xs">
+                    2560×1600
+                  </SelectItem>
+                  <SelectItem value="2048x1152" className="text-xs">
+                    2048×1152
+                  </SelectItem>
+                  <SelectItem value="1920x1200" className="text-xs">
+                    1920×1200
+                  </SelectItem>
+                  <SelectItem value="1920x1080" className="text-xs">
+                    1920×1080
+                  </SelectItem>
+                  <SelectItem value="1600x900" className="text-xs">
+                    1600×900
+                  </SelectItem>
+                  <SelectItem value="1280x720" className="text-xs">
+                    1280×720
+                  </SelectItem>
+                  <SelectItem value="custom" className="text-xs">
+                    {t("dialog.rdpResolutionCustom", "Custom")}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
 
-            <TabsContent value="security" className="mt-3 border-0 outline-none">
-              <div className="rounded-lg border bg-accent/25 p-3">
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="rounded-md border bg-background/70 px-3 py-2">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 space-y-0.5">
-                        <div className="text-xs font-medium">{t("dialog.rdpUseNla")}</div>
-                        <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
-                          {t("dialog.rdpUseNlaDesc")}
-                        </p>
-                      </div>
-                      <Switch checked={useNla} onCheckedChange={setUseNla} />
-                    </div>
-                  </div>
+          {resolutionPreset === "custom" ? (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs font-medium text-foreground/80">
+                  {t("dialog.rdpWidth", "Width")}
+                </Label>
+                <NumberInput
+                  className="mt-1 [&_button]:h-8 [&_button]:w-8 [&_input]:h-8 [&_input]:text-xs"
+                  value={width || DEFAULT_RDP_WIDTH}
+                  min={640}
+                  max={8192}
+                  onChange={(value) => setWidth(Math.max(0, value))}
+                />
+              </div>
+              <div>
+                <Label className="text-xs font-medium text-foreground/80">
+                  {t("dialog.rdpHeight", "Height")}
+                </Label>
+                <NumberInput
+                  className="mt-1 [&_button]:h-8 [&_button]:w-8 [&_input]:h-8 [&_input]:text-xs"
+                  value={height || DEFAULT_RDP_HEIGHT}
+                  min={480}
+                  max={8192}
+                  onChange={(value) => setHeight(Math.max(0, value))}
+                />
+              </div>
+            </div>
+          ) : null}
+
+          <Collapsible open={redirectsOpen} onOpenChange={setRedirectsOpen}>
+            <CollapsibleTrigger className="group flex w-full items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground">
+              <MdChevronRight className="size-3.5 transition-transform group-data-[state=open]:rotate-90" />
+              {t("dialog.rdpRedirectSection", "Redirection & devices")}
+            </CollapsibleTrigger>
+            <CollapsibleContent className="mt-3 space-y-3">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <SwitchRow
+                  label={t("dialog.rdpClipboard", "Clipboard")}
+                  checked={redirects.redirectClipboard}
+                  onCheckedChange={(checked) => setRedirects({ redirectClipboard: checked })}
+                />
+                <SwitchRow
+                  label={t("dialog.rdpPrinters", "Printers")}
+                  checked={redirects.redirectPrinters}
+                  onCheckedChange={(checked) => setRedirects({ redirectPrinters: checked })}
+                />
+                <SwitchRow
+                  label={t("dialog.rdpComPorts", "COM ports")}
+                  checked={redirects.redirectComPorts}
+                  onCheckedChange={(checked) => setRedirects({ redirectComPorts: checked })}
+                />
+                <SwitchRow
+                  label={t("dialog.rdpSmartCards", "Smart cards")}
+                  checked={redirects.redirectSmartCards}
+                  onCheckedChange={(checked) => setRedirects({ redirectSmartCards: checked })}
+                />
+                <SwitchRow
+                  label={t("dialog.rdpMicrophone", "Microphone")}
+                  checked={redirects.audioCapture}
+                  onCheckedChange={(checked) => setRedirects({ audioCapture: checked })}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <Label className="text-xs font-medium text-foreground/80">
+                    {t("dialog.rdpAudioMode", "Audio output")}
+                  </Label>
+                  <Select
+                    value={String(redirects.audioMode)}
+                    onValueChange={(value) => setRedirects({ audioMode: Number(value) })}
+                  >
+                    <SelectTrigger className="mt-1 h-8 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="0" className="text-xs">
+                        {t("dialog.rdpAudioLocal", "Play on this computer")}
+                      </SelectItem>
+                      <SelectItem value="1" className="text-xs">
+                        {t("dialog.rdpAudioRemote", "Play on remote computer")}
+                      </SelectItem>
+                      <SelectItem value="2" className="text-xs">
+                        {t("dialog.rdpAudioOff", "Do not play")}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs font-medium text-foreground/80">
+                    {t("dialog.rdpKeyboardHook", "Windows keys")}
+                  </Label>
+                  <Select
+                    value={String(redirects.keyboardHook)}
+                    onValueChange={(value) => setRedirects({ keyboardHook: Number(value) })}
+                  >
+                    <SelectTrigger className="mt-1 h-8 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="0" className="text-xs">
+                        {t("dialog.rdpKeyboardLocal", "On this computer")}
+                      </SelectItem>
+                      <SelectItem value="1" className="text-xs">
+                        {t("dialog.rdpKeyboardRemote", "On the remote computer")}
+                      </SelectItem>
+                      <SelectItem value="2" className="text-xs">
+                        {t("dialog.rdpKeyboardFullscreen", "Only when fullscreen")}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <Label className="text-xs font-medium text-foreground/80">
+                    {t("dialog.rdpDrives", "Drive redirection")}
+                  </Label>
+                  <Select
+                    value={redirects.driveRedirectMode}
+                    onValueChange={(value) =>
+                      setRedirects({ driveRedirectMode: value as RdpDriveRedirectMode })
+                    }
+                  >
+                    <SelectTrigger className="mt-1 h-8 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all" className="text-xs">
+                        {t("dialog.rdpRedirectAll", "All drives")}
+                      </SelectItem>
+                      <SelectItem value="off" className="text-xs">
+                        {t("dialog.rdpRedirectOff", "Off")}
+                      </SelectItem>
+                      <SelectItem value="custom" className="text-xs">
+                        {t("dialog.rdpRedirectCustom", "Custom")}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {redirects.driveRedirectMode === "custom" ? (
+                    <Input
+                      className="mt-2 h-8 text-xs"
+                      value={redirects.driveRedirectCustom}
+                      placeholder="C:;D:;"
+                      onChange={(event) =>
+                        setRedirects({ driveRedirectCustom: event.target.value })
+                      }
+                    />
+                  ) : null}
+                </div>
+                <div className="space-y-3">
                   <div>
                     <Label className="text-xs font-medium text-foreground/80">
-                      {t("dialog.rdpCertificatePolicy")}
+                      {t("dialog.rdpDevices", "PnP devices")}
                     </Label>
                     <Select
-                      value={certificatePolicy}
+                      value={redirects.deviceRedirect}
                       onValueChange={(value) =>
-                        setCertificatePolicy(value as RdpCertificatePolicy)
+                        setRedirects({ deviceRedirect: value as RdpStarOrOff })
                       }
                     >
                       <SelectTrigger className="mt-1 h-8 text-xs">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="prompt">{t("dialog.rdpCertificatePrompt")}</SelectItem>
-                        <SelectItem value="strict">{t("dialog.rdpCertificateStrict")}</SelectItem>
-                        <SelectItem value="accept-temporarily">
-                          {t("dialog.rdpCertificateTemporary")}
+                        <SelectItem value="all" className="text-xs">
+                          {t("dialog.rdpRedirectAll", "All")}
+                        </SelectItem>
+                        <SelectItem value="off" className="text-xs">
+                          {t("dialog.rdpRedirectOff", "Off")}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label className="text-xs font-medium text-foreground/80">
+                      {t("dialog.rdpCameras", "Cameras")}
+                    </Label>
+                    <Select
+                      value={redirects.cameraRedirect}
+                      onValueChange={(value) =>
+                        setRedirects({ cameraRedirect: value as RdpStarOrOff })
+                      }
+                    >
+                      <SelectTrigger className="mt-1 h-8 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all" className="text-xs">
+                          {t("dialog.rdpRedirectAll", "All")}
+                        </SelectItem>
+                        <SelectItem value="off" className="text-xs">
+                          {t("dialog.rdpRedirectOff", "Off")}
                         </SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                 </div>
               </div>
-            </TabsContent>
+            </CollapsibleContent>
+          </Collapsible>
+        </>
+      ) : null}
 
-            <TabsContent value="display" className="mt-3 border-0 outline-none">
-              <div className="rounded-lg border bg-accent/25 p-3">
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <div>
+      {clientMode === "builtin" ? (
+        <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+          <CollapsibleTrigger className="group flex w-full items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground">
+            <MdChevronRight
+              className={`text-sm transition-transform duration-200 ${advancedOpen ? "rotate-90" : ""}`}
+            />
+            <span>{t("dialog.advancedConfig")}</span>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="mt-3">
+            <Tabs defaultValue="security" className="w-full">
+              <TabsList className="grid h-8 w-full grid-cols-4 pointer-events-auto">
+                <TabsTrigger value="security" className="text-xs">
+                  {t("dialog.rdpSecurity")}
+                </TabsTrigger>
+                <TabsTrigger value="display" className="text-xs">
+                  {t("dialog.rdpDisplay")}
+                </TabsTrigger>
+                <TabsTrigger value="clipboard" className="text-xs">
+                  {t("dialog.rdpClipboard")}
+                </TabsTrigger>
+                <TabsTrigger value="reconnect" className="text-xs">
+                  {t("dialog.rdpReconnect")}
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="security" className="mt-3 border-0 outline-none">
+                <div className="rounded-lg border bg-accent/25 p-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-md border bg-background/70 px-3 py-2">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 space-y-0.5">
+                          <div className="text-xs font-medium">{t("dialog.rdpUseNla")}</div>
+                          <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+                            {t("dialog.rdpUseNlaDesc")}
+                          </p>
+                        </div>
+                        <Switch checked={useNla} onCheckedChange={setUseNla} />
+                      </div>
+                    </div>
+                    <div>
+                      <Label className="text-xs font-medium text-foreground/80">
+                        {t("dialog.rdpCertificatePolicy")}
+                      </Label>
+                      <Select
+                        value={certificatePolicy}
+                        onValueChange={(value) =>
+                          setCertificatePolicy(value as RdpCertificatePolicy)
+                        }
+                      >
+                        <SelectTrigger className="mt-1 h-8 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="prompt">{t("dialog.rdpCertificatePrompt")}</SelectItem>
+                          <SelectItem value="strict">{t("dialog.rdpCertificateStrict")}</SelectItem>
+                          <SelectItem value="accept-temporarily">
+                            {t("dialog.rdpCertificateTemporary")}
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                </div>
+              </TabsContent>
+
+              <TabsContent value="display" className="mt-3 border-0 outline-none">
+                <div className="rounded-lg border bg-accent/25 p-3">
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div>
+                      <Label className="text-xs font-medium text-foreground/80">
+                        {t("dialog.rdpDisplayMode")}
+                      </Label>
+                      <Select
+                        value={displayMode === "native" ? "fixed" : displayMode}
+                        onValueChange={(value) => setDisplayMode(value as RdpDisplayMode)}
+                      >
+                        <SelectTrigger className="mt-1 h-8 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="fit-window">
+                            {t("dialog.rdpDisplayFitWindow")}
+                          </SelectItem>
+                          <SelectItem value="fixed">{t("dialog.rdpDisplayFixed")}</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-xs font-medium text-foreground/80">
+                        {t("dialog.rdpWidth")}
+                      </Label>
+                      <NumberInput
+                        className="mt-1 [&_button]:h-8 [&_button]:w-8 [&_input]:h-8 [&_input]:text-xs"
+                        value={displayWidth}
+                        onChange={setDisplayWidth}
+                        min={640}
+                        max={7680}
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs font-medium text-foreground/80">
+                        {t("dialog.rdpHeight")}
+                      </Label>
+                      <NumberInput
+                        className="mt-1 [&_button]:h-8 [&_button]:w-8 [&_input]:h-8 [&_input]:text-xs"
+                        value={displayHeight}
+                        onChange={setDisplayHeight}
+                        min={480}
+                        max={4320}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </TabsContent>
+
+              <TabsContent value="clipboard" className="mt-3 border-0 outline-none">
+                <div className="rounded-lg border bg-accent/25 p-3">
+                  <div className="max-w-md">
                     <Label className="text-xs font-medium text-foreground/80">
-                      {t("dialog.rdpDisplayMode")}
+                      {t("dialog.rdpClipboard")}
                     </Label>
                     <Select
-                      value={displayMode === "native" ? "fixed" : displayMode}
-                      onValueChange={(value) => setDisplayMode(value as RdpDisplayMode)}
+                      value={clipboardMode}
+                      onValueChange={(value) => setClipboardMode(value as RdpClipboardMode)}
                     >
                       <SelectTrigger className="mt-1 h-8 text-xs">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="fit-window">{t("dialog.rdpDisplayFitWindow")}</SelectItem>
-                        <SelectItem value="fixed">{t("dialog.rdpDisplayFixed")}</SelectItem>
+                        <SelectItem value="text-only">
+                          {t("dialog.rdpClipboardTextOnly")}
+                        </SelectItem>
+                        <SelectItem value="disabled">{t("dialog.disabled")}</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
-                  <div>
-                    <Label className="text-xs font-medium text-foreground/80">
-                      {t("dialog.rdpWidth")}
-                    </Label>
-                    <NumberInput
-                      className="mt-1 [&_button]:h-8 [&_button]:w-8 [&_input]:h-8 [&_input]:text-xs"
-                      value={displayWidth}
-                      onChange={setDisplayWidth}
-                      min={640}
-                      max={7680}
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-xs font-medium text-foreground/80">
-                      {t("dialog.rdpHeight")}
-                    </Label>
-                    <NumberInput
-                      className="mt-1 [&_button]:h-8 [&_button]:w-8 [&_input]:h-8 [&_input]:text-xs"
-                      value={displayHeight}
-                      onChange={setDisplayHeight}
-                      min={480}
-                      max={4320}
-                    />
-                  </div>
                 </div>
-              </div>
-            </TabsContent>
+              </TabsContent>
 
-            <TabsContent value="clipboard" className="mt-3 border-0 outline-none">
-              <div className="rounded-lg border bg-accent/25 p-3">
-                <div className="max-w-md">
-                  <Label className="text-xs font-medium text-foreground/80">
-                    {t("dialog.rdpClipboard")}
-                  </Label>
-                  <Select
-                    value={clipboardMode}
-                    onValueChange={(value) => setClipboardMode(value as RdpClipboardMode)}
-                  >
-                    <SelectTrigger className="mt-1 h-8 text-xs">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="text-only">{t("dialog.rdpClipboardTextOnly")}</SelectItem>
-                      <SelectItem value="disabled">{t("dialog.disabled")}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="reconnect" className="mt-3 border-0 outline-none">
-              <div className="rounded-lg border bg-accent/25 p-3">
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="rounded-md border bg-background/70 px-3 py-2">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 space-y-0.5">
-                        <div className="text-xs font-medium">{t("dialog.rdpAutoReconnect")}</div>
-                        <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
-                          {t("dialog.rdpAutoReconnectDesc")}
-                        </p>
+              <TabsContent value="reconnect" className="mt-3 border-0 outline-none">
+                <div className="rounded-lg border bg-accent/25 p-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-md border bg-background/70 px-3 py-2">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 space-y-0.5">
+                          <div className="text-xs font-medium">{t("dialog.rdpAutoReconnect")}</div>
+                          <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+                            {t("dialog.rdpAutoReconnectDesc")}
+                          </p>
+                        </div>
+                        <Switch checked={reconnectEnabled} onCheckedChange={setReconnectEnabled} />
                       </div>
-                      <Switch checked={reconnectEnabled} onCheckedChange={setReconnectEnabled} />
+                    </div>
+                    <div>
+                      <Label className="text-xs font-medium text-foreground/80">
+                        {t("dialog.rdpReconnectAttempts")}
+                      </Label>
+                      <NumberInput
+                        className="mt-1 [&_button]:h-8 [&_button]:w-8 [&_input]:h-8 [&_input]:text-xs"
+                        value={reconnectMaxAttempts}
+                        onChange={setReconnectMaxAttempts}
+                        min={0}
+                        max={20}
+                        disabled={!reconnectEnabled}
+                      />
                     </div>
                   </div>
-                  <div>
-                    <Label className="text-xs font-medium text-foreground/80">
-                      {t("dialog.rdpReconnectAttempts")}
-                    </Label>
-                    <NumberInput
-                      className="mt-1 [&_button]:h-8 [&_button]:w-8 [&_input]:h-8 [&_input]:text-xs"
-                      value={reconnectMaxAttempts}
-                      onChange={setReconnectMaxAttempts}
-                      min={0}
-                      max={20}
-                      disabled={!reconnectEnabled}
-                    />
-                  </div>
                 </div>
-              </div>
-            </TabsContent>
-          </Tabs>
-        </CollapsibleContent>
-      </Collapsible>
+              </TabsContent>
+            </Tabs>
+          </CollapsibleContent>
+        </Collapsible>
+      ) : null}
+    </div>
+  );
+}
+
+function SwitchRow({
+  label,
+  checked,
+  onCheckedChange,
+}: {
+  label: string;
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <Label className="text-xs font-medium text-foreground/80">{label}</Label>
+      <Switch checked={Boolean(checked)} onCheckedChange={onCheckedChange} />
     </div>
   );
 }

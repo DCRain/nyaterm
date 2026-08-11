@@ -15,7 +15,22 @@ import {
 import ChildWindowHeader from "@/components/layout/ChildWindowHeader";
 import { buildGroupPath, type ConnectionOption, sortLabel } from "@/components/network/shared";
 import { LocalTerminal } from "@/components/sessions/LocalTerminal";
-import { RdpForm } from "@/components/sessions/RdpForm";
+import {
+  DEFAULT_RDP_HEIGHT,
+  DEFAULT_RDP_USERNAME,
+  DEFAULT_RDP_WIDTH,
+  defaultRdpRedirectSettings,
+  driveRedirectToStored,
+  normalizeRdpRedirectSettings,
+  normalizeRdpSize,
+  type RdpExternalDisplayMode,
+  RdpForm,
+  type RdpRedirectSettings,
+  type RdpResolutionPreset,
+  rdpRedirectSettingsFromSaved,
+  resolveRdpResolutionPreset,
+  starOrOffToStored,
+} from "@/components/sessions/RdpForm";
 import { SerialForm } from "@/components/sessions/SerialForm";
 import { type SshAuthMode, SshForm } from "@/components/sessions/SshForm";
 import { TelnetForm } from "@/components/sessions/TelnetForm";
@@ -191,9 +206,18 @@ export default function NewSessionPage() {
   const [rdpPort, setRdpPort] = useState(3389);
   const [vncPort, setVncPort] = useState(5900);
   const [rdpDomain, setRdpDomain] = useState("");
+  const [rdpClientMode, setRdpClientMode] = useState<"external" | "builtin">("external");
+  const [rdpExternalDisplayMode, setRdpExternalDisplayMode] =
+    useState<RdpExternalDisplayMode>("fullscreen");
+  const [rdpResolutionPreset, setRdpResolutionPreset] = useState<RdpResolutionPreset>("1920x1080");
+  const [rdpWidth, setRdpWidth] = useState(DEFAULT_RDP_WIDTH);
+  const [rdpHeight, setRdpHeight] = useState(DEFAULT_RDP_HEIGHT);
+  const [rdpPreferredClient, setRdpPreferredClient] = useState("");
+  const [rdpRedirects, setRdpRedirects] = useState<RdpRedirectSettings>(() =>
+    defaultRdpRedirectSettings(),
+  );
   const [rdpUseNla, setRdpUseNla] = useState(true);
-  const [rdpCertificatePolicy, setRdpCertificatePolicy] =
-    useState<RdpCertificatePolicy>("prompt");
+  const [rdpCertificatePolicy, setRdpCertificatePolicy] = useState<RdpCertificatePolicy>("prompt");
   const [rdpDisplayMode, setRdpDisplayMode] = useState<RdpDisplayMode>("fit-window");
   const [rdpDisplayWidth, setRdpDisplayWidth] = useState(1920);
   const [rdpDisplayHeight, setRdpDisplayHeight] = useState(1080);
@@ -370,10 +394,11 @@ export default function NewSessionPage() {
         } else if (found.type === "rdp") {
           setHost(found.host || "");
           setRdpPort(found.port || 3389);
-          setUsername(found.username || "");
+          setUsername(found.username?.trim() || DEFAULT_RDP_USERNAME);
           setRdpDomain(found.domain || "");
           setPasswordId(found.auth?.password_id || "");
           setHasPassword(found.auth?.has_password || false);
+          setRdpClientMode(found.client_mode ?? "external");
           setRdpUseNla(found.security?.use_nla ?? true);
           setRdpCertificatePolicy(found.security?.certificate_policy ?? "prompt");
           setRdpDisplayMode(
@@ -384,6 +409,14 @@ export default function NewSessionPage() {
           setRdpClipboardMode(found.clipboard?.mode ?? "text-only");
           setRdpReconnectEnabled(found.reconnect?.enabled ?? true);
           setRdpReconnectMaxAttempts(found.reconnect?.max_attempts ?? 5);
+          const externalMode = found.display_mode === "windowed" ? "windowed" : "fullscreen";
+          setRdpExternalDisplayMode(externalMode);
+          const sized = normalizeRdpSize(found.width ?? 0, found.height ?? 0);
+          setRdpWidth(sized.width);
+          setRdpHeight(sized.height);
+          setRdpResolutionPreset(resolveRdpResolutionPreset(sized.width, sized.height));
+          setRdpRedirects(rdpRedirectSettingsFromSaved(found));
+          setRdpPreferredClient(found.preferred_client?.trim() || "");
         } else if (found.type === "vnc") {
           setHost(found.host || "");
           setVncPort(found.port || 5900);
@@ -438,6 +471,13 @@ export default function NewSessionPage() {
     setVncPort(5900);
     setUsername("root");
     setRdpDomain("");
+    setRdpClientMode("external");
+    setRdpExternalDisplayMode("fullscreen");
+    setRdpResolutionPreset("1920x1080");
+    setRdpWidth(DEFAULT_RDP_WIDTH);
+    setRdpHeight(DEFAULT_RDP_HEIGHT);
+    setRdpPreferredClient("");
+    setRdpRedirects(defaultRdpRedirectSettings());
     setRdpUseNla(true);
     setRdpCertificatePolicy("prompt");
     setRdpDisplayMode("fit-window");
@@ -659,18 +699,35 @@ export default function NewSessionPage() {
       if (!isValidPort(rdpPort)) {
         return t("dialog.portInvalid", "Port must be between 1 and 65535");
       }
-      if (!username.trim()) {
-        return t("dialog.usernameRequired", "Username is required");
-      }
-      if (!Number.isInteger(rdpDisplayWidth) || rdpDisplayWidth < 640 || rdpDisplayWidth > 7680) {
-        return t("dialog.rdpDisplayWidthInvalid");
-      }
-      if (
-        !Number.isInteger(rdpDisplayHeight) ||
-        rdpDisplayHeight < 480 ||
-        rdpDisplayHeight > 4320
-      ) {
-        return t("dialog.rdpDisplayHeightInvalid");
+      if (rdpClientMode === "builtin") {
+        if (!username.trim()) {
+          return t("dialog.usernameRequired", "Username is required");
+        }
+        if (!Number.isInteger(rdpDisplayWidth) || rdpDisplayWidth < 640 || rdpDisplayWidth > 7680) {
+          return t("dialog.rdpDisplayWidthInvalid");
+        }
+        if (
+          !Number.isInteger(rdpDisplayHeight) ||
+          rdpDisplayHeight < 480 ||
+          rdpDisplayHeight > 4320
+        ) {
+          return t("dialog.rdpDisplayHeightInvalid");
+        }
+      } else {
+        if (rdpResolutionPreset === "custom") {
+          if (!Number.isInteger(rdpWidth) || rdpWidth < 640 || rdpWidth > 7680) {
+            return t("dialog.rdpDisplayWidthInvalid");
+          }
+          if (!Number.isInteger(rdpHeight) || rdpHeight < 480 || rdpHeight > 4320) {
+            return t("dialog.rdpDisplayHeightInvalid");
+          }
+        }
+        if (
+          rdpRedirects.driveRedirectMode === "custom" &&
+          !rdpRedirects.driveRedirectCustom.trim()
+        ) {
+          return t("dialog.rdpDriveCustomRequired", "Enter at least one drive, e.g. C:;D:;");
+        }
       }
     }
 
@@ -708,9 +765,15 @@ export default function NewSessionPage() {
     postLoginCommand,
     postLoginDelayMs,
     postLoginEnabled,
+    rdpClientMode,
     rdpDisplayHeight,
     rdpDisplayWidth,
+    rdpHeight,
     rdpPort,
+    rdpRedirects.driveRedirectCustom,
+    rdpRedirects.driveRedirectMode,
+    rdpResolutionPreset,
+    rdpWidth,
     serialPortName,
     shellPath,
     sshPort,
@@ -920,30 +983,52 @@ export default function NewSessionPage() {
             }
           : {}),
         ...(currentTab === "rdp"
-          ? {
-              host: normalizedHost,
-              port: rdpPort,
-              username: normalizedUsername,
-              domain: rdpDomain.trim() || undefined,
-              auth,
-              security: {
-                use_nla: rdpUseNla,
-                certificate_policy: rdpCertificatePolicy,
-              },
-              display: {
-                mode: rdpDisplayMode,
-                width: rdpDisplayWidth,
-                height: rdpDisplayHeight,
-                color_depth: 32,
-              },
-              clipboard: {
-                mode: rdpClipboardMode,
-              },
-              reconnect: {
-                enabled: rdpReconnectEnabled,
-                max_attempts: rdpReconnectMaxAttempts,
-              },
-            }
+          ? (() => {
+              const sized = normalizeRdpSize(rdpWidth, rdpHeight);
+              const redirects = normalizeRdpRedirectSettings(rdpRedirects);
+              return {
+                host: normalizedHost,
+                port: rdpPort,
+                username: normalizedUsername || DEFAULT_RDP_USERNAME,
+                domain: rdpDomain.trim() || undefined,
+                client_mode: rdpClientMode,
+                auth,
+                security: {
+                  use_nla: rdpUseNla,
+                  certificate_policy: rdpCertificatePolicy,
+                },
+                display: {
+                  mode: rdpDisplayMode,
+                  width: rdpDisplayWidth,
+                  height: rdpDisplayHeight,
+                  color_depth: 32 as const,
+                },
+                clipboard: {
+                  mode: rdpClipboardMode,
+                },
+                reconnect: {
+                  enabled: rdpReconnectEnabled,
+                  max_attempts: rdpReconnectMaxAttempts,
+                },
+                display_mode: rdpExternalDisplayMode,
+                width: sized.width,
+                height: sized.height,
+                redirect_clipboard: redirects.redirectClipboard,
+                redirect_printers: redirects.redirectPrinters,
+                redirect_com_ports: redirects.redirectComPorts,
+                redirect_smart_cards: redirects.redirectSmartCards,
+                drive_redirect: driveRedirectToStored(
+                  redirects.driveRedirectMode,
+                  redirects.driveRedirectCustom,
+                ),
+                device_redirect: starOrOffToStored(redirects.deviceRedirect),
+                camera_redirect: starOrOffToStored(redirects.cameraRedirect),
+                audio_mode: redirects.audioMode,
+                audio_capture: redirects.audioCapture,
+                keyboard_hook: redirects.keyboardHook,
+                preferred_client: rdpPreferredClient.trim() || undefined,
+              };
+            })()
           : {}),
         ...(currentTab === "vnc"
           ? {
@@ -1655,6 +1740,8 @@ export default function NewSessionPage() {
                 setUsername={setUsername}
                 domain={rdpDomain}
                 setDomain={setRdpDomain}
+                clientMode={rdpClientMode}
+                setClientMode={setRdpClientMode}
                 passwordId={passwordId}
                 setPasswordId={setPasswordId}
                 password={password}
@@ -1677,6 +1764,18 @@ export default function NewSessionPage() {
                 setReconnectEnabled={setRdpReconnectEnabled}
                 reconnectMaxAttempts={rdpReconnectMaxAttempts}
                 setReconnectMaxAttempts={setRdpReconnectMaxAttempts}
+                externalDisplayMode={rdpExternalDisplayMode}
+                setExternalDisplayMode={setRdpExternalDisplayMode}
+                resolutionPreset={rdpResolutionPreset}
+                setResolutionPreset={setRdpResolutionPreset}
+                width={rdpWidth}
+                setWidth={setRdpWidth}
+                height={rdpHeight}
+                setHeight={setRdpHeight}
+                preferredClient={rdpPreferredClient}
+                setPreferredClient={setRdpPreferredClient}
+                redirects={rdpRedirects}
+                setRedirects={(patch) => setRdpRedirects((prev) => ({ ...prev, ...patch }))}
               />
             </TabsContent>
 
