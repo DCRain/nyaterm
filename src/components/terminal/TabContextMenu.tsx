@@ -11,6 +11,7 @@ import {
   MdHorizontalSplit,
   MdInfoOutline,
   MdInput,
+  MdFolderOpen,
   MdLinkOff,
   MdLock,
   MdLockOpen,
@@ -58,6 +59,7 @@ interface TabContextMenuProps {
   tabs: Tab[];
   onDuplicateSession: (tab: Tab) => void | Promise<void>;
   onMultiplexSshSession: (tab: Tab) => void | Promise<void>;
+  onMultiplexSshSftpSession: (tab: Tab) => void | Promise<void>;
   onDuplicateSessionWithCommand: (tab: Tab) => void | Promise<void>;
   onMultiplexSshSessionWithCommand: (tab: Tab) => void | Promise<void>;
   onReconnectSession: (tab: Tab) => void | Promise<void>;
@@ -83,6 +85,7 @@ export default function TabContextMenu({
   tabs,
   onDuplicateSession,
   onMultiplexSshSession,
+  onMultiplexSshSftpSession,
   onDuplicateSessionWithCommand,
   onMultiplexSshSessionWithCommand,
   onReconnectSession,
@@ -101,7 +104,7 @@ export default function TabContextMenu({
   onCopyServerIp,
 }: TabContextMenuProps) {
   const { t } = useTranslation();
-  const { updateTab } = useApp();
+  const { savedConnections, updateTab } = useApp();
 
   const activePane = getActivePane(tab);
   const tabIndex = tabs.findIndex((item) => item.id === tab.id);
@@ -114,6 +117,10 @@ export default function TabContextMenu({
     !activePane.connecting &&
     !activePane.connectError &&
     !!activePane.sessionId;
+  const sftpDisabledForConnection =
+    !!activePane?.connectionId &&
+    savedConnections.find((item) => item.id === activePane.connectionId)?.sftp?.enabled === false;
+  const canMultiplexSshSftp = canMultiplexSsh && !sftpDisabledForConnection;
   const canDisconnect = !!activePane && !activePane.connecting && !activePane.connectError;
   const canSplit = canSpawnSession && activePane?.view !== "sftp";
   const canUseAI = !!activePane && !activePane.connecting && !activePane.connectError;
@@ -254,6 +261,13 @@ export default function TabContextMenu({
             >
               <MdInput className={iconClass} />
               {t("tabCtx.multiplexSshWithCommand")}
+            </ContextMenuItem>
+            <ContextMenuItem
+              disabled={!canMultiplexSshSftp}
+              onClick={() => void onMultiplexSshSftpSession(tab)}
+            >
+              <MdFolderOpen className={iconClass} />
+              {t("tabCtx.multiplexSshSftp")}
             </ContextMenuItem>
           </ContextMenuSubContent>
         </ContextMenuSub>

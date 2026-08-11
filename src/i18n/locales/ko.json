@@ -2574,6 +2574,8 @@
     "lockedTabsSkipped": "잠긴 탭은 건너뛰었습니다",
     "multiplexSsh": "SSH 연결 재사용",
     "multiplexSshFailed": "SSH 채널을 재사용하지 못했습니다",
+    "multiplexSshSftp": "SSH 연결 재사용으로 SFTP 열기",
+    "multiplexSshSftpFailed": "재사용된 SSH 연결로 SFTP를 열지 못했습니다",
     "multiplexSshWithCommand": "SSH 연결 재사용 및 명령 실행",
     "nameCopied": "탭 이름이 복사되었습니다",
     "reconnect": "세션 다시 연결",

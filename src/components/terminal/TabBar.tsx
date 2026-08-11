@@ -67,6 +67,7 @@ interface TabBarProps {
   onConnectConnection: (connection: SavedConnection) => void | Promise<void>;
   onDuplicateSession: (tab: Tab) => void | Promise<void>;
   onMultiplexSshSession: (tab: Tab) => void | Promise<void>;
+  onMultiplexSshSftpSession: (tab: Tab) => void | Promise<void>;
   onDuplicateSessionWithCommand: (
     tab: Tab,
     command: string,
@@ -253,6 +254,7 @@ function TabBar({
   onConnectConnection,
   onDuplicateSession,
   onMultiplexSshSession,
+  onMultiplexSshSftpSession,
   onDuplicateSessionWithCommand,
   onMultiplexSshSessionWithCommand,
   onReconnectSession,
@@ -1269,6 +1271,7 @@ function TabBar({
           tabs={tabs}
           onDuplicateSession={onDuplicateSession}
           onMultiplexSshSession={onMultiplexSshSession}
+          onMultiplexSshSftpSession={onMultiplexSshSftpSession}
           onDuplicateSessionWithCommand={(targetTab) => openCommandDialog(targetTab, "duplicate")}
           onMultiplexSshSessionWithCommand={(targetTab) =>
             openCommandDialog(targetTab, "multiplex")

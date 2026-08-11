@@ -118,8 +118,10 @@ import {
   type FileListColumnWidths,
   type FileSortColumn,
   type FileSortMode,
+  fileExplorerSessionCacheKey,
   fileExplorerSessionCacheStore,
   getExplorerParentDirectory,
+  getSessionIdFromFileExplorerSessionCacheKey,
   getLocalPathName,
   getRemoteFileTextKind,
   type InlineRenameState,
@@ -457,7 +459,10 @@ function FileExplorer(props: FileExplorerProps) {
             : targetSessionId === secondaryEndpoint?.sessionId
               ? secondaryEndpoint
               : null;
-        const cachedPath = fileExplorerSessionCacheStore.get(targetSessionId)?.currentPath ?? "";
+        const cachedPath =
+          fileExplorerSessionCacheStore.get(
+            fileExplorerSessionCacheKey(targetSessionId, targetKind),
+          )?.currentPath ?? "";
         const livePath =
           liveEndpoint?.kind === targetKind
             ? normalizeExplorerPath(liveEndpoint.currentPath, targetKind)
@@ -937,6 +942,7 @@ export function FileExplorerPane({
   useEffect(() => {
     return () => {
       if (!activeSessionId) return;
+      const backend = explorerBackendRef.current;
       const snapshot = buildSessionCacheSnapshot(
         filesRef.current,
         currentPathRef.current,
@@ -944,10 +950,10 @@ export function FileExplorerPane({
         historyRef.current,
         historyIndexRef.current,
         visitedHistoryRef.current,
-        explorerBackendRef.current,
+        backend,
       );
       if (snapshot) {
-        sessionCacheRef.current.set(activeSessionId, snapshot);
+        sessionCacheRef.current.set(fileExplorerSessionCacheKey(activeSessionId, backend), snapshot);
       }
     };
   }, [activeSessionId]);
@@ -974,11 +980,16 @@ export function FileExplorerPane({
       try {
         const sessions = await invoke<SessionInfo[]>("list_sessions");
         const liveIds = new Set(sessions.map((session) => session.id));
-        for (const sessionId of [...cache.keys()]) {
+        const prunedSessionIds = new Set<string>();
+        for (const cacheKey of [...cache.keys()]) {
+          const sessionId = getSessionIdFromFileExplorerSessionCacheKey(cacheKey);
           if (!liveIds.has(sessionId)) {
-            cache.delete(sessionId);
-            clearDirectoryChildrenCacheForSession(sessionId);
+            cache.delete(cacheKey);
+            prunedSessionIds.add(sessionId);
           }
+        }
+        for (const sessionId of prunedSessionIds) {
+          clearDirectoryChildrenCacheForSession(sessionId);
         }
       } catch {
         // Backend might be unavailable; keep the cache untouched until next event.
@@ -1193,7 +1204,8 @@ export function FileExplorerPane({
           startTransition(applyListing);
         }
 
-        const cached = sessionCacheRef.current.get(activeSessionId);
+        const cacheKey = fileExplorerSessionCacheKey(activeSessionId, backend);
+        const cached = sessionCacheRef.current.get(cacheKey);
         const snapshot = buildSessionCacheSnapshot(
           entries,
           normalizedPath,
@@ -1204,7 +1216,7 @@ export function FileExplorerPane({
           backend,
         );
         if (snapshot) {
-          sessionCacheRef.current.set(activeSessionId, snapshot);
+          sessionCacheRef.current.set(cacheKey, snapshot);
         }
         return true;
       } catch (e) {
@@ -1348,6 +1360,7 @@ export function FileExplorerPane({
     resetExternalDropHover();
     const cache = sessionCacheRef.current;
     const prevId = prevSessionIdRef.current;
+    const backend = explorerBackendRef.current;
 
     if (prevId && prevId !== activeSessionId) {
       const snapshot = buildSessionCacheSnapshot(
@@ -1357,10 +1370,10 @@ export function FileExplorerPane({
         historyRef.current,
         historyIndexRef.current,
         visitedHistoryRef.current,
-        explorerBackendRef.current,
+        backend,
       );
       if (snapshot) {
-        cache.set(prevId, snapshot);
+        cache.set(fileExplorerSessionCacheKey(prevId, backend), snapshot);
       }
     }
     prevSessionIdRef.current = activeSessionId;
@@ -1379,7 +1392,7 @@ export function FileExplorerPane({
       return;
     }
 
-    const cached = cache.get(activeSessionId);
+    const cached = cache.get(fileExplorerSessionCacheKey(activeSessionId, backend));
     if (cached?.currentPath) {
       setFiles(cached.files);
       setCurrentPath(cached.currentPath);

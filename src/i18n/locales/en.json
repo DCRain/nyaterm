@@ -2589,6 +2589,8 @@
     "lockedTabsSkipped": "Locked tabs were skipped",
     "multiplexSsh": "Reuse SSH Connection",
     "multiplexSshFailed": "Failed to reuse SSH channel",
+    "multiplexSshSftp": "Reuse SSH Connection for SFTP",
+    "multiplexSshSftpFailed": "Failed to open SFTP over reused SSH connection",
     "multiplexSshWithCommand": "Reuse SSH Connection and Run Command",
     "nameCopied": "Tab name copied",
     "reconnect": "Reconnect Session",

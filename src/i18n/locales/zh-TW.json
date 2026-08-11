@@ -2583,6 +2583,8 @@
     "lockedTabsSkipped": "已跳過鎖定的標籤",
     "multiplexSsh": "複用 SSH 連線建立工作階段",
     "multiplexSshFailed": "SSH 通道複用失敗",
+    "multiplexSshSftp": "複用 SSH 連線建立 SFTP",
+    "multiplexSshSftpFailed": "複用 SSH 連線建立 SFTP 失敗",
     "multiplexSshWithCommand": "複用 SSH 連線並執行命令",
     "nameCopied": "標籤名稱已複製",
     "reconnect": "重新連線工作階段",

@@ -2588,6 +2588,8 @@
     "lockedTabsSkipped": "已跳过锁定的标签",
     "multiplexSsh": "复用 SSH 连接新建会话",
     "multiplexSshFailed": "SSH 通道复用失败",
+    "multiplexSshSftp": "复用 SSH 连接新建 SFTP",
+    "multiplexSshSftpFailed": "复用 SSH 连接新建 SFTP 失败",
     "multiplexSshWithCommand": "复用 SSH 连接并执行命令",
     "nameCopied": "标签名称已复制",
     "reconnect": "重新连接会话",

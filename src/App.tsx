@@ -2497,6 +2497,81 @@ function App() {
     [handleMultiplexSshSession],
   );
 
+  const handleMultiplexSshSftpSession = useCallback(
+    async (tab: Tab) => {
+      const pane = getActivePane(tab);
+      if (!pane || pane.type !== "SSH" || pane.connecting || pane.connectError || !pane.sessionId) {
+        return;
+      }
+
+      if (pane.connectionId) {
+        const connection = savedConnections.find((item) => item.id === pane.connectionId);
+        if (connection?.sftp?.enabled === false) {
+          toast.error(t("savedConnections.openSftpDisabled"));
+          return;
+        }
+      }
+
+      let tabId: string | undefined;
+
+      try {
+        const tabName = t("sftpWorkspace.tabTitle", { name: pane.name });
+        const pending = addPendingTab(
+          tabName,
+          pane.type,
+          pane.connectionId,
+          { tabColor: tab.tabColor },
+          { afterTabId: tab.id, view: "sftp" },
+        );
+        tabId = pending.tabId;
+        setTerminalWindows((current) =>
+          current && tabId ? insertTabAfterInLeaf(current, tab.id, tabId, tabId) : current,
+        );
+
+        const sessionId = await invoke<string>("create_multiplexed_ssh_session", {
+          sourceSessionId: pane.sessionId,
+        });
+        if (!hasTab(tabId)) {
+          await closeStaleCreatedSession(sessionId);
+          return;
+        }
+        updateTabSession(tabId, sessionId);
+        if (pane.connectionId) {
+          recordRecentConnection(pane.connectionId);
+          updateAutoIconForSessionStart(pane.connectionId, sessionId);
+        }
+      } catch (error) {
+        if ((tabId && !hasTab(tabId)) || isSessionCreationCancelled(error)) {
+          return;
+        }
+        const errorMessage = getErrorMessage(error);
+        logger.error({
+          domain: "session.lifecycle",
+          event: "session.multiplex_sftp_failed",
+          message: "Failed to create multiplexed SFTP session",
+          ids: pane.connectionId
+            ? { connection_id: pane.connectionId, session_id: pane.sessionId }
+            : { session_id: pane.sessionId },
+          error,
+        });
+        if (tabId) {
+          markTabConnectionFailed(tabId, errorMessage);
+        }
+        toast.error(t("tabCtx.multiplexSshSftpFailed"));
+      }
+    },
+    [
+      addPendingTab,
+      hasTab,
+      markTabConnectionFailed,
+      recordRecentConnection,
+      savedConnections,
+      t,
+      updateAutoIconForSessionStart,
+      updateTabSession,
+    ],
+  );
+
   const getActiveTab = useCallback(
     () => tabs.find((tab) => tab.id === activeTabId) ?? null,
     [activeTabId, tabs],
@@ -3686,6 +3761,7 @@ function App() {
                   onConnectConnection: handleConnectConnectionFromHeader,
                   onDuplicateSession: handleDuplicateSession,
                   onMultiplexSshSession: handleMultiplexSshSession,
+                  onMultiplexSshSftpSession: handleMultiplexSshSftpSession,
                   onDuplicateSessionWithCommand: handleDuplicateSessionWithCommand,
                   onMultiplexSshSessionWithCommand: handleMultiplexSshSessionWithCommand,
                   onReconnectSession: handleReconnectSession,

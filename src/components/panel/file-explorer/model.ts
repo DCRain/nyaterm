@@ -71,6 +71,22 @@ export type InlineRenameState = {
 };
 
 export const fileExplorerSessionCacheStore = new Map<string, FileExplorerSessionCache>();
+
+/** Cache key must include backend so dual-pane SFTP (same sessionId, local+remote) does not collide. */
+export function fileExplorerSessionCacheKey(
+  sessionId: string,
+  backend: FileExplorerBackendKind,
+): string {
+  return `${sessionId}:${backend}`;
+}
+
+export function getSessionIdFromFileExplorerSessionCacheKey(cacheKey: string): string {
+  if (cacheKey.endsWith(":local") || cacheKey.endsWith(":remote")) {
+    return cacheKey.slice(0, cacheKey.lastIndexOf(":"));
+  }
+  return cacheKey;
+}
+
 export const MAX_VISITED_HISTORY = 30;
 export const FILE_LIST_ITEM_HEIGHT = 30;
 export const FILE_LIST_HEADER_HEIGHT = 28;
