@@ -71,7 +71,6 @@ const MAX_POST_LOGIN_DELAY_MS = 60_000;
 const DEFAULT_SFTP_SHELL_DETECTION_TIMEOUT_MS = 3000;
 const MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS = 100;
 const MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS = 60_000;
-const DEFAULT_RDP_USERNAME = "Administrator";
 const DEFAULT_SSH_ALGORITHMS: SshAlgorithmPreferences = {
   mode: "compatible",
   kex: [],
@@ -537,15 +536,6 @@ export default function NewSessionPage() {
     setError("");
     setConnecting(false);
   }, [appSettings.recording.auto_start, appSettings.recording.default_mode, currentTab]);
-
-  const handleTabChange = useCallback((value: string) => {
-    setCurrentTab(value);
-    if (value === "rdp") {
-      setUsername((current) =>
-        !current.trim() || current === "root" ? DEFAULT_RDP_USERNAME : current,
-      );
-    }
-  }, []);
 
   const serialPortOptions: { unavailable?: boolean; value: string }[] = serialPorts.map((port) => ({
     value: port,
@@ -1101,7 +1091,7 @@ export default function NewSessionPage() {
     setTestResult(null);
     setError("");
     if (!editId && protocol === "rdp" && (username === "root" || !username.trim())) {
-      setUsername("");
+      setUsername(DEFAULT_RDP_USERNAME);
     }
     setWizardStep("form");
   };

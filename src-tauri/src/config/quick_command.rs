@@ -80,6 +80,7 @@ fn builtin_command(
         updated_at: None,
         created_at: None,
         use_count: None,
+        sort_order: None,
     }
 }
 
