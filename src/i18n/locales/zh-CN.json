@@ -2045,7 +2045,7 @@
     "groupTransfer": "数据传输",
     "groupWorkspace": "工作区",
     "hardwareAcceleration": "硬件加速",
-    "hardwareAccelerationDesc": "使用 GPU 进行终端渲染 (WebGL/Canvas)。需要重启。",
+    "hardwareAccelerationDesc": "使用 GPU 进行终端渲染 (WebGL)。支持窗口透明与背景图，保存后立即生效。",
     "headerStatus": "顶部信息栏",
     "headerStatusDesc": "选择应用顶部居中显示的信息，或隐藏它以便更容易拖动窗口。",
     "hidePassphrase": "隐藏口令",

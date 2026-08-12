@@ -2040,7 +2040,7 @@
     "groupTransfer": "資料傳輸",
     "groupWorkspace": "工作區",
     "hardwareAcceleration": "硬體加速",
-    "hardwareAccelerationDesc": "使用 GPU 進行終端渲染 (WebGL/Canvas)。需要重新啟動。",
+    "hardwareAccelerationDesc": "使用 GPU 進行終端渲染 (WebGL)。支援視窗透明與背景圖，儲存後立即生效。",
     "headerStatus": "頂部資訊列",
     "headerStatusDesc": "選擇應用程式頂部置中顯示的資訊，或隱藏它以便更容易拖動視窗。",
     "hidePassphrase": "隱藏密碼片語",

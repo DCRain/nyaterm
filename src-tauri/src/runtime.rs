@@ -112,12 +112,35 @@ pub fn apply_to_context<R: tauri::Runtime>(context: &mut tauri::Context<R>, runt
 }
 
 pub fn prepare_webview_environment(runtime: &AppRuntime) {
-    if runtime.portable {
-        #[cfg(windows)]
-        // Called during app startup before Tauri initializes WebView threads.
-        unsafe {
+    #[cfg(windows)]
+    // Called during app startup before Tauri initializes WebView threads.
+    unsafe {
+        if runtime.portable {
             std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", runtime.webview_data_dir());
         }
+
+        // Packaged WebView2 builds with transparent/undecorated windows often land on
+        // Chromium's GPU blocklist, which silently disables canvas/WebGL acceleration.
+        // Keep any user-provided args and force-enable GPU rasterization.
+        const GPU_ARGS: &str = "--ignore-gpu-blocklist --enable-gpu-rasterization";
+        let merged = match std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") {
+            Ok(existing) if !existing.trim().is_empty() => {
+                let lower = existing.to_ascii_lowercase();
+                if lower.contains("ignore-gpu-blocklist") || lower.contains("ignore-gpu-blacklist")
+                {
+                    existing
+                } else {
+                    format!("{existing} {GPU_ARGS}")
+                }
+            }
+            _ => GPU_ARGS.to_string(),
+        };
+        std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", merged);
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = runtime;
     }
 }
 

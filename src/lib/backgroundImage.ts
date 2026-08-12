@@ -39,10 +39,6 @@ export function isTerminalTransparencyEnabled(
   return isBackgroundImageEnabled(appearance) || isWindowTransparencyEnabled(appearance);
 }
 
-export function shouldSuspendTerminalWebglForBackground(appearance: AppearanceSettings) {
-  return isTerminalTransparencyEnabled(appearance);
-}
-
 export function getWindowTransparencyOpacity(
   appearance: Pick<AppearanceSettings, "window_transparency" | "window_transparency_tint">,
 ) {

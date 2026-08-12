@@ -26,7 +26,7 @@ export async function toggleTerminalWindowFullscreen(): Promise<boolean> {
     fullscreenActive = false;
     emitFullscreenChanged(false);
     logger.error({
-      domain: "window.fullscreen",
+      domain: "window.lifecycle",
       event: "window.fullscreen.toggle_failed",
       message: "Failed to toggle terminal fullscreen",
       error,
@@ -41,7 +41,7 @@ export async function exitTerminalWindowFullscreen(): Promise<void> {
     await invoke("set_terminal_fullscreen", { enable: false });
   } catch (error) {
     logger.warn({
-      domain: "window.fullscreen",
+      domain: "window.lifecycle",
       event: "window.fullscreen.exit_failed",
       message: "Failed to exit terminal fullscreen",
       error,

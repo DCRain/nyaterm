@@ -2046,7 +2046,7 @@
     "groupTransfer": "Transfer",
     "groupWorkspace": "Workspace",
     "hardwareAcceleration": "Hardware Accel.",
-    "hardwareAccelerationDesc": "Use GPU for terminal rendering (WebGL/Canvas). Requires restart.",
+    "hardwareAccelerationDesc": "Use GPU for terminal rendering (WebGL). Works with window transparency and background images. Applies immediately after save.",
     "headerStatus": "Header status",
     "headerStatusDesc": "Choose what appears in the center of the app header, or hide it to make that area easier to drag.",
     "hidePassphrase": "Hide passphrase",

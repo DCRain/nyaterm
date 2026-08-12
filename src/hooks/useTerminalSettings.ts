@@ -2,6 +2,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import type { Terminal } from "@xterm/xterm";
 import { type RefObject, useCallback, useEffect, useRef } from "react";
 import { isTerminalTransparencyEnabled } from "@/lib/backgroundImage";
+import { logger } from "@/lib/logger";
 import { resolveTerminalFontSize } from "@/lib/terminalFontSize";
 import type { TerminalColors } from "@/lib/themes";
 import { installImeCompatibilityPatch } from "@/lib/xtermImeCompatibility";
@@ -132,9 +133,7 @@ export function useTerminalSettings(
     }
 
     const shouldUseWebgl =
-      terminalSettings.hardware_acceleration &&
-      !terminalTransparencyEnabled &&
-      !webglCircuitBrokenRef.current;
+      terminalSettings.hardware_acceleration && !webglCircuitBrokenRef.current;
 
     if (!shouldUseWebgl) {
       clearHiddenWebglDisposeTimer();
@@ -191,9 +190,17 @@ export function useTerminalSettings(
         webglAddonRef.current = webgl;
         webglTerminalRef.current = targetTerminal;
         scheduleRevealRefresh();
-      } catch {
+      } catch (error) {
         // Fallback to DOM renderer if WebGL initialization fails
         webglCircuitBrokenRef.current = true;
+        logger.warn({
+          domain: "ui.error",
+          event: "terminal.webgl.init_failed",
+          message: "Failed to initialize terminal WebGL renderer; falling back to DOM",
+          ids: sessionId ? { session_id: sessionId } : undefined,
+          data: { transparency_enabled: terminalTransparencyEnabled },
+          error,
+        });
       }
     };
 
@@ -204,6 +211,7 @@ export function useTerminalSettings(
     terminalSettings.hardware_acceleration,
     terminalTransparencyEnabled,
     rendererVisible,
+    sessionId,
     terminalRef,
     terminalInstance,
     clearContextLossRetryTimer,
