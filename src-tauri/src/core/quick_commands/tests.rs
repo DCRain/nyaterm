@@ -127,6 +127,26 @@ mod tests {
     }
 
     #[test]
+    fn imports_nyaterm_config_json_with_command_sort_order() {
+        let raw = r#"{
+            "commands": [{
+                "id": "cmd-list",
+                "label": "List",
+                "command": "ls -la",
+                "execution_mode": "execute",
+                "sort_order": 7
+            }]
+        }"#;
+        let import_config = parse_nyaterm_import(raw).unwrap();
+        let mut config = empty_config();
+
+        let stats = merge_import(&mut config, import_config).unwrap();
+
+        assert_eq!(stats.added_commands, 1);
+        assert_eq!(config.commands[0].sort_order, Some(7));
+    }
+
+    #[test]
     fn import_without_sort_order_preserves_existing_category_order() {
         let mut config = QuickCommandsConfig {
             commands: Vec::new(),
@@ -369,6 +389,7 @@ Button_2_Action=whoami
                 updated_at: Some(10),
                 created_at: Some(5),
                 use_count: Some(7),
+                sort_order: Some(3),
             }],
             categories: Vec::new(),
         };
@@ -384,6 +405,7 @@ Button_2_Action=whoami
         assert_eq!(config.commands[0].label, "New");
         assert_eq!(config.commands[0].created_at, Some(5));
         assert_eq!(config.commands[0].use_count, Some(7));
+        assert_eq!(config.commands[0].sort_order, Some(3));
         assert_eq!(config.commands[0].execution_mode, "append");
     }
 

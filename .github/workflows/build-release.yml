@@ -46,11 +46,11 @@ jobs:
 
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
-            args: --bundles nsis
+            args: --bundles nsis,msi
 
           - platform: windows-latest
             target: aarch64-pc-windows-msvc
-            args: --target aarch64-pc-windows-msvc --bundles nsis
+            args: --target aarch64-pc-windows-msvc --bundles nsis,msi
 
     steps:
       - name: Checkout repository
@@ -354,6 +354,10 @@ jobs:
                 newName = `${appName}_${version}_windows_${arch}-setup.exe`;
               } else if (lower.endsWith('-setup.nsis.zip')) {
                 newName = `${appName}_${version}_windows_${arch}-setup.nsis.zip`;
+              } else if (lower.endsWith('.msi.zip')) {
+                newName = `${appName}_${version}_windows_${arch}.msi.zip`;
+              } else if (lower.endsWith('.msi')) {
+                newName = `${appName}_${version}_windows_${arch}.msi`;
               }
 
               if (!newName) return null;
@@ -432,34 +436,67 @@ jobs:
 
             const assets = release.assets || [];
 
+            function normalizeArch(name) {
+              const lower = name.toLowerCase();
+
+              if (
+                lower.includes('aarch64') ||
+                lower.includes('arm64') ||
+                lower.includes('arm_64')
+              ) {
+                return 'aarch64';
+              }
+
+              if (
+                lower.includes('x86_64') ||
+                lower.includes('x64') ||
+                lower.includes('amd64')
+              ) {
+                return 'x86_64';
+              }
+
+              return null;
+            }
+
             function mapSigToPlatforms(name) {
               const baseName = name.replace(/\.sig$/, '');
               const lower = name.toLowerCase();
               const keys = [];
+              const arch = normalizeArch(name);
 
               if (lower.endsWith('.app.tar.gz.sig')) {
-                if (lower.includes('macos_x64') || lower.includes('x64') || lower.includes('x86_64')) {
+                if (arch === 'x86_64') {
                   keys.push('darwin-x86_64');
-                } else if (lower.includes('macos_arm64') || lower.includes('arm64') || lower.includes('aarch64')) {
+                } else if (arch === 'aarch64') {
                   keys.push('darwin-aarch64');
                 }
               } else if (lower.endsWith('.appimage.sig')) {
-                if (lower.includes('linux_x64') || lower.includes('x64') || lower.includes('x86_64') || lower.includes('amd64')) {
+                if (arch === 'x86_64') {
                   keys.push('linux-x86_64');
-                } else if (lower.includes('linux_arm64') || lower.includes('arm64') || lower.includes('aarch64')) {
+                } else if (arch === 'aarch64') {
                   keys.push('linux-aarch64');
                 }
               } else if (lower.endsWith('_portable.zip.sig')) {
-                if (lower.includes('windows_x64') || lower.includes('x64') || lower.includes('x86_64') || lower.includes('amd64')) {
+                if (arch === 'x86_64') {
                   keys.push('windows-x86_64-portable');
-                } else if (lower.includes('windows_arm64') || lower.includes('arm64') || lower.includes('aarch64')) {
+                } else if (arch === 'aarch64') {
                   keys.push('windows-aarch64-portable');
                 }
               } else if (lower.endsWith('-setup.exe.sig') || lower.endsWith('-setup.nsis.zip.sig')) {
-                if (lower.includes('windows_x64') || lower.includes('x64') || lower.includes('x86_64') || lower.includes('amd64')) {
+                if (arch === 'x86_64') {
+                  // New Tauri updater clients use the NSIS-specific key; old clients fall back here.
+                  keys.push('windows-x86_64-nsis');
                   keys.push('windows-x86_64');
-                } else if (lower.includes('windows_arm64') || lower.includes('arm64') || lower.includes('aarch64')) {
+                } else if (arch === 'aarch64') {
+                  // Keep the generic Windows key tied to NSIS for historical client compatibility.
+                  keys.push('windows-aarch64-nsis');
                   keys.push('windows-aarch64');
+                }
+              } else if (lower.endsWith('.msi.sig') || lower.endsWith('.msi.zip.sig')) {
+                if (arch === 'x86_64') {
+                  keys.push('windows-x86_64-msi');
+                } else if (arch === 'aarch64') {
+                  keys.push('windows-aarch64-msi');
                 }
               }
 
@@ -526,17 +563,23 @@ jobs:
               return;
             }
 
-            const requiredPortablePlatforms = [
+            const requiredWindowsPlatforms = [
+              'windows-x86_64',
+              'windows-aarch64',
+              'windows-x86_64-nsis',
+              'windows-aarch64-nsis',
+              'windows-x86_64-msi',
+              'windows-aarch64-msi',
               'windows-x86_64-portable',
               'windows-aarch64-portable',
             ];
 
-            for (const platform of requiredPortablePlatforms) {
+            for (const platform of requiredWindowsPlatforms) {
               const item = platforms[platform];
 
               if (!item?.url || !item?.signature) {
                 throw new Error(
-                  `latest.json is missing signed portable target: ${platform}`
+                  `latest.json is missing signed Windows target: ${platform}`
                 );
               }
             }
@@ -789,24 +832,30 @@ jobs:
             throw new Error('latest.json does not contain platforms');
           }
 
-          function verifySignedPortableTargets(source) {
-            const requiredPortablePlatforms = [
+          function verifySignedWindowsTargets(source) {
+            const requiredWindowsPlatforms = [
+              'windows-x86_64',
+              'windows-aarch64',
+              'windows-x86_64-nsis',
+              'windows-aarch64-nsis',
+              'windows-x86_64-msi',
+              'windows-aarch64-msi',
               'windows-x86_64-portable',
               'windows-aarch64-portable',
             ];
 
-            for (const platform of requiredPortablePlatforms) {
+            for (const platform of requiredWindowsPlatforms) {
               const item = manifest.platforms?.[platform];
 
               if (!item?.url || !item?.signature) {
                 throw new Error(
-                  `${source} is missing signed portable target: ${platform}`
+                  `${source} is missing signed Windows target: ${platform}`
                 );
               }
             }
           }
 
-          verifySignedPortableTargets('latest.json');
+          verifySignedWindowsTargets('latest.json');
 
           for (const [platform, item] of Object.entries(manifest.platforms)) {
             if (!item.url) {
@@ -825,7 +874,7 @@ jobs:
             item.url = `${baseUrl}/releases/${tag}/${encodeURIComponent(filename)}`;
           }
 
-          verifySignedPortableTargets('r2-latest.json');
+          verifySignedWindowsTargets('r2-latest.json');
 
           fs.writeFileSync(outputPath, JSON.stringify(manifest, null, 2) + '\n');
 
@@ -857,6 +906,9 @@ jobs:
                 ;;
               *.exe)
                 content_type="application/vnd.microsoft.portable-executable"
+                ;;
+              *.msi)
+                content_type="application/x-msi"
                 ;;
               *.AppImage)
                 content_type="application/octet-stream"
@@ -920,23 +972,29 @@ jobs:
               process.stdin.on('data', chunk => input += chunk);
               process.stdin.on('end', () => {
                 const json = JSON.parse(input);
-                const requiredPortablePlatforms = [
+                const requiredWindowsPlatforms = [
+                  'windows-x86_64',
+                  'windows-aarch64',
+                  'windows-x86_64-nsis',
+                  'windows-aarch64-nsis',
+                  'windows-x86_64-msi',
+                  'windows-aarch64-msi',
                   'windows-x86_64-portable',
                   'windows-aarch64-portable',
                 ];
-                const portableUrlPrefix = process.env.DOWNLOAD_BASE_URL +
+                const windowsUrlPrefix = process.env.DOWNLOAD_BASE_URL +
                   '/releases/' + process.env.GITHUB_REF_NAME + '/';
 
-                for (const platform of requiredPortablePlatforms) {
+                for (const platform of requiredWindowsPlatforms) {
                   const item = json.platforms?.[platform];
                   if (!item?.url || !item?.signature) {
                     throw new Error(
-                      source + ' is missing a signed portable target: ' + platform
+                      source + ' is missing a signed Windows target: ' + platform
                     );
                   }
-                  if (!item.url.startsWith(portableUrlPrefix)) {
+                  if (!item.url.startsWith(windowsUrlPrefix)) {
                     throw new Error(
-                      source + ' portable target does not use the versioned R2 URL: ' + platform
+                      source + ' Windows target does not use the versioned R2 URL: ' + platform
                     );
                   }
                 }

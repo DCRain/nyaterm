@@ -3651,6 +3651,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "futures-util",
+ "ironrdp-bulk",
  "ironrdp-cfg",
  "ironrdp-cliprdr",
  "ironrdp-cliprdr-native",
@@ -4963,7 +4964,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",

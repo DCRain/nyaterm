@@ -71,6 +71,7 @@ const MAX_POST_LOGIN_DELAY_MS = 60_000;
 const DEFAULT_SFTP_SHELL_DETECTION_TIMEOUT_MS = 3000;
 const MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS = 100;
 const MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS = 60_000;
+const DEFAULT_RDP_USERNAME = "Administrator";
 const DEFAULT_SSH_ALGORITHMS: SshAlgorithmPreferences = {
   mode: "compatible",
   kex: [],
@@ -469,7 +470,7 @@ export default function NewSessionPage() {
     setTelnetPort(23);
     setRdpPort(3389);
     setVncPort(5900);
-    setUsername("root");
+    setUsername(currentTab === "rdp" ? DEFAULT_RDP_USERNAME : "root");
     setRdpDomain("");
     setRdpClientMode("external");
     setRdpExternalDisplayMode("fullscreen");
@@ -535,7 +536,16 @@ export default function NewSessionPage() {
     setShowIconPicker(false);
     setError("");
     setConnecting(false);
-  }, [appSettings.recording.auto_start, appSettings.recording.default_mode]);
+  }, [appSettings.recording.auto_start, appSettings.recording.default_mode, currentTab]);
+
+  const handleTabChange = useCallback((value: string) => {
+    setCurrentTab(value);
+    if (value === "rdp") {
+      setUsername((current) =>
+        !current.trim() || current === "root" ? DEFAULT_RDP_USERNAME : current,
+      );
+    }
+  }, []);
 
   const serialPortOptions: { unavailable?: boolean; value: string }[] = serialPorts.map((port) => ({
     value: port,
@@ -703,13 +713,17 @@ export default function NewSessionPage() {
         if (!username.trim()) {
           return t("dialog.usernameRequired", "Username is required");
         }
-        if (!Number.isInteger(rdpDisplayWidth) || rdpDisplayWidth < 640 || rdpDisplayWidth > 7680) {
+        if (
+          rdpDisplayMode === "fixed" &&
+          (!Number.isInteger(rdpDisplayWidth) || rdpDisplayWidth < 640 || rdpDisplayWidth > 7680)
+        ) {
           return t("dialog.rdpDisplayWidthInvalid");
         }
         if (
-          !Number.isInteger(rdpDisplayHeight) ||
-          rdpDisplayHeight < 480 ||
-          rdpDisplayHeight > 4320
+          rdpDisplayMode === "fixed" &&
+          (!Number.isInteger(rdpDisplayHeight) ||
+            rdpDisplayHeight < 480 ||
+            rdpDisplayHeight > 4320)
         ) {
           return t("dialog.rdpDisplayHeightInvalid");
         }
@@ -767,6 +781,7 @@ export default function NewSessionPage() {
     postLoginEnabled,
     rdpClientMode,
     rdpDisplayHeight,
+    rdpDisplayMode,
     rdpDisplayWidth,
     rdpHeight,
     rdpPort,
@@ -1776,6 +1791,7 @@ export default function NewSessionPage() {
                 setPreferredClient={setRdpPreferredClient}
                 redirects={rdpRedirects}
                 setRedirects={(patch) => setRdpRedirects((prev) => ({ ...prev, ...patch }))}
+                connectionId={initialData?.id || editId}
               />
             </TabsContent>
 

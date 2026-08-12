@@ -25,6 +25,9 @@ use ironrdp::input::{
     MousePosition as IronRdpMousePosition, Operation as IronRdpInputOperation,
     Scancode as IronRdpScancode, WheelRotations as IronRdpWheelRotations,
 };
+use ironrdp::pdu::input::fast_path::{
+    FastPathInputEvent as IronRdpFastPathInputEvent, KeyboardFlags as IronRdpKeyboardFlags,
+};
 use ironrdp::pdu::rdp::capability_sets::MajorPlatformType;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -52,6 +55,7 @@ const RDP_MIN_WIDTH: u32 = 200;
 const RDP_MIN_HEIGHT: u32 = 200;
 const RDP_MAX_WIDTH: u32 = 7680;
 const RDP_MAX_HEIGHT: u32 = 4320;
+const RDP_RIGHT_SHIFT_SCAN_CODE: u16 = 0x36;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -482,8 +486,9 @@ impl RdpEngine for IronRdpEngine {
             let mut database = session.input_database.lock().await;
             let mut output = Vec::new();
             for event in events {
-                let fast_path = match rdp_input_to_operations(event) {
-                    Some(operations) => database.apply(operations),
+                let fast_path = match rdp_input_to_fast_path_input(event) {
+                    Some(RdpInputAction::Operations(operations)) => database.apply(operations),
+                    Some(RdpInputAction::FastPath(event)) => smallvec::smallvec![event],
                     None => database.release_all(),
                 };
                 if !fast_path.is_empty() {
@@ -906,7 +911,10 @@ async fn build_ironrdp_config(
         .with_credssp(config.use_nla)
         .with_tls(true)
         .with_autologon(true)
-        .with_compression(true)
+        // Some servers send compressed FastPath bitmap updates that IronRDP 0.17 can decode
+        // inconsistently after activation/reactivation, producing malformed 0 bpp bitmap PDUs.
+        // Do not advertise bulk compression until the full output path is stable.
+        .with_compression(false)
         .with_server_pointer(true)
         .with_client_build(client_build())
         .with_client_dir("C:\\Windows\\System32\\mstscax.dll")
@@ -1367,28 +1375,53 @@ fn stable_text_hash(text: &str) -> u64 {
     hasher.finish()
 }
 
-fn rdp_input_to_operations(event: RdpInputEvent) -> Option<Vec<IronRdpInputOperation>> {
+enum RdpInputAction {
+    Operations(Vec<IronRdpInputOperation>),
+    FastPath(IronRdpFastPathInputEvent),
+}
+
+fn rdp_input_to_fast_path_input(event: RdpInputEvent) -> Option<RdpInputAction> {
     match event {
         RdpInputEvent::KeyDown {
             scan_code,
             extended,
             ..
-        } => Some(vec![IronRdpInputOperation::KeyPressed(
-            IronRdpScancode::from_u8(extended, scan_code as u8),
-        )]),
+        } if is_right_shift_scan_code(scan_code, extended) => Some(RdpInputAction::FastPath(
+            IronRdpFastPathInputEvent::KeyboardEvent(
+                IronRdpKeyboardFlags::empty(),
+                RDP_RIGHT_SHIFT_SCAN_CODE as u8,
+            ),
+        )),
+        RdpInputEvent::KeyDown {
+            scan_code,
+            extended,
+            ..
+        } => Some(RdpInputAction::Operations(vec![
+            IronRdpInputOperation::KeyPressed(IronRdpScancode::from_u8(extended, scan_code as u8)),
+        ])),
         RdpInputEvent::KeyUp {
             scan_code,
             extended,
             ..
-        } => Some(vec![IronRdpInputOperation::KeyReleased(
-            IronRdpScancode::from_u8(extended, scan_code as u8),
-        )]),
-        RdpInputEvent::MouseMove { x, y } => Some(vec![IronRdpInputOperation::MouseMove(
-            IronRdpMousePosition {
+        } if is_right_shift_scan_code(scan_code, extended) => Some(RdpInputAction::FastPath(
+            IronRdpFastPathInputEvent::KeyboardEvent(
+                IronRdpKeyboardFlags::RELEASE,
+                RDP_RIGHT_SHIFT_SCAN_CODE as u8,
+            ),
+        )),
+        RdpInputEvent::KeyUp {
+            scan_code,
+            extended,
+            ..
+        } => Some(RdpInputAction::Operations(vec![
+            IronRdpInputOperation::KeyReleased(IronRdpScancode::from_u8(extended, scan_code as u8)),
+        ])),
+        RdpInputEvent::MouseMove { x, y } => Some(RdpInputAction::Operations(vec![
+            IronRdpInputOperation::MouseMove(IronRdpMousePosition {
                 x: clamp_u32_to_u16(x),
                 y: clamp_u32_to_u16(y),
-            },
-        )]),
+            }),
+        ])),
         RdpInputEvent::MouseButton {
             button,
             pressed,
@@ -1396,7 +1429,7 @@ fn rdp_input_to_operations(event: RdpInputEvent) -> Option<Vec<IronRdpInputOpera
             y,
         } => {
             let Some(button) = ironrdp_mouse_button(&button) else {
-                return Some(Vec::new());
+                return Some(RdpInputAction::Operations(Vec::new()));
             };
             let mut operations = vec![IronRdpInputOperation::MouseMove(IronRdpMousePosition {
                 x: clamp_u32_to_u16(x),
@@ -1407,7 +1440,7 @@ fn rdp_input_to_operations(event: RdpInputEvent) -> Option<Vec<IronRdpInputOpera
             } else {
                 IronRdpInputOperation::MouseButtonReleased(button)
             });
-            Some(operations)
+            Some(RdpInputAction::Operations(operations))
         }
         RdpInputEvent::MouseWheel {
             delta_x,
@@ -1423,7 +1456,7 @@ fn rdp_input_to_operations(event: RdpInputEvent) -> Option<Vec<IronRdpInputOpera
                 operations.push(IronRdpInputOperation::WheelRotations(
                     IronRdpWheelRotations {
                         is_vertical: false,
-                        rotation_units: clamp_f64_to_i16(delta_x),
+                        rotation_units: clamp_f64_to_i16(-delta_x),
                     },
                 ));
             }
@@ -1431,11 +1464,11 @@ fn rdp_input_to_operations(event: RdpInputEvent) -> Option<Vec<IronRdpInputOpera
                 operations.push(IronRdpInputOperation::WheelRotations(
                     IronRdpWheelRotations {
                         is_vertical: true,
-                        rotation_units: clamp_f64_to_i16(delta_y),
+                        rotation_units: clamp_f64_to_i16(-delta_y),
                     },
                 ));
             }
-            Some(operations)
+            Some(RdpInputAction::Operations(operations))
         }
         RdpInputEvent::Unicode { text } => {
             let mut operations = Vec::new();
@@ -1443,10 +1476,30 @@ fn rdp_input_to_operations(event: RdpInputEvent) -> Option<Vec<IronRdpInputOpera
                 operations.push(IronRdpInputOperation::UnicodeKeyPressed(character));
                 operations.push(IronRdpInputOperation::UnicodeKeyReleased(character));
             }
-            Some(operations)
+            Some(RdpInputAction::Operations(operations))
         }
         RdpInputEvent::ReleaseAllKeys => None,
     }
+}
+
+#[cfg(test)]
+fn rdp_input_to_operations(event: RdpInputEvent) -> Option<Vec<IronRdpInputOperation>> {
+    match rdp_input_to_fast_path_input(event)? {
+        RdpInputAction::Operations(operations) => Some(operations),
+        RdpInputAction::FastPath(_) => Some(Vec::new()),
+    }
+}
+
+#[cfg(test)]
+fn rdp_input_to_direct_fast_path(event: RdpInputEvent) -> Option<IronRdpFastPathInputEvent> {
+    match rdp_input_to_fast_path_input(event)? {
+        RdpInputAction::FastPath(event) => Some(event),
+        RdpInputAction::Operations(_) => None,
+    }
+}
+
+fn is_right_shift_scan_code(scan_code: u16, extended: bool) -> bool {
+    !extended && scan_code == RDP_RIGHT_SHIFT_SCAN_CODE
 }
 
 fn ironrdp_mouse_button(button: &str) -> Option<IronRdpMouseButton> {
@@ -2044,6 +2097,93 @@ mod tests {
             }
             _ => panic!("expected mouse-wheel event"),
         }
+    }
+
+    #[test]
+    fn right_shift_uses_direct_fast_path_keyboard_event() {
+        assert_eq!(
+            rdp_input_to_direct_fast_path(RdpInputEvent::KeyDown {
+                scan_code: RDP_RIGHT_SHIFT_SCAN_CODE,
+                extended: false,
+                repeat: false,
+            }),
+            Some(IronRdpFastPathInputEvent::KeyboardEvent(
+                IronRdpKeyboardFlags::empty(),
+                RDP_RIGHT_SHIFT_SCAN_CODE as u8,
+            ))
+        );
+        assert_eq!(
+            rdp_input_to_direct_fast_path(RdpInputEvent::KeyUp {
+                scan_code: RDP_RIGHT_SHIFT_SCAN_CODE,
+                extended: false,
+                repeat: false,
+            }),
+            Some(IronRdpFastPathInputEvent::KeyboardEvent(
+                IronRdpKeyboardFlags::RELEASE,
+                RDP_RIGHT_SHIFT_SCAN_CODE as u8,
+            ))
+        );
+    }
+
+    #[test]
+    fn left_shift_stays_on_database_input_path() {
+        let operations = rdp_input_to_operations(RdpInputEvent::KeyDown {
+            scan_code: 0x2a,
+            extended: false,
+            repeat: false,
+        })
+        .unwrap();
+
+        assert_eq!(operations.len(), 1);
+        assert!(matches!(
+            operations.first(),
+            Some(IronRdpInputOperation::KeyPressed(_))
+        ));
+        assert_eq!(
+            rdp_input_to_direct_fast_path(RdpInputEvent::KeyDown {
+                scan_code: 0x2a,
+                extended: false,
+                repeat: false,
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn browser_wheel_delta_is_inverted_for_rdp_rotation_units() {
+        let operations = rdp_input_to_operations(RdpInputEvent::MouseWheel {
+            delta_x: 3.0,
+            delta_y: 120.0,
+            x: 10,
+            y: 20,
+        })
+        .unwrap();
+
+        assert!(matches!(
+            operations.first(),
+            Some(IronRdpInputOperation::MouseMove(_))
+        ));
+        let horizontal = operations
+            .iter()
+            .find_map(|operation| match operation {
+                IronRdpInputOperation::WheelRotations(rotations) if !rotations.is_vertical => {
+                    Some(rotations.rotation_units)
+                }
+                _ => None,
+            })
+            .expect("expected horizontal wheel operation");
+        let vertical = operations
+            .iter()
+            .find_map(|operation| match operation {
+                IronRdpInputOperation::WheelRotations(rotations) if rotations.is_vertical => {
+                    Some(rotations.rotation_units)
+                }
+                _ => None,
+            })
+            .expect("expected vertical wheel operation");
+
+        assert_eq!(horizontal, -3);
+        assert_eq!(vertical, -120);
     }
 
     #[tokio::test]

@@ -1392,6 +1392,8 @@ struct QuickCommandExport {
     source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     risk_level: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sort_order: Option<i32>,
 }
 
 impl From<QuickCommandsConfig> for QuickCommandsExportConfig {
@@ -1422,6 +1424,7 @@ impl From<QuickCommandsConfig> for QuickCommandsExportConfig {
                     execution_mode: command.execution_mode,
                     source: command.source,
                     risk_level: command.risk_level,
+                    sort_order: command.sort_order,
                 })
                 .collect(),
         }

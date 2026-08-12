@@ -48,6 +48,8 @@ struct QuickCommand {
     source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     risk_level: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sort_order: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -96,6 +98,8 @@ struct ImportCommand {
     source: Option<String>,
     #[serde(default)]
     risk_level: Option<String>,
+    #[serde(default)]
+    sort_order: Option<i32>,
 }
 
 struct Args {
@@ -390,6 +394,7 @@ fn merge_import(
                 execution_mode,
                 source,
                 risk_level,
+                sort_order: command.sort_order,
             },
         );
         imported_commands += 1;

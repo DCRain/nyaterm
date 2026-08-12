@@ -19,9 +19,9 @@
 </p>
 
 <p align="center">
-  <a href="https://discord.gg/9XVNUKSxv" target="_blank"><img src="https://img.shields.io/badge/Discord-加入-5865F2?logo=discord&logoColor=white" alt="Discord" /></a>
+  <a href="https://discord.gg/Tgb9ugMKdM" target="_blank"><img src="https://dcbadge.limes.pink/api/server/Tgb9ugMKdM" alt="Discord" /></a>
   &nbsp;
-  <a href="https://docs.qq.com/doc/DYW5TUkZnakxOWUFW" target="_blank"><img src="https://img.shields.io/badge/微信交流群-点击加入-07C160?logo=wechat&logoColor=white" alt="微信交流群" /></a>
+  <a href="https://docs.qq.com/doc/DYW5TUkZnakxOWUFW" target="_blank"><img src="https://img.shields.io/badge/微信交流群-点击加入-07C160?style=for-the-badge&logo=wechat&logoColor=white" alt="微信交流群" /></a>
   <br/>
   <a href="https://nyaterm.app"><img alt="Version" src="https://img.shields.io/github/v/release/nyakang/nyaterm.svg?style=flat-square&logo=github&color=0EA5E9&labelColor=334155&label=%E7%89%88%E6%9C%AC&cacheSeconds=300"></a>
   &nbsp;

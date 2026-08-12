@@ -18,6 +18,7 @@ use ironrdp_pdu::input::fast_path::FastPathInputEvent;
 use ironrdp_pdu::input::mouse::PointerFlags;
 #[cfg(any(feature = "dvc-pipe-proxy", all(windows, feature = "dvc-com-plugin")))]
 use ironrdp_pdu::pdu_other_err;
+use ironrdp_pdu::rdp::client_info::CompressionType as PduCompressionType;
 use ironrdp_session::image::DecodedImage;
 use ironrdp_session::{ActiveStageBuilder, ActiveStageOutput, GracefulDisconnectReason, SessionResult, fast_path};
 use ironrdp_svc::SvcMessage;
@@ -769,6 +770,7 @@ async fn active_session(
 ) -> SessionResult<RdpControlFlow> {
     let (mut reader, mut writer) = split_tokio_framed(framed);
     let desktop_size = connection_result.desktop_size;
+    let compression_type = connection_result.compression_type;
     let mut image = DecodedImage::new(PixelFormat::RgbA32, desktop_size.width, desktop_size.height);
 
     // We retain the factory to drive the Deactivation-Reactivation Sequence locally.
@@ -780,7 +782,7 @@ async fn active_session(
         io_channel_id: connection_result.io_channel_id,
         message_channel_id: connection_result.message_channel_id,
         share_id: connection_result.share_id,
-        compression_type: connection_result.compression_type,
+        compression_type,
         enable_server_pointer: connection_result.enable_server_pointer,
         pointer_software_rendering: connection_result.pointer_software_rendering,
     }
@@ -1040,7 +1042,7 @@ async fn active_session(
                                     share_id,
                                     enable_server_pointer,
                                     pointer_software_rendering,
-                                    bulk_decompressor: None,
+                                    bulk_decompressor: new_fast_path_bulk_decompressor(compression_type),
                                 }
                                 .build(),
                             );
@@ -1096,6 +1098,25 @@ async fn send_image_patch(
         .await
         .map_err(|e| ironrdp_session::custom_err!("output_event_sender", e))?;
     Ok(())
+}
+
+fn new_fast_path_bulk_decompressor(
+    compression_type: Option<PduCompressionType>,
+) -> Option<ironrdp_bulk::BulkCompressor> {
+    let compression_type = compression_type?;
+    let bulk_type = match compression_type {
+        PduCompressionType::K8 => ironrdp_bulk::CompressionType::Rdp4,
+        PduCompressionType::K64 => ironrdp_bulk::CompressionType::Rdp5,
+        PduCompressionType::Rdp6 => ironrdp_bulk::CompressionType::Rdp6,
+        PduCompressionType::Rdp61 => ironrdp_bulk::CompressionType::Rdp61,
+    };
+    match ironrdp_bulk::BulkCompressor::new(bulk_type) {
+        Ok(decompressor) => Some(decompressor),
+        Err(error) => {
+            warn!(%error, compression_type = %bulk_type, "Failed to initialize FastPath bulk decompressor");
+            None
+        }
+    }
 }
 
 fn image_patch_buffer(image: &DecodedImage, region: &InclusiveRectangle) -> Vec<u32> {

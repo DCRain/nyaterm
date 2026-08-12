@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 This changelog is inferred from release bump commits in git history (for example `chore: bump version to vX.Y.Z`) and grouped by Conventional Commit type.
 
+## [1.2.2] - 2026-08-12
+
+### Added
+
+- **build:** Add Windows MSI packaging support to the release workflow.
+- **quick-commands:** Add drag-and-drop sorting for quick command categories.
+- **rdp:** Enhance RDP resizing and dynamic display behavior.
+- **header:** Add predefined macOS edit menu items.
+
+### Changed
+
+- **terminal-gutter:** Improve gutter layout constants for better readability.
+- **i18n:** Add quick command labels for category creation and custom sorting.
+
+### Fixed
+
+- **rdp:** Improve physical key capture, lock-key routing, right Shift handling, and UPN username preservation during authentication.
+- **terminal:** Reset timestamps to terminal startup time when Clear All is used.
+- **release:** Prevent release crashes when remote metadata is corrupt.
+
+### Documentation
+
+- **readme:** Update Discord and WeChat group links.
+
 ## [1.2.1] - 2026-08-11
 
 ### Added

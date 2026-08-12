@@ -326,6 +326,20 @@ pub struct UiConfig {
     pub activity_bar_layout: ActivityBarLayout,
 }
 
+impl UiConfig {
+    pub fn normalize_quick_command_sort_mode(&mut self) -> bool {
+        if matches!(
+            self.quick_cmd_sort_mode.as_str(),
+            "created" | "name" | "useCount" | "custom"
+        ) {
+            return false;
+        }
+
+        self.quick_cmd_sort_mode = default_quick_cmd_sort_mode();
+        true
+    }
+}
+
 fn default_left_width() -> f64 {
     306.0
 }

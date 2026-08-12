@@ -40,6 +40,7 @@ interface TerminalContextMenuProps {
   onFind: (selection?: string) => void;
   onPasteText: (text: string) => void;
   onPasteClipboard: () => Promise<void> | void;
+  onClearAll: () => void;
 }
 
 export default function TerminalContextMenu({
@@ -48,14 +49,22 @@ export default function TerminalContextMenu({
   onFind,
   onPasteText,
   onPasteClipboard,
+  onClearAll,
 }: TerminalContextMenuProps) {
   const { t } = useTranslation();
   const termSettings = useTerminalAppSettings();
   const { interaction, translation, search, ai, keybindings } = termSettings;
   const dk = (id: string) => resolveDisplayKeys(id, keybindings);
 
-  const [ctxSelection, setCtxSelection] = useState({ text: "", hasSelection: false });
-  const [translateState, setTranslateState] = useState({ open: false, text: "", provider: "" });
+  const [ctxSelection, setCtxSelection] = useState({
+    text: "",
+    hasSelection: false,
+  });
+  const [translateState, setTranslateState] = useState({
+    open: false,
+    text: "",
+    provider: "",
+  });
   const pasteText = useCallback(
     (text: string) => {
       if (!text) return;
@@ -85,7 +94,9 @@ export default function TerminalContextMenu({
     },
   ].filter((p) => p.free || p.configured);
   const terminalAiActions = ai.enabled
-    ? ai.terminal_ai_actions.filter((action) => action.enabled && action.name.trim())
+    ? ai.terminal_ai_actions.filter(
+        (action) => action.enabled && action.name.trim(),
+      )
     : [];
 
   // Right-click context menu: capture selection state
@@ -156,9 +167,8 @@ export default function TerminalContextMenu({
   }, [terminalRef]);
 
   const doClearAll = useCallback(() => {
-    terminalRef.current?.reset();
-    terminalRef.current?.focus();
-  }, [terminalRef]);
+    onClearAll();
+  }, [onClearAll]);
 
   const doSelectAll = useCallback(() => {
     terminalRef.current?.selectAll();
@@ -198,7 +208,9 @@ export default function TerminalContextMenu({
                       let IconComponent = null;
                       let color: string | undefined;
                       if (engine.icon && SEARCH_ICONS[engine.icon]) {
-                        const iconDef = SEARCH_ICONS[engine.icon] as QuickIconDef;
+                        const iconDef = SEARCH_ICONS[
+                          engine.icon
+                        ] as QuickIconDef;
                         IconComponent = iconDef.icon;
                         color = iconDef.color;
                       }
@@ -206,10 +218,15 @@ export default function TerminalContextMenu({
                       return (
                         <ContextMenuItem
                           key={engine.name}
-                          onClick={() => doSearchOnline(ctxSelection.text, engine)}
+                          onClick={() =>
+                            doSearchOnline(ctxSelection.text, engine)
+                          }
                         >
                           {IconComponent && (
-                            <IconComponent className="text-[0.875rem] mr-2" style={{ color }} />
+                            <IconComponent
+                              className="text-[0.875rem] mr-2"
+                              style={{ color }}
+                            />
                           )}
                           {engine.name}
                         </ContextMenuItem>
@@ -256,7 +273,11 @@ export default function TerminalContextMenu({
                       <ContextMenuItem
                         key={p.id}
                         onClick={() =>
-                          setTranslateState({ open: true, text: ctxSelection.text, provider: p.id })
+                          setTranslateState({
+                            open: true,
+                            text: ctxSelection.text,
+                            provider: p.id,
+                          })
                         }
                       >
                         {t(`translation.${p.id}`)}
@@ -269,12 +290,16 @@ export default function TerminalContextMenu({
               <ContextMenuItem onClick={doPaste}>
                 <MdContentPaste className="text-[0.875rem] text-muted-foreground mr-2" />
                 {t("terminalCtx.paste")}
-                <ContextMenuShortcut>{dk("terminal.paste")}</ContextMenuShortcut>
+                <ContextMenuShortcut>
+                  {dk("terminal.paste")}
+                </ContextMenuShortcut>
               </ContextMenuItem>
               <ContextMenuItem onClick={doPasteSelected}>
                 <MdContentPasteGo className="text-[0.875rem] text-muted-foreground mr-2" />
                 {t("terminalCtx.pasteSelectedText")}
-                <ContextMenuShortcut>{dk("terminal.pasteSelected")}</ContextMenuShortcut>
+                <ContextMenuShortcut>
+                  {dk("terminal.pasteSelected")}
+                </ContextMenuShortcut>
               </ContextMenuItem>
             </>
           ) : (
@@ -282,7 +307,9 @@ export default function TerminalContextMenu({
               <ContextMenuItem onClick={doPaste}>
                 <MdContentPaste className="text-[0.875rem] text-muted-foreground mr-2" />
                 {t("terminalCtx.paste")}
-                <ContextMenuShortcut>{dk("terminal.paste")}</ContextMenuShortcut>
+                <ContextMenuShortcut>
+                  {dk("terminal.paste")}
+                </ContextMenuShortcut>
               </ContextMenuItem>
               <ContextMenuItem onClick={() => onFind()}>
                 <MdSearch className="text-[0.875rem] text-muted-foreground mr-2" />
@@ -305,13 +332,17 @@ export default function TerminalContextMenu({
           <ContextMenuItem onClick={doSelectAll}>
             <MdSelectAll className="text-[0.875rem] text-muted-foreground mr-2" />
             {t("terminalCtx.selectAll")}
-            <ContextMenuShortcut>{dk("terminal.selectAll")}</ContextMenuShortcut>
+            <ContextMenuShortcut>
+              {dk("terminal.selectAll")}
+            </ContextMenuShortcut>
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
       <TranslationDialog
         open={translateState.open}
-        onClose={() => setTranslateState({ open: false, text: "", provider: "" })}
+        onClose={() =>
+          setTranslateState({ open: false, text: "", provider: "" })
+        }
         text={translateState.text}
         provider={translateState.provider}
       />

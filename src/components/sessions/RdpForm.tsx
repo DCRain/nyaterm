@@ -1,8 +1,7 @@
 import { Eye, EyeOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { MdChevronRight } from "react-icons/md";
-import { Button } from "@/components/ui/button";
+import { MdChevronRight, MdClose } from "react-icons/md";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -99,7 +98,12 @@ interface RdpFormProps {
   setPreferredClient: (value: string) => void;
   redirects: RdpRedirectSettings;
   setRedirects: (patch: Partial<RdpRedirectSettings>) => void;
+  connectionId?: string;
 }
+
+type PasswordSource = "direct" | "saved";
+
+const MASKED_PASSWORD_PLACEHOLDER = "********";
 
 function RequiredMark() {
   return <span className="ml-0.5 text-destructive">*</span>;
@@ -254,19 +258,63 @@ export function RdpForm({
   setPreferredClient,
   redirects,
   setRedirects,
+  connectionId,
 }: RdpFormProps) {
   const { t } = useTranslation();
   const [passwords, setPasswords] = useState<SavedPassword[]>([]);
   const [showPassword, setShowPassword] = useState(false);
+  const [passwordLoading, setPasswordLoading] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [redirectsOpen, setRedirectsOpen] = useState(true);
   const [clients, setClients] = useState<RemoteDesktopClientInfo[]>([]);
+  const [passwordSource, setPasswordSource] = useState<PasswordSource>(
+    passwordId ? "saved" : "direct",
+  );
 
   useEffect(() => {
     invoke<SavedPassword[]>("get_saved_passwords")
-      .then(setPasswords)
+      .then((items) => {
+        setPasswords(items);
+        if (passwordId && !items.some((item) => item.id === passwordId)) {
+          setPasswordId("");
+        }
+      })
       .catch(() => {});
-  }, []);
+  }, [passwordId, setPasswordId]);
+
+  useEffect(() => {
+    setPasswordSource(passwordId ? "saved" : "direct");
+  }, [passwordId]);
+
+  const selectedPasswordName = passwords.find((item) => item.id === passwordId)?.name;
+  const normalizedDisplayMode = displayMode === "native" ? "fixed" : displayMode;
+  const fixedDisplay = normalizedDisplayMode === "fixed";
+
+  const togglePasswordVisibility = async () => {
+    if (showPassword) {
+      setShowPassword(false);
+      return;
+    }
+
+    if (!password && hasPassword && connectionId) {
+      setPasswordLoading(true);
+      try {
+        const value = await invoke<string | null>("get_connection_password_value", {
+          id: connectionId,
+        });
+        if (value) {
+          setPassword(value);
+          setHasPassword(false);
+        }
+      } catch {
+        return;
+      } finally {
+        setPasswordLoading(false);
+      }
+    }
+
+    setShowPassword(true);
+  };
 
   useEffect(() => {
     if (clientMode !== "external") {
@@ -395,57 +443,118 @@ export function RdpForm({
       </div>
 
       {clientMode === "builtin" ? (
-        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          <div>
-            <Label className="text-xs font-medium text-foreground/80">{t("dialog.password")}</Label>
-            <div className="mt-1 flex gap-2">
-              <Input
-                className="h-8 text-xs"
-                type={showPassword ? "text" : "password"}
-                value={password}
-                placeholder={hasPassword ? "********" : ""}
-                disabled={!!passwordId}
-                onChange={(event) => {
-                  setPassword(event.target.value);
-                  setHasPassword(false);
-                }}
-              />
-              <Button
-                type="button"
-                variant="outline"
-                size="icon-sm"
-                className="h-8 w-8"
-                onClick={() => setShowPassword((value) => !value)}
-              >
-                {showPassword ? (
-                  <EyeOff className="h-3.5 w-3.5" />
-                ) : (
-                  <Eye className="h-3.5 w-3.5" />
+        <div>
+          <Label className="text-xs font-medium text-foreground/80">
+            {t("dialog.authentication")}
+          </Label>
+          <Tabs
+            value={passwordSource}
+            onValueChange={(value) => {
+              const nextSource = value as PasswordSource;
+              setPasswordSource(nextSource);
+              if (nextSource === "direct") {
+                setPasswordId("");
+              } else {
+                setPassword("");
+                setHasPassword(false);
+                setShowPassword(false);
+              }
+            }}
+            className="mt-1 w-full"
+          >
+            <TabsList className="grid h-8 w-full grid-cols-2 pointer-events-auto">
+              <TabsTrigger value="direct" className="text-xs">
+                {t("dialog.directPassword")}
+              </TabsTrigger>
+              <TabsTrigger value="saved" className="text-xs">
+                {t("dialog.savedPassword")}
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="direct" className="mt-3 border-0 outline-none">
+              <Label className="text-xs font-medium text-foreground/80">{t("dialog.password")}</Label>
+              <div className="relative mt-1">
+                <Input
+                  className="h-8 pr-16 text-xs"
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  placeholder={
+                    hasPassword && !password
+                      ? MASKED_PASSWORD_PLACEHOLDER
+                      : t("dialog.passwordPlaceholder")
+                  }
+                  disabled={passwordLoading}
+                  onChange={(event) => {
+                    setPassword(event.target.value);
+                    setPasswordId("");
+                    if (event.target.value) {
+                      setHasPassword(false);
+                    }
+                  }}
+                />
+                {(password || hasPassword) && (
+                  <button
+                    type="button"
+                    className="absolute right-7 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+                    title={showPassword ? t("dialog.hidePassword") : t("dialog.showPassword")}
+                    disabled={passwordLoading}
+                    onClick={() => {
+                      void togglePasswordVisibility();
+                    }}
+                  >
+                    {showPassword ? (
+                      <EyeOff className="h-3.5 w-3.5" />
+                    ) : (
+                      <Eye className="h-3.5 w-3.5" />
+                    )}
+                  </button>
                 )}
-              </Button>
-            </div>
-          </div>
-          <div>
-            <Label className="text-xs font-medium text-foreground/80">
-              {t("dialog.savedPassword")}
-            </Label>
-            <Select
-              value={passwordId || "inline"}
-              onValueChange={(value) => setPasswordId(value === "inline" ? "" : value)}
-            >
-              <SelectTrigger className="mt-1 h-8 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="inline">{t("dialog.passwordInline")}</SelectItem>
-                {passwords.map((item) => (
-                  <SelectItem key={item.id} value={item.id}>
-                    {item.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+                {(password || hasPassword) && (
+                  <button
+                    type="button"
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+                    title={t("dialog.clearPassword", "Clear password")}
+                    onClick={() => {
+                      setPassword("");
+                      setHasPassword(false);
+                      setShowPassword(false);
+                    }}
+                  >
+                    <MdClose className="text-sm" />
+                  </button>
+                )}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="saved" className="mt-3 border-0 outline-none">
+              <Label className="text-xs font-medium text-foreground/80">
+                {t("dialog.savedPassword")}
+              </Label>
+              <Select
+                value={passwordId || "__none__"}
+                onValueChange={(value) => {
+                  setPasswordId(value === "__none__" ? "" : value);
+                  setPassword("");
+                  setHasPassword(false);
+                  setShowPassword(false);
+                }}
+              >
+                <SelectTrigger className="mt-1 h-8 w-full text-xs font-normal">
+                  <SelectValue placeholder={t("dialog.selectPassword")}>
+                    {selectedPasswordName || t("dialog.none")}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">{t("dialog.none")}</SelectItem>
+                  {passwords.map((item) => (
+                    <SelectItem key={item.id} value={item.id}>
+                      {item.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </TabsContent>
+          </Tabs>
         </div>
       ) : null}
 
@@ -829,13 +938,13 @@ export function RdpForm({
 
               <TabsContent value="display" className="mt-3 border-0 outline-none">
                 <div className="rounded-lg border bg-accent/25 p-3">
-                  <div className="grid gap-3 sm:grid-cols-3">
+                  <div className={fixedDisplay ? "grid gap-3 sm:grid-cols-3" : "grid gap-3"}>
                     <div>
                       <Label className="text-xs font-medium text-foreground/80">
                         {t("dialog.rdpDisplayMode")}
                       </Label>
                       <Select
-                        value={displayMode === "native" ? "fixed" : displayMode}
+                        value={normalizedDisplayMode}
                         onValueChange={(value) => setDisplayMode(value as RdpDisplayMode)}
                       >
                         <SelectTrigger className="mt-1 h-8 text-xs">
@@ -849,30 +958,34 @@ export function RdpForm({
                         </SelectContent>
                       </Select>
                     </div>
-                    <div>
-                      <Label className="text-xs font-medium text-foreground/80">
-                        {t("dialog.rdpWidth")}
-                      </Label>
-                      <NumberInput
-                        className="mt-1 [&_button]:h-8 [&_button]:w-8 [&_input]:h-8 [&_input]:text-xs"
-                        value={displayWidth}
-                        onChange={setDisplayWidth}
-                        min={640}
-                        max={7680}
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-xs font-medium text-foreground/80">
-                        {t("dialog.rdpHeight")}
-                      </Label>
-                      <NumberInput
-                        className="mt-1 [&_button]:h-8 [&_button]:w-8 [&_input]:h-8 [&_input]:text-xs"
-                        value={displayHeight}
-                        onChange={setDisplayHeight}
-                        min={480}
-                        max={4320}
-                      />
-                    </div>
+                    {fixedDisplay && (
+                      <>
+                        <div>
+                          <Label className="text-xs font-medium text-foreground/80">
+                            {t("dialog.rdpWidth")}
+                          </Label>
+                          <NumberInput
+                            className="mt-1 [&_button]:h-8 [&_button]:w-8 [&_input]:h-8 [&_input]:text-xs"
+                            value={displayWidth}
+                            onChange={setDisplayWidth}
+                            min={640}
+                            max={7680}
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs font-medium text-foreground/80">
+                            {t("dialog.rdpHeight")}
+                          </Label>
+                          <NumberInput
+                            className="mt-1 [&_button]:h-8 [&_button]:w-8 [&_input]:h-8 [&_input]:text-xs"
+                            value={displayHeight}
+                            onChange={setDisplayHeight}
+                            min={480}
+                            max={4320}
+                          />
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               </TabsContent>

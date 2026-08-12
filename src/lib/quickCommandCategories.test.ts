@@ -9,6 +9,7 @@ import {
   getQuickCommandCategoryMoveState,
   hasQuickCommandCategorySiblingName,
   moveQuickCommandCategory,
+  moveQuickCommandCategoryToTarget,
 } from "./quickCommandCategories";
 
 describe("quickCommandCategories", () => {
@@ -196,6 +197,76 @@ describe("quickCommandCategories", () => {
 
     expect(result.find((item) => item.id === "orphan")?.sort_order).toBe(0);
     expect(result.find((item) => item.id === "root")?.sort_order).toBe(1);
+  });
+
+  it("moves a category before a sibling and rewrites sibling sort order", () => {
+    const categories = [
+      category("first", "First", undefined, 0),
+      category("second", "Second", undefined, 1),
+      category("third", "Third", undefined, 2),
+    ];
+
+    const result = moveQuickCommandCategoryToTarget(categories, "third", {
+      categoryId: "first",
+      position: "before",
+    });
+
+    expect(result.map(({ id, sort_order }) => [id, sort_order])).toEqual([
+      ["first", 1],
+      ["second", 2],
+      ["third", 0],
+    ]);
+  });
+
+  it("moves a category into another category as the last child", () => {
+    const categories = [
+      category("root", "Root", undefined, 0),
+      category("target", "Target", undefined, 1),
+      category("child", "Child", "target", 0),
+    ];
+
+    const result = moveQuickCommandCategoryToTarget(categories, "root", {
+      categoryId: "target",
+      position: "inside",
+    });
+
+    expect(result.find((item) => item.id === "root")).toMatchObject({
+      parent_id: "target",
+      sort_order: 1,
+    });
+    expect(result.find((item) => item.id === "child")?.sort_order).toBe(0);
+  });
+
+  it("prevents moving a category into its own descendant", () => {
+    const categories = [
+      category("root", "Root", undefined, 0),
+      category("child", "Child", "root", 0),
+    ];
+
+    const result = moveQuickCommandCategoryToTarget(categories, "root", {
+      categoryId: "child",
+      position: "inside",
+    });
+
+    expect(result).toBe(categories);
+  });
+
+  it("moves a nested category back to the root level", () => {
+    const categories = [
+      category("root", "Root", undefined, 0),
+      category("child", "Child", "root", 0),
+      category("other", "Other", undefined, 1),
+    ];
+
+    const result = moveQuickCommandCategoryToTarget(categories, "child", {
+      categoryId: null,
+      position: "inside",
+    });
+
+    expect(result.find((item) => item.id === "child")).toMatchObject({
+      parent_id: undefined,
+      sort_order: 2,
+    });
   });
 });
 

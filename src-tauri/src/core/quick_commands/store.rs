@@ -54,9 +54,11 @@ impl QuickCommandsStore {
         {
             let original_created_at = existing.created_at;
             let original_use_count = existing.use_count;
+            let original_sort_order = existing.sort_order;
             *existing = command;
             existing.created_at = existing.created_at.or(original_created_at);
             existing.use_count = existing.use_count.or(original_use_count);
+            existing.sort_order = existing.sort_order.or(original_sort_order);
         } else {
             command.created_at = command.created_at.or(Some(now));
             config.commands.push(command);

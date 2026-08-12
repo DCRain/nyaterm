@@ -232,10 +232,17 @@ impl fmt::Debug for AuthIdentityBuffers {
 impl From<AuthIdentity> for AuthIdentityBuffers {
     fn from(credentials: AuthIdentity) -> Self {
         let password: &str = credentials.password.as_ref().as_ref();
+        let (user, domain) = match credentials.username.format() {
+            UserNameFormat::UserPrincipalName => (credentials.username.inner(), ""),
+            UserNameFormat::DownLevelLogonName => (
+                credentials.username.account_name(),
+                credentials.username.domain_name().unwrap_or_default(),
+            ),
+        };
 
         Self {
-            user: credentials.username.account_name().into(),
-            domain: credentials.username.domain_name().unwrap_or_default().into(),
+            user: user.into(),
+            domain: domain.into(),
             password: ZeroizedUtf16String(password.into()).into(),
         }
     }
@@ -620,6 +627,34 @@ mod tests {
 
             check_round_trip_property(&username);
         })
+    }
+
+    #[test]
+    fn upn_auth_identity_buffers_preserve_full_username() {
+        let username = Username::parse("abc123@hotmail.com").expect("UPN");
+        let credentials = AuthIdentity {
+            username,
+            password: "secret".to_string().into(),
+        };
+
+        let buffers = AuthIdentityBuffers::from(credentials);
+
+        assert_eq!(buffers.user.to_string(), "abc123@hotmail.com");
+        assert_eq!(buffers.domain.to_string(), "");
+    }
+
+    #[test]
+    fn down_level_auth_identity_buffers_keep_split_user_and_domain() {
+        let username = Username::parse("DOMAIN\\abc123").expect("down-level logon name");
+        let credentials = AuthIdentity {
+            username,
+            password: "secret".to_string().into(),
+        };
+
+        let buffers = AuthIdentityBuffers::from(credentials);
+
+        assert_eq!(buffers.user.to_string(), "abc123");
+        assert_eq!(buffers.domain.to_string(), "DOMAIN");
     }
 
     #[test]

@@ -74,6 +74,7 @@ fn parse_windterm_quickbar(raw: &str) -> AppResult<ImportConfig> {
             execution_mode,
             source: Some("manual".to_string()),
             risk_level: None,
+            sort_order: None,
         });
     }
 
@@ -189,6 +190,7 @@ fn parse_xshell_quick_buttons_content(raw: &str) -> ImportConfig {
                 execution_mode: "append".to_string(),
                 source: Some("manual".to_string()),
                 risk_level: None,
+                sort_order: None,
             })
         })
         .collect();

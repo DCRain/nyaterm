@@ -146,11 +146,35 @@ export function mapKeyboardCodeToRdp(code: string): RdpKeyMapping | null {
   return KEY_CODE_TO_SCANCODE[code] ?? null;
 }
 
+function modifierCodeFromLocation(event: KeyboardEvent): string | null {
+  const location = event.location;
+  if (event.key === "Shift" || event.code === "Shift") {
+    return location === KeyboardEvent.DOM_KEY_LOCATION_RIGHT ? "ShiftRight" : "ShiftLeft";
+  }
+  if (event.key === "Control" || event.code === "Control") {
+    return location === KeyboardEvent.DOM_KEY_LOCATION_RIGHT ? "ControlRight" : "ControlLeft";
+  }
+  if (event.key === "Alt" || event.code === "Alt") {
+    return location === KeyboardEvent.DOM_KEY_LOCATION_RIGHT ? "AltRight" : "AltLeft";
+  }
+  if (event.key === "Meta" || event.code === "Meta") {
+    return location === KeyboardEvent.DOM_KEY_LOCATION_RIGHT ? "MetaRight" : "MetaLeft";
+  }
+  return null;
+}
+
+function mapKeyboardEventToRdp(event: KeyboardEvent): RdpKeyMapping | null {
+  const mapping = mapKeyboardCodeToRdp(event.code);
+  if (mapping) return mapping;
+  const modifierCode = modifierCodeFromLocation(event);
+  return modifierCode ? mapKeyboardCodeToRdp(modifierCode) : null;
+}
+
 export function buildRdpKeyEvent(
   event: KeyboardEvent,
   type: "key-down" | "key-up",
 ): RdpInputEvent | null {
-  const mapping = mapKeyboardCodeToRdp(event.code);
+  const mapping = mapKeyboardEventToRdp(event);
   if (!mapping) return null;
   return {
     type,

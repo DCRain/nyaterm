@@ -23,6 +23,10 @@ import {
   DEFAULT_TAB_RIGHT_CLICK_ACTION,
 } from "@/lib/interactionSettings";
 import {
+  normalizeQuickCommandAppSettings,
+  normalizeQuickCommandUiConfig,
+} from "@/lib/quickCommandSettings";
+import {
   collectSessionPanes,
   createSessionPane,
   createWorkspaceTab,
@@ -589,12 +593,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     invoke<AppSettings>("get_app_settings")
       .then((cfg) => {
-        appSettingsRef.current = cfg;
-        setAppSettings(cfg);
-        setLoggerLevel(cfg.diagnostics.level);
+        const normalized = normalizeQuickCommandAppSettings(cfg);
+        appSettingsRef.current = normalized;
+        setAppSettings(normalized);
+        setLoggerLevel(normalized.diagnostics.level);
         appSettingsLoaded.current = true;
         setSettingsLoaded(true);
-        if (isPrimaryMainWindow() && cfg.security?.enable_screen_lock) {
+        if (isPrimaryMainWindow() && normalized.security?.enable_screen_lock) {
           setIsLocked(true);
         }
       })
@@ -625,7 +630,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (Object.keys(nextUpdates).length === 0 || nextUpdates === prev) {
           return prev;
         }
-        const next = { ...prev, ...nextUpdates };
+        const next = normalizeQuickCommandAppSettings({
+          ...prev,
+          ...nextUpdates,
+        });
         const changed = Object.keys(nextUpdates).some(
           (key) =>
             !areSettingsValuesEqual(
@@ -691,7 +699,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
           panel_stack_sizes: localUi.panel_stack_sizes,
         },
       };
-      const normalized = preserveAppSettingsReferences(current, mergedNext);
+      const normalized = preserveAppSettingsReferences(
+        current,
+        normalizeQuickCommandAppSettings(mergedNext),
+      );
       appSettingsRef.current = normalized;
       setLoggerLevel(normalized.diagnostics.level);
       return normalized;
@@ -712,7 +723,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ) {
           return prev;
         }
-        const nextUi = { ...prev.ui, ...nextUpdates };
+        const nextUi = normalizeQuickCommandUiConfig({
+          ...prev.ui,
+          ...nextUpdates,
+        });
         const next = { ...prev, ui: nextUi };
         appSettingsRef.current = next;
         if (appSettingsLoaded.current) {

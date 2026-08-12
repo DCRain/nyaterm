@@ -97,6 +97,9 @@ features = ["sink"]
 [dependencies.ironrdp-cfg]
 version = "0.1"
 
+[dependencies.ironrdp-bulk]
+version = "0.1"
+
 [dependencies.ironrdp-cliprdr]
 version = "0.7"
 optional = true
