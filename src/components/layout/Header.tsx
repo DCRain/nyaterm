@@ -98,6 +98,7 @@ import {
   resetTerminalFontSizeDelta,
 } from "@/lib/terminalFontSize";
 import { getActivePane, getTabDisplayName } from "@/lib/workspaceTabs";
+import { openSettings } from "@/lib/windowManager";
 import type {
   AppearanceSettings,
   RemoteGpuOverview,
@@ -943,6 +944,13 @@ export default function Header({
         action: handleExport,
         icon: "file_export",
       },
+      { label: "separator", separator: true },
+      addNativeAccelerator({
+        id: "file.openSettings",
+        label: t("settings.title"),
+        action: () => void openSettings(),
+        icon: "settings",
+      }, "view.openSettings", appSettings.keybindings),
     ],
     view: [
       {
@@ -1306,6 +1314,13 @@ export default function Header({
             label: t("menu.about"),
             enabled: true,
             accelerator: null,
+          },
+          {
+            kind: "item",
+            id: "file.openSettings",
+            label: t("settings.title"),
+            enabled: !locked,
+            accelerator: getMacosAccelerator("view.openSettings", appSettings.keybindings),
           },
           { kind: "separator" },
           { kind: "predefined", role: "services" },
