@@ -31,6 +31,11 @@ import {
   shouldDisableDynamicResizeAfterState,
 } from "@/lib/rdpResize";
 import { mapClientPointToRdpPixel } from "@/lib/rdpViewport";
+import {
+  isTerminalWindowFullscreenActive,
+  TERMINAL_FULLSCREEN_CHANGED_EVENT,
+  toggleTerminalWindowFullscreen,
+} from "@/lib/terminalFullscreen";
 import type { RdpSessionPane } from "@/types/global";
 
 type RdpSessionState =
@@ -643,27 +648,29 @@ function RdpPaneHost({
   }, [active, pane.display?.scaleMode, pane.sessionId, state, visible]);
 
   useEffect(() => {
-    const syncFullscreen = () => {
-      setIsFullscreen(document.fullscreenElement === containerRef.current);
+    const syncFullscreen = (event?: Event) => {
+      if (event) {
+        const detail = (event as CustomEvent<{ active?: boolean }>).detail;
+        setIsFullscreen(Boolean(detail?.active));
+        return;
+      }
+      setIsFullscreen(isTerminalWindowFullscreenActive());
     };
-    document.addEventListener("fullscreenchange", syncFullscreen);
+    window.addEventListener(TERMINAL_FULLSCREEN_CHANGED_EVENT, syncFullscreen);
     syncFullscreen();
     return () => {
-      document.removeEventListener("fullscreenchange", syncFullscreen);
-      if (document.fullscreenElement === containerRef.current) {
-        void document.exitFullscreen().catch(() => {});
-      }
+      window.removeEventListener(TERMINAL_FULLSCREEN_CHANGED_EVENT, syncFullscreen);
     };
   }, []);
 
   const toggleFullscreen = useCallback(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    if (document.fullscreenElement === container) {
-      void document.exitFullscreen().catch(() => {});
-      return;
-    }
-    void container.requestFullscreen().catch(() => {});
+    void toggleTerminalWindowFullscreen()
+      .then(() => {
+        window.setTimeout(() => {
+          window.dispatchEvent(new CustomEvent("nyaterm:refresh-terminals"));
+        }, 50);
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {

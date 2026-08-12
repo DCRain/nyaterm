@@ -321,6 +321,10 @@ textarea,
   border-radius: var(--nyaterm-window-radius);
 }
 
+.nyaterm-wallpaper-shell[data-terminal-fullscreen="true"] {
+  border-radius: 0;
+}
+
 .nyaterm-wallpaper-shell[data-wallpaper-enabled="true"] .xterm,
 .nyaterm-wallpaper-shell[data-wallpaper-enabled="true"] .xterm .xterm-viewport,
 .nyaterm-wallpaper-shell[data-wallpaper-enabled="true"] .xterm .xterm-screen,

@@ -77,6 +77,13 @@ pub fn open_devtools(window: tauri::WebviewWindow) -> AppResult<()> {
 }
 
 #[tauri::command]
+pub fn set_terminal_fullscreen(window: tauri::WebviewWindow, enable: bool) -> AppResult<()> {
+    crate::platform::set_terminal_fullscreen(&window, enable)
+        .map_err(AppError::Config)?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn reveal_main_window(window: tauri::WebviewWindow) -> AppResult<()> {
     crate::app::reveal_main_window(&window);
     Ok(())

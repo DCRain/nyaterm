@@ -126,6 +126,7 @@ pub fn run() {
             cmd::app::quit_application,
             cmd::app::hide_main_window,
             cmd::app::open_devtools,
+            cmd::app::set_terminal_fullscreen,
             cmd::app::reveal_main_window,
             cmd::app::open_download_dir,
             cmd::app::open_log_dir,

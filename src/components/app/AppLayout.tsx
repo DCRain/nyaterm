@@ -5,7 +5,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from "react";
 import { MdChevronLeft, MdChevronRight, MdTerminal } from "react-icons/md";
@@ -45,6 +44,12 @@ import {
 } from "@/lib/backgroundImage";
 import type { SendCommandPanelDraft } from "@/lib/sendCommandPanelEvents";
 import { matchesKeyEvent } from "@/lib/shortcutRegistry";
+import {
+  exitTerminalWindowFullscreen,
+  isTerminalWindowFullscreen,
+  TERMINAL_FULLSCREEN_CHANGED_EVENT,
+  toggleTerminalWindowFullscreen,
+} from "@/lib/terminalFullscreen";
 import type { UpdateInfo } from "@/lib/updater";
 import { cn } from "@/lib/utils";
 import { bounceTopModalWindow } from "@/lib/windowManager";
@@ -185,51 +190,76 @@ export default function AppLayout({
   const [backgroundDataUrl, setBackgroundDataUrl] = useState("");
   const [serialSendRunning, setSerialSendRunning] = useState(false);
   const [terminalFullscreen, setTerminalFullscreen] = useState(false);
-  const terminalAreaRef = useRef<HTMLElement | null>(null);
 
   const toggleTerminalFullscreen = useCallback(async () => {
-    const area = terminalAreaRef.current;
-    if (!area) return;
     try {
-      if (document.fullscreenElement === area) {
-        await document.exitFullscreen();
-        return;
-      }
-      if (document.fullscreenElement) {
-        await document.exitFullscreen();
-      }
-      await area.requestFullscreen();
+      await toggleTerminalWindowFullscreen();
+      window.setTimeout(() => {
+        window.dispatchEvent(new CustomEvent("nyaterm:refresh-terminals"));
+      }, 50);
     } catch {
-      // WebView / user gesture restrictions — ignore.
+      // State is reset via TERMINAL_FULLSCREEN_CHANGED_EVENT.
     }
+  }, []);
+
+  useEffect(() => {
+    const onFullscreenChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ active?: boolean }>).detail;
+      setTerminalFullscreen(Boolean(detail?.active));
+    };
+    window.addEventListener(TERMINAL_FULLSCREEN_CHANGED_EVENT, onFullscreenChanged);
+    return () => {
+      window.removeEventListener(TERMINAL_FULLSCREEN_CHANGED_EVENT, onFullscreenChanged);
+    };
   }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.repeat) return;
+
+      const isF11 =
+        event.code === "F11" || event.key === "F11" || event.key === "f11";
       const keys = resolveShortcutKeys("view.toggleFullscreen", keybindings);
-      if (!matchesKeyEvent(keys, event)) return;
+      const matchesConfigured = Boolean(keys) && matchesKeyEvent(keys, event);
+      // Always accept bare F11 even if keybindings override is empty/broken.
+      const shouldToggle = matchesConfigured || (isF11 && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey);
+
+      if (event.key === "Escape" && terminalFullscreen) {
+        event.preventDefault();
+        event.stopPropagation();
+        void exitTerminalWindowFullscreen().then(() => {
+          window.dispatchEvent(new CustomEvent("nyaterm:refresh-terminals"));
+        });
+        return;
+      }
+
+      if (!shouldToggle) return;
       event.preventDefault();
       event.stopPropagation();
       void toggleTerminalFullscreen();
     };
-    // Capture phase so F11 wins over RDP / xterm handlers.
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, [keybindings, toggleTerminalFullscreen]);
+  }, [keybindings, terminalFullscreen, toggleTerminalFullscreen]);
 
   useEffect(() => {
-    const onFullscreenChange = () => {
-      setTerminalFullscreen(document.fullscreenElement === terminalAreaRef.current);
-      window.dispatchEvent(new CustomEvent("nyaterm:refresh-terminals"));
-    };
-    document.addEventListener("fullscreenchange", onFullscreenChange);
+    let cancelled = false;
+    void isTerminalWindowFullscreen().then((isFullscreen) => {
+      if (!cancelled) setTerminalFullscreen(isFullscreen);
+    });
     return () => {
-      document.removeEventListener("fullscreenchange", onFullscreenChange);
-      if (document.fullscreenElement === terminalAreaRef.current) {
-        void document.exitFullscreen().catch(() => {});
-      }
+      cancelled = true;
+      // Do not auto-exit on HMR/effect cleanup — that made F11 appear broken
+      // during hot reload. Exit only when the page is actually unloading.
     };
+  }, []);
+
+  useEffect(() => {
+    const onPageHide = () => {
+      void exitTerminalWindowFullscreen().catch(() => {});
+    };
+    window.addEventListener("pagehide", onPageHide);
+    return () => window.removeEventListener("pagehide", onPageHide);
   }, []);
 
   useEffect(() => {
@@ -294,8 +324,12 @@ export default function AppLayout({
   const serialSendVisible = bottomPanel.activePanel === "serialSend";
   const serialSendMounted = serialSendVisible || serialSendRunning;
   // When side chrome is gone, round the terminal so it doesn't cover window corners.
-  const leftEdgeOccupied = (hasLeftActivityItems && leftActivityBarVisible) || leftPanelOpen;
-  const rightEdgeOccupied = (hasRightActivityItems && rightActivityBarVisible) || rightPanelOpen;
+  const leftEdgeOccupied =
+    !terminalFullscreen &&
+    ((hasLeftActivityItems && leftActivityBarVisible) || leftPanelOpen);
+  const rightEdgeOccupied =
+    !terminalFullscreen &&
+    ((hasRightActivityItems && rightActivityBarVisible) || rightPanelOpen);
 
   return (
     <div
@@ -303,6 +337,7 @@ export default function AppLayout({
       data-wallpaper-enabled={backgroundEnabled ? "true" : "false"}
       data-window-transparency={windowTransparencyEnabled ? "true" : "false"}
       data-window-transparency-blur={windowTransparencyBlur ? "true" : "false"}
+      data-terminal-fullscreen={terminalFullscreen ? "true" : "false"}
       style={shellStyle}
     >
       {backgroundEnabled && (
@@ -313,10 +348,10 @@ export default function AppLayout({
         />
       )}
       <div className="relative z-10 flex h-full min-h-0 flex-col">
-        <Header {...header} />
+        {!terminalFullscreen && <Header {...header} />}
 
         <main className="flex-1 flex overflow-hidden relative">
-          {hasLeftActivityItems && leftActivityBarVisible && (
+          {!terminalFullscreen && hasLeftActivityItems && leftActivityBarVisible && (
             <ActivityBar
               {...leftActivityBar}
               side="left"
@@ -325,7 +360,7 @@ export default function AppLayout({
             />
           )}
 
-          {leftPanelOpen && (
+          {!terminalFullscreen && leftPanelOpen && (
             <>
               <div
                 style={{
@@ -361,11 +396,11 @@ export default function AppLayout({
           )}
 
           <section
-            ref={terminalAreaRef}
             className={cn(
               "relative flex min-w-0 flex-1 origin-top-left flex-col overflow-hidden",
               !leftEdgeOccupied && "rounded-bl-[var(--nyaterm-window-radius)]",
               !rightEdgeOccupied && "rounded-br-[var(--nyaterm-window-radius)]",
+              terminalFullscreen && "rounded-none",
             )}
             style={{
               backgroundColor:
@@ -374,7 +409,7 @@ export default function AppLayout({
                   : "var(--df-bg-terminal)",
             }}
           >
-            {hasLeftActivityItems && !leftActivityBarVisible && (
+            {!terminalFullscreen && hasLeftActivityItems && !leftActivityBarVisible && (
               <button
                 type="button"
                 className="absolute left-0 top-1/2 z-30 flex h-12 w-3 -translate-y-1/2 cursor-pointer items-center justify-center rounded-r-sm bg-transparent text-[var(--df-text-dimmed)] transition-colors hover:bg-[color-mix(in_srgb,var(--df-text-muted)_12%,transparent)] hover:text-[var(--df-primary)]"
@@ -385,7 +420,7 @@ export default function AppLayout({
                 <MdChevronRight className="text-sm" />
               </button>
             )}
-            {hasRightActivityItems && !rightActivityBarVisible && (
+            {!terminalFullscreen && hasRightActivityItems && !rightActivityBarVisible && (
               <button
                 type="button"
                 className="absolute right-0 top-1/2 z-30 flex h-12 w-3 -translate-y-1/2 cursor-pointer items-center justify-center rounded-l-sm bg-transparent text-[var(--df-text-dimmed)] transition-colors hover:bg-[color-mix(in_srgb,var(--df-text-muted)_12%,transparent)] hover:text-[var(--df-primary)]"
@@ -483,7 +518,7 @@ export default function AppLayout({
             )}
           </section>
 
-          {hasRightActivityItems && (
+          {!terminalFullscreen && hasRightActivityItems && (
             <>
               {rightPanelOpen && <ResizeHandle direction="horizontal" onResize={onRightResize} />}
               <aside
@@ -520,7 +555,7 @@ export default function AppLayout({
             </>
           )}
 
-          {hasRightActivityItems && rightActivityBarVisible && (
+          {!terminalFullscreen && hasRightActivityItems && rightActivityBarVisible && (
             <ActivityBar
               {...rightActivityBar}
               side="right"
