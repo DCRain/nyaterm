@@ -29,10 +29,15 @@ import {
 } from "react-icons/md";
 import { toast } from "sonner";
 import CloseAllSessionsDialog from "@/components/dialog/terminal/CloseAllSessionsDialog";
+import type {
+  LocalShellOption,
+  LocalShellSelection,
+} from "@/components/dialog/terminal/LocalShellPickerDialog";
 import TabRenameDialog from "@/components/dialog/terminal/TabRenameDialog";
 import TabStartupCommandDialog from "@/components/dialog/terminal/TabStartupCommandDialog";
 import type { TabMouseAction } from "@/lib/interactionSettings";
 import { normalizeTabMouseAction } from "@/lib/interactionSettings";
+import { invoke } from "@/lib/invoke";
 import { getActiveGroupForSession, isSessionPausedInGroup } from "@/lib/syncInputGroups";
 import { getActivePane, getTabDisplayName } from "@/lib/workspaceTabs";
 import type { Group, PaneSplitDirection, SavedConnection, Tab } from "@/types/global";
@@ -65,6 +70,7 @@ interface TabBarProps {
   onTabClose: (tab: Tab) => void | Promise<void>;
   onAddTab: () => void;
   onConnectConnection: (connection: SavedConnection) => void | Promise<void>;
+  onSelectLocalShell: (shell: LocalShellSelection) => void;
   onDuplicateSession: (tab: Tab) => void | Promise<void>;
   onMultiplexSshSession: (tab: Tab) => void | Promise<void>;
   onMultiplexSshSftpSession: (tab: Tab) => void | Promise<void>;
@@ -252,6 +258,7 @@ function TabBar({
   onTabClose,
   onAddTab,
   onConnectConnection,
+  onSelectLocalShell,
   onDuplicateSession,
   onMultiplexSshSession,
   onMultiplexSshSftpSession,
@@ -286,6 +293,9 @@ function TabBar({
   const [commandDelayMs, setCommandDelayMs] = useState(
     appSettings.interaction.duplicate_session_command_delay_ms,
   );
+  const [localShells, setLocalShells] = useState<LocalShellOption[]>([]);
+  const [localShellsLoading, setLocalShellsLoading] = useState(false);
+  const [localShellsLoaded, setLocalShellsLoaded] = useState(false);
   const pendingOpenTabFocusRef = useRef<Tab | null>(null);
   const tabStripRef = useRef<HTMLDivElement | null>(null);
   const tabButtonRefs = useRef(new Map<string, HTMLDivElement>());
@@ -362,14 +372,6 @@ function TabBar({
     };
   }, [savedConnections, savedGroups]);
 
-  const shellConnections = useMemo(
-    () =>
-      savedConnections
-        .filter((connection) => connection.type === "local_terminal")
-        .sort(compareSortOrder),
-    [savedConnections],
-  );
-
   const recentConnections = useMemo(() => {
     const byId = new Map(savedConnections.map((connection) => [connection.id, connection]));
     return (appSettings.ui.recent_connection_ids ?? [])
@@ -377,6 +379,27 @@ function TabBar({
       .filter((connection): connection is SavedConnection => !!connection)
       .slice(0, 10);
   }, [appSettings.ui.recent_connection_ids, savedConnections]);
+
+  const loadLocalShells = useCallback(async () => {
+    setLocalShellsLoading(true);
+    try {
+      const options = await invoke<LocalShellOption[]>("list_local_shells");
+      setLocalShells(options);
+      setLocalShellsLoaded(true);
+    } catch {
+      setLocalShells([]);
+      setLocalShellsLoaded(true);
+    } finally {
+      setLocalShellsLoading(false);
+    }
+  }, []);
+
+  const handleNewSessionMenuOpenChange = useCallback(
+    (open: boolean) => {
+      if (open) void loadLocalShells();
+    },
+    [loadLocalShells],
+  );
 
   const openTabsMenuItems = useMemo(
     () => tabs.map((tab, index) => ({ tab, index })).reverse(),
@@ -1369,6 +1392,31 @@ function TabBar({
     </DropdownMenuItem>
   );
 
+  const renderLocalShellMenuItem = (shell: LocalShellOption) => {
+    const label = shell.elevated
+      ? `${shell.name} (${t("localShellPicker.admin")})`
+      : shell.name;
+    return (
+      <DropdownMenuItem
+        key={shell.id}
+        className="max-w-[320px]"
+        onSelect={() =>
+          onSelectLocalShell({
+            shellPath: shell.shellPath,
+            shellArgs: shell.shellArgs,
+            name: shell.name,
+            kind: shell.kind,
+            elevated: shell.elevated,
+          })
+        }
+        title={[shell.shellPath, shell.shellArgs].filter(Boolean).join(" ")}
+      >
+        <MdTerminal className="text-sm text-muted-foreground" />
+        <span className="min-w-0 truncate">{label}</span>
+      </DropdownMenuItem>
+    );
+  };
+
   const renderEmptyMenuItem = (label: string) => (
     <DropdownMenuItem disabled className="text-muted-foreground">
       <span className="truncate">{label}</span>
@@ -1439,7 +1487,7 @@ function TabBar({
           </div>
         </div>
 
-        <DropdownMenu>
+        <DropdownMenu onOpenChange={handleNewSessionMenuOpenChange}>
           <Tooltip>
             <TooltipTrigger asChild>
               <DropdownMenuTrigger asChild>
@@ -1485,15 +1533,20 @@ function TabBar({
                   )}
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>
+                  <MdTerminal className="text-sm text-muted-foreground" />
+                  {t("app.workbenchLocalTerminal")}
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="min-w-[260px] max-w-[360px] max-h-[70vh] overflow-y-auto">
+                  {localShellsLoading && !localShellsLoaded
+                    ? renderEmptyMenuItem(t("common.loading"))
+                    : localShells.length > 0
+                      ? localShells.map((shell) => renderLocalShellMenuItem(shell))
+                      : renderEmptyMenuItem(t("localShellPicker.noShells"))}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
             </DropdownMenuGroup>
-
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel className="text-muted-foreground">
-              {t("terminal.shellSessions")}
-            </DropdownMenuLabel>
-            {shellConnections.length > 0
-              ? shellConnections.map((connection) => renderConnectionMenuItem(connection))
-              : renderEmptyMenuItem(t("terminal.noShellSessions"))}
 
             <DropdownMenuSeparator />
             <DropdownMenuLabel className="text-muted-foreground">

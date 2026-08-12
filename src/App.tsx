@@ -4277,9 +4277,7 @@ function App() {
           rightActivityBarVisible: showRightActivityBar,
           onToggleLeftActivityBar: () => handleToggleVisibility("left"),
           onToggleRightActivityBar: () => handleToggleVisibility("right"),
-          tabBar:
-            tabs.length > 0
-              ? {
+          tabBar: {
                   tabs: terminalWindows ? flattenLeafTabs(terminalWindows, tabsById) : tabs,
                   activeTabId,
                   focusedTabId: activeTabId,
@@ -4289,6 +4287,7 @@ function App() {
                   onTabClose: handleCloseWorkspaceTab,
                   onAddTab: handleAddHeaderTab,
                   onConnectConnection: handleConnectConnectionFromHeader,
+                  onSelectLocalShell: handleSelectLocalShell,
                   onDuplicateSession: handleDuplicateSession,
                   onMultiplexSshSession: handleMultiplexSshSession,
                   onMultiplexSshSftpSession: handleMultiplexSshSftpSession,
@@ -4304,8 +4303,7 @@ function App() {
                   onCloseRight: handleCloseRightTabs,
                   onSessionInfo: handleSessionInfo,
                   onReorderTabs: handleReorderHeaderTabs,
-                }
-              : null,
+                },
           activeTab,
           savedConnections,
           remoteStatsEnabled: activeRemoteStatsEnabled,

@@ -21,7 +21,7 @@ export interface LocalShellSelection {
   elevated: boolean;
 }
 
-interface LocalShellOption {
+export interface LocalShellOption {
   id: string;
   name: string;
   shellPath: string;

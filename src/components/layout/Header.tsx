@@ -1892,7 +1892,7 @@ export default function Header({
       </div>
 
       <div className="flex-1 min-w-0 h-full flex items-center gap-1 px-0">
-        {tabBar && tabBar.tabs.length > 0 ? (
+        {tabBar ? (
           <>
             <div className="h-full w-3 shrink-0" data-tauri-drag-region />
             <TabBar {...tabBar} variant="header" />
