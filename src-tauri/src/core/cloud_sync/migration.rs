@@ -4,8 +4,8 @@ use crate::error::{AppError, AppResult, CloudSyncError};
 use super::operator::CloudRemote;
 use super::protocol::{
     commit_sync_pointer, pointer_from_snapshot, read_current_sync_snapshot_compat,
-    read_snapshot_for_pointer, upload_sync_snapshot, validate_snapshot_against_pointer,
-    verify_uploaded_sync_snapshot,
+    read_current_sync_snapshot_compat_decoded, read_snapshot_for_pointer, upload_sync_snapshot,
+    validate_decoded_snapshot_against_pointer, verify_uploaded_sync_snapshot,
 };
 use super::remote::RemoteSyncPointer;
 
@@ -56,7 +56,7 @@ async fn resolve_from_compatible_current(
     pointer: &RemoteSyncPointer,
     pointer_error: AppError,
 ) -> AppResult<RemoteSnapshotResolution> {
-    let current = match read_current_sync_snapshot_compat(remote, remote_root).await {
+    let current = match read_current_sync_snapshot_compat_decoded(remote, remote_root).await {
         Ok(Some(current)) => current,
         Ok(None) => return Err(pointer_error),
         Err(AppError::CloudSync(CloudSyncError::CorruptedSnapshot { .. })) => {
@@ -69,23 +69,23 @@ async fn resolve_from_compatible_current(
         Err(error) => return Err(error),
     };
 
-    if validate_snapshot_against_pointer(pointer, &current).is_ok() {
+    if validate_decoded_snapshot_against_pointer(pointer, &current).is_ok() {
         tracing::info!(
             revision = %pointer.revision_id,
             "Compatible current cloud sync snapshot matches latest pointer; migrating snapshot file"
         );
-        migrate_legacy_snapshot(remote, remote_root, pointer, &current).await?;
-        return Ok(RemoteSnapshotResolution::LegacyMigrated(current));
+        migrate_legacy_snapshot(remote, remote_root, pointer, &current.snapshot).await?;
+        return Ok(RemoteSnapshotResolution::LegacyMigrated(current.snapshot));
     }
 
     tracing::warn!(
         pointer_revision = %pointer.revision_id,
-        current_revision = %current.revision_id,
+        current_revision = %current.snapshot.revision_id,
         "Remote sync pointer snapshot and compatible current snapshot are inconsistent"
     );
     Ok(RemoteSnapshotResolution::Inconsistent {
         pointer: pointer.clone(),
-        recovery_candidate: current,
+        recovery_candidate: current.snapshot,
     })
 }
 
