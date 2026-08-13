@@ -3,13 +3,139 @@ import type { RestorableTab } from "@/types/global";
 import type { TemporaryLinkConfig } from "@/types/temporaryConnection";
 import {
   collectSessionPanes,
+  createFileDocumentPane,
   createSessionPane,
   createWorkspaceTab,
+  findOpenFileDocument,
+  getReleasedSessionIds,
+  replaceSessionReferences,
   restoreTabFromPersistence,
   serializeTabsForPersistence,
   splitSessionPane,
   updateSessionPane,
 } from "./workspaceTabs";
+
+describe("workspaceTabs file documents", () => {
+  const file = (path: string, sessionId = "session-ssh") =>
+    createFileDocumentPane({
+      sessionId,
+      name: path.split("/").pop() || path,
+      type: "SSH",
+      connectionId: "ssh-1",
+      backend: "remote",
+      path,
+      file: { content: `content:${path}`, size: 12, mtime: 42 },
+    });
+
+  it("finds an already open file by backend, session and exact path", () => {
+    const existing = createWorkspaceTab(file("/srv/README"), 0);
+
+    expect(
+      findOpenFileDocument([existing], {
+        backend: "remote",
+        sessionId: "session-ssh",
+        path: "/srv/README",
+      }),
+    ).toMatchObject({ tabId: existing.id, paneId: existing.root.id });
+    expect(
+      findOpenFileDocument([existing], {
+        backend: "remote",
+        sessionId: "session-ssh",
+        path: "/srv/readme",
+      }),
+    ).toBeNull();
+  });
+
+  it("only releases a shared session after its final pane reference is removed", () => {
+    const terminal = createWorkspaceTab(
+      createSessionPane("Host", "SSH", "ssh-1", { sessionId: "session-ssh" }),
+      0,
+    );
+    const document = createWorkspaceTab(file("/srv/notes.md"), 1);
+
+    expect(getReleasedSessionIds([terminal, document], [document])).toEqual([]);
+    expect(getReleasedSessionIds([terminal, document], [terminal])).toEqual([]);
+    expect(getReleasedSessionIds([terminal, document], [])).toEqual([
+      "session-ssh",
+    ]);
+  });
+
+  it("moves file dependencies to the new id when a session reconnects", () => {
+    const terminalPane = createSessionPane("Host", "SSH", "ssh-1", {
+      sessionId: "session-old",
+    });
+    const filePane = file("/srv/notes.md", "session-old");
+    const root = {
+      id: "split-reconnect",
+      kind: "split" as const,
+      direction: "vertical" as const,
+      ratio: 0.5,
+      first: terminalPane,
+      second: filePane,
+    };
+
+    const updated = replaceSessionReferences(
+      root,
+      "session-old",
+      "session-new",
+    );
+
+    expect(collectSessionPanes(updated).map((pane) => pane.sessionId)).toEqual([
+      "session-new",
+      "session-new",
+    ]);
+  });
+
+  it("does not persist file-only tabs and collapses file leaves out of split tabs", () => {
+    const terminalPane = createSessionPane("Host", "SSH", "ssh-1", {
+      id: "pane-terminal",
+      sessionId: "session-ssh",
+    });
+    const filePane = file("/srv/notes.md");
+    const mixed = createWorkspaceTab(terminalPane, 1);
+    mixed.root = {
+      id: "split-1",
+      kind: "split",
+      direction: "vertical",
+      ratio: 0.5,
+      first: terminalPane,
+      second: filePane,
+    };
+    mixed.activePaneId = filePane.id;
+
+    const serialized = serializeTabsForPersistence([
+      createWorkspaceTab(file("/srv/only.md"), 0),
+      mixed,
+    ]);
+
+    expect(serialized).toHaveLength(1);
+    expect(serialized[0].root).toMatchObject({
+      kind: "leaf",
+      pane_kind: "terminal",
+      title: "Host",
+    });
+    expect(serialized[0].active_pane_id).toBe("pane-terminal");
+  });
+
+  it("ignores legacy persisted file leaves instead of restoring them as terminals", () => {
+    const restored = restoreTabFromPersistence(
+      {
+        title: "notes.md",
+        session_type: "SSH",
+        root: {
+          kind: "leaf",
+          pane_kind: "file",
+          title: "notes.md",
+          session_type: "SSH",
+          connection_id: "ssh-1",
+        },
+      } as RestorableTab,
+      0,
+    );
+
+    expect(restored).toBeNull();
+  });
+});
 
 describe("workspaceTabs remote desktop persistence", () => {
   it("keeps legacy terminal tabs restorable without pane_kind", () => {
@@ -53,7 +179,9 @@ describe("workspaceTabs remote desktop persistence", () => {
       id: "pane-rdp",
       sessionId: "session-rdp",
     });
-    const [serialized] = serializeTabsForPersistence([createWorkspaceTab(pane, 0)]);
+    const [serialized] = serializeTabsForPersistence([
+      createWorkspaceTab(pane, 0),
+    ]);
 
     expect(serialized.root?.kind).toBe("leaf");
     if (serialized.root?.kind === "leaf") {
