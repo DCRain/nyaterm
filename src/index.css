@@ -363,6 +363,10 @@ body[data-window-transparency="true"] #root {
   -webkit-backdrop-filter: none;
 }
 
+.nyaterm-wallpaper-shell[data-wallpaper-enabled="true"] .nyaterm-wallpaper-transparent-surface {
+  background-color: transparent !important;
+}
+
 .nyaterm-wallpaper-control-surface {
   background-color: var(--df-bg-panel-solid, var(--df-bg-panel));
 }
