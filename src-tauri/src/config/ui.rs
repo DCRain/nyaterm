@@ -312,6 +312,10 @@ pub struct UiConfig {
     #[serde(default)]
     pub saved_connections_expanded_group_ids: Vec<String>,
     #[serde(default)]
+    pub asset_sort_key: Option<String>,
+    #[serde(default)]
+    pub asset_sort_direction: Option<String>,
+    #[serde(default)]
     pub recent_connection_ids: Vec<String>,
     #[serde(default = "default_transfer_height")]
     pub transfer_height: f64,
@@ -479,6 +483,8 @@ impl Default for UiConfig {
             docker_manager_interval: default_docker_manager_interval(),
             saved_connections_sort_mode: default_sort_mode(),
             saved_connections_expanded_group_ids: vec![],
+            asset_sort_key: None,
+            asset_sort_direction: None,
             recent_connection_ids: vec![],
             transfer_height: default_transfer_height(),
             file_explorer_show_hidden_files: true,

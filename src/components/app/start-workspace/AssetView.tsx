@@ -38,13 +38,17 @@ interface AssetViewProps {
 }
 
 export default function AssetView({ t, onConnectConnection, onEditConnection }: AssetViewProps) {
-  const { savedConnections, savedGroups, refreshConnections } = useApp();
+  const { appSettings, savedConnections, savedGroups, refreshConnections, updateUi } = useApp();
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
   const [filters, setFilters] = useState<Set<AssetFilterKey>>(new Set());
-  const [sortState, setSortState] = useState<AssetSortState | null>(null);
   const [viewMode, setViewMode] = useState<AssetViewMode>("list");
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const sortState = useMemo(
+    () =>
+      normalizeAssetSortState(appSettings.ui.asset_sort_key, appSettings.ui.asset_sort_direction),
+    [appSettings.ui.asset_sort_direction, appSettings.ui.asset_sort_key],
+  );
 
   useEffect(() => {
     void refreshConnections();
@@ -128,11 +132,17 @@ export default function AssetView({ t, onConnectConnection, onEditConnection }: 
   }, []);
 
   const handleSortChange = useCallback((key: AssetSortKey) => {
-    setSortState((current) => {
-      if (!current || current.key !== key) return { key, direction: "asc" };
-      return { key, direction: current.direction === "asc" ? "desc" : "asc" };
+    updateUi((prev) => {
+      const current = normalizeAssetSortState(prev.asset_sort_key, prev.asset_sort_direction);
+      if (!current || current.key !== key) {
+        return { asset_sort_key: key, asset_sort_direction: "asc" };
+      }
+      return {
+        asset_sort_key: key,
+        asset_sort_direction: current.direction === "asc" ? "desc" : "asc",
+      };
     });
-  }, []);
+  }, [updateUi]);
 
   return (
     <div
@@ -276,6 +286,29 @@ function compareBySortKey(
       );
     }
   }
+}
+
+function normalizeAssetSortState(
+  key: string | null | undefined,
+  direction: string | null | undefined,
+): AssetSortState | null {
+  if (!isAssetSortKey(key)) return null;
+  return {
+    key,
+    direction: direction === "desc" ? "desc" : "asc",
+  };
+}
+
+function isAssetSortKey(value: string | null | undefined): value is AssetSortKey {
+  return (
+    value === "name" ||
+    value === "address" ||
+    value === "connectionTime" ||
+    value === "cpu" ||
+    value === "memory" ||
+    value === "storage" ||
+    value === "accelerators"
+  );
 }
 
 function compareConnectionTime(

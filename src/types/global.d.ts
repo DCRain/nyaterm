@@ -694,6 +694,8 @@ export interface UiConfig {
   docker_manager_interval: number;
   saved_connections_sort_mode?: string;
   saved_connections_expanded_group_ids?: string[];
+  asset_sort_key?: string | null;
+  asset_sort_direction?: "asc" | "desc" | null;
   recent_connection_ids: string[];
   transfer_height: number;
   file_explorer_show_hidden_files: boolean;

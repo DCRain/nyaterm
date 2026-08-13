@@ -162,31 +162,75 @@ describe("start workspace asset view", () => {
 
   it("shows disk capacity and sorts from table headers", async () => {
     const user = userEvent.setup();
-    renderAssetView();
+    const view = renderAssetView();
 
     expect(screen.getByText("2.0 TB")).not.toBeNull();
     expect(screen.getByText(formatTestDateTime(GPU_CONNECTION_TIME_MS))).not.toBeNull();
 
     await user.click(screen.getByRole("button", { name: /Name/ }));
+    rerenderAssetView(view);
     expect(getRenderedAssetNames()).toEqual(["Ascend Edge", "GPU Lab", "Windows VM"]);
 
     await user.click(screen.getByRole("button", { name: /Name/ }));
+    rerenderAssetView(view);
     expect(getRenderedAssetNames()).toEqual(["Windows VM", "GPU Lab", "Ascend Edge"]);
 
     await user.click(screen.getByRole("button", { name: /Address/ }));
+    rerenderAssetView(view);
     expect(getRenderedAssetNames()).toEqual(["GPU Lab", "Windows VM", "Ascend Edge"]);
 
     await user.click(screen.getByRole("button", { name: /Connected At/ }));
+    rerenderAssetView(view);
     expect(getRenderedAssetNames()).toEqual(["GPU Lab", "Windows VM", "Ascend Edge"]);
 
     await user.click(screen.getByRole("button", { name: /Connected At/ }));
+    rerenderAssetView(view);
     expect(getRenderedAssetNames()).toEqual(["Windows VM", "GPU Lab", "Ascend Edge"]);
 
     await user.click(screen.getByRole("button", { name: /Memory/ }));
+    rerenderAssetView(view);
     expect(getRenderedAssetNames()).toEqual(["GPU Lab", "Windows VM", "Ascend Edge"]);
 
     await user.click(screen.getByRole("button", { name: /Storage/ }));
+    rerenderAssetView(view);
     expect(getRenderedAssetNames()).toEqual(["GPU Lab", "Windows VM", "Ascend Edge"]);
+  });
+
+  it("restores persisted asset sort state", () => {
+    appState.appSettings.ui.asset_sort_key = "name";
+    appState.appSettings.ui.asset_sort_direction = "desc";
+
+    renderAssetView();
+
+    expect(getRenderedAssetNames()).toEqual(["Windows VM", "GPU Lab", "Ascend Edge"]);
+  });
+
+  it("persists asset sort changes from table headers", async () => {
+    const user = userEvent.setup();
+    const view = renderAssetView();
+
+    await user.click(screen.getByRole("button", { name: /Connected At/ }));
+    expect(updateUiMock).toHaveBeenLastCalledWith({
+      asset_sort_key: "connectionTime",
+      asset_sort_direction: "asc",
+    });
+    expect(appState.appSettings.ui.asset_sort_key).toBe("connectionTime");
+    expect(appState.appSettings.ui.asset_sort_direction).toBe("asc");
+
+    view.rerender(
+      <AssetView
+        t={t}
+        onConnectConnection={connectConnectionMock}
+        onEditConnection={editConnectionMock}
+      />,
+    );
+    expect(getRenderedAssetNames()).toEqual(["GPU Lab", "Windows VM", "Ascend Edge"]);
+
+    await user.click(screen.getByRole("button", { name: /Connected At/ }));
+    expect(updateUiMock).toHaveBeenLastCalledWith({
+      asset_sort_key: "connectionTime",
+      asset_sort_direction: "desc",
+    });
   });
 
   it("resizes table columns from header drag handles", () => {
@@ -239,6 +283,16 @@ describe("start workspace asset view", () => {
 
 function renderAssetView() {
   return render(
+    <AssetView
+      t={t}
+      onConnectConnection={connectConnectionMock}
+      onEditConnection={editConnectionMock}
+    />,
+  );
+}
+
+function rerenderAssetView(view: ReturnType<typeof render>) {
+  view.rerender(
     <AssetView
       t={t}
       onConnectConnection={connectConnectionMock}
