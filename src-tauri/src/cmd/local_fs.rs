@@ -1,6 +1,6 @@
 use crate::core::sftp::{
     DirectoryChild, FileEntry, FileProperties, RemoteBinaryFile, RemoteTextFile,
-    WriteRemoteTextResult,
+    TextFileOpenResult, WriteRemoteTextResult, classify_text_file,
 };
 use crate::core::{SessionManager, SessionType};
 use crate::error::{AppError, AppResult};
@@ -240,6 +240,18 @@ pub async fn read_local_file_text(
 ) -> AppResult<RemoteTextFile> {
     ensure_local_session(state.inner(), &session_id).await?;
     read_local_file_text_impl(&path, max_bytes).await
+}
+
+#[tauri::command]
+pub async fn open_local_file_text(
+    state: tauri::State<'_, Arc<SessionManager>>,
+    session_id: String,
+    path: String,
+    max_bytes: u64,
+) -> AppResult<TextFileOpenResult> {
+    ensure_local_session(state.inner(), &session_id).await?;
+    let file = read_local_file_bytes_impl(&path, max_bytes).await?;
+    Ok(classify_text_file(file))
 }
 
 async fn read_local_file_text_impl(path: &str, max_bytes: u64) -> AppResult<RemoteTextFile> {

@@ -102,6 +102,41 @@ pub struct RemoteTextFile {
     pub mtime: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextFileUnsupportedReason {
+    Binary,
+    UnsupportedEncoding,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum TextFileOpenResult {
+    Text { file: RemoteTextFile },
+    Unsupported { reason: TextFileUnsupportedReason },
+}
+
+pub fn classify_text_file(file: RemoteBinaryFile) -> TextFileOpenResult {
+    if file.content_bytes.contains(&0) {
+        return TextFileOpenResult::Unsupported {
+            reason: TextFileUnsupportedReason::Binary,
+        };
+    }
+    match String::from_utf8(file.content_bytes) {
+        Ok(content) => TextFileOpenResult::Text {
+            file: RemoteTextFile {
+                path: file.path,
+                content,
+                size: file.size,
+                mtime: file.mtime,
+            },
+        },
+        Err(_) => TextFileOpenResult::Unsupported {
+            reason: TextFileUnsupportedReason::UnsupportedEncoding,
+        },
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteBinaryFile {
@@ -423,9 +458,37 @@ fn is_windows_reserved_device_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        FileProperties, RemotePathRef, decode_raw_path_token, permissions_string_to_octal_mode,
-        raw_path_token, sanitize_download_file_name_for_platform, scp_finalize_replace_command,
+        FileProperties, RemoteBinaryFile, RemotePathRef, TextFileOpenResult,
+        TextFileUnsupportedReason, classify_text_file, decode_raw_path_token,
+        permissions_string_to_octal_mode, raw_path_token, sanitize_download_file_name_for_platform,
+        scp_finalize_replace_command,
     };
+
+    #[test]
+    fn text_open_classifies_binary_and_invalid_utf8() {
+        let file = |content_bytes: Vec<u8>| RemoteBinaryFile {
+            path: "/tmp/file".to_string(),
+            size: content_bytes.len() as u64,
+            mtime: 1,
+            content_bytes,
+        };
+        assert!(matches!(
+            classify_text_file(file(b"hello\0world".to_vec())),
+            TextFileOpenResult::Unsupported {
+                reason: TextFileUnsupportedReason::Binary
+            }
+        ));
+        assert!(matches!(
+            classify_text_file(file(vec![0xff, 0xfe])),
+            TextFileOpenResult::Unsupported {
+                reason: TextFileUnsupportedReason::UnsupportedEncoding
+            }
+        ));
+        assert!(matches!(
+            classify_text_file(file(b"hello".to_vec())),
+            TextFileOpenResult::Text { file } if file.content == "hello"
+        ));
+    }
 
     #[test]
     fn raw_path_token_round_trips_non_utf8_bytes() {
