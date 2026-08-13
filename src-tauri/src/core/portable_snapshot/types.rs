@@ -140,6 +140,12 @@ pub struct PortableSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DecodedPortableSnapshot {
+    pub snapshot: PortableSnapshot,
+    pub source_payload_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PortableSnapshotMeta {
     schema_version: u32,
     snapshot_kind: PortableSnapshotKind,

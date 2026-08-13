@@ -131,7 +131,6 @@ export default function AssetTable({
             className="h-8 border-b"
             style={{
               color: "var(--df-text-muted)",
-              backgroundColor: "var(--df-bg-terminal)",
             }}
           >
             <SortableHeaderCell
@@ -293,7 +292,7 @@ function HeaderCell({
       className={`relative border-b px-3 py-2 font-medium ${className}`}
       style={{
         borderColor: "var(--df-border)",
-        backgroundColor: "var(--df-bg-terminal)",
+        backgroundColor: "var(--nyaterm-asset-sticky-bg, var(--df-bg-terminal))",
         width,
       }}
     >
@@ -352,7 +351,7 @@ function BodyCell({ children, className = "" }: { children: React.ReactNode; cla
       style={{
         borderColor: "color-mix(in srgb, var(--df-border) 50%, transparent)",
         backgroundColor: className.includes("asset-col-actions")
-          ? "var(--df-bg-terminal)"
+          ? "var(--nyaterm-asset-sticky-bg, var(--df-bg-terminal))"
           : undefined,
       }}
     >

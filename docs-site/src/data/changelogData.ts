@@ -10,6 +10,46 @@ export type ChangelogRelease = {
 
 const changelogReleasesEn: ChangelogRelease[] = [
   {
+    version: '[1.2.3] - 2026-08-13',
+    sections: [
+      {
+        title: 'Added',
+        items: [
+          '**vnc:** Add VNC sessions with saved-connection support, workspace integration, authentication, clipboard handling, input forwarding, and framebuffer rendering.',
+          '**remote-desktop:** Add shared frame, viewport, renderer, and surface utilities for VNC and RDP panes.',
+          '**terminal:** Add session recording and transcript management.',
+          '**asset-management:** Add connection time tracking, display formatting, asset sorting, and persisted sort state.',
+          '**cloud-sync:** Add a cloud snapshot decoding helper and integrate it into the main sync flow.',
+        ],
+      },
+      {
+        title: 'Changed',
+        items: [
+          '**rdp:** Improve RDP behavior through shared remote desktop rendering and viewport handling.',
+          '**settings:** Normalize settings tab handling and update terminal context menu behavior.',
+          '**process-manager:** Optimize process display settings and remove unused process-management code.',
+          '**ui:** Remove unnecessary transparent background styling from the wallpaper surface.',
+          '**tuning:** Change release panic behavior from unwind to abort.',
+          '**i18n:** Add and update localization strings for VNC, recording, and connection time across supported languages.',
+        ],
+      },
+      {
+        title: 'Fixed',
+        items: [
+          '**cloud-sync:** Validate source hashes while decoding snapshots to improve sync data integrity.',
+          '**temporary-session:** Complete temporary session recreation flows and fix context-menu actions for temporary SSH links.',
+        ],
+      },
+      {
+        title: 'Documentation',
+        items: [
+          '**readme:** Update README content for RDP and VNC support.',
+          '**docs-site:** Update session type documentation with RDP and VNC support.',
+        ],
+      },
+    ],
+  },
+  {
     version: '[1.2.2] - 2026-08-12',
     sections: [
       {
@@ -1866,6 +1906,43 @@ const changelogReleasesEn: ChangelogRelease[] = [
 ];
 
 const changelogReleasesZhCN: ChangelogRelease[] = [
+  {
+    version: '[1.2.3] - 2026-08-13',
+    sections: [
+      {
+        title: '新增',
+        items: [
+          '**vnc:** 新增 VNC 会话，支持已保存连接、工作区集成、认证处理、剪贴板、输入转发和帧缓冲渲染。',
+          '**remote-desktop:** 新增 VNC 和 RDP 面板共用的远程桌面帧、视口、渲染器和 Surface 工具。',
+          '**terminal:** 新增会话录制和转录管理流程。',
+          '**asset-management:** 新增连接时长跟踪、显示格式化、资产排序和排序状态持久化。',
+          '**cloud-sync:** 新增云端快照解码辅助工具，并接入主同步流程。',
+        ],
+      },
+      {
+        title: '变更',
+        items: [
+          '**rdp:** 通过共用远程桌面渲染和视口处理改进 RDP 行为。',
+          '**settings:** 规范设置标签页处理，并更新终端上下文菜单行为。',
+          '**process-manager:** 优化进程显示设置，并移除未使用的进程管理代码。',
+          '**ui:** 移除壁纸 Surface 不必要的透明背景样式。',
+          '**tuning:** 将发布构建的 panic 行为从 unwind 调整为 abort。',
+          '**i18n:** 补充和更新 VNC、录制、连接时长相关的多语言文案。',
+        ],
+      },
+      {
+        title: '修复',
+        items: [
+          '**cloud-sync:** 解码快照时校验源哈希，提升同步数据完整性。',
+          '**temporary-session:** 完善临时会话重建流程，并修复临时 SSH 链接上下文菜单操作。',
+        ],
+      },
+      {
+        title: '文档',
+        items: ['**readme:** 更新 README 中的 RDP 和 VNC 支持说明。', '**docs-site:** 更新会话类型文档，加入 RDP 和 VNC 支持。'],
+      },
+    ],
+  },
   {
     version: '[1.2.2] - 2026-08-12',
     sections: [

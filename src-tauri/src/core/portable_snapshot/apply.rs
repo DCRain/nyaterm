@@ -3,6 +3,7 @@ pub async fn apply_portable_snapshot(
     snapshot: &PortableSnapshot,
 ) -> AppResult<()> {
     validate_portable_snapshot(snapshot)?;
+    install_snapshot_master_key_token(snapshot)?;
 
     let mut sessions = snapshot.sessions.clone();
     if snapshot.snapshot_kind == PortableSnapshotKind::Sync {
@@ -36,9 +37,6 @@ pub async fn apply_portable_snapshot(
     persisted.ai = config::encrypt_ai_settings(merged.ai.clone())?;
     config::save_app_settings(app, &persisted)?;
 
-    if let Some(master_key) = &snapshot.master_key_token {
-        crate::storage::save_master_key_token(master_key)?;
-    }
     if !snapshot.known_hosts.is_empty() {
         crate::storage::replace_known_hosts_export(&snapshot.known_hosts)?;
     }
@@ -69,5 +67,14 @@ pub async fn apply_portable_snapshot(
         },
     );
 
+    Ok(())
+}
+
+fn install_snapshot_master_key_token(snapshot: &PortableSnapshot) -> AppResult<()> {
+    let Some(master_key) = &snapshot.master_key_token else {
+        return Ok(());
+    };
+    crate::storage::save_master_key_token(master_key)?;
+    crate::utils::crypto::verify_master_key_token()?;
     Ok(())
 }

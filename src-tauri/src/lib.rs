@@ -393,3 +393,7 @@ pub fn run() {
 pub fn run_portable_update_helper_if_requested() -> bool {
     portable_updater::run_helper_if_requested()
 }
+
+pub fn run_cloud_snapshot_decode_helper_if_requested() -> bool {
+    core::cloud_sync::run_snapshot_decode_helper_if_requested()
+}

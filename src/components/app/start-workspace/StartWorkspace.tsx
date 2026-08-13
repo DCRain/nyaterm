@@ -47,8 +47,15 @@ export default function StartWorkspace({
     [mode, updateUi],
   );
 
+  const assetSurfaceBackground = "var(--df-bg-terminal)";
+
   return (
-    <div className="relative h-full min-h-0 overflow-hidden">
+    <div
+      className="relative h-full min-h-0 overflow-hidden"
+      style={{
+        backgroundColor: mode === "assets" ? assetSurfaceBackground : undefined,
+      }}
+    >
       <div className="pointer-events-none absolute left-0 right-0 top-3 z-30 flex justify-center">
         <div
           className="pointer-events-auto inline-flex rounded-md border p-0.5"
@@ -83,6 +90,7 @@ export default function StartWorkspace({
         <div className="h-full min-h-0 pt-14">
           <AssetView
             t={t}
+            transparentBackground
             onConnectConnection={onConnectConnection}
             onEditConnection={onEditConnection}
           />
