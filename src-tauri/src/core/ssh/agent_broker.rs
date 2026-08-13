@@ -1248,8 +1248,10 @@ impl<'a> Cursor<'a> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::AGENT_IDENTITY_TIMEOUT;
     use super::{
-        AGENT_FIRST_FRAME_TIMEOUT, AGENT_IDENTITY_TIMEOUT, AGENT_SIGN_TIMEOUT, AgentBrokerFactory,
+        AGENT_FIRST_FRAME_TIMEOUT, AGENT_SIGN_TIMEOUT, AgentBrokerFactory,
         AgentForwardingEndpointError, ExternalIdentity, IdentityProvider, MAX_AGENT_COMMENT_LEN,
         MAX_AGENT_FRAME_LEN, SshAgentForwardingConfig, SshAgentForwardingPolicy, StoredKeyIdentity,
         agent_sign_permits, bounded_agent_comment, fingerprint, frame, parse_extension_request,
@@ -1263,12 +1265,15 @@ mod tests {
     #[cfg(unix)]
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
+    #[cfg(unix)]
+    use tokio::io::AsyncReadExt;
+    use tokio::io::AsyncWriteExt;
     use tokio::io::duplex;
     #[cfg(unix)]
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    #[cfg(unix)]
     use tokio::net::{UnixListener, UnixStream};
-    use tokio::sync::{Mutex as AsyncMutex, Semaphore, oneshot};
+    #[cfg(unix)]
+    use tokio::sync::oneshot;
+    use tokio::sync::{Mutex as AsyncMutex, Semaphore};
     #[cfg(unix)]
     use tokio::time::timeout;
     use tokio::time::{Duration, advance, pause};
