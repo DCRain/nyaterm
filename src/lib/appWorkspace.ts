@@ -36,9 +36,12 @@ export type TrayAction =
   | { type: "request_quit"; targetWindowLabel?: string | null };
 
 export function canCreateSessionFromPane(
-  pane: Pick<SessionPane, "type" | "connectionId"> | null | undefined,
-): pane is Pick<SessionPane, "type" | "connectionId"> {
-  return !!pane && (pane.type === "Local" || !!pane.connectionId);
+  pane:
+    | Pick<SessionPane, "type" | "connectionId" | "temporaryConfig">
+    | null
+    | undefined,
+): pane is Pick<SessionPane, "type" | "connectionId" | "temporaryConfig"> {
+  return !!pane && (pane.type === "Local" || !!pane.connectionId || !!pane.temporaryConfig);
 }
 
 export function hasLiveSession<T extends Pick<SessionPane, "connecting" | "connectError">>(

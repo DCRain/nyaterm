@@ -74,6 +74,7 @@ export function createSessionPane(
     connecting: overrides?.connecting,
     createRequestId: overrides?.createRequestId,
     connectError: overrides?.connectError,
+    temporaryConfig: overrides?.temporaryConfig,
   } as SessionPane;
 }
 

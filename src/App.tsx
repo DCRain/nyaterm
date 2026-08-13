@@ -1155,7 +1155,14 @@ function App() {
 
   const connectTemporaryConnection = useCallback(
     async (config: TemporaryLinkConfig) => {
-      const pending = addPendingTab(config.name, getTemporaryLinkSessionType(config));
+      const pending = addPendingTab(
+        config.name,
+        getTemporaryLinkSessionType(config),
+        undefined,
+        undefined,
+        undefined,
+        { temporaryConfig: config },
+      );
       const { tabId, createRequestId } = pending;
 
       try {
@@ -1596,7 +1603,7 @@ function App() {
 
   const createSessionForPane = useCallback(
     async (
-      pane: Pick<SessionPane, "type" | "connectionId">,
+      pane: Pick<SessionPane, "type" | "connectionId" | "temporaryConfig">,
       createRequestId?: string,
       startupCommand?: StartupCommandRequest,
     ) => {
@@ -1607,18 +1614,41 @@ function App() {
             createRequestId,
           });
         case "Telnet":
-          if (!pane.connectionId) throw new Error("Missing Telnet connection id");
-          return invoke<string>("create_telnet_session", {
-            connectionId: pane.connectionId,
-            createRequestId,
-            startupCommand: buildStartupCommandPayload(startupCommand),
-          });
+          if (pane.connectionId) {
+            return invoke<string>("create_telnet_session", {
+              connectionId: pane.connectionId,
+              createRequestId,
+              startupCommand: buildStartupCommandPayload(startupCommand),
+            });
+          }
+          if (pane.temporaryConfig) {
+            return invoke<string>("create_telnet_session", {
+              connectionId: null,
+              host: pane.temporaryConfig.host,
+              port: pane.temporaryConfig.port,
+              name: pane.temporaryConfig.name,
+              createRequestId,
+              startupCommand: null,
+            });
+          }
+          throw new Error("Missing Telnet connection id");
         case "Serial":
-          if (!pane.connectionId) throw new Error("Missing Serial connection id");
-          return invoke<string>("create_serial_session", {
-            connectionId: pane.connectionId,
-            createRequestId,
-          });
+          if (pane.connectionId) {
+            return invoke<string>("create_serial_session", {
+              connectionId: pane.connectionId,
+              createRequestId,
+            });
+          }
+          if (pane.temporaryConfig) {
+            return invoke<string>("create_serial_session", {
+              connectionId: null,
+              portName: pane.temporaryConfig.portName,
+              baudRate: pane.temporaryConfig.baudRate,
+              name: pane.temporaryConfig.name,
+              createRequestId,
+            });
+          }
+          throw new Error("Missing Serial connection id");
         case "VNC":
           if (!pane.connectionId) throw new Error("Missing VNC connection id");
           return invoke<string>("create_vnc_session", {
@@ -1632,12 +1662,21 @@ function App() {
             createRequestId,
           });
         default:
-          if (!pane.connectionId) throw new Error("Missing SSH connection id");
-          return invoke<string>("create_ssh_session", {
-            connectionId: pane.connectionId,
-            createRequestId,
-            startupCommand: buildStartupCommandPayload(startupCommand),
-          });
+          if (pane.connectionId) {
+            return invoke<string>("create_ssh_session", {
+              connectionId: pane.connectionId,
+              createRequestId,
+              startupCommand: buildStartupCommandPayload(startupCommand),
+            });
+          }
+          if (pane.temporaryConfig) {
+            const { protocol: _protocol, ...sshConfig } = pane.temporaryConfig;
+            return invoke<string>("create_temporary_ssh_session", {
+              config: sshConfig,
+              createRequestId,
+            });
+          }
+          throw new Error("Missing SSH connection id");
       }
     },
     [],
@@ -2179,6 +2218,7 @@ function App() {
           pane.connectionId,
           { customName: tab.customName, tabColor: tab.tabColor },
           { afterTabId: tab.id },
+          { temporaryConfig: pane.temporaryConfig },
         );
         const { tabId, createRequestId } = pending;
         setTerminalWindows((current) =>
@@ -2539,6 +2579,7 @@ function App() {
           pane.connectionId,
           { customName: tab.customName, tabColor: tab.tabColor },
           { afterTabId: tab.id },
+          { temporaryConfig: pane.temporaryConfig },
         );
         newTabId = pending.tabId;
         setTerminalWindows((current) =>

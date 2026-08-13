@@ -17,6 +17,15 @@ export interface XTerminalProps {
   visible?: boolean;
   sessionType: SessionType;
   connectionId?: string;
+  temporaryConfig?: {
+    protocol: "ssh" | "telnet" | "serial";
+    name?: string;
+    host?: string;
+    port?: number;
+    username?: string;
+    portName?: string;
+    baudRate?: number;
+  };
   onReconnected?: (oldSessionId: string, newSessionId: string) => void;
   onDisconnectedCloseRequested?: () => void;
   onConnectionError?: (sessionId: string, error: string) => void;

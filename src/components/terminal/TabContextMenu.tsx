@@ -107,9 +107,13 @@ export default function TabContextMenu({
   const tabIndex = tabs.findIndex((item) => item.id === tab.id);
   const isTerminalPane = activePane?.paneKind === "terminal";
   const canSpawnSession =
-    !!activePane && isTerminalPane && (activePane.type === "Local" || !!activePane.connectionId);
+    !!activePane &&
+    isTerminalPane &&
+    (activePane.type === "Local" || !!activePane.connectionId || !!activePane.temporaryConfig);
   const canReconnect =
-    !!activePane && !activePane.connecting && (activePane.type === "Local" || !!activePane.connectionId);
+    !!activePane &&
+    !activePane.connecting &&
+    (activePane.type === "Local" || !!activePane.connectionId || !!activePane.temporaryConfig);
   const canMultiplexSsh =
     !!activePane &&
     activePane.type === "SSH" &&
@@ -117,7 +121,8 @@ export default function TabContextMenu({
     !activePane.connectError &&
     !!activePane.sessionId;
   const canDisconnect = !!activePane && !activePane.connecting && !activePane.connectError;
-  const canSplit = !!activePane && (activePane.type === "Local" || !!activePane.connectionId);
+  const canSplit =
+    !!activePane && (activePane.type === "Local" || !!activePane.connectionId || !!activePane.temporaryConfig);
   const canUseAI =
     !!activePane && isTerminalPane && !activePane.connecting && !activePane.connectError;
   const canCloseInactive = tabs.length > 1;

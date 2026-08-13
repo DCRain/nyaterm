@@ -71,6 +71,16 @@ export interface WorkspacePaneBase {
   name: string;
   type: WorkspaceSessionType;
   connectionId?: string;
+  /** Config for ad-hoc (temporary) sessions that have no saved connection. */
+  temporaryConfig?: {
+    protocol: "ssh" | "telnet" | "serial";
+    name?: string;
+    host?: string;
+    port?: number;
+    username?: string;
+    portName?: string;
+    baudRate?: number;
+  };
   /** True while the backend session is being established. XTerminal is not rendered yet. */
   connecting?: boolean;
   /** Backend creation request id used to cancel an in-flight session creation. */

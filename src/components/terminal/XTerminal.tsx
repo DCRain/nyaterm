@@ -253,6 +253,7 @@ export default function XTerminal({
   visible = true,
   sessionType,
   connectionId,
+  temporaryConfig,
   onReconnected,
   onDisconnectedCloseRequested,
   onConnectionError,
@@ -351,6 +352,7 @@ export default function XTerminal({
   const gutterLineOffsetRef = useRef(0);
   const sessionTypeRef = useRef(sessionType);
   const connectionIdRef = useRef(connectionId);
+  const temporaryConfigRef = useRef(temporaryConfig);
   const onReconnectedRef = useRef(onReconnected);
   const onDisconnectedCloseRequestedRef = useRef(onDisconnectedCloseRequested);
   const onConnectionErrorRef = useRef(onConnectionError);
@@ -487,6 +489,10 @@ export default function XTerminal({
   useEffect(() => {
     connectionIdRef.current = connectionId;
   }, [connectionId]);
+
+  useEffect(() => {
+    temporaryConfigRef.current = temporaryConfig;
+  }, [temporaryConfig]);
 
   useEffect(() => {
     onReconnectedRef.current = onReconnected;
@@ -1006,10 +1012,13 @@ export default function XTerminal({
     };
 
     const canReconnectDisconnectedSession = () =>
-      sessionTypeRef.current === "Local" || !!connectionIdRef.current;
+      sessionTypeRef.current === "Local" ||
+      !!connectionIdRef.current ||
+      !!temporaryConfigRef.current;
 
     const createReconnectedSession = () => {
       const connectionId = connectionIdRef.current;
+      const temporaryConfig = temporaryConfigRef.current;
 
       switch (sessionTypeRef.current) {
         case "Local":
@@ -1017,10 +1026,42 @@ export default function XTerminal({
             connectionId: connectionId || null,
           });
         case "Telnet":
+          if (connectionId) {
+            return invoke<string>("create_telnet_session", { connectionId });
+          }
+          if (temporaryConfig) {
+            return invoke<string>("create_telnet_session", {
+              connectionId: null,
+              host: temporaryConfig.host,
+              port: temporaryConfig.port,
+              name: temporaryConfig.name,
+              startupCommand: null,
+            });
+          }
           return invoke<string>("create_telnet_session", { connectionId });
         case "Serial":
+          if (connectionId) {
+            return invoke<string>("create_serial_session", { connectionId });
+          }
+          if (temporaryConfig) {
+            return invoke<string>("create_serial_session", {
+              connectionId: null,
+              portName: temporaryConfig.portName,
+              baudRate: temporaryConfig.baudRate,
+              name: temporaryConfig.name,
+            });
+          }
           return invoke<string>("create_serial_session", { connectionId });
         default:
+          if (connectionId) {
+            return invoke<string>("create_ssh_session", { connectionId });
+          }
+          if (temporaryConfig) {
+            const { protocol: _protocol, ...sshConfig } = temporaryConfig;
+            return invoke<string>("create_temporary_ssh_session", {
+              config: sshConfig,
+            });
+          }
           return invoke<string>("create_ssh_session", { connectionId });
       }
     };
