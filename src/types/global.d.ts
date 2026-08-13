@@ -49,6 +49,7 @@ export interface SessionInfo {
   id: string;
   name: string;
   session_type: WorkspaceSessionType;
+  started_at: string;
   connection_id?: string | null;
   connected: boolean;
   owner_window_label?: string | null;
@@ -382,6 +383,9 @@ export interface SavedConnection {
   sort_order?: number;
   icon?: string;
   icon_auto_detect?: boolean;
+  created_at_ms?: number;
+  updated_at_ms?: number;
+  last_used_at_ms?: number;
   auth?: ConnectionAuth;
   network?: ConnectionNetwork;
   post_login?: ConnectionPostLogin;

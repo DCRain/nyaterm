@@ -3076,6 +3076,7 @@ function App() {
         id: sessionId,
         name: session?.name ?? sessionName ?? sessionId,
         session_type: session?.session_type ?? "Local",
+        started_at: session?.started_at ?? new Date().toISOString(),
         connection_id: session?.connection_id ?? null,
         connected: session?.connected ?? true,
         owner_window_label: session?.owner_window_label ?? null,

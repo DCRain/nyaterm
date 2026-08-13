@@ -68,9 +68,7 @@ pub async fn create_ssh_session(
     )
     .await?;
     drop(guard);
-    if let Err(error) = crate::storage::mark_connection_used(&connection_id) {
-        tracing::warn!(connection_id, %error, "Failed to mark connection as recently used");
-    }
+    mark_connection_used(&app, &connection_id);
     Ok(session_id)
 }
 
@@ -221,9 +219,7 @@ pub async fn create_local_session(
     .await?;
     drop(guard);
     if let Some(connection_id) = connection_id {
-        if let Err(error) = crate::storage::mark_connection_used(&connection_id) {
-            tracing::warn!(connection_id, %error, "Failed to mark connection as recently used");
-        }
+        mark_connection_used(&app, &connection_id);
     }
     Ok(session_id)
 }
@@ -315,9 +311,7 @@ pub async fn create_telnet_session(
     .await?;
     drop(guard);
     if let Some(connection_id) = marked_connection_id {
-        if let Err(error) = crate::storage::mark_connection_used(&connection_id) {
-            tracing::warn!(connection_id, %error, "Failed to mark connection as recently used");
-        }
+        mark_connection_used(&app, &connection_id);
     }
     Ok(session_id)
 }
@@ -431,11 +425,17 @@ pub async fn create_serial_session(
     .await?;
     drop(guard);
     if let Some(connection_id) = marked_connection_id {
-        if let Err(error) = crate::storage::mark_connection_used(&connection_id) {
-            tracing::warn!(connection_id, %error, "Failed to mark connection as recently used");
-        }
+        mark_connection_used(&app, &connection_id);
     }
     Ok(session_id)
+}
+
+fn mark_connection_used(app: &tauri::AppHandle, connection_id: &str) {
+    if let Err(error) = crate::storage::mark_connection_used(connection_id) {
+        tracing::warn!(connection_id, %error, "Failed to mark connection as recently used");
+        return;
+    }
+    let _ = app.emit("connections-changed", ());
 }
 
 fn build_auto_recording_hook(

@@ -10,6 +10,8 @@ const refreshConnectionsMock = vi.fn();
 const updateUiMock = vi.fn();
 const connectConnectionMock = vi.fn();
 const editConnectionMock = vi.fn();
+const GPU_CONNECTION_TIME_MS = Date.UTC(2026, 7, 13, 1, 15, 0);
+const WINDOWS_CONNECTION_TIME_MS = Date.UTC(2026, 7, 13, 2, 30, 0);
 
 let appState: {
   appSettings: { ui: Partial<UiConfig> };
@@ -56,7 +58,7 @@ describe("start workspace asset view", () => {
     expect(updateUiMock).toHaveBeenCalledWith({ start_workspace_mode: "assets" });
 
     view.rerender(startWorkspaceElement());
-    expect(screen.getByRole("heading", { name: "Assets" })).not.toBeNull();
+    expect(document.querySelector("[data-asset-view]")).not.toBeNull();
     expect(screen.getByText("GPU Lab")).not.toBeNull();
     expect(screen.queryByText("Temporary SSH")).toBeNull();
   });
@@ -65,7 +67,7 @@ describe("start workspace asset view", () => {
     appState.appSettings.ui.start_workspace_mode = "assets";
     renderStartWorkspace();
 
-    expect(screen.getByRole("heading", { name: "Assets" })).not.toBeNull();
+    expect(document.querySelector("[data-asset-view]")).not.toBeNull();
     expect(screen.queryByText("Temporary SSH")).toBeNull();
   });
 
@@ -163,6 +165,7 @@ describe("start workspace asset view", () => {
     renderAssetView();
 
     expect(screen.getByText("2.0 TB")).not.toBeNull();
+    expect(screen.getByText(formatTestDateTime(GPU_CONNECTION_TIME_MS))).not.toBeNull();
 
     await user.click(screen.getByRole("button", { name: /Name/ }));
     expect(getRenderedAssetNames()).toEqual(["Ascend Edge", "GPU Lab", "Windows VM"]);
@@ -172,6 +175,12 @@ describe("start workspace asset view", () => {
 
     await user.click(screen.getByRole("button", { name: /Address/ }));
     expect(getRenderedAssetNames()).toEqual(["GPU Lab", "Windows VM", "Ascend Edge"]);
+
+    await user.click(screen.getByRole("button", { name: /Connected At/ }));
+    expect(getRenderedAssetNames()).toEqual(["GPU Lab", "Windows VM", "Ascend Edge"]);
+
+    await user.click(screen.getByRole("button", { name: /Connected At/ }));
+    expect(getRenderedAssetNames()).toEqual(["Windows VM", "GPU Lab", "Ascend Edge"]);
 
     await user.click(screen.getByRole("button", { name: /Memory/ }));
     expect(getRenderedAssetNames()).toEqual(["GPU Lab", "Windows VM", "Ascend Edge"]);
@@ -289,6 +298,7 @@ const translations: Record<string, string> = {
   "assets.basicInfo": "Basic Info",
   "assets.cards": "Cards",
   "assets.cloud": "Cloud",
+  "assets.connectionTime": "Connected At",
   "assets.cpu": "CPU",
   "assets.cpuCores": "CPU Cores",
   "assets.cpuModel": "CPU Model",
@@ -365,6 +375,7 @@ function sampleConnections(): SavedConnection[] {
       username: "root",
       group_id: "ai",
       sort_order: 0,
+      last_used_at_ms: GPU_CONNECTION_TIME_MS,
       asset: {
         device_type: "physical",
         os_name: "Ubuntu Linux",
@@ -383,6 +394,7 @@ function sampleConnections(): SavedConnection[] {
       port: 22,
       username: "admin",
       sort_order: 1,
+      last_used_at_ms: WINDOWS_CONNECTION_TIME_MS,
       asset: {
         device_type: "virtual",
         os_name: "Windows Server",
@@ -409,6 +421,10 @@ function getRenderedAssetNames(): string[] {
   return Array.from(document.querySelectorAll("[data-asset-name]")).map(
     (element) => element.textContent ?? "",
   );
+}
+
+function formatTestDateTime(value: number): string {
+  return new Date(value).toLocaleString();
 }
 
 function manyConnections(count: number): SavedConnection[] {

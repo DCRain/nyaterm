@@ -14,6 +14,7 @@ import {
   DEFAULT_ASSET_DISPLAY_LABELS,
   formatAccelerators,
   formatAssetAddress,
+  getAssetConnectionTimeMs,
   getDiskTotalBytes,
   hasGpu,
   hasNpu,
@@ -76,6 +77,7 @@ export default function AssetView({ t, onConnectConnection, onEditConnection }: 
         connection,
         groupPath,
         groupSortOrder: connection.group_id ? (groupSortById.get(connection.group_id) ?? 0) : 0,
+        connectionTimeMs: getAssetConnectionTimeMs(connection.last_used_at_ms),
         searchText: buildAssetSearchText(connection, groupPath),
       };
     });
@@ -209,6 +211,12 @@ function sortAssetRecords(
   sorted.sort((left, right) => {
     if (!sortState) return compareDefaultAssetOrder(left, right);
 
+    if (sortState.key === "connectionTime") {
+      const diff = compareConnectionTime(left, right, sortState.direction);
+      if (diff !== 0) return diff;
+      return compareDefaultAssetOrder(left, right);
+    }
+
     const direction = sortState.direction === "asc" ? 1 : -1;
     const diff = compareBySortKey(left, right, sortState.key, labels);
     if (diff !== 0) return diff * direction;
@@ -239,6 +247,8 @@ function compareBySortKey(
         formatAssetAddress(left.connection, labels),
         formatAssetAddress(right.connection, labels),
       );
+    case "connectionTime":
+      return compareConnectionTime(left, right, "asc");
     case "cpu":
       return compareNullableNumber(
         getCpuSortValue(left.connection),
@@ -266,6 +276,21 @@ function compareBySortKey(
       );
     }
   }
+}
+
+function compareConnectionTime(
+  left: AssetRecord,
+  right: AssetRecord,
+  direction: AssetSortState["direction"],
+): number {
+  const leftMs = left.connectionTimeMs;
+  const rightMs = right.connectionTimeMs;
+  const leftValid = leftMs !== null;
+  const rightValid = rightMs !== null;
+  if (leftValid && rightValid) return (leftMs - rightMs) * (direction === "asc" ? 1 : -1);
+  if (leftValid) return -1;
+  if (rightValid) return 1;
+  return 0;
 }
 
 function getCpuSortValue(connection: SavedConnection): number | null {

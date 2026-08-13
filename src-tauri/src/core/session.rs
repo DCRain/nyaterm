@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tauri::Emitter;
+use time::format_description::well_known::Rfc3339;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 
 const HISTORY_SAVE_DEBOUNCE: Duration = Duration::from_millis(100);
@@ -79,6 +80,8 @@ pub struct SessionInfo {
     pub name: String,
     pub session_type: SessionType,
     #[serde(default)]
+    pub started_at: String,
+    #[serde(default)]
     pub connection_id: Option<String>,
     pub connected: bool,
     #[serde(default)]
@@ -107,6 +110,13 @@ fn default_remote_file_browser_enabled() -> bool {
 
 fn default_remote_stats_enabled() -> bool {
     true
+}
+
+pub(crate) fn now_session_started_at() -> String {
+    time::OffsetDateTime::now_local()
+        .unwrap_or_else(|_| time::OffsetDateTime::now_utc())
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| time::OffsetDateTime::now_utc().to_string())
 }
 
 /// Commands sent from the frontend to a session's I/O loop.
@@ -747,6 +757,7 @@ mod tests {
                 id: id.to_string(),
                 name: id.to_string(),
                 session_type,
+                started_at: now_session_started_at(),
                 connection_id: None,
                 connected: true,
                 owner_window_label: None,

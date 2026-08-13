@@ -39,11 +39,11 @@ pub use recording::{
     RecordingMode, RecordingProfile, RecordingStatus, RotationPolicy, TerminalHistorySearchRequest,
     TerminalHistorySearchResponse,
 };
-pub(crate) use session::update_cwd_if_changed;
 pub use session::{
     SessionCommand, SessionHandle, SessionInfo, SessionManager, SessionReadyHook, SessionType,
     SharedCwd,
 };
+pub(crate) use session::{now_session_started_at, update_cwd_if_changed};
 pub use terminal_session::local::{LocalSessionConfig, create_local_session};
 pub use terminal_session::serial::{SerialConfig, create_serial_session, list_serial_ports};
 pub use terminal_session::telnet::{

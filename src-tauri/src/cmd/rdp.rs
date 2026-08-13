@@ -1,6 +1,7 @@
 use crate::core::rdp::{self, RdpInputEvent, RdpSessionManager};
 use crate::error::AppResult;
 use std::sync::Arc;
+use tauri::Emitter;
 use tauri::ipc::{Channel, InvokeResponseBody};
 
 #[tauri::command]
@@ -15,6 +16,8 @@ pub async fn create_rdp_session(
     let session_id = state.create_session(app.clone(), config).await?;
     if let Err(error) = crate::storage::mark_connection_used(&connection_id) {
         tracing::warn!(connection_id, %error, "Failed to mark RDP connection as recently used");
+    } else {
+        let _ = app.emit("connections-changed", ());
     }
     Ok(session_id)
 }
