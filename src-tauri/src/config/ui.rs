@@ -23,6 +23,10 @@ pub struct RemoteDesktopDisplayMetadata {
     pub remote_height: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_only: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clipboard_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -520,7 +524,9 @@ mod tests {
             "display": {
                 "remoteWidth": 1600,
                 "remoteHeight": 900,
-                "scaleMode": "actual"
+                "scaleMode": "actual",
+                "viewOnly": true,
+                "clipboardEnabled": false
             }
         });
         let pane: RestorablePaneNode =

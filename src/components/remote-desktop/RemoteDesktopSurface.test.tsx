@@ -1,12 +1,13 @@
-import { act, render } from "@testing-library/react";
+import { act, fireEvent, render } from "@testing-library/react";
 import { createRef } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RemoteDesktopFramePatch } from "@/lib/remoteDesktopFrame";
 import { RemoteDesktopSurface, type RemoteDesktopSurfaceHandle } from "./RemoteDesktopSurface";
 
-const { createRenderer, draw, dispose } = vi.hoisted(() => ({
+const { createRenderer, draw, drawMany, dispose } = vi.hoisted(() => ({
   createRenderer: vi.fn(),
   draw: vi.fn(),
+  drawMany: vi.fn(),
   dispose: vi.fn(),
 }));
 
@@ -30,20 +31,41 @@ const patch: RemoteDesktopFramePatch = {
 describe("RemoteDesktopSurface", () => {
   beforeEach(() => {
     draw.mockReset();
+    drawMany.mockReset();
     dispose.mockReset();
     createRenderer.mockReset();
-    createRenderer.mockReturnValue({ draw, dispose });
+    createRenderer.mockReturnValue({ draw, drawMany, dispose });
   });
 
-  it("draws frames imperatively without storing framebuffer data in React state", () => {
+  it("batches imperative frame draws on the next animation frame", () => {
     const ref = createRef<RemoteDesktopSurfaceHandle>();
+    let rafCallback: FrameRequestCallback | null = null;
+    const requestAnimationFrame = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        rafCallback = callback;
+        return 1;
+      });
+    const cancelAnimationFrame = vi
+      .spyOn(window, "cancelAnimationFrame")
+      .mockImplementation(() => {});
     render(<RemoteDesktopSurface ref={ref} scaleMode="fit" active visible />);
 
     act(() => ref.current?.drawFrame(patch));
     act(() => ref.current?.drawFrame({ ...patch, sequence: 2n }));
 
+    expect(requestAnimationFrame).toHaveBeenCalledOnce();
+    expect(createRenderer).not.toHaveBeenCalled();
+    expect(drawMany).not.toHaveBeenCalled();
+
+    act(() => rafCallback?.(16));
+
     expect(createRenderer).toHaveBeenCalledOnce();
-    expect(draw).toHaveBeenCalledTimes(2);
+    expect(drawMany).toHaveBeenCalledWith([patch, { ...patch, sequence: 2n }]);
+    expect(draw).not.toHaveBeenCalled();
+
+    requestAnimationFrame.mockRestore();
+    cancelAnimationFrame.mockRestore();
   });
 
   it("implements fit, actual, and stretch as local canvas presentation modes", () => {
@@ -69,13 +91,53 @@ describe("RemoteDesktopSurface", () => {
 
   it("disposes renderer resources on reset and unmount", () => {
     const ref = createRef<RemoteDesktopSurfaceHandle>();
+    vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
+    const cancelAnimationFrame = vi
+      .spyOn(window, "cancelAnimationFrame")
+      .mockImplementation(() => {});
     const view = render(<RemoteDesktopSurface ref={ref} scaleMode="fit" active visible />);
     act(() => ref.current?.drawFrame(patch));
     act(() => ref.current?.reset());
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(1);
+    expect(dispose).not.toHaveBeenCalled();
+
+    let rafCallback: FrameRequestCallback | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      rafCallback = callback;
+      return 2;
+    });
+    act(() => ref.current?.drawFrame(patch));
+    act(() => rafCallback?.(16));
+    view.unmount();
     expect(dispose).toHaveBeenCalledOnce();
 
-    act(() => ref.current?.drawFrame(patch));
-    view.unmount();
-    expect(dispose).toHaveBeenCalledTimes(2);
+    vi.restoreAllMocks();
+  });
+
+  it("maps pointer coordinates with stretch presentation", () => {
+    const onPointerMove = vi.fn();
+    const view = render(
+      <RemoteDesktopSurface scaleMode="stretch" active visible onPointerMove={onPointerMove} />,
+    );
+    const canvas = view.container.querySelector("canvas");
+    if (!(canvas instanceof HTMLCanvasElement)) throw new Error("expected canvas");
+    canvas.width = 100;
+    canvas.height = 100;
+    canvas.getBoundingClientRect = () =>
+      ({
+        left: 10,
+        top: 20,
+        width: 300,
+        height: 200,
+        right: 310,
+        bottom: 220,
+        x: 10,
+        y: 20,
+        toJSON: () => ({}),
+      }) as DOMRect;
+
+    fireEvent.pointerMove(canvas, { clientX: 160, clientY: 120 });
+
+    expect(onPointerMove).toHaveBeenCalledWith({ x: 50, y: 50 }, expect.any(PointerEvent));
   });
 });

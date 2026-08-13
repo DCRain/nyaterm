@@ -1,3 +1,5 @@
+import type { RemoteDesktopScaleMode } from "@/types/global";
+
 export interface RemoteDesktopViewportRect {
   left: number;
   top: number;
@@ -9,11 +11,18 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
 
-export function getRemoteDesktopContentRect(canvas: HTMLCanvasElement): RemoteDesktopViewportRect {
+export function getRemoteDesktopContentRect(
+  canvas: HTMLCanvasElement,
+  scaleMode: RemoteDesktopScaleMode = "fit",
+): RemoteDesktopViewportRect {
   const rect = canvas.getBoundingClientRect();
   const desktopWidth = canvas.width;
   const desktopHeight = canvas.height;
   if (rect.width <= 0 || rect.height <= 0 || desktopWidth <= 0 || desktopHeight <= 0) {
+    return rect;
+  }
+
+  if (scaleMode === "stretch" || scaleMode === "actual") {
     return rect;
   }
 
@@ -52,9 +61,10 @@ export function mapClientPointToRemoteDesktopPixel(
 export function mapClientEventToRemoteDesktopPixel(
   canvas: HTMLCanvasElement,
   event: Pick<PointerEvent | WheelEvent, "clientX" | "clientY">,
+  scaleMode: RemoteDesktopScaleMode = "fit",
 ) {
   return mapClientPointToRemoteDesktopPixel(
-    getRemoteDesktopContentRect(canvas),
+    getRemoteDesktopContentRect(canvas, scaleMode),
     canvas.width,
     canvas.height,
     event.clientX,

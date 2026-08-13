@@ -37,7 +37,7 @@ import {
   getRemoteDesktopContentRect,
   mapClientEventToRemoteDesktopPixel,
 } from "@/lib/remoteDesktopViewport";
-import type { RdpSessionPane } from "@/types/global";
+import type { RdpSessionPane, RemoteDesktopScaleMode } from "@/types/global";
 
 type RdpSessionState =
   | "connecting"
@@ -86,8 +86,12 @@ interface RdpPaneHostProps {
   onConnectionError?: (sessionId: string, error: string) => void;
 }
 
-function getCanvasPoint(canvas: HTMLCanvasElement, event: PointerEvent | WheelEvent) {
-  return mapClientEventToRemoteDesktopPixel(canvas, event);
+function getCanvasPoint(
+  canvas: HTMLCanvasElement,
+  event: PointerEvent | WheelEvent,
+  scaleMode: RemoteDesktopScaleMode,
+) {
+  return mapClientEventToRemoteDesktopPixel(canvas, event, scaleMode);
 }
 
 function buttonName(button: number): Extract<RdpInputEvent, { type: "mouse-button" }>["button"] {
@@ -287,14 +291,14 @@ function RdpPaneHost({
     const position = pendingCursorRef.current;
     const bitmap = remoteCursorBitmapRef.current;
     if (!cursor || !canvas || !container || !position || !bitmap) return;
-    const rect = getRemoteDesktopContentRect(canvas);
+    const rect = getRemoteDesktopContentRect(canvas, pane.display?.scaleMode ?? "fit");
     const containerRect = container.getBoundingClientRect();
     const scaleX = rect.width / Math.max(1, canvas.width);
     const scaleY = rect.height / Math.max(1, canvas.height);
     const x = rect.left - containerRect.left + position.x * scaleX - bitmap.hotspotX * scaleX;
     const y = rect.top - containerRect.top + position.y * scaleY - bitmap.hotspotY * scaleY;
     cursor.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0)`;
-  }, []);
+  }, [pane.display?.scaleMode]);
 
   useEffect(() => {
     const unlisten = listen<RdpPointerPayload>(`rdp-pointer-${pane.sessionId}`, (event) => {
@@ -524,12 +528,16 @@ function RdpPaneHost({
     (event: ReactPointerEvent<HTMLCanvasElement>) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
-      pendingMouseMoveRef.current = getCanvasPoint(canvas, event.nativeEvent);
+      pendingMouseMoveRef.current = getCanvasPoint(
+        canvas,
+        event.nativeEvent,
+        pane.display?.scaleMode ?? "fit",
+      );
       if (mouseRafRef.current === null) {
         mouseRafRef.current = requestAnimationFrame(flushMouseMove);
       }
     },
-    [flushMouseMove],
+    [flushMouseMove, pane.display?.scaleMode],
   );
 
   const scaleStyle = useMemo(
@@ -613,7 +621,7 @@ function RdpPaneHost({
           const canvas = canvasRef.current;
           if (!canvas) return;
           event.currentTarget.setPointerCapture(event.pointerId);
-          const point = getCanvasPoint(canvas, event.nativeEvent);
+          const point = getCanvasPoint(canvas, event.nativeEvent, pane.display?.scaleMode ?? "fit");
           void sendInputBatch([
             { type: "mouse-button", button: buttonName(event.button), pressed: true, ...point },
           ]);
@@ -621,7 +629,7 @@ function RdpPaneHost({
         onPointerUp={(event) => {
           const canvas = canvasRef.current;
           if (!canvas) return;
-          const point = getCanvasPoint(canvas, event.nativeEvent);
+          const point = getCanvasPoint(canvas, event.nativeEvent, pane.display?.scaleMode ?? "fit");
           void sendInputBatch([
             { type: "mouse-button", button: buttonName(event.button), pressed: false, ...point },
           ]);
@@ -630,7 +638,7 @@ function RdpPaneHost({
           const canvas = canvasRef.current;
           if (!canvas) return;
           event.preventDefault();
-          const point = getCanvasPoint(canvas, event.nativeEvent);
+          const point = getCanvasPoint(canvas, event.nativeEvent, pane.display?.scaleMode ?? "fit");
           void sendInputBatch([
             { type: "mouse-wheel", deltaX: event.deltaX, deltaY: event.deltaY, ...point },
           ]);

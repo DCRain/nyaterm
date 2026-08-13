@@ -92,6 +92,7 @@ export interface RemoteDesktopDisplayMetadata {
   remoteHeight?: number;
   scaleMode?: RemoteDesktopScaleMode;
   viewOnly?: boolean;
+  clipboardEnabled?: boolean;
 }
 
 /** Leaf node representing one graphical remote desktop session inside a workspace tab. */

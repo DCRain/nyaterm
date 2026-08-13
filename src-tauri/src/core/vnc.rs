@@ -446,9 +446,9 @@ async fn run_protocol_generation(
     generation: u64,
     cancel_rx: &mut watch::Receiver<bool>,
 ) -> Result<(), (VncErrorKind, String, bool)> {
-    let address = format!("{}:{}", session.config.host, session.config.port);
+    let (host, port) = vnc_connect_target(&session.config);
     let stream = tokio::select! {
-        result = timeout(CONNECT_TIMEOUT, tokio::net::TcpStream::connect(&address)) => {
+        result = timeout(CONNECT_TIMEOUT, tokio::net::TcpStream::connect((host, port))) => {
             result.map_err(|_| (VncErrorKind::Transport, "VNC connection timed out".to_string(), true))?
                 .map_err(|error| (VncErrorKind::Transport, format!("Unable to connect to the VNC server: {error}"), true))?
         }
@@ -560,6 +560,10 @@ async fn run_protocol_generation(
             }
         }
     }
+}
+
+fn vnc_connect_target(config: &VncConnectConfig) -> (&str, u16) {
+    (config.host.as_str(), config.port)
 }
 
 fn security_policy(mode: &str, has_password: bool) -> VncSecurityPolicy {
@@ -1084,6 +1088,27 @@ mod tests {
             VncSecurityPolicy::VncAuthOnly
         );
         assert_eq!(security_policy("auto", false), VncSecurityPolicy::NoneOnly);
+    }
+
+    #[test]
+    fn connect_target_preserves_ipv6_literals_without_host_port_concatenation() {
+        let config = VncConnectConfig {
+            session_id: "vnc-test".to_string(),
+            connection_id: "connection-test".to_string(),
+            name: "IPv6 VNC".to_string(),
+            host: "::1".to_string(),
+            port: 5900,
+            password: None,
+            security_mode: "none".to_string(),
+            scale_mode: "fit".to_string(),
+            clipboard_enabled: true,
+            reconnect_enabled: false,
+            reconnect_max_attempts: 0,
+            shared: true,
+            view_only: false,
+        };
+
+        assert_eq!(vnc_connect_target(&config), ("::1", 5900));
     }
 
     #[tokio::test]
