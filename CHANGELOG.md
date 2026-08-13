@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 This changelog is inferred from release bump commits in git history (for example `chore: bump version to vX.Y.Z`) and grouped by Conventional Commit type.
 
+## [1.2.3] - 2026-08-13
+
+### Added
+
+- **vnc:** Add VNC sessions with saved-connection support, workspace integration, authentication handling, clipboard support, input forwarding, and framebuffer rendering.
+- **remote-desktop:** Add shared remote desktop frame, viewport, renderer, and surface utilities used by VNC and RDP panes.
+- **terminal:** Add session recording and transcript management flows.
+- **asset-management:** Add connection time tracking, display formatting, asset sorting, and persisted sort state.
+- **cloud-sync:** Add a cloud snapshot decoding helper and integrate it into the main sync flow.
+
+### Changed
+
+- **rdp:** Enhance RDP behavior through shared remote desktop rendering and viewport handling.
+- **settings:** Normalize settings tab handling and update terminal context menu behavior.
+- **process-manager:** Optimize process display settings and remove unused process-management code.
+- **ui:** Remove unnecessary transparent background styling from the wallpaper surface.
+- **tuning:** Change release panic behavior from unwind to abort.
+- **i18n:** Add and update localization strings for VNC, recording, and connection time across supported languages.
+
+### Fixed
+
+- **cloud-sync:** Validate source hashes while decoding snapshots to improve sync data integrity.
+- **temporary-session:** Complete temporary session recreation flows and fix context-menu actions for temporary SSH links.
+
+### Documentation
+
+- **readme:** Update README content for RDP and VNC support.
+- **docs-site:** Update session type documentation with RDP and VNC support.
+
 ## [1.2.2] - 2026-08-12
 
 ### Added
