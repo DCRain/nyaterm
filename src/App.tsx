@@ -183,6 +183,7 @@ function getRemoteDesktopPaneDisplay(connection: SavedConnection | null | undefi
     return {
       scaleMode: connection.display?.scale_mode ?? "fit",
       viewOnly: connection.view_only ?? false,
+      clipboardEnabled: connection.clipboard?.enabled ?? true,
     } as const;
   }
   return undefined;

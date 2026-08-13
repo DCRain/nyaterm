@@ -3,6 +3,7 @@ import {
   forwardRef,
   type ReactNode,
   type PointerEvent as ReactPointerEvent,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useMemo,
@@ -71,18 +72,49 @@ export const RemoteDesktopSurface = forwardRef<
   const rootRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<RemoteDesktopRenderer | null>(null);
+  const pendingFramesRef = useRef<RemoteDesktopFramePatch[]>([]);
+  const frameRequestRef = useRef<number | null>(null);
   const style = useMemo(() => canvasStyle(scaleMode), [scaleMode]);
+
+  const cancelPendingDraw = useCallback(() => {
+    if (frameRequestRef.current !== null) {
+      window.cancelAnimationFrame(frameRequestRef.current);
+      frameRequestRef.current = null;
+    }
+    pendingFramesRef.current = [];
+  }, []);
+
+  const flushPendingFrames = useCallback(() => {
+    frameRequestRef.current = null;
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      pendingFramesRef.current = [];
+      return;
+    }
+    const frames = pendingFramesRef.current;
+    pendingFramesRef.current = [];
+    if (frames.length === 0) return;
+    rendererRef.current ??= createRemoteDesktopRenderer(canvas);
+    rendererRef.current?.drawMany(frames);
+  }, []);
+
+  const scheduleFrameDraw = useCallback(
+    (patch: RemoteDesktopFramePatch) => {
+      pendingFramesRef.current.push(patch);
+      if (frameRequestRef.current !== null) return;
+      frameRequestRef.current = window.requestAnimationFrame(flushPendingFrames);
+    },
+    [flushPendingFrames],
+  );
 
   useImperativeHandle(
     forwardedRef,
     () => ({
       drawFrame(patch) {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        rendererRef.current ??= createRemoteDesktopRenderer(canvas);
-        rendererRef.current?.draw(patch);
+        scheduleFrameDraw(patch);
       },
       reset() {
+        cancelPendingDraw();
         rendererRef.current?.dispose();
         rendererRef.current = null;
         const canvas = canvasRef.current;
@@ -95,19 +127,20 @@ export const RemoteDesktopSurface = forwardRef<
         rootRef.current?.focus({ preventScroll: true });
       },
     }),
-    [],
+    [cancelPendingDraw, scheduleFrameDraw],
   );
 
   useEffect(() => {
     return () => {
+      cancelPendingDraw();
       rendererRef.current?.dispose();
       rendererRef.current = null;
     };
-  }, []);
+  }, [cancelPendingDraw]);
 
   const getPoint = (event: PointerEvent | WheelEvent) => {
     const canvas = canvasRef.current;
-    return canvas ? mapClientEventToRemoteDesktopPixel(canvas, event) : { x: 0, y: 0 };
+    return canvas ? mapClientEventToRemoteDesktopPixel(canvas, event, scaleMode) : { x: 0, y: 0 };
   };
 
   return (

@@ -3,14 +3,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { VncSessionPane } from "@/types/global";
 import VncPaneHost from "./VncPaneHost";
 
-const { invokeMock, listenMock, listeners } = vi.hoisted(() => ({
-  invokeMock: vi.fn(),
-  listenMock: vi.fn(),
-  listeners: new Map<string, (event: { payload: unknown }) => void>(),
-}));
+const { invokeMock, listenMock, listeners, readClipboardTextMock, writeClipboardTextMock } =
+  vi.hoisted(() => ({
+    invokeMock: vi.fn(),
+    listenMock: vi.fn(),
+    listeners: new Map<string, (event: { payload: unknown }) => void>(),
+    readClipboardTextMock: vi.fn(),
+    writeClipboardTextMock: vi.fn(),
+  }));
 
 vi.mock("@/lib/invoke", () => ({
   invoke: invokeMock,
+}));
+
+vi.mock("@/lib/clipboard", () => ({
+  readClipboardText: readClipboardTextMock,
+  writeClipboardText: writeClipboardTextMock,
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -31,6 +39,10 @@ describe("VncPaneHost", () => {
   beforeEach(() => {
     invokeMock.mockReset();
     invokeMock.mockResolvedValue(undefined);
+    readClipboardTextMock.mockReset();
+    readClipboardTextMock.mockResolvedValue("");
+    writeClipboardTextMock.mockReset();
+    writeClipboardTextMock.mockResolvedValue(undefined);
     listenMock.mockReset();
     listeners.clear();
     listenMock.mockImplementation(
@@ -126,6 +138,77 @@ describe("VncPaneHost", () => {
 
     expect(invokeMock).toHaveBeenCalledWith("vnc_reconnect", { sessionId: "vnc-session" });
     expect(onDisconnectedCloseRequested).toHaveBeenCalledOnce();
+  });
+
+  it("writes remote clipboard events to the local clipboard when enabled and focused", async () => {
+    render(
+      <VncPaneHost
+        pane={vncPane({ display: { scaleMode: "fit", clipboardEnabled: true } })}
+        active
+        visible
+      />,
+    );
+    await activate();
+    await waitFor(() => expect(listeners.has("vnc-clipboard-vnc-session")).toBe(true));
+
+    act(() => {
+      listeners.get("vnc-clipboard-vnc-session")?.({
+        payload: { sessionId: "vnc-session", text: "remote" },
+      });
+    });
+
+    expect(writeClipboardTextMock).toHaveBeenCalledWith("remote");
+  });
+
+  it("does not subscribe to remote clipboard events when clipboard is disabled", async () => {
+    render(
+      <VncPaneHost
+        pane={vncPane({ display: { scaleMode: "fit", clipboardEnabled: false } })}
+        active
+        visible
+      />,
+    );
+    await activate();
+
+    expect(listeners.has("vnc-clipboard-vnc-session")).toBe(false);
+  });
+
+  it("polls local clipboard and sends changed Latin-1 text to the VNC server", async () => {
+    readClipboardTextMock.mockResolvedValue("local");
+    render(
+      <VncPaneHost
+        pane={vncPane({ display: { scaleMode: "fit", clipboardEnabled: true } })}
+        active
+        visible
+      />,
+    );
+    await activate();
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("vnc_set_clipboard_text", {
+        sessionId: "vnc-session",
+        text: "local",
+      });
+    });
+  });
+
+  it("does not send local clipboard text for view-only panes", async () => {
+    readClipboardTextMock.mockResolvedValue("local");
+    render(
+      <VncPaneHost
+        pane={vncPane({
+          display: { scaleMode: "fit", clipboardEnabled: true, viewOnly: true },
+        })}
+        active
+        visible
+      />,
+    );
+    await activate();
+    invokeMock.mockClear();
+
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    expect(invokeMock).not.toHaveBeenCalledWith("vnc_set_clipboard_text", expect.anything());
   });
 });
 

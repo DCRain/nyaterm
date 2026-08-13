@@ -15,6 +15,7 @@ import {
   type RemoteDesktopSurfaceHandle,
 } from "@/components/remote-desktop/RemoteDesktopSurface";
 import { Button } from "@/components/ui/button";
+import { readClipboardText, writeClipboardText } from "@/lib/clipboard";
 import { invoke } from "@/lib/invoke";
 import { decodeRemoteDesktopFramePatch } from "@/lib/remoteDesktopFrame";
 import {
@@ -40,6 +41,11 @@ interface VncStatePayload {
   state: VncSessionState;
   message?: string | null;
   errorKind?: string | null;
+}
+
+interface VncClipboardPayload {
+  sessionId: string;
+  text: string;
 }
 
 interface VncPaneHostProps {
@@ -82,6 +88,14 @@ function wheelButtonMask(event: WheelEvent) {
   return event.deltaY > 0 ? VNC_POINTER_BUTTON.wheelDown : VNC_POINTER_BUTTON.wheelUp;
 }
 
+function isVncClipboardTextAllowed(text: string) {
+  return (
+    text.length > 0 &&
+    text.length <= 1024 * 1024 &&
+    [...text].every((ch) => ch.charCodeAt(0) <= 0xff)
+  );
+}
+
 function VncPaneHost({
   pane,
   active,
@@ -96,6 +110,8 @@ function VncPaneHost({
   const pendingPointerRef = useRef<{ x: number; y: number; buttonMask: number } | null>(null);
   const pointerRafRef = useRef<number | null>(null);
   const composingRef = useRef(false);
+  const lastLocalSentRef = useRef<string | null>(null);
+  const lastRemoteReceivedRef = useRef<string | null>(null);
   const [state, setState] = useState<VncSessionState>(pane.connectError ? "failed" : "connecting");
   const [message, setMessage] = useState<string | null>(pane.connectError ?? null);
   const [desktopSize, setDesktopSize] = useState({
@@ -104,7 +120,15 @@ function VncPaneHost({
   });
 
   const viewOnly = pane.display?.viewOnly ?? false;
+  const clipboardEnabled = pane.display?.clipboardEnabled ?? true;
   const inputEnabled = !viewOnly && !pane.connecting && !pane.connectError && state === "active";
+  const clipboardBridgeEnabled =
+    clipboardEnabled &&
+    active &&
+    visible &&
+    !pane.connecting &&
+    !pane.connectError &&
+    state === "active";
 
   const sendInputBatch = useCallback(
     async (events: VncInputEvent[]) => {
@@ -150,6 +174,52 @@ function VncPaneHost({
       void unlisten.then((dispose) => dispose());
     };
   }, [onConnectionError, pane.sessionId]);
+
+  useEffect(() => {
+    if (!clipboardBridgeEnabled) return;
+    const unlisten = listen<VncClipboardPayload>(`vnc-clipboard-${pane.sessionId}`, (event) => {
+      const text = event.payload.text;
+      lastRemoteReceivedRef.current = text;
+      void writeClipboardText(text).catch(() => {});
+    });
+    return () => {
+      void unlisten.then((dispose) => dispose());
+    };
+  }, [clipboardBridgeEnabled, pane.sessionId]);
+
+  useEffect(() => {
+    if (!clipboardBridgeEnabled || viewOnly) return;
+    let disposed = false;
+    let polling = false;
+    const poll = async () => {
+      if (disposed || polling) return;
+      polling = true;
+      try {
+        const text = await readClipboardText();
+        if (
+          !disposed &&
+          text !== lastLocalSentRef.current &&
+          text !== lastRemoteReceivedRef.current &&
+          isVncClipboardTextAllowed(text)
+        ) {
+          lastLocalSentRef.current = text;
+          await invoke("vnc_set_clipboard_text", { sessionId: pane.sessionId, text }).catch(
+            () => {},
+          );
+        }
+      } catch {
+        /* clipboard access can be denied while the pane remains usable */
+      } finally {
+        polling = false;
+      }
+    };
+    void poll();
+    const interval = window.setInterval(() => void poll(), 1000);
+    return () => {
+      disposed = true;
+      window.clearInterval(interval);
+    };
+  }, [clipboardBridgeEnabled, pane.sessionId, viewOnly]);
 
   useEffect(() => {
     if (!active || !visible) releaseAllKeys();

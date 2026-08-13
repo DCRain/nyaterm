@@ -178,6 +178,8 @@ describe("workspaceTabs remote desktop persistence", () => {
         remoteWidth: 1366,
         remoteHeight: 768,
         scaleMode: "stretch",
+        viewOnly: true,
+        clipboardEnabled: false,
       },
     });
     const [serialized] = serializeTabsForPersistence([createWorkspaceTab(pane, 0)]);
@@ -190,6 +192,8 @@ describe("workspaceTabs remote desktop persistence", () => {
         remoteWidth: 1366,
         remoteHeight: 768,
         scaleMode: "stretch",
+        viewOnly: true,
+        clipboardEnabled: false,
       },
     });
     const restored = restoreTabFromPersistence(serialized, 0);
@@ -200,6 +204,8 @@ describe("workspaceTabs remote desktop persistence", () => {
         remoteWidth: 1366,
         remoteHeight: 768,
         scaleMode: "stretch",
+        viewOnly: true,
+        clipboardEnabled: false,
       },
     });
   });

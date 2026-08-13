@@ -2,6 +2,7 @@ import type { RemoteDesktopFramePatch } from "@/lib/remoteDesktopFrame";
 
 export interface RemoteDesktopRenderer {
   draw(patch: RemoteDesktopFramePatch): void;
+  drawMany(patches: RemoteDesktopFramePatch[]): void;
   dispose(): void;
 }
 
@@ -41,6 +42,12 @@ export class Canvas2dRemoteDesktopRenderer implements RemoteDesktopRenderer {
     const imageData = this.ctx.createImageData(patch.width, patch.height);
     copyPatchToRgba(patch, imageData.data);
     this.ctx.putImageData(imageData, patch.x, patch.y);
+  }
+
+  drawMany(patches: RemoteDesktopFramePatch[]) {
+    for (const patch of patches) {
+      this.draw(patch);
+    }
   }
 
   dispose() {}
@@ -127,18 +134,30 @@ export class WebGl2RemoteDesktopRenderer implements RemoteDesktopRenderer {
   }
 
   draw(patch: RemoteDesktopFramePatch) {
-    const resized = ensureCanvasSize(this.canvas, patch.desktopWidth, patch.desktopHeight);
+    this.drawMany([patch]);
+  }
+
+  drawMany(patches: RemoteDesktopFramePatch[]) {
+    if (patches.length === 0) return;
+    const lastPatch = patches[patches.length - 1];
+    if (!lastPatch) return;
+    const desktopWidth = lastPatch.desktopWidth;
+    const desktopHeight = lastPatch.desktopHeight;
+    const renderPatches = patches.filter(
+      (patch) => patch.desktopWidth === desktopWidth && patch.desktopHeight === desktopHeight,
+    );
+    const resized = ensureCanvasSize(this.canvas, desktopWidth, desktopHeight);
     const gl = this.gl;
     activateWebGlProgram(gl, this.program);
-    gl.viewport(0, 0, patch.desktopWidth, patch.desktopHeight);
+    gl.viewport(0, 0, desktopWidth, desktopHeight);
     gl.bindTexture(gl.TEXTURE_2D, this.texture);
     if (resized) {
       gl.texImage2D(
         gl.TEXTURE_2D,
         0,
         gl.RGBA,
-        patch.desktopWidth,
-        patch.desktopHeight,
+        desktopWidth,
+        desktopHeight,
         0,
         gl.RGBA,
         gl.UNSIGNED_BYTE,
@@ -146,25 +165,27 @@ export class WebGl2RemoteDesktopRenderer implements RemoteDesktopRenderer {
       );
     }
 
-    const rowBytes = patch.width * 4;
-    const requiredBytes = rowBytes * patch.height;
-    const canUploadDirectly = patch.pixelFormat === "RGBA8888" && patch.stride === rowBytes;
-    const patchBytes = canUploadDirectly
-      ? patch.payload.subarray(0, requiredBytes)
-      : new Uint8Array(requiredBytes);
-    if (!canUploadDirectly) copyPatchToRgba(patch, patchBytes);
+    for (const patch of renderPatches) {
+      const rowBytes = patch.width * 4;
+      const requiredBytes = rowBytes * patch.height;
+      const canUploadDirectly = patch.pixelFormat === "RGBA8888" && patch.stride === rowBytes;
+      const patchBytes = canUploadDirectly
+        ? patch.payload.subarray(0, requiredBytes)
+        : new Uint8Array(requiredBytes);
+      if (!canUploadDirectly) copyPatchToRgba(patch, patchBytes);
 
-    gl.texSubImage2D(
-      gl.TEXTURE_2D,
-      0,
-      patch.x,
-      patch.y,
-      patch.width,
-      patch.height,
-      gl.RGBA,
-      gl.UNSIGNED_BYTE,
-      patchBytes,
-    );
+      gl.texSubImage2D(
+        gl.TEXTURE_2D,
+        0,
+        patch.x,
+        patch.y,
+        patch.width,
+        patch.height,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        patchBytes,
+      );
+    }
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
