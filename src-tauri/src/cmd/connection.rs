@@ -34,6 +34,33 @@ pub fn get_supported_ssh_algorithms() -> crate::core::ssh::SupportedSshAlgorithm
     crate::core::ssh::get_supported_ssh_algorithms()
 }
 
+fn normalize_connection_for_save(connection: &mut SavedConnection) {
+    config::migrate_legacy_ssh_agent_settings(connection);
+}
+
+fn validate_ssh_agent_forwarding_identity_inputs(
+    forwarding_config: &config::SshAgentForwardingConfig,
+) -> AppResult<()> {
+    if !forwarding_config.enabled {
+        return Ok(());
+    }
+
+    config::validate_ssh_agent_forwarding_config(forwarding_config)?;
+    Ok(())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn get_ssh_agent_forwarding_identities(
+    app: tauri::AppHandle,
+    forwarding_config: config::SshAgentForwardingConfig,
+) -> AppResult<crate::core::ssh::AgentForwardingIdentityResponse> {
+    if !forwarding_config.enabled {
+        return Ok(crate::core::ssh::AgentForwardingIdentityResponse::default());
+    }
+    validate_ssh_agent_forwarding_identity_inputs(&forwarding_config)?;
+    Ok(crate::core::ssh::list_forwarding_identities(&app, &forwarding_config).await)
+}
+
 #[tauri::command]
 pub fn save_connection(
     app: tauri::AppHandle,
@@ -47,6 +74,9 @@ pub fn save_connection(
     let target_id = connection.id.clone();
     let existing = cfg.connections.iter().find(|c| c.id == target_id).cloned();
 
+    normalize_connection_for_save(&mut connection);
+
+    config::validate_ssh_agent_settings(&connection.config)?;
     validate_proxy_jump_config(&connection, &cfg.connections)?;
     validate_local_terminal_config(&connection)?;
     validate_ssh_algorithm_config(&connection)?;
@@ -546,10 +576,11 @@ fn find_connection_for_proxy_jump<'a>(
 #[cfg(test)]
 mod tests {
     use super::{
-        delete_group_from_config, resolve_private_key_for_save, resolve_text_secret_input,
-        update_connection_asset_from_monitoring_in_config, update_connection_icon_in_config,
-        validate_certificate_content, validate_local_terminal_config, validate_private_key_content,
-        validate_proxy_jump_config, validate_sftp_settings_config,
+        delete_group_from_config, normalize_connection_for_save, resolve_private_key_for_save,
+        resolve_text_secret_input, update_connection_asset_from_monitoring_in_config,
+        update_connection_icon_in_config, validate_certificate_content,
+        validate_local_terminal_config, validate_private_key_content, validate_proxy_jump_config,
+        validate_sftp_settings_config, validate_ssh_agent_forwarding_identity_inputs,
     };
     use crate::config::{
         AiExecutionProfile, AssetAccelerator, AssetAcceleratorType, AssetDisk, AssetDiskPurpose,
@@ -582,8 +613,9 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
                 username: "root".to_string(),
                 backspace_mode: "del".to_string(),
                 x11_forwarding: false,
-                agent_endpoint: crate::config::SshAgentEndpoint::Auto,
-                agent_forwarding: false,
+                auth_agent_endpoint: None,
+                legacy_agent_forwarding: None,
+                agent_forwarding_config: None,
                 encoding: String::new(),
             },
             group_id: None,
@@ -1141,6 +1173,79 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
             == AssetAcceleratorType::Npu
             && accelerator.model.as_deref() == Some("Ascend 910B")));
         assert!(config.connections[1].asset.is_none());
+    }
+
+    fn connection_with_auth_mode(mode: &str) -> SavedConnection {
+        serde_json::from_value(serde_json::json!({
+            "id": format!("save-boundary-{mode}"),
+            "name": "Save boundary",
+            "type": "ssh",
+            "host": "example.com",
+            "auth": {
+                "mode": mode,
+                "key_id": if mode == "key" { Some("saved-key") } else { None::<&str> }
+            },
+            "agent_forwarding_config": {
+                "enabled": true,
+                "sources": {
+                    "external_agent": false,
+                    "stored_keys": true
+                },
+                "policy": { "mode": "allowlist", "fingerprints": [] }
+            }
+        }))
+        .expect("saved connection")
+    }
+
+    #[test]
+    fn save_boundary_keeps_forwarding_sources_independent_from_authentication() {
+        for mode in ["password", "none", "agent", "key"] {
+            let mut connection = connection_with_auth_mode(mode);
+            normalize_connection_for_save(&mut connection);
+            let ConnectionType::Ssh {
+                agent_forwarding_config: Some(forwarding),
+                ..
+            } = connection.config
+            else {
+                panic!("expected SSH forwarding configuration");
+            };
+            assert!(forwarding.enabled, "mode={mode}");
+            assert!(forwarding.sources.stored_keys, "mode={mode}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn forwarding_identity_preview_does_not_require_unused_authentication_endpoint() {
+        let forwarding_config = crate::config::SshAgentForwardingConfig {
+            enabled: true,
+            sources: crate::config::SshAgentForwardingSources {
+                external_agent: true,
+                external_agent_endpoints: vec![crate::config::SshAgentEndpoint::Environment {
+                    variable: "SSH_AUTH_SOCK".to_string(),
+                }],
+                stored_keys: false,
+            },
+            policy: crate::config::SshAgentForwardingPolicy::default(),
+        };
+
+        assert!(validate_ssh_agent_forwarding_identity_inputs(&forwarding_config).is_ok());
+    }
+
+    #[test]
+    fn disabled_forwarding_preview_skips_endpoint_validation() {
+        let config = crate::config::SshAgentForwardingConfig {
+            enabled: false,
+            sources: crate::config::SshAgentForwardingSources {
+                external_agent: true,
+                external_agent_endpoints: vec![crate::config::SshAgentEndpoint::UnixSocket {
+                    path: String::new(),
+                }],
+                stored_keys: true,
+            },
+            policy: crate::config::SshAgentForwardingPolicy::default(),
+        };
+        assert!(validate_ssh_agent_forwarding_identity_inputs(&config).is_ok());
     }
 }
 

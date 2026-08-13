@@ -463,7 +463,7 @@ fn resolve_saved_ssh_config(
     };
     let post_login = resolve_post_login(conn);
     let x11_forwarding = resolve_x11_forwarding(conn);
-    let (agent_endpoint, agent_forwarding) = resolve_agent_settings(conn);
+    let (auth_agent_endpoint, agent_forwarding_config) = resolve_agent_settings(conn);
     let x11_display = crate::config::load_app_settings(app)
         .map(|settings| settings.terminal.x11_display)
         .unwrap_or_default();
@@ -481,8 +481,8 @@ fn resolve_saved_ssh_config(
         backspace_mode: resolve_ssh_backspace_mode(conn),
         x11_forwarding,
         x11_display,
-        agent_endpoint,
-        agent_forwarding,
+        auth_agent_endpoint,
+        agent_forwarding_config,
         proxy,
         proxy_jump,
         post_login,
@@ -506,14 +506,20 @@ fn resolve_x11_forwarding(conn: &crate::config::SavedConnection) -> bool {
 
 fn resolve_agent_settings(
     conn: &crate::config::SavedConnection,
-) -> (crate::config::SshAgentEndpoint, bool) {
+) -> (
+    Option<crate::config::SshAgentEndpoint>,
+    crate::config::SshAgentForwardingConfig,
+) {
     match &conn.config {
         crate::config::ConnectionType::Ssh {
-            agent_endpoint,
-            agent_forwarding,
+            auth_agent_endpoint,
+            agent_forwarding_config,
             ..
-        } => (agent_endpoint.clone(), *agent_forwarding),
-        _ => (crate::config::SshAgentEndpoint::Auto, false),
+        } => (
+            auth_agent_endpoint.clone(),
+            agent_forwarding_config.clone().unwrap_or_default(),
+        ),
+        _ => (None, crate::config::SshAgentForwardingConfig::default()),
     }
 }
 
@@ -677,7 +683,6 @@ pub(super) async fn authenticate_handle(
         .as_deref()
         .and_then(|connection_id| resolve_otp_info(app, connection_id));
     let mut updates = SshRuntimeAuthUpdates::default();
-
     match &config.auth {
         SshAuth::None => {
             log_structured(
@@ -827,7 +832,6 @@ pub(super) async fn authenticate_handle(
         None,
     );
     persist_runtime_auth_updates(app, config, &updates)?;
-
     Ok(())
 }
 
@@ -1627,7 +1631,7 @@ async fn authenticate_agent(
             };
             let result = match await_agent_signing_or_action(signing, &mut action_rx).await {
                 Err(AgentSigningSelectionError::Action(action)) => {
-                    // 先释放本地 Agent 连接，再通知前端请求结束，避免用户立即重连时复用旧连接状态。
+                    // Release the local Agent stream before notifying the frontend so an immediate retry cannot reuse it.
                     drop(agent);
                     finish_agent_auth_request(app, &request_id, false).await;
                     request_guard.mark_resolved();
@@ -1644,7 +1648,7 @@ async fn authenticate_agent(
                     result
                 }
                 Err(error) => {
-                    // 失败后会等待用户操作，此时不应继续持有旧 Agent 连接。
+                    // The failed request waits for user action, so do not retain the old Agent stream.
                     drop(agent);
                     return agent_auth_failure_with_request(
                         app,
@@ -1654,7 +1658,8 @@ async fn authenticate_agent(
                         request_guard,
                         error.to_string(),
                     )
-                    .await;
+                    .await
+                    .map(|_| ());
                 }
             };
 
@@ -1693,7 +1698,9 @@ async fn authenticate_agent(
                         continue;
                     }
                     drop(agent);
-                    return agent_auth_failure(app, config, auth_failure.message).await;
+                    return agent_auth_failure(app, config, auth_failure.message)
+                        .await
+                        .map(|_| ());
                 }
             }
         }
@@ -1708,6 +1715,7 @@ async fn authenticate_agent(
             .unwrap_or_else(|| fallback_error.to_string()),
     )
     .await
+    .map(|_| ())
 }
 
 /// Establish a cancellable pre-authentication phase for a single SSH Agent authentication.
@@ -1720,6 +1728,7 @@ async fn prepare_agent_authentication(
     app: &AppHandle,
 ) -> AppResult<(DynamicAgentClient, Vec<AgentIdentity>, Vec<Option<HashAlg>>)> {
     let (request_id, mut action_rx, request_guard) = begin_agent_auth_request(app, config).await?;
+    let auth_agent_endpoint = config.auth_agent_endpoint.clone().unwrap_or_default();
 
     let mut agent = match tokio::select! {
         biased;
@@ -1728,7 +1737,7 @@ async fn prepare_agent_authentication(
             request_guard.mark_resolved();
             return Err(agent_auth_action_error(action));
         }
-        result = connect_agent_client(&config.agent_endpoint) => result,
+        result = connect_agent_client(&auth_agent_endpoint) => result,
     } {
         Ok(agent) => agent,
         Err(error) => {
@@ -1877,6 +1886,14 @@ fn agent_endpoint_name(endpoint: &crate::config::SshAgentEndpoint) -> &'static s
     }
 }
 
+fn configured_agent_endpoint_name(config: &SshConfig) -> &'static str {
+    config
+        .auth_agent_endpoint
+        .as_ref()
+        .map(agent_endpoint_name)
+        .unwrap_or("auto")
+}
+
 async fn begin_agent_auth_request(
     app: &AppHandle,
     config: &SshConfig,
@@ -1896,7 +1913,7 @@ async fn begin_agent_auth_request(
             request_id: request_id.clone(),
             connection_name: config.name.clone(),
             username: config.username.clone(),
-            endpoint: agent_endpoint_name(&config.agent_endpoint).to_string(),
+            endpoint: configured_agent_endpoint_name(config).to_string(),
             state: "pending".to_string(),
             error: None,
             target_window_label: config.owner_window_label.clone(),
@@ -1995,7 +2012,7 @@ async fn agent_auth_failure_with_request(
             request_id: request_id.clone(),
             connection_name: config.name.clone(),
             username: config.username.clone(),
-            endpoint: agent_endpoint_name(&config.agent_endpoint).to_string(),
+            endpoint: configured_agent_endpoint_name(config).to_string(),
             state: "failed".to_string(),
             error: Some(error),
             target_window_label: config.owner_window_label.clone(),

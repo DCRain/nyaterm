@@ -29,11 +29,16 @@ pub use connection::{
     AiExecutionProfile, AppConfig, AssetAccelerator, AssetAcceleratorType, AssetDeviceType,
     AssetDisk, AssetDiskKind, AssetDiskPurpose, AssetMetadata, ConnectionAuth, ConnectionNetwork,
     ConnectionRecordingSettings, ConnectionType, Group, MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS,
+    MAX_SSH_AGENT_FORWARDING_ENDPOINTS, MAX_SSH_AGENT_FORWARDING_IDENTITIES,
     MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS, SavedConnection, SessionsConfig, SftpCwdFollowMode,
-    SftpSettings, SshAgentEndpoint, SshAlgorithmMode, SshAlgorithmPreferences, SshProfile,
+    SftpSettings, SshAgentEndpoint, SshAgentForwardingConfig, SshAgentForwardingPolicy,
+    SshAgentForwardingSources, SshAlgorithmMode, SshAlgorithmPreferences, SshProfile,
     SshTerminalType, TelnetAutoLoginConfig, effective_cwd_follow_mode,
     effective_cwd_follow_mode_for_profile, load_config, load_connection_by_id, load_sessions,
-    resolve_connection_encoding, resolve_ssh_terminal_type, save_config, save_sessions,
+    migrate_legacy_ssh_agent_settings, resolve_connection_encoding, resolve_ssh_terminal_type,
+    save_config, save_sessions, ssh_agent_endpoint_key, validate_ssh_agent_endpoint,
+    validate_ssh_agent_endpoint_shape, validate_ssh_agent_forwarding_config,
+    validate_ssh_agent_forwarding_shape, validate_ssh_agent_settings,
 };
 #[allow(unused_imports)]
 pub use credential::{
@@ -44,6 +49,7 @@ pub use credential::{
 pub use key::{
     KeysConfig, SshKey, decrypt_key_cert, decrypt_key_pem, load_key_by_id, load_keys, save_keys,
 };
+pub(crate) use key::{ssh_key_change_epoch, ssh_key_read_guard};
 #[allow(unused_imports)]
 pub use note::{
     DeleteNoteNodeResult, NoteDocument, NoteFolder, NoteNodeChange, NoteSummary, NoteTreePayload,

@@ -270,6 +270,7 @@ pub fn run() {
             cmd::local_fs::write_local_file_text,
             cmd::connection::get_saved_connections,
             cmd::connection::get_supported_ssh_algorithms,
+            cmd::connection::get_ssh_agent_forwarding_identities,
             cmd::connection::save_connection,
             cmd::connection::update_connection_icon,
             cmd::connection::update_connection_asset_from_monitoring,

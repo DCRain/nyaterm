@@ -8,6 +8,11 @@ pub async fn apply_portable_snapshot(
     if snapshot.snapshot_kind == PortableSnapshotKind::Sync {
         let current_sessions = config::load_sessions(app).unwrap_or_default();
         preserve_device_local_sessions(&mut sessions, &current_sessions);
+    } else {
+        normalize_backup_sessions_for_platform(
+            &mut sessions,
+            AgentEndpointTargetPlatform::current(),
+        )?;
     }
     config::save_sessions(app, &sessions)?;
     config::save_keys(app, &snapshot.keys)?;

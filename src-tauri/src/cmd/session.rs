@@ -124,8 +124,9 @@ fn normalize_temporary_ssh_config(mut config: ssh::SshConfig, encoding: &str) ->
     };
     config.x11_forwarding = false;
     config.x11_display = String::new();
-    config.agent_endpoint = crate::config::SshAgentEndpoint::Auto;
-    config.agent_forwarding = false;
+    config.auth_agent_endpoint = matches!(&config.auth, ssh::SshAuth::Agent)
+        .then_some(crate::config::SshAgentEndpoint::Auto);
+    config.agent_forwarding_config = crate::config::SshAgentForwardingConfig::default();
     config.proxy = None;
     config.proxy_jump = None;
     config.post_login = None;

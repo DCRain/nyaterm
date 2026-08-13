@@ -1,20 +1,33 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ChevronsUpDownIcon, Eye, EyeOff } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  MdAdd,
   MdCheck,
   MdChevronRight,
   MdClose,
+  MdDeleteOutline,
   MdExpandMore,
   MdKeyboardArrowDown,
   MdKeyboardArrowUp,
+  MdRefresh,
   MdSettings,
 } from "react-icons/md";
 import { ConnectionCombobox, type ConnectionOption } from "@/components/network/shared";
 import { KeyManagementTab } from "@/components/panel/security-auth/KeyManagementTab";
 import { PasswordManagementTab } from "@/components/panel/security-auth/PasswordManagementTab";
 import { ConnectionRecordingSettings } from "@/components/sessions/ConnectionRecordingSettings";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -30,6 +43,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -47,8 +61,13 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import { isLinux, isMacOS, isWindows } from "@/lib/platform";
+import {
+  MAX_SSH_AGENT_FORWARDING_ENDPOINTS,
+  MAX_SSH_AGENT_FORWARDING_IDENTITIES,
+} from "@/lib/sshAgent";
 import { cn } from "@/lib/utils";
 import type {
   AlgorithmOption,
@@ -57,9 +76,13 @@ import type {
   RecordingMode,
   SavedPassword,
   SftpSettings,
+  SshAgentEndpoint,
+  SshAgentForwardingConfig,
+  SshAgentForwardingEndpointError,
+  SshAgentForwardingIdentity,
+  SshAgentForwardingIdentityResponse,
   SshAlgorithmDefaults,
   SshAlgorithmPreferences,
-  SshAgentEndpoint,
   SshKey,
   SshProfile,
   SshTerminalType,
@@ -78,6 +101,11 @@ function isSupportedSshAgentEndpoint(type: SshAgentEndpoint["type"]): boolean {
   if (type === "auto") return true;
   if (isWindows) return type === "pageant" || type === "windows_open_ssh";
   return (isMacOS || isLinux) && (type === "environment" || type === "unix_socket");
+}
+
+function defaultForwardingEndpoint(): SshAgentEndpoint {
+  if (isWindows) return { type: "windows_open_ssh" };
+  return { type: "environment", variable: "SSH_AUTH_SOCK" };
 }
 
 interface SshFormProps {
@@ -120,10 +148,12 @@ interface SshFormProps {
   setBackspaceMode: (v: string) => void;
   x11Forwarding: boolean;
   setX11Forwarding: (v: boolean) => void;
-  agentEndpoint: SshAgentEndpoint;
-  setAgentEndpoint: (v: SshAgentEndpoint) => void;
-  agentForwarding: boolean;
-  setAgentForwarding: (v: boolean) => void;
+  authAgentEndpoint: SshAgentEndpoint;
+  setAuthAgentEndpoint: (v: SshAgentEndpoint) => void;
+  authAgentEndpointError?: string;
+  agentForwardingConfig: SshAgentForwardingConfig;
+  setAgentForwardingConfig: (v: SshAgentForwardingConfig) => void;
+  agentForwardingEndpointError?: string;
   sshAlgorithms: SshAlgorithmPreferences;
   setSshAlgorithms: (v: SshAlgorithmPreferences) => void;
   sshProfile: SshProfile;
@@ -456,10 +486,12 @@ export function SshForm({
   setBackspaceMode,
   x11Forwarding,
   setX11Forwarding,
-  agentEndpoint,
-  setAgentEndpoint,
-  agentForwarding,
-  setAgentForwarding,
+  authAgentEndpoint,
+  setAuthAgentEndpoint,
+  authAgentEndpointError,
+  agentForwardingConfig,
+  setAgentForwardingConfig,
+  agentForwardingEndpointError,
   sshAlgorithms,
   setSshAlgorithms,
   sshProfile,
@@ -491,6 +523,16 @@ export function SshForm({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [showDirectPassword, setShowDirectPassword] = useState(false);
   const [directPasswordLoading, setDirectPasswordLoading] = useState(false);
+  const [showAgentAllowAllWarning, setShowAgentAllowAllWarning] = useState(false);
+  const [showAgentIdentityPicker, setShowAgentIdentityPicker] = useState(false);
+  const [agentIdentities, setAgentIdentities] = useState<SshAgentForwardingIdentity[]>([]);
+  const [agentEndpointErrors, setAgentEndpointErrors] = useState<SshAgentForwardingEndpointError[]>(
+    [],
+  );
+  const [agentIdentityLoadError, setAgentIdentityLoadError] = useState("");
+  const [agentIdentityLoading, setAgentIdentityLoading] = useState(false);
+  const [agentIdentityTruncated, setAgentIdentityTruncated] = useState(false);
+  const agentIdentityRequestGeneration = useRef(0);
   const [supportedAlgorithms, setSupportedAlgorithms] = useState<SupportedSshAlgorithms | null>(
     null,
   );
@@ -521,6 +563,60 @@ export function SshForm({
       /* ignore */
     }
   }, [passwordId, setPasswordId]);
+
+  const loadAgentIdentities = useCallback(async () => {
+    const generation = ++agentIdentityRequestGeneration.current;
+    if (
+      !agentForwardingConfig.enabled ||
+      (!agentForwardingConfig.sources.external_agent && !agentForwardingConfig.sources.stored_keys)
+    ) {
+      if (generation !== agentIdentityRequestGeneration.current) return;
+      setAgentIdentities([]);
+      setAgentEndpointErrors([]);
+      setAgentIdentityTruncated(false);
+      setAgentIdentityLoadError("");
+      return;
+    }
+
+    setAgentIdentityLoading(true);
+    setAgentIdentityLoadError("");
+    try {
+      const response = await invoke<SshAgentForwardingIdentityResponse>(
+        "get_ssh_agent_forwarding_identities",
+        {
+          forwardingConfig: {
+            enabled: agentForwardingConfig.enabled,
+            sources: agentForwardingConfig.sources,
+            // Identity preview enumerates candidates; the saved policy is applied only when forwarding.
+            policy: { mode: "all" },
+          },
+        },
+      );
+      if (generation !== agentIdentityRequestGeneration.current) return;
+      setAgentIdentities(response.identities);
+      setAgentEndpointErrors(response.endpoint_errors);
+      setAgentIdentityTruncated(response.truncated);
+    } catch (error) {
+      if (generation !== agentIdentityRequestGeneration.current) return;
+      setAgentIdentities([]);
+      setAgentEndpointErrors([]);
+      setAgentIdentityTruncated(false);
+      setAgentIdentityLoadError(getErrorMessage(error));
+    } finally {
+      if (generation === agentIdentityRequestGeneration.current) {
+        setAgentIdentityLoading(false);
+      }
+    }
+  }, [agentForwardingConfig.enabled, agentForwardingConfig.sources]);
+
+  useEffect(() => {
+    if (showAgentIdentityPicker) {
+      void loadAgentIdentities();
+    } else {
+      agentIdentityRequestGeneration.current += 1;
+      setAgentIdentityLoading(false);
+    }
+  }, [loadAgentIdentities, showAgentIdentityPicker]);
 
   useEffect(() => {
     if (passwordId) {
@@ -571,10 +667,10 @@ export function SshForm({
   }, [setSshAlgorithms, sshAlgorithms, supportedAlgorithms]);
 
   useEffect(() => {
-    if (!isSupportedSshAgentEndpoint(agentEndpoint.type)) {
-      setAgentEndpoint({ type: "auto" });
+    if (!isSupportedSshAgentEndpoint(authAgentEndpoint.type)) {
+      setAuthAgentEndpoint({ type: "auto" });
     }
-  }, [agentEndpoint.type, setAgentEndpoint]);
+  }, [authAgentEndpoint.type, setAuthAgentEndpoint]);
 
   const selectedKeyName = sshKeys.find((k) => k.id === keyId)?.name;
   const selectedPasswordName = savedPasswords.find((p) => p.id === passwordId)?.name;
@@ -583,9 +679,63 @@ export function SshForm({
     : isMacOS || isLinux
       ? ["auto", "environment", "unix_socket"]
       : ["auto"];
-  const visibleAgentEndpointType = isSupportedSshAgentEndpoint(agentEndpoint.type)
-    ? agentEndpoint.type
+  const availableForwardingEndpointTypes = availableAgentEndpointTypes;
+  const forwardingEndpointCandidates: SshAgentEndpoint[] = isWindows
+    ? [{ type: "windows_open_ssh" }, { type: "pageant" }, { type: "auto" }]
+    : [
+        { type: "environment", variable: "SSH_AUTH_SOCK" },
+        { type: "unix_socket", path: "" },
+        { type: "auto" },
+      ];
+  const forwardingEndpointKeys = new Set(
+    agentForwardingConfig.sources.external_agent_endpoints.map((endpoint) =>
+      JSON.stringify(endpoint),
+    ),
+  );
+  const canAddForwardingEndpoint = forwardingEndpointCandidates.some(
+    (endpoint) => !forwardingEndpointKeys.has(JSON.stringify(endpoint)),
+  );
+  const visibleAgentEndpointType = isSupportedSshAgentEndpoint(authAgentEndpoint.type)
+    ? authAgentEndpoint.type
     : "auto";
+  const updateForwardingSources = (patch: Partial<SshAgentForwardingConfig["sources"]>) => {
+    setAgentForwardingConfig({
+      ...agentForwardingConfig,
+      sources: { ...agentForwardingConfig.sources, ...patch },
+    });
+  };
+  const updateForwardingEndpoint = (index: number, endpoint: SshAgentEndpoint) => {
+    const endpoints = [...agentForwardingConfig.sources.external_agent_endpoints];
+    endpoints[index] = endpoint;
+    updateForwardingSources({ external_agent_endpoints: endpoints });
+  };
+  const addForwardingEndpoint = () => {
+    const endpoint = forwardingEndpointCandidates.find(
+      (candidate) => !forwardingEndpointKeys.has(JSON.stringify(candidate)),
+    );
+    if (!endpoint) return;
+    updateForwardingSources({
+      external_agent: true,
+      external_agent_endpoints: [
+        ...agentForwardingConfig.sources.external_agent_endpoints,
+        endpoint,
+      ],
+    });
+  };
+  const removeForwardingEndpoint = (index: number) => {
+    updateForwardingSources({
+      external_agent_endpoints: agentForwardingConfig.sources.external_agent_endpoints.filter(
+        (_, endpointIndex) => endpointIndex !== index,
+      ),
+    });
+  };
+  const moveForwardingEndpoint = (index: number, direction: -1 | 1) => {
+    const nextIndex = index + direction;
+    const endpoints = [...agentForwardingConfig.sources.external_agent_endpoints];
+    if (nextIndex < 0 || nextIndex >= endpoints.length) return;
+    [endpoints[index], endpoints[nextIndex]] = [endpoints[nextIndex], endpoints[index]];
+    updateForwardingSources({ external_agent_endpoints: endpoints });
+  };
   const proxyOptions = proxies.map((proxy) => ({
     id: proxy.id,
     label: proxy.name,
@@ -974,8 +1124,85 @@ export function SshForm({
             </Popover>
           </TabsContent>
           <TabsContent value="agent" className="mt-3 border-0 outline-none">
-            <div className="rounded-lg border bg-accent/25 p-3 text-xs text-muted-foreground">
-              {t("dialog.sshAgentAuthDesc", "Use an identity managed by the local SSH Agent.")}
+            <div className="space-y-3 rounded-lg border bg-accent/25 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <Label className="text-xs font-medium text-foreground/80">
+                    {t("dialog.sshAgentEndpoint", "Agent endpoint")}
+                  </Label>
+                  <p className="mt-1 text-[0.6875rem] leading-relaxed text-muted-foreground">
+                    {t(
+                      "dialog.sshAgentAuthDesc",
+                      "Use an identity managed by the local SSH Agent.",
+                    )}
+                  </p>
+                </div>
+                <Select
+                  value={visibleAgentEndpointType}
+                  onValueChange={(type) => {
+                    if (type === "auto") setAuthAgentEndpoint({ type: "auto" });
+                    if (type === "environment")
+                      setAuthAgentEndpoint({ type: "environment", variable: "SSH_AUTH_SOCK" });
+                    if (type === "unix_socket")
+                      setAuthAgentEndpoint({ type: "unix_socket", path: "" });
+                    if (type === "pageant") setAuthAgentEndpoint({ type: "pageant" });
+                    if (type === "windows_open_ssh")
+                      setAuthAgentEndpoint({ type: "windows_open_ssh" });
+                  }}
+                >
+                  <SelectTrigger className="h-8 w-44 shrink-0 text-xs font-normal">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="auto">{t("dialog.sshAgentAuto", "Automatic")}</SelectItem>
+                    {availableAgentEndpointTypes.includes("environment") && (
+                      <SelectItem value="environment">
+                        {t("dialog.sshAgentEnvironment", "Environment variable")}
+                      </SelectItem>
+                    )}
+                    {availableAgentEndpointTypes.includes("unix_socket") && (
+                      <SelectItem value="unix_socket">
+                        {t("dialog.sshAgentUnixSocket", "Unix domain socket")}
+                      </SelectItem>
+                    )}
+                    {availableAgentEndpointTypes.includes("pageant") && (
+                      <SelectItem value="pageant">
+                        {t("dialog.sshAgentPageant", "Pageant")}
+                      </SelectItem>
+                    )}
+                    {availableAgentEndpointTypes.includes("windows_open_ssh") && (
+                      <SelectItem value="windows_open_ssh">
+                        {t("dialog.sshAgentWindowsOpenSsh", "Windows OpenSSH Agent")}
+                      </SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+              {authAgentEndpoint.type === "environment" && (
+                <Input
+                  value={authAgentEndpoint.variable}
+                  onChange={(event) =>
+                    setAuthAgentEndpoint({ type: "environment", variable: event.target.value })
+                  }
+                  placeholder="SSH_AUTH_SOCK"
+                  className="h-8 text-xs"
+                />
+              )}
+              {authAgentEndpoint.type === "unix_socket" && (
+                <Input
+                  value={authAgentEndpoint.path}
+                  onChange={(event) =>
+                    setAuthAgentEndpoint({ type: "unix_socket", path: event.target.value })
+                  }
+                  placeholder="/tmp/ssh-XXXXXX/agent.YYYY"
+                  className="h-8 text-xs"
+                />
+              )}
+              {authAgentEndpointError && (
+                <p className="text-[0.6875rem] text-destructive" role="alert">
+                  {authAgentEndpointError}
+                </p>
+              )}
             </div>
           </TabsContent>
         </Tabs>
@@ -1029,72 +1256,7 @@ export function SshForm({
 
             <TabsContent value="agent" className="mt-3 border-0 outline-none">
               <div className="space-y-3 rounded-lg border bg-accent/25 p-3">
-                <div>
-                  <Label className="text-xs font-medium text-foreground/80">
-                    {t("dialog.sshAgentEndpoint", "Agent endpoint")}
-                  </Label>
-                  <Select
-                    value={visibleAgentEndpointType}
-                    onValueChange={(type) => {
-                      if (type === "auto") setAgentEndpoint({ type: "auto" });
-                      if (type === "environment")
-                        setAgentEndpoint({ type: "environment", variable: "SSH_AUTH_SOCK" });
-                      if (type === "unix_socket")
-                        setAgentEndpoint({ type: "unix_socket", path: "" });
-                      if (type === "pageant") setAgentEndpoint({ type: "pageant" });
-                      if (type === "windows_open_ssh")
-                        setAgentEndpoint({ type: "windows_open_ssh" });
-                    }}
-                  >
-                    <SelectTrigger className="mt-1 h-8 text-xs font-normal">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="auto">{t("dialog.sshAgentAuto", "Automatic")}</SelectItem>
-                      {availableAgentEndpointTypes.includes("environment") && (
-                        <SelectItem value="environment">
-                          {t("dialog.sshAgentEnvironment", "Environment variable")}
-                        </SelectItem>
-                      )}
-                      {availableAgentEndpointTypes.includes("unix_socket") && (
-                        <SelectItem value="unix_socket">
-                          {t("dialog.sshAgentUnixSocket", "Unix domain socket")}
-                        </SelectItem>
-                      )}
-                      {availableAgentEndpointTypes.includes("pageant") && (
-                        <SelectItem value="pageant">
-                          {t("dialog.sshAgentPageant", "Pageant")}
-                        </SelectItem>
-                      )}
-                      {availableAgentEndpointTypes.includes("windows_open_ssh") && (
-                        <SelectItem value="windows_open_ssh">
-                          {t("dialog.sshAgentWindowsOpenSsh", "Windows OpenSSH Agent")}
-                        </SelectItem>
-                      )}
-                    </SelectContent>
-                  </Select>
-                </div>
-                {agentEndpoint.type === "environment" && (
-                  <Input
-                    value={agentEndpoint.variable}
-                    onChange={(event) =>
-                      setAgentEndpoint({ type: "environment", variable: event.target.value })
-                    }
-                    placeholder="SSH_AUTH_SOCK"
-                    className="h-8 text-xs"
-                  />
-                )}
-                {agentEndpoint.type === "unix_socket" && (
-                  <Input
-                    value={agentEndpoint.path}
-                    onChange={(event) =>
-                      setAgentEndpoint({ type: "unix_socket", path: event.target.value })
-                    }
-                    placeholder="/tmp/ssh-XXXXXX/agent.YYYY"
-                    className="h-8 text-xs"
-                  />
-                )}
-                <div className="flex items-start justify-between gap-3 border-t pt-3">
+                <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-xs font-medium">
                       {t("dialog.sshAgentForwarding", "Allow agent forwarding")}
@@ -1102,16 +1264,330 @@ export function SshForm({
                     <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
                       {t(
                         "dialog.sshAgentForwardingDesc",
-                        "Forward this local Agent to the remote server.",
+                        "Allow remote processes to use signing capabilities from the selected forwarding sources.",
                       )}
                     </p>
                   </div>
-                  <Switch checked={agentForwarding} onCheckedChange={setAgentForwarding} />
+                  <Switch
+                    checked={agentForwardingConfig.enabled}
+                    onCheckedChange={(enabled) =>
+                      setAgentForwardingConfig({ ...agentForwardingConfig, enabled })
+                    }
+                  />
                 </div>
+                {agentForwardingConfig.enabled && (
+                  <>
+                    <div className="space-y-2 border-t pt-3">
+                      <div className="text-xs font-medium">
+                        {t("dialog.sshAgentForwardingSources", "Forwarding sources")}
+                      </div>
+                      <label className="flex items-center justify-between gap-3 text-xs">
+                        <span>
+                          {t("dialog.sshAgentExternalSource", "External SSH Agent")}
+                          {t("dialog.sshAgentEndpointList", " (custom endpoints)")}
+                        </span>
+                        <Switch
+                          checked={agentForwardingConfig.sources.external_agent}
+                          onCheckedChange={(external_agent) =>
+                            setAgentForwardingConfig({
+                              ...agentForwardingConfig,
+                              sources: {
+                                ...agentForwardingConfig.sources,
+                                external_agent,
+                                external_agent_endpoints:
+                                  external_agent &&
+                                  agentForwardingConfig.sources.external_agent_endpoints.length ===
+                                    0
+                                    ? [defaultForwardingEndpoint()]
+                                    : agentForwardingConfig.sources.external_agent_endpoints,
+                              },
+                            })
+                          }
+                        />
+                      </label>
+                      {agentForwardingConfig.sources.external_agent && (
+                        <div className="space-y-2 rounded-md border border-dashed p-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[0.6875rem] text-muted-foreground">
+                              {t(
+                                "dialog.sshAgentEndpointListDesc",
+                                "Use more than one local Agent endpoint; identities are merged in this order.",
+                              )}
+                              <span className="mt-0.5 block">
+                                {t(
+                                  "dialog.sshAgentEndpointGpgHint",
+                                  "For gpg-agent, use its SSH-compatible socket, not a regular GPG Assuan socket.",
+                                )}
+                              </span>
+                            </span>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-7 shrink-0 px-2 text-xs"
+                              disabled={
+                                agentForwardingConfig.sources.external_agent_endpoints.length >=
+                                  MAX_SSH_AGENT_FORWARDING_ENDPOINTS ||
+                                !!agentForwardingEndpointError ||
+                                !canAddForwardingEndpoint
+                              }
+                              title={
+                                agentForwardingEndpointError ||
+                                (agentForwardingConfig.sources.external_agent_endpoints.length >=
+                                MAX_SSH_AGENT_FORWARDING_ENDPOINTS
+                                  ? t(
+                                      "dialog.sshAgentEndpointLimit",
+                                      "A maximum of 16 custom endpoints is supported.",
+                                    )
+                                  : undefined)
+                              }
+                              onClick={addForwardingEndpoint}
+                            >
+                              <MdAdd className="mr-1 text-sm" />
+                              {t("dialog.sshAgentAddEndpoint", "Add endpoint")}
+                            </Button>
+                          </div>
+                          {agentForwardingConfig.sources.external_agent_endpoints.length === 0 ? (
+                            <div className="rounded border border-dashed px-2 py-2 text-[0.6875rem] text-muted-foreground">
+                              {t(
+                                "dialog.sshAgentEndpointListEmpty",
+                                "No custom endpoints are configured.",
+                              )}
+                            </div>
+                          ) : (
+                            agentForwardingConfig.sources.external_agent_endpoints.map(
+                              (endpoint, index) => (
+                                <div
+                                  key={`${index}-${endpoint.type}`}
+                                  className="space-y-2 rounded-md border bg-background/40 p-2"
+                                >
+                                  <div className="flex items-center gap-1.5">
+                                    <Select
+                                      value={endpoint.type}
+                                      onValueChange={(type) => {
+                                        if (type === "auto") {
+                                          updateForwardingEndpoint(index, { type: "auto" });
+                                        } else if (type === "environment") {
+                                          updateForwardingEndpoint(index, {
+                                            type: "environment",
+                                            variable: "SSH_AUTH_SOCK",
+                                          });
+                                        } else if (type === "unix_socket") {
+                                          updateForwardingEndpoint(index, {
+                                            type: "unix_socket",
+                                            path: "",
+                                          });
+                                        } else if (type === "pageant") {
+                                          updateForwardingEndpoint(index, { type: "pageant" });
+                                        } else if (type === "windows_open_ssh") {
+                                          updateForwardingEndpoint(index, {
+                                            type: "windows_open_ssh",
+                                          });
+                                        }
+                                      }}
+                                    >
+                                      <SelectTrigger className="h-8 min-w-0 flex-1 text-xs font-normal">
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        {availableAgentEndpointTypes.includes("auto") && (
+                                          <SelectItem value="auto">
+                                            {t("dialog.sshAgentAuto", "Automatic")}
+                                          </SelectItem>
+                                        )}
+                                        {availableForwardingEndpointTypes.includes(
+                                          "environment",
+                                        ) && (
+                                          <SelectItem value="environment">
+                                            {t(
+                                              "dialog.sshAgentEnvironment",
+                                              "Environment variable",
+                                            )}
+                                          </SelectItem>
+                                        )}
+                                        {availableForwardingEndpointTypes.includes(
+                                          "unix_socket",
+                                        ) && (
+                                          <SelectItem value="unix_socket">
+                                            {t("dialog.sshAgentUnixSocket", "Unix domain socket")}
+                                          </SelectItem>
+                                        )}
+                                        {availableForwardingEndpointTypes.includes("pageant") && (
+                                          <SelectItem value="pageant">
+                                            {t("dialog.sshAgentPageant", "Pageant")}
+                                          </SelectItem>
+                                        )}
+                                        {availableForwardingEndpointTypes.includes(
+                                          "windows_open_ssh",
+                                        ) && (
+                                          <SelectItem value="windows_open_ssh">
+                                            {t(
+                                              "dialog.sshAgentWindowsOpenSsh",
+                                              "Windows OpenSSH Agent",
+                                            )}
+                                          </SelectItem>
+                                        )}
+                                      </SelectContent>
+                                    </Select>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-7 w-7"
+                                      disabled={index === 0}
+                                      onClick={() => moveForwardingEndpoint(index, -1)}
+                                      aria-label={t(
+                                        "dialog.sshAgentMoveEndpointUp",
+                                        "Move endpoint up",
+                                      )}
+                                    >
+                                      <MdKeyboardArrowUp className="text-base" />
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-7 w-7"
+                                      disabled={
+                                        index ===
+                                        agentForwardingConfig.sources.external_agent_endpoints
+                                          .length -
+                                          1
+                                      }
+                                      onClick={() => moveForwardingEndpoint(index, 1)}
+                                      aria-label={t(
+                                        "dialog.sshAgentMoveEndpointDown",
+                                        "Move endpoint down",
+                                      )}
+                                    >
+                                      <MdKeyboardArrowDown className="text-base" />
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-7 w-7 text-destructive hover:text-destructive"
+                                      onClick={() => removeForwardingEndpoint(index)}
+                                      aria-label={t(
+                                        "dialog.sshAgentRemoveEndpoint",
+                                        "Remove endpoint",
+                                      )}
+                                    >
+                                      <MdDeleteOutline className="text-base" />
+                                    </Button>
+                                  </div>
+                                  {endpoint.type === "environment" && (
+                                    <Input
+                                      value={endpoint.variable}
+                                      onChange={(event) =>
+                                        updateForwardingEndpoint(index, {
+                                          type: "environment",
+                                          variable: event.target.value,
+                                        })
+                                      }
+                                      placeholder="SSH_AUTH_SOCK"
+                                      className="h-8 text-xs"
+                                    />
+                                  )}
+                                  {endpoint.type === "unix_socket" && (
+                                    <Input
+                                      value={endpoint.path}
+                                      onChange={(event) =>
+                                        updateForwardingEndpoint(index, {
+                                          type: "unix_socket",
+                                          path: event.target.value,
+                                        })
+                                      }
+                                      placeholder="/tmp/ssh-XXXXXX/agent.YYYY"
+                                      className="h-8 text-xs"
+                                    />
+                                  )}
+                                </div>
+                              ),
+                            )
+                          )}
+                        </div>
+                      )}
+                      {agentForwardingEndpointError && (
+                        <p className="text-[0.6875rem] text-destructive" role="alert">
+                          {agentForwardingEndpointError}
+                        </p>
+                      )}
+                      <label className="flex items-center justify-between gap-3 text-xs">
+                        <span>{t("dialog.sshAgentStoredKeysSource", "NyaTerm stored keys")}</span>
+                        <Switch
+                          checked={agentForwardingConfig.sources.stored_keys}
+                          onCheckedChange={(stored_keys) =>
+                            updateForwardingSources({ stored_keys })
+                          }
+                        />
+                      </label>
+                    </div>
+                    <div className="space-y-2 border-t pt-3">
+                      <Label className="text-xs font-medium text-foreground/80">
+                        {t("dialog.sshAgentForwardingPolicy", "Identity policy")}
+                      </Label>
+                      <Select
+                        value={agentForwardingConfig.policy.mode}
+                        onValueChange={(mode) => {
+                          if (mode === "allowlist") {
+                            setAgentForwardingConfig({
+                              ...agentForwardingConfig,
+                              policy: { mode: "allowlist", fingerprints: [] },
+                            });
+                          }
+                          if (mode === "all") {
+                            setShowAgentAllowAllWarning(true);
+                          }
+                        }}
+                      >
+                        <SelectTrigger className="h-8 text-xs font-normal">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="allowlist">
+                            {t("dialog.sshAgentAllowlist", "Allowlist")}
+                          </SelectItem>
+                          <SelectItem value="all">
+                            {t("dialog.sshAgentAllowAll", "Allow all identities")}
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {agentForwardingConfig.policy.mode === "allowlist" && (
+                        <div className="space-y-2">
+                          <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+                            {agentForwardingConfig.policy.fingerprints.length === 0
+                              ? t(
+                                  "dialog.sshAgentAllowlistEmpty",
+                                  "The allowlist is empty. Forwarding remains enabled but exposes no identities until you authorize fingerprints.",
+                                )
+                              : t("dialog.sshAgentAllowlistCount", {
+                                  count: agentForwardingConfig.policy.fingerprints.length,
+                                  defaultValue: `${agentForwardingConfig.policy.fingerprints.length} identities are authorized.`,
+                                })}
+                          </p>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={
+                              !agentForwardingConfig.sources.external_agent &&
+                              !agentForwardingConfig.sources.stored_keys
+                            }
+                            onClick={() => setShowAgentIdentityPicker(true)}
+                          >
+                            <MdSettings className="mr-1.5 text-sm" />
+                            {t("dialog.sshAgentManageAllowlist", "Choose identities")}
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
                 <p className="mt-2 text-[0.6875rem] leading-relaxed text-amber-600 dark:text-amber-300">
                   {t(
                     "dialog.sshAgentForwardingWarning",
-                    "Agent forwarding lets remote processes use the local Agent's signing capability through SSH. Enable it only for trusted servers and keep it disabled when it is not needed. The Agent endpoint and forwarding switch are device-local connection settings; hardware keys and private keys are never synchronized to the cloud.",
+                    "Agent forwarding exposes signing capability from the selected local Agent endpoints and NyaTerm stored keys to remote processes. Enable it only for trusted servers. Private key material is never sent to the remote server; endpoint and forwarding policy remain device-local.",
                   )}
                 </p>
               </div>
@@ -1657,6 +2133,170 @@ export function SshForm({
           </div>
         </DialogContent>
       </Dialog>
+      <Dialog open={showAgentIdentityPicker} onOpenChange={setShowAgentIdentityPicker}>
+        <DialogContent className="w-[min(42rem,calc(100vw-2rem))]">
+          <DialogHeader>
+            <DialogTitle>{t("dialog.sshAgentManageAllowlist", "Choose identities")}</DialogTitle>
+            <DialogDescription>
+              {t(
+                "dialog.sshAgentAllowlistDescription",
+                "Select fingerprints from the merged external Agent and NyaTerm stored-key identities. An unchecked identity is never exposed to the remote server.",
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[min(30rem,50vh)] space-y-2 overflow-y-auto pr-1 terminal-scroll">
+            {agentIdentityLoading ? (
+              <div className="rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
+                {t("dialog.sshAgentIdentitiesLoading", "Loading Agent identities…")}
+              </div>
+            ) : agentIdentityLoadError ? (
+              <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                {t(
+                  "dialog.sshAgentIdentityLoadError",
+                  "Could not load forwarding identities. Check the Agent endpoint configuration and application environment.",
+                )}
+                <div className="mt-1 break-words font-mono text-[0.625rem] opacity-80">
+                  {agentIdentityLoadError}
+                </div>
+              </div>
+            ) : agentIdentities.length === 0 && agentEndpointErrors.length === 0 ? (
+              <div className="rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
+                {t(
+                  "dialog.sshAgentIdentitiesEmpty",
+                  "No identities are currently available. Check the selected Agent endpoint or add a stored key.",
+                )}
+              </div>
+            ) : (
+              <>
+                {agentEndpointErrors.map((error) => (
+                  <div
+                    key={`${error.custom_endpoint_index}-${error.endpoint_type}-${error.code}`}
+                    className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive"
+                  >
+                    {t(
+                      `dialog.sshAgentEndpointError.${error.code}`,
+                      error.code === "connect_failed"
+                        ? "Could not connect to forwarding Agent endpoint."
+                        : "Could not enumerate identities from forwarding Agent endpoint.",
+                    )}{" "}
+                    <span className="font-mono text-[0.625rem]">
+                      {`${t("dialog.sshAgentCustomEndpointLabel", "Custom endpoint")} #${
+                        error.custom_endpoint_index + 1
+                      }`}{" "}
+                      ({error.endpoint_type})
+                    </span>
+                  </div>
+                ))}
+                {agentIdentityTruncated && (
+                  <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+                    {t(
+                      "dialog.sshAgentIdentityPreviewTruncated",
+                      "Only the first 1,024 identities that fit the SSH Agent protocol limits are shown and available for forwarding.",
+                    )}
+                  </div>
+                )}
+                {agentIdentities.map((identity) => {
+                  const selected =
+                    agentForwardingConfig.policy.mode === "allowlist" &&
+                    agentForwardingConfig.policy.fingerprints.includes(identity.fingerprint);
+                  return (
+                    <label
+                      key={identity.fingerprint}
+                      className="flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2 hover:bg-accent/40"
+                    >
+                      <Checkbox
+                        checked={selected}
+                        onCheckedChange={(checked) => {
+                          if (agentForwardingConfig.policy.mode !== "allowlist") return;
+                          const fingerprints = new Set(agentForwardingConfig.policy.fingerprints);
+                          if (checked === true) {
+                            if (fingerprints.size >= MAX_SSH_AGENT_FORWARDING_IDENTITIES) return;
+                            fingerprints.add(identity.fingerprint);
+                          } else {
+                            fingerprints.delete(identity.fingerprint);
+                          }
+                          setAgentForwardingConfig({
+                            ...agentForwardingConfig,
+                            policy: {
+                              mode: "allowlist",
+                              fingerprints: [...fingerprints],
+                            },
+                          });
+                        }}
+                        disabled={
+                          !selected &&
+                          agentForwardingConfig.policy.mode === "allowlist" &&
+                          agentForwardingConfig.policy.fingerprints.length >=
+                            MAX_SSH_AGENT_FORWARDING_IDENTITIES
+                        }
+                        className="mt-0.5"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-xs font-medium">
+                          {identity.comment || identity.fingerprint}
+                        </span>
+                        <span className="mt-0.5 block break-all font-mono text-[0.625rem] text-muted-foreground">
+                          {identity.fingerprint}
+                        </span>
+                        <span className="mt-1 block text-[0.625rem] text-muted-foreground">
+                          {identity.source === "stored_key"
+                            ? t("dialog.sshAgentStoredKeysSource", "NyaTerm stored keys")
+                            : t("dialog.sshAgentExternalSource", "External SSH Agent")}
+                          {identity.custom_endpoint_index !== undefined
+                            ? ` #${identity.custom_endpoint_index + 1}`
+                            : ""}
+                        </span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </>
+            )}
+          </div>
+          <DialogFooter className="sm:justify-between">
+            <Button type="button" onClick={() => setShowAgentIdentityPicker(false)}>
+              {t("dialog.done", "Done")}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={agentIdentityLoading}
+              onClick={() => void loadAgentIdentities()}
+            >
+              <MdRefresh className="mr-1.5 text-sm" />
+              {t("dialog.refresh", "Refresh")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <AlertDialog open={showAgentAllowAllWarning} onOpenChange={setShowAgentAllowAllWarning}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t("dialog.sshAgentAllowAllWarningTitle", "Allow all Agent identities?")}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(
+                "dialog.sshAgentAllowAllWarning",
+                "Remote processes may use every current and future identity provided by the selected forwarding sources to create signatures. This can include external hardware Agents and NyaTerm stored keys. Private keys are not transferred, but signing capability is exposed.",
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("dialog.cancel", "Cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setAgentForwardingConfig({
+                  ...agentForwardingConfig,
+                  policy: { mode: "all" },
+                });
+              }}
+            >
+              {t("dialog.sshAgentAllowAllConfirm", "Allow all")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

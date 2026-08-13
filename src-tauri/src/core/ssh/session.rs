@@ -1,3 +1,4 @@
+use super::agent_broker::AgentBrokerFactory;
 use super::auth::{SSH_AGENT_AUTH_RETRY, authenticate_handle, load_saved_ssh_config};
 use super::client::{
     RemoteForwardOpen, SshConfig, SshConnectionHandles, SshDiagnosticContext, SshDiagnosticStage,
@@ -5,7 +6,10 @@ use super::client::{
     connect_via_stream, connect_with_proxy,
 };
 use super::io::{open_shell_channel, ssh_io_loop};
-use crate::config::{AiExecutionProfile, SshProfile, effective_cwd_follow_mode_for_profile};
+use crate::config::{
+    AiExecutionProfile, SshAgentForwardingConfig, SshAgentForwardingPolicy, SshProfile,
+    effective_cwd_follow_mode_for_profile,
+};
 use crate::core::{
     SessionCommand, SessionHandle, SessionInfo, SessionManager, SessionReadyHook, SessionType,
     SharedCwd,
@@ -144,9 +148,9 @@ fn connect_authenticated_chain_boxed<'a>(
             if let Some(tx) = remote_forward_tx {
                 target_handler = target_handler.with_remote_forward_sender(tx);
             }
-            if should_attach_agent_forwarding(enable_agent_forwarding, config.agent_forwarding) {
-                target_handler =
-                    target_handler.with_agent_forwarding_endpoint(config.agent_endpoint.clone());
+            let forwarding = effective_forwarding_config(config);
+            if should_attach_agent_forwarding(enable_agent_forwarding, forwarding.enabled) {
+                target_handler = attach_agent_forwarding(app, config, target_handler)?;
             }
             if let Some(diagnostics) = diagnostics.clone() {
                 target_handler = target_handler.with_diagnostics(diagnostics);
@@ -189,8 +193,9 @@ fn connect_authenticated_chain_boxed<'a>(
         if let Some(tx) = remote_forward_tx {
             handler = handler.with_remote_forward_sender(tx);
         }
-        if should_attach_agent_forwarding(enable_agent_forwarding, config.agent_forwarding) {
-            handler = handler.with_agent_forwarding_endpoint(config.agent_endpoint.clone());
+        let forwarding = effective_forwarding_config(config);
+        if should_attach_agent_forwarding(enable_agent_forwarding, forwarding.enabled) {
+            handler = attach_agent_forwarding(app, config, handler)?;
         }
         if let Some(diagnostics) = diagnostics.clone() {
             handler = handler.with_diagnostics(diagnostics);
@@ -218,6 +223,33 @@ fn connect_authenticated_chain_boxed<'a>(
 
 fn should_attach_agent_forwarding(global_enabled: bool, connection_enabled: bool) -> bool {
     global_enabled && connection_enabled
+}
+
+fn attach_agent_forwarding(
+    app: &AppHandle,
+    config: &SshConfig,
+    handler: SshHandler,
+) -> AppResult<SshHandler> {
+    let forwarding = effective_forwarding_config(config);
+    if is_raw_agent_forwarding_config(&forwarding) {
+        return Ok(handler.with_agent_forwarding_endpoint(
+            forwarding.sources.external_agent_endpoints[0].clone(),
+        ));
+    }
+
+    let broker = Arc::new(AgentBrokerFactory::new(app, &forwarding)?);
+    Ok(handler.with_agent_broker(broker))
+}
+
+fn is_raw_agent_forwarding_config(config: &SshAgentForwardingConfig) -> bool {
+    config.sources.external_agent
+        && config.sources.external_agent_endpoints.len() == 1
+        && !config.sources.stored_keys
+        && matches!(&config.policy, SshAgentForwardingPolicy::All)
+}
+
+fn effective_forwarding_config(config: &SshConfig) -> SshAgentForwardingConfig {
+    config.agent_forwarding_config.clone()
 }
 
 fn is_agent_auth_retry(error: &AppError) -> bool {
@@ -391,13 +423,15 @@ async fn create_ssh_session_inner(
     );
     let handle_mtx = ssh_connection.target_handle();
     let mut handle = handle_mtx.lock().await;
+    let forwarding_enabled =
+        should_attach_agent_forwarding(true, effective_forwarding_config(&config).enabled);
 
     let (channel, injection_script, ready_marker, detected_shell, initial_notice) =
         open_shell_channel(
             &mut handle,
             &session_id,
             x11_config.as_ref().map(|cfg| cfg.fake_cookie_hex.as_str()),
-            config.agent_forwarding,
+            forwarding_enabled,
             config.terminal_type.as_str(),
             capabilities.remote_file_browser_enabled,
             capabilities.network_device_profile,
@@ -585,12 +619,14 @@ pub async fn create_multiplexed_ssh_session(
 
     let handle_mtx = ssh_connection.target_handle();
     let mut handle = handle_mtx.lock().await;
+    let forwarding_enabled =
+        should_attach_agent_forwarding(true, effective_forwarding_config(&config).enabled);
     let (channel, injection_script, ready_marker, detected_shell, initial_notice) =
         open_shell_channel(
             &mut handle,
             &session_id,
             None,
-            config.agent_forwarding,
+            forwarding_enabled,
             config.terminal_type.as_str(),
             capabilities.remote_file_browser_enabled,
             capabilities.network_device_profile,
@@ -676,9 +712,13 @@ pub async fn create_multiplexed_ssh_session(
 #[cfg(test)]
 mod tests {
     use super::{
-        is_agent_auth_retry, resolve_runtime_capabilities, should_attach_agent_forwarding,
+        is_agent_auth_retry, is_raw_agent_forwarding_config, resolve_runtime_capabilities,
+        should_attach_agent_forwarding,
     };
-    use crate::config::{SftpSettings, SshAgentEndpoint, SshProfile, SshTerminalType};
+    use crate::config::{
+        SftpSettings, SshAgentEndpoint, SshAgentForwardingConfig, SshAgentForwardingPolicy,
+        SshAgentForwardingSources, SshProfile, SshTerminalType,
+    };
     use crate::core::ssh::client::{SshAuth, SshConfig};
     use crate::error::AppError;
 
@@ -688,6 +728,33 @@ mod tests {
         assert!(!should_attach_agent_forwarding(false, true));
         assert!(!should_attach_agent_forwarding(true, false));
         assert!(should_attach_agent_forwarding(true, true));
+    }
+
+    #[test]
+    fn raw_agent_forwarding_is_limited_to_the_legacy_compatible_shape() {
+        let raw = SshAgentForwardingConfig {
+            enabled: true,
+            sources: SshAgentForwardingSources {
+                external_agent: true,
+                external_agent_endpoints: vec![SshAgentEndpoint::Auto],
+                stored_keys: false,
+            },
+            policy: SshAgentForwardingPolicy::All,
+        };
+        assert!(is_raw_agent_forwarding_config(&raw));
+
+        let mut multiple = raw.clone();
+        multiple
+            .sources
+            .external_agent_endpoints
+            .push(SshAgentEndpoint::Auto);
+        assert!(!is_raw_agent_forwarding_config(&multiple));
+
+        let mut allowlist = raw;
+        allowlist.policy = SshAgentForwardingPolicy::Allowlist {
+            fingerprints: vec!["SHA256:example".to_string()],
+        };
+        assert!(!is_raw_agent_forwarding_config(&allowlist));
     }
 
     #[test]
@@ -715,8 +782,8 @@ mod tests {
             backspace_mode: "del".to_string(),
             x11_forwarding: false,
             x11_display: String::new(),
-            agent_endpoint: SshAgentEndpoint::Auto,
-            agent_forwarding: false,
+            auth_agent_endpoint: Some(SshAgentEndpoint::Auto),
+            agent_forwarding_config: crate::config::SshAgentForwardingConfig::default(),
             proxy: None,
             proxy_jump: None,
             post_login: None,
