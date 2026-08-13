@@ -14,7 +14,9 @@ use tokio::process::Command;
 #[cfg(not(test))]
 use uuid::Uuid;
 
-use crate::core::portable_snapshot::{PortableSnapshot, decode_portable_snapshot};
+use crate::core::portable_snapshot::{
+    DecodedPortableSnapshot, decode_portable_snapshot_with_source_hash,
+};
 use crate::error::{AppError, AppResult, CloudSyncError};
 use crate::utils::crypto::set_master_password;
 #[cfg(not(test))]
@@ -38,7 +40,7 @@ struct DecodeHelperRequest {
 
 #[derive(Serialize, Deserialize)]
 struct DecodeHelperResponse {
-    snapshot: PortableSnapshot,
+    decoded: DecodedPortableSnapshot,
 }
 
 pub fn run_helper_if_requested() -> bool {
@@ -68,24 +70,24 @@ fn run_helper(args: &[OsString]) -> AppResult<()> {
     let request: DecodeHelperRequest = serde_json::from_slice(&std::fs::read(input_path)?)?;
     set_master_password(Some(master_password));
     let decrypted = decrypt_snapshot_bytes(&request.encrypted_snapshot)?;
-    let snapshot = decode_portable_snapshot(&decrypted)?;
-    let response = DecodeHelperResponse { snapshot };
+    let decoded = decode_portable_snapshot_with_source_hash(&decrypted)?;
+    let response = DecodeHelperResponse { decoded };
     std::io::stdout().write_all(&serde_json::to_vec(&response)?)?;
     Ok(())
 }
 
-pub async fn decode_remote_snapshot_isolated(
+pub async fn decode_remote_snapshot_with_source_hash_isolated(
     encrypted_snapshot: &[u8],
     revision: &str,
-) -> AppResult<PortableSnapshot> {
+) -> AppResult<DecodedPortableSnapshot> {
     #[cfg(test)]
     {
-        return decode_remote_snapshot_in_process(encrypted_snapshot, revision);
+        return decode_remote_snapshot_with_source_hash_in_process(encrypted_snapshot, revision);
     }
 
     #[cfg(not(test))]
     match decode_remote_snapshot_with_helper(encrypted_snapshot).await {
-        Ok(snapshot) => Ok(snapshot),
+        Ok(decoded) => Ok(decoded),
         Err(error) => {
             tracing::warn!(
                 revision,
@@ -101,16 +103,16 @@ pub async fn decode_remote_snapshot_isolated(
 }
 
 #[cfg(test)]
-fn decode_remote_snapshot_in_process(
+fn decode_remote_snapshot_with_source_hash_in_process(
     encrypted_snapshot: &[u8],
     revision: &str,
-) -> AppResult<PortableSnapshot> {
+) -> AppResult<DecodedPortableSnapshot> {
     let decrypted = decrypt_snapshot_bytes(encrypted_snapshot).map_err(|_| {
         CloudSyncError::CorruptedSnapshot {
             revision: revision.to_string(),
         }
     })?;
-    decode_portable_snapshot(&decrypted).map_err(|_| {
+    decode_portable_snapshot_with_source_hash(&decrypted).map_err(|_| {
         CloudSyncError::CorruptedSnapshot {
             revision: revision.to_string(),
         }
@@ -121,7 +123,7 @@ fn decode_remote_snapshot_in_process(
 #[cfg(not(test))]
 async fn decode_remote_snapshot_with_helper(
     encrypted_snapshot: &[u8],
-) -> AppResult<PortableSnapshot> {
+) -> AppResult<DecodedPortableSnapshot> {
     let master_password = require_master_password()?;
     let temp = DecodeHelperTempFiles::new();
     let request = DecodeHelperRequest {
@@ -157,7 +159,7 @@ async fn decode_remote_snapshot_with_helper(
         ));
     }
     let response: DecodeHelperResponse = serde_json::from_slice(&output.stdout)?;
-    Ok(response.snapshot)
+    Ok(response.decoded)
 }
 
 #[cfg(not(test))]
