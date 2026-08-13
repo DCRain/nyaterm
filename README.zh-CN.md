@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  在一个桌面客户端中处理 SSH、本地 Shell、Telnet、串口、SFTP、隧道、OTP、AI 辅助与加密同步。
+  在一个桌面客户端中处理 SSH、本地 Shell、Telnet、串口、RDP、VNC、SFTP、隧道、OTP、AI 辅助与加密同步。
 </p>
 
 <p align="center">
@@ -88,7 +88,7 @@ NyaTerm 内置 AI Assistant 面板，可用于生成命令、解释终端输出�
 - **NyaTerm 是** 面向开发者、系统管理员和 DevOps 工程师的 SSH 客户端
 - **NyaTerm 是** 支持标签页、横向分屏和纵向分屏的终端工作区
 - **NyaTerm 是** 带传输队列和“本地编辑后回传”流程的 SFTP 文件浏览器
-- **NyaTerm 支持** SSH、本地终端、Telnet 和串口会话
+- **NyaTerm 支持** SSH、本地终端、Telnet、串口、RDP 和 VNC 会话
 - **NyaTerm 不是** Shell 替代品；它用于连接远程 Shell、本地 Shell、Telnet 端点和串口设备
 
 ---
@@ -111,8 +111,9 @@ NyaTerm 适合每天在服务器、本地命令、设备调试和配置文件之
 
 ## 会话与工作区
 
-- 支持 SSH、本地终端、Telnet 和串口会话
+- 支持 SSH、本地终端、Telnet、串口、RDP 和 VNC 会话
 - 多标签页工作区，标签页内支持横向/纵向分屏、标签拖拽停靠和布局恢复
+- RDP 与 VNC 远程桌面 pane；VNC 当前支持 direct TCP、None / classic VNC Auth、Raw / ZRLE / Tight / Tight JPEG framebuffer 更新、窗口缩放、有界重连，以及 Latin-1 文本剪贴板交换
 - 已保存连接支持分组、图标、元数据、复制、键盘复制、重连和导入
 - 命令面板与会话快速切换器，可查找应用动作、已打开会话、已保存连接和新建会话入口
 - 主窗口支持 `Background Image` 背景图自定义，可调 `cover` / `contain` / `stretch` / `tile` 以及 `Background Content Opacity`

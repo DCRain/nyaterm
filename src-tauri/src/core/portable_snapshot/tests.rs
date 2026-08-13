@@ -447,6 +447,8 @@ mod tests {
                 show_docker_manager: false,
                 docker_manager_interval: 10,
                 saved_connections_sort_mode: "default".to_string(),
+                asset_sort_key: None,
+                asset_sort_direction: None,
                 activity_bar_layout: ActivityBarLayout::default(),
             },
         }

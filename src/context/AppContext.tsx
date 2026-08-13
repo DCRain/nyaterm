@@ -23,6 +23,10 @@ import {
   DEFAULT_TAB_RIGHT_CLICK_ACTION,
 } from "@/lib/interactionSettings";
 import {
+  normalizeQuickCommandAppSettings,
+  normalizeQuickCommandUiConfig,
+} from "@/lib/quickCommandSettings";
+import {
   collectSessionPanes,
   createSessionPane,
   createWorkspaceTab,
@@ -44,7 +48,7 @@ import type {
   AppSettings,
   Group,
   PaneSplitDirection,
-  RdpSessionPane,
+  RemoteDesktopSessionPane,
   SavedConnection,
   SessionPane,
   SyncGroup,
@@ -58,7 +62,7 @@ import { DEFAULT_TERMINAL_FONT_SIZE } from "../lib/terminalFontSize";
 import { isPrimaryMainWindow } from "../lib/windowManager";
 
 type PaneConnectingUpdates = Partial<Pick<SessionPane, "name" | "type" | "connectionId">> & {
-  display?: RdpSessionPane["display"];
+  display?: RemoteDesktopSessionPane["display"];
 };
 
 interface AppContextType {
@@ -368,6 +372,8 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     docker_manager_interval: 10,
     saved_connections_sort_mode: "default",
     saved_connections_expanded_group_ids: [],
+    asset_sort_key: null,
+    asset_sort_direction: null,
     recent_connection_ids: [],
     transfer_height: 180,
     file_explorer_show_hidden_files: true,
@@ -580,12 +586,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     invoke<AppSettings>("get_app_settings")
       .then((cfg) => {
-        appSettingsRef.current = cfg;
-        setAppSettings(cfg);
-        setLoggerLevel(cfg.diagnostics.level);
+        const normalized = normalizeQuickCommandAppSettings(cfg);
+        appSettingsRef.current = normalized;
+        setAppSettings(normalized);
+        setLoggerLevel(normalized.diagnostics.level);
         appSettingsLoaded.current = true;
         setSettingsLoaded(true);
-        if (isPrimaryMainWindow() && cfg.security?.enable_screen_lock) {
+        if (isPrimaryMainWindow() && normalized.security?.enable_screen_lock) {
           setIsLocked(true);
         }
       })
@@ -613,7 +620,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     (updates: Partial<AppSettings> | ((prev: AppSettings) => Partial<AppSettings>)) => {
       setAppSettings((prev) => {
         const nextUpdates = typeof updates === "function" ? updates(prev) : updates;
-        const next = { ...prev, ...nextUpdates };
+        const next = normalizeQuickCommandAppSettings({
+          ...prev,
+          ...nextUpdates,
+        });
         appSettingsRef.current = next;
         setLoggerLevel(next.diagnostics.level);
         if (appSettingsLoaded.current) {
@@ -641,7 +651,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       appSettingsSaveTimerRef.current = null;
     }
     setAppSettings((current) => {
-      const normalized = preserveAppSettingsReferences(current, next);
+      const normalized = preserveAppSettingsReferences(
+        current,
+        normalizeQuickCommandAppSettings(next),
+      );
       appSettingsRef.current = normalized;
       setLoggerLevel(normalized.diagnostics.level);
       return normalized;
@@ -653,7 +666,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     (updates: Partial<UiConfig> | ((prev: UiConfig) => Partial<UiConfig>)) => {
       setAppSettings((prev) => {
         const nextUpdates = typeof updates === "function" ? updates(prev.ui) : updates;
-        const nextUi = { ...prev.ui, ...nextUpdates };
+        const nextUi = normalizeQuickCommandUiConfig({
+          ...prev.ui,
+          ...nextUpdates,
+        });
         const next = { ...prev, ui: nextUi };
         appSettingsRef.current = next;
         if (appSettingsLoaded.current) {
@@ -1214,6 +1230,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId))
                 .catch((e) =>
                   handleRestoredSessionFailed(tab.id, pane.id, "Serial", pane.connectionId, e),
+                );
+              break;
+            case "VNC":
+              if (!cid) {
+                markPaneConnectionFailed(tab.id, pane.id, "Missing VNC connection id");
+                return;
+              }
+              invoke<string>("create_vnc_session", {
+                connectionId: cid,
+                createRequestId: pane.createRequestId,
+              })
+                .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId, cid))
+                .catch((e) =>
+                  handleRestoredSessionFailed(tab.id, pane.id, "VNC", pane.connectionId, e),
                 );
               break;
             case "RDP":

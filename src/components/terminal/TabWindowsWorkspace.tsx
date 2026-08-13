@@ -16,7 +16,13 @@ import {
   type TerminalWindowNode,
   type TerminalWindowSplit,
 } from "@/lib/tabWindows";
-import type { PaneSplitDirection, SavedConnection, Tab } from "@/types/global";
+import type {
+  PaneSplitDirection,
+  RecordingMode,
+  RecordingStatus,
+  SavedConnection,
+  Tab,
+} from "@/types/global";
 import PaneWorkspace from "./PaneWorkspace";
 import TabBar from "./TabBar";
 import DropZoneOverlay, { type DropZone } from "./TabDockDropOverlay";
@@ -84,6 +90,9 @@ interface TabWindowsWorkspaceProps {
   onReconnected?: (oldSessionId: string, newSessionId: string) => void;
   onDisconnectedCloseRequested?: (tabId: string, paneId: string) => void | Promise<void>;
   onConnectionError?: (tabId: string, paneId: string, sessionId: string, error: string) => void;
+  recordingStatuses?: RecordingStatus[];
+  onToggleSessionRecording?: (sessionId: string, mode?: RecordingMode) => Promise<void> | void;
+  onSaveSessionTranscript?: (sessionId: string, sessionName?: string) => Promise<void> | void;
 }
 
 type LeafContentRectChange = (leafId: string, rect: LeafContentRect | null) => void;
@@ -475,6 +484,9 @@ function TerminalContentHost({
   onReconnected,
   onDisconnectedCloseRequested,
   onConnectionError,
+  recordingStatuses,
+  onToggleSessionRecording,
+  onSaveSessionTranscript,
   onLeafDragOver,
   onLeafDragLeave,
   onLeafDrop,
@@ -489,6 +501,9 @@ function TerminalContentHost({
   onReconnected?: TabWindowsWorkspaceProps["onReconnected"];
   onDisconnectedCloseRequested?: TabWindowsWorkspaceProps["onDisconnectedCloseRequested"];
   onConnectionError?: TabWindowsWorkspaceProps["onConnectionError"];
+  recordingStatuses?: TabWindowsWorkspaceProps["recordingStatuses"];
+  onToggleSessionRecording?: TabWindowsWorkspaceProps["onToggleSessionRecording"];
+  onSaveSessionTranscript?: TabWindowsWorkspaceProps["onSaveSessionTranscript"];
   onLeafDragOver: LeafDragHandler;
   onLeafDragLeave: LeafDragHandler;
   onLeafDrop: LeafDragHandler;
@@ -529,6 +544,9 @@ function TerminalContentHost({
               onReconnected={onReconnected}
               onDisconnectedCloseRequested={onDisconnectedCloseRequested}
               onConnectionError={onConnectionError}
+              recordingStatuses={recordingStatuses}
+              onToggleSessionRecording={onToggleSessionRecording}
+              onSaveSessionTranscript={onSaveSessionTranscript}
             />
             {visible && dropZone && <DropZoneOverlay zone={dropZone} />}
           </div>
@@ -550,6 +568,9 @@ function TabWindowsWorkspace({
   onReconnected,
   onDisconnectedCloseRequested,
   onConnectionError,
+  recordingStatuses,
+  onToggleSessionRecording,
+  onSaveSessionTranscript,
   ...props
 }: TabWindowsWorkspaceProps) {
   const workspaceRef = useRef<HTMLDivElement | null>(null);
@@ -749,6 +770,9 @@ function TabWindowsWorkspace({
         onReconnected={onReconnected}
         onDisconnectedCloseRequested={onDisconnectedCloseRequested}
         onConnectionError={onConnectionError}
+        recordingStatuses={recordingStatuses}
+        onToggleSessionRecording={onToggleSessionRecording}
+        onSaveSessionTranscript={onSaveSessionTranscript}
         onLeafDragOver={handleLeafDragOver}
         onLeafDragLeave={handleLeafDragLeave}
         onLeafDrop={handleLeafDrop}

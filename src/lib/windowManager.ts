@@ -632,10 +632,20 @@ export function openNewSessionWithTarget(
   });
 }
 
-export function openQuickCommand(editJson?: string) {
-  const url = editJson
-    ? `index.html?window=quick-command&owner=${encodeURIComponent(ownerMainWindowLabel)}&data=${encodeURIComponent(editJson)}`
-    : `index.html?window=quick-command&owner=${encodeURIComponent(ownerMainWindowLabel)}`;
+export function openQuickCommand(
+  editJson?: string,
+  options?: { categoryId?: string | null },
+) {
+  const params = new URLSearchParams({
+    window: "quick-command",
+    owner: ownerMainWindowLabel,
+  });
+  if (editJson) {
+    params.set("data", editJson);
+  } else if (options?.categoryId) {
+    params.set("category_id", options.categoryId);
+  }
+  const url = `index.html?${params.toString()}`;
   return openChildWindow({
     label: scopedModalLabel("quick-command"),
     title: i18n.t(editJson ? "quickCommands.editCommand" : "quickCommands.addCommand"),

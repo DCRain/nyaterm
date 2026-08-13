@@ -260,6 +260,10 @@ pub struct PortableUiSettings {
     #[serde(default = "default_portable_docker_manager_interval")]
     pub docker_manager_interval: u32,
     pub saved_connections_sort_mode: String,
+    #[serde(default)]
+    pub asset_sort_key: Option<String>,
+    #[serde(default)]
+    pub asset_sort_direction: Option<String>,
     pub activity_bar_layout: ActivityBarLayout,
 }
 
@@ -335,6 +339,8 @@ impl PortableAppSettings {
                 show_docker_manager: settings.ui.show_docker_manager,
                 docker_manager_interval: settings.ui.docker_manager_interval,
                 saved_connections_sort_mode: settings.ui.saved_connections_sort_mode.clone(),
+                asset_sort_key: settings.ui.asset_sort_key.clone(),
+                asset_sort_direction: settings.ui.asset_sort_direction.clone(),
                 activity_bar_layout: settings.ui.activity_bar_layout.clone(),
             },
         }
@@ -384,6 +390,8 @@ impl PortableAppSettings {
         current.ui.show_docker_manager = self.ui.show_docker_manager;
         current.ui.docker_manager_interval = self.ui.docker_manager_interval;
         current.ui.saved_connections_sort_mode = self.ui.saved_connections_sort_mode;
+        current.ui.asset_sort_key = self.ui.asset_sort_key;
+        current.ui.asset_sort_direction = self.ui.asset_sort_direction;
         current.ui.activity_bar_layout = self.ui.activity_bar_layout;
 
         // Preserve device-local UI state.
@@ -460,7 +468,9 @@ pub fn strip_device_local_sessions(sessions: &mut config::SessionsConfig) {
                 *legacy_agent_forwarding = None;
                 *agent_forwarding_config = None;
             }
-            config::ConnectionType::Telnet { .. } | config::ConnectionType::Rdp { .. } => {}
+            config::ConnectionType::Telnet { .. }
+            | config::ConnectionType::Rdp { .. }
+            | config::ConnectionType::Vnc { .. } => {}
         }
     }
 }

@@ -191,6 +191,7 @@ export default function QuickCommandPage() {
   const params = new URLSearchParams(window.location.search);
   const dataParam = params.get("data");
   const initialData = parseJsonSearchParam<QuickCommand>(dataParam);
+  const defaultCategoryId = initialData ? null : params.get("category_id");
 
   const [savedCategories, setSavedCategories] = useState<
     QuickCommandCategory[]
@@ -198,7 +199,7 @@ export default function QuickCommandPage() {
   const [label, setLabel] = useState(initialData?.label || "");
   const [command, setCommand] = useState(initialData?.command || "");
   const [categoryId, setCategoryId] = useState(
-    initialData?.category_id || "none",
+    initialData?.category_id || defaultCategoryId || "none",
   );
   const [categorySearchQuery, setCategorySearchQuery] = useState("");
   const [newCategoryDraftName, setNewCategoryDraftName] = useState("");
@@ -361,6 +362,7 @@ export default function QuickCommandPage() {
       updated_at: now,
       created_at: initialData?.created_at ?? now,
       use_count: initialData?.use_count,
+      sort_order: initialData?.sort_order,
     };
 
     setSaving(true);

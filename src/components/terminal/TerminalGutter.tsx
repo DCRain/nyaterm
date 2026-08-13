@@ -31,6 +31,8 @@ interface GutterLayout {
 const DEFAULT_TIMESTAMP_FORMAT = "[HH:mm:ss]";
 const MAX_TIMESTAMP_FORMAT_LENGTH = 64;
 const TIMESTAMP_WIDTH_SAMPLE_MS = new Date(2099, 11, 28, 23, 59, 59, 999).getTime();
+const GUTTER_COLUMN_GAP = 12;
+const GUTTER_RIGHT_PADDING = 8;
 
 function normalizeTimestampFormat(format: string | undefined): string {
   if (!format || format.trim().length === 0) {
@@ -308,10 +310,8 @@ export default function TerminalGutter({
     : 0;
   const timestampTemplate = formatTimestamp(TIMESTAMP_WIDTH_SAMPLE_MS, timestampFormat);
   const tsWidth = showTimestamps ? Math.ceil(layout.cellWidth * timestampTemplate.length) + 2 : 0;
-  const columnGap = showLineNumbers && showTimestamps ? 8 : 0;
-  const innerRightPadding = 8;
-  const separatorGap = 10;
-  const gutterWidth = tsWidth + lineNumWidth + columnGap + innerRightPadding + separatorGap;
+  const columnGap = showLineNumbers && showTimestamps ? GUTTER_COLUMN_GAP : 0;
+  const gutterWidth = tsWidth + lineNumWidth + columnGap + GUTTER_RIGHT_PADDING;
 
   return (
     <div
@@ -335,7 +335,7 @@ export default function TerminalGutter({
             height: layout.rowHeight,
             lineHeight: `${layout.rowHeight}px`,
             columnGap,
-            paddingRight: innerRightPadding + separatorGap,
+            paddingRight: GUTTER_RIGHT_PADDING,
           }}
         >
           {showTimestamps && (

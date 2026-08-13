@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  SSH, local shells, Telnet, Serial, SFTP, tunnels, OTP, AI assistance, and encrypted sync in one desktop client.
+  SSH, local shells, Telnet, Serial, RDP, VNC, SFTP, tunnels, OTP, AI assistance, and encrypted sync in one desktop client.
 </p>
 
 <p align="center">
@@ -75,7 +75,7 @@ NyaTerm includes an AI Assistant panel for command generation, terminal output e
 - **NyaTerm is** an SSH client for developers, sysadmins, and DevOps engineers
 - **NyaTerm is** a terminal workspace with tabs, horizontal splits, and vertical splits
 - **NyaTerm is** an SFTP browser with a transfer queue and local-edit-then-upload-back workflow
-- **NyaTerm supports** SSH, Local Terminal, Telnet, and Serial sessions
+- **NyaTerm supports** SSH, Local Terminal, Telnet, Serial, RDP, and VNC sessions
 - **NyaTerm is not** a shell replacement; it connects to remote shells, local shells, Telnet endpoints, and serial devices
 
 ---
@@ -98,8 +98,9 @@ NyaTerm is built for people who move between servers, local commands, devices, a
 
 ## Sessions and Workspace
 
-- SSH, Local Terminal, Telnet, and Serial session support
+- SSH, Local Terminal, Telnet, Serial, RDP, and VNC session support
 - Multi-tab workspace with horizontal and vertical pane splits, tab drag docking, and layout restoration
+- RDP and VNC remote desktop panes; VNC currently supports direct TCP, None / classic VNC Auth, Raw / ZRLE / Tight / Tight JPEG framebuffer updates, window scaling, bounded reconnects, and text clipboard exchange for Latin-1 text
 - Saved connections with folders, icons, metadata, duplication, keyboard copy, reconnect, and import flows
 - Command Palette and session quick switcher for finding actions, open sessions, saved connections, and new-session entry points
 - Main-window `Background Image` customization with `cover` / `contain` / `stretch` / `tile` sizing and adjustable `Background Content Opacity`

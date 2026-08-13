@@ -18,6 +18,7 @@ const PHYSICAL_TEXT_KEYS = new Set([
 ]);
 
 const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta"]);
+const LOCK_KEYS = new Set(["CapsLock", "NumLock", "ScrollLock"]);
 
 export function shouldUsePhysicalRdpKey(
   event: Pick<KeyboardEvent, "key" | "ctrlKey" | "altKey" | "metaKey">,
@@ -27,6 +28,7 @@ export function shouldUsePhysicalRdpKey(
     event.altKey ||
     event.metaKey ||
     MODIFIER_KEYS.has(event.key) ||
+    LOCK_KEYS.has(event.key) ||
     PHYSICAL_TEXT_KEYS.has(event.key)
   );
 }

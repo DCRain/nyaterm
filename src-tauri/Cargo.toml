@@ -1,6 +1,6 @@
 [package]
 name = "nyaterm"
-version = "1.2.1"
+version = "1.2.2"
 description = "A modern remote terminal workspace built with Tauri, React, and Rust."
 authors = ["Kang"]
 edition = "2024"
@@ -26,7 +26,7 @@ debug = false
 debug-assertions = false
 overflow-checks = false
 incremental = false
-panic = "unwind"
+panic = "abort"
 rpath = false
 
 [profile.release-size]
@@ -36,7 +36,7 @@ lto = true
 codegen-units = 1
 strip = true
 debug = false
-panic = "unwind"
+panic = "abort"
 
 [profile.release-debug]
 inherits = "release"
@@ -176,6 +176,7 @@ opendal = { version = "0.58", default-features = false, features = [
 ] }
 redb = "4.1.0"
 zmodem2 = { path = "vendor/zmodem2" }
+vnc-rs = { path = "vendor/vnc-rs" }
 
 [patch.crates-io]
 ironrdp-connector = { path = "vendor/ironrdp-connector" }

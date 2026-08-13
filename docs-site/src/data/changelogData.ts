@@ -10,6 +10,39 @@ export type ChangelogRelease = {
 
 const changelogReleasesEn: ChangelogRelease[] = [
   {
+    version: '[1.2.2] - 2026-08-12',
+    sections: [
+      {
+        title: 'Added',
+        items: [
+          '**build:** Add Windows MSI packaging support to the release workflow.',
+          '**quick-commands:** Add drag-and-drop sorting for quick command categories.',
+          '**rdp:** Enhance RDP resizing and dynamic display behavior.',
+          '**header:** Add predefined macOS edit menu items.',
+        ],
+      },
+      {
+        title: 'Changed',
+        items: [
+          '**terminal-gutter:** Improve gutter layout constants for better readability.',
+          '**i18n:** Add quick command labels for category creation and custom sorting.',
+        ],
+      },
+      {
+        title: 'Fixed',
+        items: [
+          '**rdp:** Improve physical key capture, lock-key routing, right Shift handling, and UPN username preservation during authentication.',
+          '**terminal:** Reset timestamps to terminal startup time when Clear All is used.',
+          '**release:** Prevent release crashes when remote metadata is corrupt.',
+        ],
+      },
+      {
+        title: 'Documentation',
+        items: ['**readme:** Update Discord and WeChat group links.'],
+      },
+    ],
+  },
+  {
     version: '[1.2.1] - 2026-08-11',
     sections: [
       {
@@ -1833,6 +1866,39 @@ const changelogReleasesEn: ChangelogRelease[] = [
 ];
 
 const changelogReleasesZhCN: ChangelogRelease[] = [
+  {
+    version: '[1.2.2] - 2026-08-12',
+    sections: [
+      {
+        title: '新增',
+        items: [
+          '**build:** 在发布流程中新增 Windows MSI 打包支持。',
+          '**quick-commands:** 新增快捷命令分类拖拽排序。',
+          '**rdp:** 增强 RDP 缩放和动态显示行为。',
+          '**header:** 新增 macOS 预设编辑菜单项。',
+        ],
+      },
+      {
+        title: '变更',
+        items: [
+          '**terminal-gutter:** 优化 gutter 布局常量，提升可读性。',
+          '**i18n:** 新增快捷命令分类创建和自定义排序相关文案。',
+        ],
+      },
+      {
+        title: '修复',
+        items: [
+          '**rdp:** 改进物理按键捕获、锁定键路由、右 Shift 处理，以及认证时 UPN 用户名保留。',
+          '**terminal:** 使用 Clear All 时将时间戳重置为终端启动时间。',
+          '**release:** 防止远端元数据损坏时发布流程崩溃。',
+        ],
+      },
+      {
+        title: '文档',
+        items: ['**readme:** 更新 Discord 和微信群链接。'],
+      },
+    ],
+  },
   {
     version: '[1.2.1] - 2026-08-11',
     sections: [

@@ -79,6 +79,8 @@ struct ImportCommand {
     source: Option<String>,
     #[serde(default)]
     risk_level: Option<String>,
+    #[serde(default)]
+    sort_order: Option<i32>,
 }
 
 #[derive(Debug, Default)]

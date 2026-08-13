@@ -2,9 +2,11 @@ import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MdErrorOutline } from "react-icons/md";
 import ResizeHandle from "@/components/layout/ResizeHandle";
-import { Button } from "@/components/ui/button";
-import { useApp } from "@/context/AppContext";
 import RdpPaneHost from "@/components/rdp/RdpPaneHost";
+import { Button } from "@/components/ui/button";
+import VncPaneHost from "@/components/vnc/VncPaneHost";
+import { useApp } from "@/context/AppContext";
+import { hasMatchingTemporaryConfig } from "@/lib/appWorkspace";
 import {
   getActiveGroupForSession,
   getSessionInputPeerIds,
@@ -14,7 +16,14 @@ import {
   resumeSessionInGroup,
 } from "@/lib/syncInputGroups";
 import { isSplitPane } from "@/lib/workspaceTabs";
-import type { PaneNode, SplitPane, Tab, TerminalSessionPane } from "@/types/global";
+import type {
+  PaneNode,
+  RecordingMode,
+  RecordingStatus,
+  SplitPane,
+  Tab,
+  TerminalSessionPane,
+} from "@/types/global";
 import XTerminal from "./XTerminal";
 
 interface PaneWorkspaceProps {
@@ -26,6 +35,9 @@ interface PaneWorkspaceProps {
   onReconnected?: (oldSessionId: string, newSessionId: string) => void;
   onDisconnectedCloseRequested?: (tabId: string, paneId: string) => void | Promise<void>;
   onConnectionError?: (tabId: string, paneId: string, sessionId: string, error: string) => void;
+  recordingStatuses?: RecordingStatus[];
+  onToggleSessionRecording?: (sessionId: string, mode?: RecordingMode) => Promise<void> | void;
+  onSaveSessionTranscript?: (sessionId: string, sessionName?: string) => Promise<void> | void;
 }
 
 function SplitView({
@@ -38,6 +50,9 @@ function SplitView({
   onReconnected,
   onDisconnectedCloseRequested,
   onConnectionError,
+  recordingStatuses,
+  onToggleSessionRecording,
+  onSaveSessionTranscript,
 }: {
   split: SplitPane;
   tab: Tab;
@@ -48,6 +63,9 @@ function SplitView({
   onReconnected?: (oldSessionId: string, newSessionId: string) => void;
   onDisconnectedCloseRequested?: (tabId: string, paneId: string) => void | Promise<void>;
   onConnectionError?: (tabId: string, paneId: string, sessionId: string, error: string) => void;
+  recordingStatuses?: RecordingStatus[];
+  onToggleSessionRecording?: (sessionId: string, mode?: RecordingMode) => Promise<void> | void;
+  onSaveSessionTranscript?: (sessionId: string, sessionName?: string) => Promise<void> | void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const isHorizontalSplit = split.direction === "horizontal";
@@ -82,6 +100,9 @@ function SplitView({
           onReconnected={onReconnected}
           onDisconnectedCloseRequested={onDisconnectedCloseRequested}
           onConnectionError={onConnectionError}
+          recordingStatuses={recordingStatuses}
+          onToggleSessionRecording={onToggleSessionRecording}
+          onSaveSessionTranscript={onSaveSessionTranscript}
         />
       </div>
       <ResizeHandle
@@ -103,6 +124,9 @@ function SplitView({
           onReconnected={onReconnected}
           onDisconnectedCloseRequested={onDisconnectedCloseRequested}
           onConnectionError={onConnectionError}
+          recordingStatuses={recordingStatuses}
+          onToggleSessionRecording={onToggleSessionRecording}
+          onSaveSessionTranscript={onSaveSessionTranscript}
         />
       </div>
     </div>
@@ -120,6 +144,9 @@ function PaneNodeView({
   onReconnected,
   onDisconnectedCloseRequested,
   onConnectionError,
+  recordingStatuses,
+  onToggleSessionRecording,
+  onSaveSessionTranscript,
 }: {
   node: PaneNode;
   tab: Tab;
@@ -131,6 +158,9 @@ function PaneNodeView({
   onReconnected?: (oldSessionId: string, newSessionId: string) => void;
   onDisconnectedCloseRequested?: (tabId: string, paneId: string) => void | Promise<void>;
   onConnectionError?: (tabId: string, paneId: string, sessionId: string, error: string) => void;
+  recordingStatuses?: RecordingStatus[];
+  onToggleSessionRecording?: (sessionId: string, mode?: RecordingMode) => Promise<void> | void;
+  onSaveSessionTranscript?: (sessionId: string, sessionName?: string) => Promise<void> | void;
 }) {
   const { t } = useTranslation();
   const { syncGroups, broadcastToAll } = useApp();
@@ -158,12 +188,17 @@ function PaneNodeView({
         onReconnected={onReconnected}
         onDisconnectedCloseRequested={onDisconnectedCloseRequested}
         onConnectionError={onConnectionError}
+        recordingStatuses={recordingStatuses}
+        onToggleSessionRecording={onToggleSessionRecording}
+        onSaveSessionTranscript={onSaveSessionTranscript}
       />
     );
   }
 
   const isActive = visible && tab.activePaneId === node.id;
-  const showReconnectAction = !!(node.type === "Local" || node.connectionId) && !!onReconnectPane;
+  const showReconnectAction =
+    !!(node.type === "Local" || node.connectionId || hasMatchingTemporaryConfig(node)) &&
+    !!onReconnectPane;
   const statusTitle = isReconnectPending
     ? t("tabCtx.reconnecting")
     : t("terminal.connectionFailed");
@@ -261,23 +296,41 @@ function PaneNodeView({
             </Button>
           ) : null}
         </div>
-      ) : node.paneKind === "rdp" ? (
-        <RdpPaneHost
-          pane={node}
-          active={isActive}
-          visible={visible}
-          onDisconnectedCloseRequested={() => void onDisconnectedCloseRequested?.(tab.id, node.id)}
-          onConnectionError={(sessionId, error) =>
-            onConnectionError?.(tab.id, node.id, sessionId, error)
-          }
-        />
+      ) : node.paneKind === "remote-desktop" ? (
+        node.type === "RDP" ? (
+          <RdpPaneHost
+            pane={node}
+            active={isActive}
+            visible={visible}
+            onDisconnectedCloseRequested={() =>
+              void onDisconnectedCloseRequested?.(tab.id, node.id)
+            }
+            onConnectionError={(sessionId, error) =>
+              onConnectionError?.(tab.id, node.id, sessionId, error)
+            }
+          />
+        ) : (
+          <VncPaneHost
+            pane={node}
+            active={isActive}
+            visible={visible}
+            onDisconnectedCloseRequested={() =>
+              void onDisconnectedCloseRequested?.(tab.id, node.id)
+            }
+            onConnectionError={(sessionId, error) =>
+              onConnectionError?.(tab.id, node.id, sessionId, error)
+            }
+          />
+        )
       ) : (
         <PaneXTerminal
           sessionId={node.sessionId}
+          sessionName={node.name}
           active={isActive}
           visible={visible}
           sessionType={node.type}
           connectionId={node.connectionId}
+          temporaryConfig={node.temporaryConfig}
           onReconnected={onReconnected}
           onDisconnectedCloseRequested={() => void onDisconnectedCloseRequested?.(tab.id, node.id)}
           onConnectionError={(sessionId, error) =>
@@ -285,6 +338,9 @@ function PaneNodeView({
           }
           syncGroups={syncGroups}
           broadcastToAll={broadcastToAll}
+          recordingStatus={recordingStatuses?.find((status) => status.sessionId === node.sessionId)}
+          onToggleRecording={onToggleSessionRecording}
+          onSaveTranscript={onSaveSessionTranscript}
         />
       )}
     </div>
@@ -293,26 +349,36 @@ function PaneNodeView({
 
 function PaneXTerminal({
   sessionId,
+  sessionName,
   active,
   visible,
   sessionType,
   connectionId,
+  temporaryConfig,
   onReconnected,
   onDisconnectedCloseRequested,
   onConnectionError,
   syncGroups,
   broadcastToAll,
+  recordingStatus,
+  onToggleRecording,
+  onSaveTranscript,
 }: {
   sessionId: string;
+  sessionName: string;
   active: boolean;
   visible: boolean;
   sessionType: TerminalSessionPane["type"];
   connectionId?: string;
+  temporaryConfig?: TerminalSessionPane["temporaryConfig"];
   onReconnected?: (oldSessionId: string, newSessionId: string) => void;
   onDisconnectedCloseRequested?: () => void;
   onConnectionError?: (sessionId: string, error: string) => void;
   syncGroups: import("@/types/global").SyncGroup[];
   broadcastToAll: boolean;
+  recordingStatus?: RecordingStatus;
+  onToggleRecording?: (sessionId: string, mode?: RecordingMode) => Promise<void> | void;
+  onSaveTranscript?: (sessionId: string, sessionName?: string) => Promise<void> | void;
 }) {
   const { tabs, setSyncGroups } = useApp();
 
@@ -380,15 +446,20 @@ function PaneXTerminal({
   return (
     <XTerminal
       sessionId={sessionId}
+      sessionName={sessionName}
       active={active}
       visible={visible}
       sessionType={sessionType}
       connectionId={connectionId}
+      temporaryConfig={temporaryConfig}
       onReconnected={onReconnected}
       onDisconnectedCloseRequested={onDisconnectedCloseRequested}
       onConnectionError={onConnectionError}
       syncPeerSessionIds={syncPeerSessionIds}
       syncOverlay={syncOverlay}
+      recordingStatus={recordingStatus}
+      onToggleRecording={onToggleRecording}
+      onSaveTranscript={onSaveTranscript}
     />
   );
 }
@@ -402,6 +473,9 @@ function PaneWorkspace({
   onReconnected,
   onDisconnectedCloseRequested,
   onConnectionError,
+  recordingStatuses,
+  onToggleSessionRecording,
+  onSaveSessionTranscript,
 }: PaneWorkspaceProps) {
   return (
     <div className="absolute inset-0" style={{ display: visible ? "block" : "none" }}>
@@ -416,6 +490,9 @@ function PaneWorkspace({
         onReconnected={onReconnected}
         onDisconnectedCloseRequested={onDisconnectedCloseRequested}
         onConnectionError={onConnectionError}
+        recordingStatuses={recordingStatuses}
+        onToggleSessionRecording={onToggleSessionRecording}
+        onSaveSessionTranscript={onSaveSessionTranscript}
       />
     </div>
   );

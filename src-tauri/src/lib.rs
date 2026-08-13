@@ -30,6 +30,7 @@ use crate::core::ssh::{
 };
 use crate::core::{
     CloudSyncManager, QuickCommandsStore, RdpSessionManager, RecordingManager, SessionManager,
+    VncSessionManager,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -40,6 +41,7 @@ pub fn run() {
 
     let session_manager = Arc::new(SessionManager::new());
     let rdp_session_manager = Arc::new(RdpSessionManager::new());
+    let vnc_session_manager = Arc::new(VncSessionManager::new());
     let tunnel_manager = Arc::new(TunnelManager::new());
     let recording_manager = Arc::new(RecordingManager::new());
     let pending_auth_manager = Arc::new(PendingAuthManager::new());
@@ -89,6 +91,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(session_manager.clone())
         .manage(rdp_session_manager.clone())
+        .manage(vnc_session_manager.clone())
         .manage(tunnel_manager.clone())
         .manage(recording_manager.clone())
         .manage(pending_auth_manager.clone())
@@ -195,6 +198,12 @@ pub fn run() {
             cmd::rdp::rdp_reconnect,
             cmd::rdp::close_rdp_session,
             cmd::rdp::respond_rdp_certificate,
+            cmd::vnc::create_vnc_session,
+            cmd::vnc::vnc_attach_frame_channel,
+            cmd::vnc::vnc_input_batch,
+            cmd::vnc::vnc_set_clipboard_text,
+            cmd::vnc::vnc_reconnect,
+            cmd::vnc::close_vnc_session,
             cmd::session::cancel_session_creation,
             cmd::session::list_serial_ports,
             cmd::session::write_to_session,
@@ -321,7 +330,6 @@ pub fn run() {
             cmd::stats::try_get_terminal_cwd,
             cmd::process::get_remote_processes,
             cmd::process::signal_remote_process,
-            cmd::process::renice_remote_process,
             cmd::gpu::get_remote_gpu_overview,
             cmd::ascend_npu::get_remote_ascend_npu_overview,
             cmd::docker::get_remote_docker_overview,

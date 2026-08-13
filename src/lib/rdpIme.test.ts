@@ -58,6 +58,14 @@ describe("rdpIme", () => {
     ).toBe(true);
     expect(
       shouldUsePhysicalRdpKey({
+        key: "CapsLock",
+        ctrlKey: false,
+        altKey: false,
+        metaKey: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldUsePhysicalRdpKey({
         key: "a",
         ctrlKey: false,
         altKey: false,

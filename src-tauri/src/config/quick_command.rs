@@ -35,6 +35,8 @@ pub struct QuickCommand {
     pub created_at: Option<u64>,
     #[serde(default)]
     pub use_count: Option<u32>,
+    #[serde(default)]
+    pub sort_order: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -22,8 +22,14 @@ import { resolveShortcutKeys } from "@/hooks/useShortcutMap";
 import { useTerminalSearch } from "@/hooks/useTerminalSearch";
 import { useTerminalSettings } from "@/hooks/useTerminalSettings";
 import { emitAIErrorDetected } from "@/lib/aiEvents";
-import { renderAiCommandEnd, renderAiCommandStart } from "@/lib/aiTerminalRenderer";
-import { buildTerminalThemeColors, isTerminalTransparencyEnabled } from "@/lib/backgroundImage";
+import {
+  renderAiCommandEnd,
+  renderAiCommandStart,
+} from "@/lib/aiTerminalRenderer";
+import {
+  buildTerminalThemeColors,
+  isTerminalTransparencyEnabled,
+} from "@/lib/backgroundImage";
 import {
   readClipboardPathPayload,
   readClipboardText,
@@ -102,7 +108,10 @@ import {
   readRecentOutput,
 } from "./terminalInputSelection";
 import { createTerminalLinkHandlers } from "./terminalLinkHandlers";
-import { TerminalOutputDrain, type TerminalOutputDrainMode } from "./terminalOutputDrain";
+import {
+  TerminalOutputDrain,
+  type TerminalOutputDrainMode,
+} from "./terminalOutputDrain";
 import { useTerminalExternalDrop } from "./useTerminalExternalDrop";
 import { useTerminalRefreshEffects } from "./useTerminalRefreshEffects";
 import {
@@ -110,9 +119,15 @@ import {
   decodeOsc52ClipboardText,
   quotePosixPath,
 } from "./xterminalClipboard";
-import { serializeTerminalSnapshot, writeTextInFrames } from "./xterminalOutputQueue";
+import {
+  serializeTerminalSnapshot,
+  writeTextInFrames,
+} from "./xterminalOutputQueue";
 import type { PerformanceMode, XTerminalProps } from "./xterminalTypes";
-import { createZmodemEventHandler, type ZmodemEventPayload } from "./zmodemTerminalEvents";
+import {
+  createZmodemEventHandler,
+  type ZmodemEventPayload,
+} from "./zmodemTerminalEvents";
 import "@xterm/xterm/css/xterm.css";
 
 const BACKSPACE_INPUT = "\x7f";
@@ -140,7 +155,11 @@ function getCtrlPrintableCsiuInput(e: KeyboardEvent): string | null {
   const codePoint = e.key.codePointAt(0);
   if (!codePoint || codePoint < 0x20 || codePoint > 0x7e) return null;
 
-  if (/^[a-z]$/i.test(e.key) || /^[2-8]$/.test(e.key) || LEGACY_CTRL_KEYS.has(e.key)) {
+  if (
+    /^[a-z]$/i.test(e.key) ||
+    /^[2-8]$/.test(e.key) ||
+    LEGACY_CTRL_KEYS.has(e.key)
+  ) {
     return null;
   }
 
@@ -171,7 +190,13 @@ type SearchAddonWithLifecycle = SearchAddon & {
   onAfterSearch?: (listener: () => void) => { dispose: () => void };
 };
 
-type HibernationPhase = "idle" | "preparing" | "detached" | "hibernated" | "waking" | "failed";
+type HibernationPhase =
+  | "idle"
+  | "preparing"
+  | "detached"
+  | "hibernated"
+  | "waking"
+  | "failed";
 type HibernationLogEvent =
   | "scheduled"
   | "start"
@@ -185,12 +210,23 @@ type HibernationLogEvent =
   | "fail"
   | "cancel";
 
-function isLocalBackspaceEvent(event: KeyboardEvent, sessionType: SessionType): boolean {
-  if (sessionType !== "Local" || event.ctrlKey || event.metaKey || event.altKey) {
+function isLocalBackspaceEvent(
+  event: KeyboardEvent,
+  sessionType: SessionType,
+): boolean {
+  if (
+    sessionType !== "Local" ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.altKey
+  ) {
     return false;
   }
 
-  return event.key === "Backspace" || (event.key === "Delete" && event.code === "Backspace");
+  return (
+    event.key === "Backspace" ||
+    (event.key === "Delete" && event.code === "Backspace")
+  );
 }
 
 function isSessionNotFoundError(error: unknown): boolean {
@@ -200,7 +236,10 @@ function isSessionNotFoundError(error: unknown): boolean {
       : error instanceof Error
         ? error.message
         : String(error ?? "");
-  return message.toLowerCase().includes("session") && message.toLowerCase().includes("not found");
+  return (
+    message.toLowerCase().includes("session") &&
+    message.toLowerCase().includes("not found")
+  );
 }
 
 /**
@@ -209,35 +248,52 @@ function isSessionNotFoundError(error: unknown): boolean {
  */
 export default function XTerminal({
   sessionId,
+  sessionName,
   active,
   visible = true,
   sessionType,
   connectionId,
+  temporaryConfig,
   onReconnected,
   onDisconnectedCloseRequested,
   onConnectionError,
   syncPeerSessionIds,
   syncOverlay,
+  recordingStatus,
+  onToggleRecording,
+  onSaveTranscript,
 }: XTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const fitSchedulerRef = useRef<TerminalFitScheduler | null>(null);
   const resizeDeduperRef = useRef(new TerminalResizeDeduper());
-  const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null);
+  const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(
+    null,
+  );
   const [terminalReady, setTerminalReady] = useState(false);
-  const [performanceMode, setPerformanceMode] = useState<PerformanceMode>("normal");
+  const [performanceMode, setPerformanceMode] =
+    useState<PerformanceMode>("normal");
   const [terminalGeneration, setTerminalGeneration] = useState(0);
   const [hibernated, setHibernated] = useState(false);
-  const [multiLinePasteText, setMultiLinePasteText] = useState<string | null>(null);
+  const [multiLinePasteText, setMultiLinePasteText] = useState<string | null>(
+    null,
+  );
   const aiCapturingRef = useRef(false);
 
   const { terminalTheme } = useTheme();
   const { t } = useTranslation();
-  const { upsertExternalTransferProgress, completeExternalTransfer, failExternalTransfer } =
-    useTransfer();
+  const {
+    upsertExternalTransferProgress,
+    completeExternalTransfer,
+    failExternalTransfer,
+  } = useTransfer();
   const terminalAppSettings = useTerminalAppSettings();
-  const { appearance, interaction, terminal: terminalSettings } = terminalAppSettings;
+  const {
+    appearance,
+    interaction,
+    terminal: terminalSettings,
+  } = terminalAppSettings;
   const terminalThemeColors = useMemo(
     () => buildTerminalThemeColors(terminalTheme.colors.terminal, appearance),
     [appearance, terminalTheme.colors.terminal],
@@ -265,14 +321,19 @@ export default function XTerminal({
   const terminalAppSettingsRef = useRef(terminalAppSettings);
   const tRef = useRef(t);
   const doFindRef = useRef<(selection?: string) => void>(() => {});
-  const pasteTextRef = useRef<(text: string, options?: { skipDialog?: boolean }) => void>(() => {});
+  const pasteTextRef = useRef<
+    (text: string, options?: { skipDialog?: boolean }) => void
+  >(() => {});
+  const clearAllRef = useRef<() => void>(() => {});
   const pendingSearchSelectionRef = useRef(false);
   const searchSelectionTextRef = useRef<string | null>(null);
   const disconnectedRef = useRef(false);
   const disconnectedNoticeShownRef = useRef(false);
   const disconnectedCloseRequestedRef = useRef(false);
   const reconnectingRef = useRef(false);
-  const preservedReconnectContentRef = useRef<TerminalReconnectSnapshot | null>(null);
+  const preservedReconnectContentRef = useRef<TerminalReconnectSnapshot | null>(
+    null,
+  );
   const hibernationSnapshotRef = useRef<TerminalReconnectSnapshot | null>(null);
   const hibernateTimerRef = useRef<number | null>(null);
   const hibernationCleanupRef = useRef(false);
@@ -283,13 +344,15 @@ export default function XTerminal({
   const hibernatedRef = useRef(hibernated);
   const pendingWakeEventsRef = useRef<PendingWakeEvent[]>([]);
   const zmodemActiveRef = useRef(false);
-  const outputDrainRef = useRef<TerminalOutputDrain<{ beforeLine: number; ts: number }> | null>(
-    null,
-  );
+  const outputDrainRef = useRef<TerminalOutputDrain<{
+    beforeLine: number;
+    ts: number;
+  }> | null>(null);
   const lineTimestampsRef = useRef<Map<number, number>>(new Map());
   const gutterLineOffsetRef = useRef(0);
   const sessionTypeRef = useRef(sessionType);
   const connectionIdRef = useRef(connectionId);
+  const temporaryConfigRef = useRef(temporaryConfig);
   const onReconnectedRef = useRef(onReconnected);
   const onDisconnectedCloseRequestedRef = useRef(onDisconnectedCloseRequested);
   const onConnectionErrorRef = useRef(onConnectionError);
@@ -300,7 +363,9 @@ export default function XTerminal({
   const performanceModeRef = useRef<PerformanceMode>("normal");
   const lastAlternateScreenWriteAtRef = useRef(0);
   const handleVisibilityChangeRef = useRef<(() => void) | null>(null);
-  const replaceInputCommandRef = useRef<((command: string) => void) | null>(null);
+  const replaceInputCommandRef = useRef<((command: string) => void) | null>(
+    null,
+  );
   const lastErrorNoticeAtRef = useRef(0);
   const credentialPromptBufferRef = useRef("");
   const credentialPromptInputUntilRef = useRef(0);
@@ -360,7 +425,9 @@ export default function XTerminal({
 
       if (hibernationPhaseRef.current !== "idle") {
         hibernationPhaseRef.current = "waking";
-        logHibernation("wake", "Waking hibernated terminal renderer", { reason });
+        logHibernation("wake", "Waking hibernated terminal renderer", {
+          reason,
+        });
       }
 
       if (hibernatedRef.current) {
@@ -410,7 +477,10 @@ export default function XTerminal({
     pasteTextRef.current(text);
   }, []);
 
-  const getGutterLineOffset = useCallback(() => gutterLineOffsetRef.current, []);
+  const getGutterLineOffset = useCallback(
+    () => gutterLineOffsetRef.current,
+    [],
+  );
 
   useEffect(() => {
     sessionTypeRef.current = sessionType;
@@ -419,6 +489,10 @@ export default function XTerminal({
   useEffect(() => {
     connectionIdRef.current = connectionId;
   }, [connectionId]);
+
+  useEffect(() => {
+    temporaryConfigRef.current = temporaryConfig;
+  }, [temporaryConfig]);
 
   useEffect(() => {
     onReconnectedRef.current = onReconnected;
@@ -472,7 +546,9 @@ export default function XTerminal({
         await listen<string>(`session-error-${sessionId}`, (event) => {
           wake({
             type: "error",
-            message: String(event.payload || tRef.current("terminal.connectionFailed")),
+            message: String(
+              event.payload || tRef.current("terminal.connectionFailed"),
+            ),
           });
         }),
       );
@@ -482,9 +558,12 @@ export default function XTerminal({
         }),
       );
       unlisteners.push(
-        await listen<ZmodemEventPayload>(`zmodem-event-${sessionId}`, (event) => {
-          wake({ type: "zmodem", payload: event.payload });
-        }),
+        await listen<ZmodemEventPayload>(
+          `zmodem-event-${sessionId}`,
+          (event) => {
+            wake({ type: "zmodem", payload: event.payload });
+          },
+        ),
       );
       unlisteners.push(
         await listen<AiCaptureEvent>(`ai-capture-${sessionId}`, (event) => {
@@ -521,10 +600,14 @@ export default function XTerminal({
             detachedHibernateEpochRef.current = null;
           }
           hibernationPhaseRef.current = "idle";
-          logHibernation("rollback", "Rolled back detached renderer on component unmount", {
-            reason: "unmount",
-            epoch: detachedEpoch,
-          });
+          logHibernation(
+            "rollback",
+            "Rolled back detached renderer on component unmount",
+            {
+              reason: "unmount",
+              epoch: detachedEpoch,
+            },
+          );
         })
         .catch((error) => {
           hibernationPhaseRef.current = "failed";
@@ -557,10 +640,13 @@ export default function XTerminal({
     setPerformanceMode(mode);
   }, []);
 
-  const exitOverloadedMode = useCallback((nextMode: PerformanceMode = "normal") => {
-    performanceModeRef.current = nextMode;
-    setPerformanceMode(nextMode);
-  }, []);
+  const exitOverloadedMode = useCallback(
+    (nextMode: PerformanceMode = "normal") => {
+      performanceModeRef.current = nextMode;
+      setPerformanceMode(nextMode);
+    },
+    [],
+  );
 
   // Search Addon state and handlers
   const {
@@ -587,40 +673,43 @@ export default function XTerminal({
 
   // Shell integration state
   const { shellIntegrationRef } = useShellIntegration();
-  const canShowCommandSuggestions = useCallback((options?: { allowEmpty?: boolean }) => {
-    if (credentialPromptInputUntilRef.current > Date.now()) {
-      return false;
-    }
-    credentialPromptInputUntilRef.current = 0;
+  const canShowCommandSuggestions = useCallback(
+    (options?: { allowEmpty?: boolean }) => {
+      if (credentialPromptInputUntilRef.current > Date.now()) {
+        return false;
+      }
+      credentialPromptInputUntilRef.current = 0;
 
-    const terminal = terminalRef.current;
-    if (terminal?.buffer.active.type === "alternate") {
-      return false;
-    }
+      const terminal = terminalRef.current;
+      if (terminal?.buffer.active.type === "alternate") {
+        return false;
+      }
 
-    const shellIntegration = shellIntegrationRef.current;
-    if (shellIntegration.enabled && shellIntegration.commandRunning) {
-      return false;
-    }
+      const shellIntegration = shellIntegrationRef.current;
+      if (shellIntegration.enabled && shellIntegration.commandRunning) {
+        return false;
+      }
 
-    const inputState = inputStateRef.current;
-    if (commandSuggestionSuppressedRef.current) {
-      return false;
-    }
-    if (isPagerSearchOrCommandInput(inputState.value)) {
-      return false;
-    }
+      const inputState = inputStateRef.current;
+      if (commandSuggestionSuppressedRef.current) {
+        return false;
+      }
+      if (isPagerSearchOrCommandInput(inputState.value)) {
+        return false;
+      }
 
-    if (options?.allowEmpty) {
-      return (
-        !inputState.desynced &&
-        !inputState.multiline &&
-        inputState.cursor === inputState.value.length
-      );
-    }
+      if (options?.allowEmpty) {
+        return (
+          !inputState.desynced &&
+          !inputState.multiline &&
+          inputState.cursor === inputState.value.length
+        );
+      }
 
-    return canSuggestFromTracker(inputState);
-  }, [shellIntegrationRef]);
+      return canSuggestFromTracker(inputState);
+    },
+    [shellIntegrationRef],
+  );
 
   const applySuggestion = useCallback(
     (command: string, execute: boolean) => {
@@ -686,7 +775,13 @@ export default function XTerminal({
     handleSelect: handleCredentialSelect,
     dismiss: dismissCredentialPanel,
     reset: resetCredentialAutofill,
-  } = useCredentialAutofill(terminalRef, sessionIdRef, activeRef, visibleRef, performanceModeRef);
+  } = useCredentialAutofill(
+    terminalRef,
+    sessionIdRef,
+    activeRef,
+    visibleRef,
+    performanceModeRef,
+  );
 
   // Create and setup terminal
   // biome-ignore lint/correctness/useExhaustiveDependencies: terminal lifecycle is intentionally scoped to session changes.
@@ -720,7 +815,10 @@ export default function XTerminal({
       scrollback: terminalSettings.scrollback_lines,
       cursorBlink: appearance.cursor_blink,
       cursorStyle: appearance.cursor_style as "block" | "underline" | "bar",
-      fontSize: resolveTerminalFontSize(appearance.font_size, terminalSettings.font_size_delta),
+      fontSize: resolveTerminalFontSize(
+        appearance.font_size,
+        terminalSettings.font_size_delta,
+      ),
       fontFamily: appearance.font_family,
       fontWeight: appearance.font_weight,
       fontWeightBold: appearance.font_weight_bold,
@@ -753,14 +851,17 @@ export default function XTerminal({
           pendingSearchSelectionRef.current = false;
         }, 0);
       }),
-    ].filter((disposable): disposable is { dispose: () => void } => Boolean(disposable));
+    ].filter((disposable): disposable is { dispose: () => void } =>
+      Boolean(disposable),
+    );
     const serializeAddon = new SerializeAddon();
     const unicodeGraphemesAddon = new UnicodeGraphemesAddon();
     const zmodemHandler = createZmodemEventHandler(
       terminal,
       sessionId,
       () => tRef.current,
-      () => terminalAppSettingsRef.current?.transfer.duplicate_strategy ?? "ask",
+      () =>
+        terminalAppSettingsRef.current?.transfer.duplicate_strategy ?? "ask",
       {
         upsertProgress: upsertExternalTransferProgress,
         complete: completeExternalTransfer,
@@ -795,20 +896,32 @@ export default function XTerminal({
     shellIntegrationRef.current.commandRunning = false;
 
     const getCurrentAbsoluteLine = () =>
-      gutterLineOffsetRef.current + terminal.buffer.active.baseY + terminal.buffer.active.cursorY;
+      gutterLineOffsetRef.current +
+      terminal.buffer.active.baseY +
+      terminal.buffer.active.cursorY;
 
     const requestGutterRefresh = () => {
       if (disposed || terminalRef.current !== terminal) return;
       if (performanceModeRef.current !== "normal") return;
       const terminalSettings = terminalAppSettingsRef.current?.terminal;
-      if (!terminalSettings?.show_line_numbers && !terminalSettings?.show_timestamps) return;
-      window.dispatchEvent(new CustomEvent("nyaterm:refresh-gutter", { detail: { sessionId } }));
+      if (
+        !terminalSettings?.show_line_numbers &&
+        !terminalSettings?.show_timestamps
+      )
+        return;
+      window.dispatchEvent(
+        new CustomEvent("nyaterm:refresh-gutter", { detail: { sessionId } }),
+      );
     };
 
-    const captureReconnectSnapshot = (contentSuffix = ""): TerminalReconnectSnapshot => {
+    const captureReconnectSnapshot = (
+      contentSuffix = "",
+    ): TerminalReconnectSnapshot => {
       const serialized = serializeTerminalSnapshot(terminal, serializeAddon);
-      const captureStartLine = gutterLineOffsetRef.current + serialized.captureStartLine;
-      const captureEndLine = gutterLineOffsetRef.current + serialized.captureEndLine;
+      const captureStartLine =
+        gutterLineOffsetRef.current + serialized.captureStartLine;
+      const captureEndLine =
+        gutterLineOffsetRef.current + serialized.captureEndLine;
       const lineTimestamps: Array<[number, number]> = [];
 
       for (const [line, timestamp] of lineTimestampsRef.current) {
@@ -830,7 +943,9 @@ export default function XTerminal({
       };
     };
 
-    const restoreLineTimestampsFromSnapshot = (snapshot: TerminalReconnectSnapshot) => {
+    const restoreLineTimestampsFromSnapshot = (
+      snapshot: TerminalReconnectSnapshot,
+    ) => {
       const map = lineTimestampsRef.current;
       map.clear();
 
@@ -861,13 +976,16 @@ export default function XTerminal({
     hibernationSnapshotRef.current = null;
     preservedReconnectContentRef.current = null;
     const initialReplayPromise = preservedReconnectSnapshot?.content
-      ? writeTextInFrames(terminal, preservedReconnectSnapshot.content).then(() => {
-          restoreLineTimestampsFromSnapshot(preservedReconnectSnapshot);
-          requestGutterRefresh();
-        })
+      ? writeTextInFrames(terminal, preservedReconnectSnapshot.content).then(
+          () => {
+            restoreLineTimestampsFromSnapshot(preservedReconnectSnapshot);
+            requestGutterRefresh();
+          },
+        )
       : Promise.resolve();
-    const unregisterReconnectCapture = registerTerminalReconnectCapture(sessionId, () =>
-      captureReconnectSnapshot(),
+    const unregisterReconnectCapture = registerTerminalReconnectCapture(
+      sessionId,
+      () => captureReconnectSnapshot(),
     );
     const isTerminalAlive = () => !disposed && terminalRef.current === terminal;
     const syncSuggestionsWithInputState = () => {
@@ -894,10 +1012,33 @@ export default function XTerminal({
     };
 
     const canReconnectDisconnectedSession = () =>
-      sessionTypeRef.current === "Local" || !!connectionIdRef.current;
+      sessionTypeRef.current === "Local" ||
+      !!connectionIdRef.current ||
+      temporaryConfigMatchesSessionType();
+
+    const temporaryConfigMatchesSessionType = () => {
+      const temporaryConfig = temporaryConfigRef.current;
+      if (!temporaryConfig) return false;
+      switch (sessionTypeRef.current) {
+        case "SSH":
+          return temporaryConfig.protocol === "ssh";
+        case "Telnet":
+          return temporaryConfig.protocol === "telnet";
+        case "Serial":
+          return temporaryConfig.protocol === "serial";
+        default:
+          return false;
+      }
+    };
+
+    const assertTemporaryConfigMatchesSessionType = () => {
+      if (!temporaryConfigRef.current || temporaryConfigMatchesSessionType()) return;
+      throw new Error("Temporary session config protocol mismatch");
+    };
 
     const createReconnectedSession = () => {
       const connectionId = connectionIdRef.current;
+      const temporaryConfig = temporaryConfigRef.current;
 
       switch (sessionTypeRef.current) {
         case "Local":
@@ -905,10 +1046,45 @@ export default function XTerminal({
             connectionId: connectionId || null,
           });
         case "Telnet":
+          if (connectionId) {
+            return invoke<string>("create_telnet_session", { connectionId });
+          }
+          assertTemporaryConfigMatchesSessionType();
+          if (temporaryConfig?.protocol === "telnet") {
+            return invoke<string>("create_telnet_session", {
+              connectionId: null,
+              host: temporaryConfig.host,
+              port: temporaryConfig.port,
+              name: temporaryConfig.name,
+              startupCommand: null,
+            });
+          }
           return invoke<string>("create_telnet_session", { connectionId });
         case "Serial":
+          if (connectionId) {
+            return invoke<string>("create_serial_session", { connectionId });
+          }
+          assertTemporaryConfigMatchesSessionType();
+          if (temporaryConfig?.protocol === "serial") {
+            return invoke<string>("create_serial_session", {
+              connectionId: null,
+              portName: temporaryConfig.portName,
+              baudRate: temporaryConfig.baudRate,
+              name: temporaryConfig.name,
+            });
+          }
           return invoke<string>("create_serial_session", { connectionId });
         default:
+          if (connectionId) {
+            return invoke<string>("create_ssh_session", { connectionId });
+          }
+          assertTemporaryConfigMatchesSessionType();
+          if (temporaryConfig?.protocol === "ssh") {
+            const { protocol: _protocol, ...sshConfig } = temporaryConfig;
+            return invoke<string>("create_temporary_ssh_session", {
+              config: sshConfig,
+            });
+          }
           return invoke<string>("create_ssh_session", { connectionId });
       }
     };
@@ -940,7 +1116,10 @@ export default function XTerminal({
         preview: { kind: "replace-and-execute", value: command },
         registerSubmission: null,
       });
-      inputStateRef.current = applyTerminalInputData(inputStateRef.current, "\r");
+      inputStateRef.current = applyTerminalInputData(
+        inputStateRef.current,
+        "\r",
+      );
       syncSuggestionsWithInputState();
       await sendSessionInput(sessionId, "\r", {
         preview: null,
@@ -950,25 +1129,35 @@ export default function XTerminal({
 
     replaceInputCommandRef.current = replaceInputCommand;
 
-    const unregisterTerminalContext = registerTerminalContextProvider(sessionId, {
-      getRecentOutput: (lineLimit) => readRecentOutput(terminal, lineLimit),
-      getSelectedText: () => terminal.getSelection(),
-      getInputBuffer: () => inputStateRef.current.value,
-      insertCommand: async (command) => {
-        const input = buildReplaceInputData(command);
-        await sendSessionInput(sessionId, normalizeTerminalCommandInput(input), {
-          preview: { kind: "replace", value: command },
-          registerSubmission: null,
-        });
+    const unregisterTerminalContext = registerTerminalContextProvider(
+      sessionId,
+      {
+        getRecentOutput: (lineLimit) => readRecentOutput(terminal, lineLimit),
+        getSelectedText: () => terminal.getSelection(),
+        getInputBuffer: () => inputStateRef.current.value,
+        insertCommand: async (command) => {
+          const input = buildReplaceInputData(command);
+          await sendSessionInput(
+            sessionId,
+            normalizeTerminalCommandInput(input),
+            {
+              preview: { kind: "replace", value: command },
+              registerSubmission: null,
+            },
+          );
+        },
+        executeCommand: async (command) => {
+          await executeInputCommand(command);
+        },
+        focus: () => terminal.focus(),
       },
-      executeCommand: async (command) => {
-        await executeInputCommand(command);
-      },
-      focus: () => terminal.focus(),
-    });
+    );
 
     const handleInputPreview = (preview: SessionInputPreview) => {
-      inputStateRef.current = applyTerminalInputPreview(inputStateRef.current, preview);
+      inputStateRef.current = applyTerminalInputPreview(
+        inputStateRef.current,
+        preview,
+      );
       syncSuggestionsWithInputState();
     };
 
@@ -986,9 +1175,15 @@ export default function XTerminal({
       if (isCredentialPromptInputMode()) return false;
 
       const shellIntegration = shellIntegrationRef.current;
-      if (shellIntegration.enabled && shellIntegration.commandRunning) return false;
+      if (shellIntegration.enabled && shellIntegration.commandRunning)
+        return false;
 
-      if (state.desynced || state.lineRewriteRequired || state.pasteMode || state.multiline) {
+      if (
+        state.desynced ||
+        state.lineRewriteRequired ||
+        state.pasteMode ||
+        state.multiline
+      ) {
         return false;
       }
 
@@ -1022,11 +1217,15 @@ export default function XTerminal({
       return true;
     };
 
-    const pasteText = (text: string, options: { skipDialog?: boolean } = {}) => {
+    const pasteText = (
+      text: string,
+      options: { skipDialog?: boolean } = {},
+    ) => {
       if (!text) return;
       terminal.focus();
       const showMultiLinePasteDialog =
-        terminalAppSettingsRef.current?.terminal?.show_multi_line_paste_dialog ?? true;
+        terminalAppSettingsRef.current?.terminal
+          ?.show_multi_line_paste_dialog ?? true;
       if (
         !options.skipDialog &&
         showMultiLinePasteDialog &&
@@ -1042,8 +1241,13 @@ export default function XTerminal({
       let pendingSelectionDelete: Promise<void> | null = null;
       if (selectedInputRange) {
         const currentCursor = inputStateRef.current.cursor;
-        const moveToSelectionEnd = buildMoveInputCursorData(currentCursor, selectedInputRange.end);
-        const deleteSelection = "\u007f".repeat(selectedInputRange.end - selectedInputRange.start);
+        const moveToSelectionEnd = buildMoveInputCursorData(
+          currentCursor,
+          selectedInputRange.end,
+        );
+        const deleteSelection = "\u007f".repeat(
+          selectedInputRange.end - selectedInputRange.start,
+        );
         inputStateRef.current = deleteTerminalInputRange(
           inputStateRef.current,
           selectedInputRange.start,
@@ -1052,7 +1256,10 @@ export default function XTerminal({
         terminal.clearSelection();
         syncSuggestionsWithInputState();
         if (moveToSelectionEnd || deleteSelection) {
-          pendingSelectionDelete = sendRawInput(`${moveToSelectionEnd}${deleteSelection}`, null);
+          pendingSelectionDelete = sendRawInput(
+            `${moveToSelectionEnd}${deleteSelection}`,
+            null,
+          );
         }
       }
 
@@ -1075,7 +1282,9 @@ export default function XTerminal({
     let lastSelection = "";
     let primaryMouseDown: { x: number; y: number } | null = null;
 
-    const resetTerminalPointerState = (options: { clearSelection?: boolean } = {}) => {
+    const resetTerminalPointerState = (
+      options: { clearSelection?: boolean } = {},
+    ) => {
       primaryMouseDown = null;
       if (options.clearSelection && isTerminalAlive()) {
         terminal.clearSelection();
@@ -1085,7 +1294,10 @@ export default function XTerminal({
       }
     };
 
-    const buildMoveInputCursorData = (currentCursor: number, targetCursor: number) => {
+    const buildMoveInputCursorData = (
+      currentCursor: number,
+      targetCursor: number,
+    ) => {
       if (targetCursor === currentCursor) return "";
       return targetCursor > currentCursor
         ? "\x1b[C".repeat(targetCursor - currentCursor)
@@ -1095,7 +1307,10 @@ export default function XTerminal({
     const moveInputCursor = (targetCursor: number) => {
       const currentState = inputStateRef.current;
       if (!canUseSmartCursor(currentState)) return;
-      const nextCursor = Math.max(0, Math.min(currentState.value.length, targetCursor));
+      const nextCursor = Math.max(
+        0,
+        Math.min(currentState.value.length, targetCursor),
+      );
       const input = buildMoveInputCursorData(currentState.cursor, nextCursor);
       if (!input) return;
 
@@ -1110,7 +1325,8 @@ export default function XTerminal({
     ) => {
       const currentState = inputStateRef.current;
       if (!canUseSmartCursor(currentState)) return;
-      const targetCursor = edge === "start" ? selectedInputRange.start : selectedInputRange.end;
+      const targetCursor =
+        edge === "start" ? selectedInputRange.start : selectedInputRange.end;
       const input = buildMoveInputCursorData(currentState.cursor, targetCursor);
 
       inputStateRef.current = { ...currentState, cursor: targetCursor };
@@ -1122,8 +1338,13 @@ export default function XTerminal({
     const deleteInputSelection = (selectedInputRange: InputSelectionRange) => {
       if (!canUseSmartCursor()) return;
       const currentCursor = inputStateRef.current.cursor;
-      const moveToSelectionEnd = buildMoveInputCursorData(currentCursor, selectedInputRange.end);
-      const deleteSelection = "\u007f".repeat(selectedInputRange.end - selectedInputRange.start);
+      const moveToSelectionEnd = buildMoveInputCursorData(
+        currentCursor,
+        selectedInputRange.end,
+      );
+      const deleteSelection = "\u007f".repeat(
+        selectedInputRange.end - selectedInputRange.start,
+      );
 
       inputStateRef.current = deleteTerminalInputRange(
         inputStateRef.current,
@@ -1135,11 +1356,19 @@ export default function XTerminal({
       sendRawInput(`${moveToSelectionEnd}${deleteSelection}`, null);
     };
 
-    const replaceInputSelection = (selectedInputRange: InputSelectionRange, data: string) => {
+    const replaceInputSelection = (
+      selectedInputRange: InputSelectionRange,
+      data: string,
+    ) => {
       if (!canUseSmartCursor()) return;
       const currentCursor = inputStateRef.current.cursor;
-      const moveToSelectionEnd = buildMoveInputCursorData(currentCursor, selectedInputRange.end);
-      const deleteSelection = "\u007f".repeat(selectedInputRange.end - selectedInputRange.start);
+      const moveToSelectionEnd = buildMoveInputCursorData(
+        currentCursor,
+        selectedInputRange.end,
+      );
+      const deleteSelection = "\u007f".repeat(
+        selectedInputRange.end - selectedInputRange.start,
+      );
       const stateAfterDelete = deleteTerminalInputRange(
         inputStateRef.current,
         selectedInputRange.start,
@@ -1154,21 +1383,31 @@ export default function XTerminal({
 
     const getDirectInputDataFromKeyEvent = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return null;
-      if (e.key === "Dead" || e.key === "Process" || e.key === "Unidentified") return null;
+      if (e.key === "Dead" || e.key === "Process" || e.key === "Unidentified")
+        return null;
       if (Array.from(e.key).length !== 1) return null;
       if (/[\x00-\x1f\x7f]/u.test(e.key)) return null;
       return e.key;
     };
 
     const moveCredentialSelection = (direction: 1 | -1) => {
-      if (!credentialShowPanelRef.current || credentialMatchesRef.current.length === 0) {
+      if (
+        !credentialShowPanelRef.current ||
+        credentialMatchesRef.current.length === 0
+      ) {
         return false;
       }
 
       const cur = credentialSelectedIndexRef.current;
       const len = credentialMatchesRef.current.length;
       const next =
-        direction > 0 ? (cur < 0 || cur >= len - 1 ? 0 : cur + 1) : cur <= 0 ? len - 1 : cur - 1;
+        direction > 0
+          ? cur < 0 || cur >= len - 1
+            ? 0
+            : cur + 1
+          : cur <= 0
+            ? len - 1
+            : cur - 1;
 
       credentialSelectedIndexRef.current = next;
       setCredentialSelectedIndex(next);
@@ -1242,7 +1481,12 @@ export default function XTerminal({
 
       const kb = terminalAppSettingsRef.current.keybindings;
 
-      if (matchesKeyEvent(resolveShortcutKeys("terminal.showCommandSuggestions", kb), e)) {
+      if (
+        matchesKeyEvent(
+          resolveShortcutKeys("terminal.showCommandSuggestions", kb),
+          e,
+        )
+      ) {
         e.preventDefault();
         if (!disconnectedRef.current) {
           triggerSearch({ manual: true });
@@ -1328,7 +1572,10 @@ export default function XTerminal({
           return false;
         }
 
-        inputStateRef.current = applyTerminalInputData(inputStateRef.current, BACKSPACE_INPUT);
+        inputStateRef.current = applyTerminalInputData(
+          inputStateRef.current,
+          BACKSPACE_INPUT,
+        );
         syncSuggestionsWithInputState();
         sendRawInput(BACKSPACE_INPUT, null);
         return false;
@@ -1348,12 +1595,20 @@ export default function XTerminal({
         const selectedInputRange = getSmartCursorSelectedInputRange();
         if (selectedInputRange) {
           e.preventDefault();
-          collapseInputSelection(selectedInputRange, e.key === "ArrowLeft" ? "start" : "end");
+          collapseInputSelection(
+            selectedInputRange,
+            e.key === "ArrowLeft" ? "start" : "end",
+          );
           return false;
         }
       }
 
-      if ((e.key === "Backspace" || e.key === "Delete") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (
+        (e.key === "Backspace" || e.key === "Delete") &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey
+      ) {
         if (clearSearchSelectionBeforeInput()) {
           return true;
         }
@@ -1405,22 +1660,46 @@ export default function XTerminal({
           return false;
         }
         // Handle arrow keys - send ANSI escape sequences without clearing selection
-        if (e.key === "ArrowLeft" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        if (
+          e.key === "ArrowLeft" &&
+          !e.ctrlKey &&
+          !e.metaKey &&
+          !e.altKey &&
+          !e.shiftKey
+        ) {
           e.preventDefault();
           terminal.input("\x1b[D", false);
           return false;
         }
-        if (e.key === "ArrowRight" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        if (
+          e.key === "ArrowRight" &&
+          !e.ctrlKey &&
+          !e.metaKey &&
+          !e.altKey &&
+          !e.shiftKey
+        ) {
           e.preventDefault();
           terminal.input("\x1b[C", false);
           return false;
         }
-        if (e.key === "ArrowUp" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        if (
+          e.key === "ArrowUp" &&
+          !e.ctrlKey &&
+          !e.metaKey &&
+          !e.altKey &&
+          !e.shiftKey
+        ) {
           e.preventDefault();
           terminal.input("\x1b[A", false);
           return false;
         }
-        if (e.key === "ArrowDown" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        if (
+          e.key === "ArrowDown" &&
+          !e.ctrlKey &&
+          !e.metaKey &&
+          !e.altKey &&
+          !e.shiftKey
+        ) {
           e.preventDefault();
           terminal.input("\x1b[B", false);
           return false;
@@ -1548,7 +1827,9 @@ export default function XTerminal({
         sendTerminalClearInput(terminal);
         return false;
       }
-      if (matchesKeyEvent(resolveShortcutKeys("terminal.pasteSelected", kb), e)) {
+      if (
+        matchesKeyEvent(resolveShortcutKeys("terminal.pasteSelected", kb), e)
+      ) {
         e.preventDefault();
         const sel = terminal.getSelection() || lastSelection;
         pasteText(sel);
@@ -1582,6 +1863,7 @@ export default function XTerminal({
         "view.showAllCommands",
         "terminal.manageSyncGroups",
         "terminal.showCommandSuggestions",
+        "terminal.recording.toggle",
         "special.lockScreen",
       ];
       for (const sid of swallowIds) {
@@ -1592,7 +1874,13 @@ export default function XTerminal({
       }
       for (let tabNumber = 1; tabNumber <= 9; tabNumber += 1) {
         if (
-          matchesKeyEvent(resolveIndexedKeys(resolveShortcutKeys("tab.switchTo", kb), tabNumber), e)
+          matchesKeyEvent(
+            resolveIndexedKeys(
+              resolveShortcutKeys("tab.switchTo", kb),
+              tabNumber,
+            ),
+            e,
+          )
         ) {
           return false;
         }
@@ -1662,17 +1950,23 @@ export default function XTerminal({
       return false;
     });
 
-    const clipboardOscDisposable = terminal.parser.registerOscHandler(52, (data) => {
-      if (!terminalAppSettingsRef.current?.interaction?.allow_osc52_clipboard_write) {
+    const clipboardOscDisposable = terminal.parser.registerOscHandler(
+      52,
+      (data) => {
+        if (
+          !terminalAppSettingsRef.current?.interaction
+            ?.allow_osc52_clipboard_write
+        ) {
+          return true;
+        }
+
+        const text = decodeOsc52ClipboardText(data);
+        if (text === null) return true;
+
+        void writeClipboardText(text).catch(() => {});
         return true;
-      }
-
-      const text = decodeOsc52ClipboardText(data);
-      if (text === null) return true;
-
-      void writeClipboardText(text).catch(() => {});
-      return true;
-    });
+      },
+    );
 
     const writeParsedDisposable = terminal.onWriteParsed(() => {
       if (terminal.buffer.active.type === "alternate") {
@@ -1681,9 +1975,12 @@ export default function XTerminal({
       const terminalSettings = terminalAppSettingsRef.current?.terminal;
       if (
         performanceModeRef.current === "normal" &&
-        (terminalSettings?.show_line_numbers || terminalSettings?.show_timestamps)
+        (terminalSettings?.show_line_numbers ||
+          terminalSettings?.show_timestamps)
       ) {
-        window.dispatchEvent(new CustomEvent("nyaterm:refresh-gutter", { detail: { sessionId } }));
+        window.dispatchEvent(
+          new CustomEvent("nyaterm:refresh-gutter", { detail: { sessionId } }),
+        );
       }
     });
 
@@ -1701,9 +1998,8 @@ export default function XTerminal({
     };
 
     const updateCredentialPromptInputMode = (payload: string) => {
-      credentialPromptBufferRef.current = `${credentialPromptBufferRef.current}${payload}`.slice(
-        -4096,
-      );
+      credentialPromptBufferRef.current =
+        `${credentialPromptBufferRef.current}${payload}`.slice(-4096);
 
       if (detectCredentialPromptKind(credentialPromptBufferRef.current)) {
         credentialPromptInputUntilRef.current = Date.now() + 120_000;
@@ -1725,7 +2021,9 @@ export default function XTerminal({
     };
 
     const noteShellCommand = (command: string) => {
-      setCommandSuggestionSuppressed(commandStartsSuggestionSuppressingProgram(command));
+      setCommandSuggestionSuppressed(
+        commandStartsSuggestionSuppressingProgram(command),
+      );
     };
 
     const resetCommandSuggestionSuppression = () => {
@@ -1737,9 +2035,24 @@ export default function XTerminal({
       requestGutterRefresh();
     };
 
+    clearAllRef.current = () => {
+      lineTimestampsRef.current = new Map();
+      gutterLineOffsetRef.current = 0;
+      terminal.reset();
+      terminal.focus();
+      requestGutterRefresh();
+    };
+
     resizeDeduperRef.current.reset(sessionId, terminalGeneration);
     const sendBackendResize = (cols: number, rows: number, source: string) => {
-      if (resizeDeduperRef.current.shouldSend(sessionId, terminalGeneration, cols, rows)) {
+      if (
+        resizeDeduperRef.current.shouldSend(
+          sessionId,
+          terminalGeneration,
+          cols,
+          rows,
+        )
+      ) {
         logger.debug({
           domain: "terminal.resize",
           event: "terminal.resize.backend_sent",
@@ -1831,7 +2144,8 @@ export default function XTerminal({
       }
     };
 
-    const isAlternateScreenActive = () => terminal.buffer.active.type === "alternate";
+    const isAlternateScreenActive = () =>
+      terminal.buffer.active.type === "alternate";
 
     const getWriteChunkBytes = () =>
       isAlternateScreenActive()
@@ -1851,10 +2165,12 @@ export default function XTerminal({
         ? XTERM_PERFORMANCE_CONFIG.output.visibleRecoveryThresholdBytes
         : XTERM_PERFORMANCE_CONFIG.output.hiddenRecoveryThresholdBytes;
 
-    const getPendingOutputBytes = () => outputDrainRef.current?.getPendingBytes() ?? 0;
+    const getPendingOutputBytes = () =>
+      outputDrainRef.current?.getPendingBytes() ?? 0;
 
     const getNonOverloadedPressureMode = (): PerformanceMode =>
-      getPendingOutputBytes() >= XTERM_PERFORMANCE_CONFIG.output.strainedBacklogBytes
+      getPendingOutputBytes() >=
+      XTERM_PERFORMANCE_CONFIG.output.strainedBacklogBytes
         ? "strained"
         : "normal";
 
@@ -1884,7 +2200,8 @@ export default function XTerminal({
       visibleRef.current &&
       !isAlternateScreenActive() &&
       performanceModeRef.current !== "overloaded" &&
-      getPendingOutputBytes() <= XTERM_PERFORMANCE_CONFIG.output.lowLatencyFlushBacklogBytes;
+      getPendingOutputBytes() <=
+        XTERM_PERFORMANCE_CONFIG.output.lowLatencyFlushBacklogBytes;
 
     const resolveOutputDrainMode = (): TerminalOutputDrainMode => {
       if (hibernatedRef.current) return "hibernated";
@@ -1911,7 +2228,10 @@ export default function XTerminal({
       outputDrainRef.current?.setMode(resolveOutputDrainMode());
     };
 
-    const outputDrain = new TerminalOutputDrain<{ beforeLine: number; ts: number }>({
+    const outputDrain = new TerminalOutputDrain<{
+      beforeLine: number;
+      ts: number;
+    }>({
       sessionId,
       getTerminal: () => (isTerminalAlive() ? terminal : null),
       getWriteChunkBytes,
@@ -1926,7 +2246,11 @@ export default function XTerminal({
       },
       onWriteComplete: (_payload, context) => {
         if (!isTerminalAlive() || !context) return;
-        stampWrittenLines(context.beforeLine, getCurrentAbsoluteLine(), context.ts);
+        stampWrittenLines(
+          context.beforeLine,
+          getCurrentAbsoluteLine(),
+          context.ts,
+        );
         maybeRecoverPerformanceMode();
         refreshOutputPressureMode();
       },
@@ -2006,7 +2330,9 @@ export default function XTerminal({
 
     const flushQueuedOutputBeforeStatusNotice = async () => {
       clearHibernateTimer();
-      await outputDrain.waitForIdle(XTERM_PERFORMANCE_CONFIG.output.hibernateDrainTimeoutMs);
+      await outputDrain.waitForIdle(
+        XTERM_PERFORMANCE_CONFIG.output.hibernateDrainTimeoutMs,
+      );
       maybeRecoverPerformanceMode();
       refreshOutputPressureMode();
     };
@@ -2044,9 +2370,13 @@ export default function XTerminal({
         await flushQueuedOutputBeforeStatusNotice();
         if (!isTerminalAlive()) return;
 
-        await writeTerminalTextAfterOutputQueue(`\r\n\x1b[${titleColor}m[${title}]\x1b[0m\r\n`);
+        await writeTerminalTextAfterOutputQueue(
+          `\r\n\x1b[${titleColor}m[${title}]\x1b[0m\r\n`,
+        );
         if (message) {
-          await writeTerminalTextAfterOutputQueue(`\x1b[31m${message}\x1b[0m\r\n`);
+          await writeTerminalTextAfterOutputQueue(
+            `\x1b[31m${message}\x1b[0m\r\n`,
+          );
         }
         if (showReconnectPrompt && canReconnectDisconnectedSession()) {
           await writeTerminalTextAfterOutputQueue(
@@ -2106,9 +2436,15 @@ export default function XTerminal({
             terminal.focus();
             break;
           case "zmodem":
-            if (event.payload.type === "detected" || event.payload.type === "progress") {
+            if (
+              event.payload.type === "detected" ||
+              event.payload.type === "progress"
+            ) {
               zmodemActiveRef.current = true;
-            } else if (event.payload.type === "complete" || event.payload.type === "failed") {
+            } else if (
+              event.payload.type === "complete" ||
+              event.payload.type === "failed"
+            ) {
               zmodemActiveRef.current = false;
             }
             zmodemHandler.handle(event.payload);
@@ -2136,12 +2472,16 @@ export default function XTerminal({
         visibleRef.current ||
         (!options.allowPending && hibernationPendingRef.current) ||
         (phase !== "idle" &&
-          !(options.allowPending && (phase === "preparing" || phase === "detached")))
+          !(
+            options.allowPending &&
+            (phase === "preparing" || phase === "detached")
+          ))
       ) {
         return false;
       }
       if (sessionTypeRef.current === "Local") return false;
-      if (!["SSH", "Telnet", "Serial"].includes(sessionTypeRef.current)) return false;
+      if (!["SSH", "Telnet", "Serial"].includes(sessionTypeRef.current))
+        return false;
       if (terminal.buffer.active.type === "alternate") return false;
       if (showSearchBar || activeMode === "history") return false;
       if (aiCapturingRef.current || zmodemActiveRef.current) return false;
@@ -2157,7 +2497,10 @@ export default function XTerminal({
         await invoke("attach_session", { sessionId });
         detachedHibernateEpochRef.current = null;
         hibernationPhaseRef.current = "idle";
-        logHibernation("rollback", "Rolled back detached terminal renderer", { reason, epoch });
+        logHibernation("rollback", "Rolled back detached terminal renderer", {
+          reason,
+          epoch,
+        });
       } catch (error) {
         if (enterDisconnectedStateIfAttachSessionMissing(error)) return;
         hibernationPhaseRef.current = "failed";
@@ -2175,38 +2518,60 @@ export default function XTerminal({
       if (epoch !== hibernationEpochRef.current) return;
       if (!canHibernateRenderer()) {
         hibernationPhaseRef.current = "idle";
-        logHibernation("cancel", "Skipped terminal hibernation after eligibility check", { epoch });
+        logHibernation(
+          "cancel",
+          "Skipped terminal hibernation after eligibility check",
+          { epoch },
+        );
         return;
       }
 
       hibernationPhaseRef.current = "preparing";
       hibernationPendingRef.current = true;
-      logHibernation("start", "Starting terminal renderer hibernation", { epoch });
+      logHibernation("start", "Starting terminal renderer hibernation", {
+        epoch,
+      });
 
       try {
         updateOutputDrainMode();
-        logHibernation("drain_start", "Draining terminal output before hibernation", { epoch });
+        logHibernation(
+          "drain_start",
+          "Draining terminal output before hibernation",
+          { epoch },
+        );
         const drainedBeforeDetach = await outputDrain.waitForIdle(
           XTERM_PERFORMANCE_CONFIG.output.hibernateDrainTimeoutMs,
         );
         if (!drainedBeforeDetach) {
           hibernationPhaseRef.current = "idle";
-          logHibernation("drain_timeout", "Timed out draining terminal output before hibernation", {
-            epoch,
-            queue_bytes: outputDrain.getQueueBytes(),
-            pending_bytes: outputDrain.getPendingBytes(),
-          });
+          logHibernation(
+            "drain_timeout",
+            "Timed out draining terminal output before hibernation",
+            {
+              epoch,
+              queue_bytes: outputDrain.getQueueBytes(),
+              pending_bytes: outputDrain.getPendingBytes(),
+            },
+          );
           return;
         }
-        logHibernation("drain_complete", "Drained terminal output before backend detach", {
-          epoch,
-        });
+        logHibernation(
+          "drain_complete",
+          "Drained terminal output before backend detach",
+          {
+            epoch,
+          },
+        );
 
         await invoke("detach_session_renderer", { sessionId });
         detachedHibernateEpochRef.current = epoch;
         hibernationPhaseRef.current = "detached";
         updateOutputDrainMode();
-        logHibernation("detached", "Detached terminal renderer from backend output", { epoch });
+        logHibernation(
+          "detached",
+          "Detached terminal renderer from backend output",
+          { epoch },
+        );
 
         if (
           epoch !== hibernationEpochRef.current ||
@@ -2246,7 +2611,12 @@ export default function XTerminal({
       } catch (error) {
         hibernationSnapshotRef.current = null;
         hibernationPhaseRef.current = "failed";
-        logHibernation("fail", "Failed to hibernate terminal renderer", { epoch }, error);
+        logHibernation(
+          "fail",
+          "Failed to hibernate terminal renderer",
+          { epoch },
+          error,
+        );
         await restoreDetachedRenderer(epoch, "error");
       } finally {
         hibernationPendingRef.current = false;
@@ -2254,7 +2624,8 @@ export default function XTerminal({
           hibernationPhaseRef.current === "preparing" ||
           (hibernationPhaseRef.current === "detached" &&
             detachedHibernateEpochRef.current !== epoch) ||
-          (hibernationPhaseRef.current === "failed" && detachedHibernateEpochRef.current === null)
+          (hibernationPhaseRef.current === "failed" &&
+            detachedHibernateEpochRef.current === null)
         ) {
           hibernationPhaseRef.current = "idle";
         }
@@ -2271,7 +2642,9 @@ export default function XTerminal({
       }
       const epoch = hibernationEpochRef.current + 1;
       hibernationEpochRef.current = epoch;
-      logHibernation("scheduled", "Scheduled terminal renderer hibernation", { epoch });
+      logHibernation("scheduled", "Scheduled terminal renderer hibernation", {
+        epoch,
+      });
       hibernateTimerRef.current = window.setTimeout(() => {
         hibernateTimerRef.current = null;
         void hibernateRenderer(epoch);
@@ -2316,7 +2689,9 @@ export default function XTerminal({
           });
 
           const recentPayload =
-            payload.data.length > 4096 ? payload.data.slice(-4096) : payload.data;
+            payload.data.length > 4096
+              ? payload.data.slice(-4096)
+              : payload.data;
           updateCredentialPromptInputMode(recentPayload);
           feedCredentialOutput(recentPayload);
           if (visibleRef.current && hasErrorKeyword(recentPayload)) {
@@ -2352,59 +2727,71 @@ export default function XTerminal({
       }
       outputUnlisten = nextOutputUnlisten;
 
-      const nextCommandAcceptedUnlisten = await listen<SessionCommandAcceptedEvent>(
-        "session-command-accepted",
-        (event) => {
-          if (!isTerminalAlive()) return;
-          if (event.payload.sessionId !== sessionIdRef.current) return;
-          noteShellCommand(event.payload.command);
-        },
-      );
+      const nextCommandAcceptedUnlisten =
+        await listen<SessionCommandAcceptedEvent>(
+          "session-command-accepted",
+          (event) => {
+            if (!isTerminalAlive()) return;
+            if (event.payload.sessionId !== sessionIdRef.current) return;
+            noteShellCommand(event.payload.command);
+          },
+        );
       if (disposed) {
         nextCommandAcceptedUnlisten();
         return;
       }
       commandAcceptedUnlisten = nextCommandAcceptedUnlisten;
 
-      const nextErrorUnlisten = await listen<string>(`session-error-${sessionId}`, (event) => {
-        if (!isTerminalAlive()) return;
-        requestWake("session_error");
-        const message = String(event.payload || tRef.current("terminal.connectionFailed"));
-        enterDisconnectedState({
-          title: tRef.current("terminal.connectionFailed"),
-          message,
-          titleColor: "31",
-          showReconnectPrompt: false,
-        });
-        toast.error(message);
-        onConnectionErrorRef.current?.(sessionIdRef.current, message);
-      });
+      const nextErrorUnlisten = await listen<string>(
+        `session-error-${sessionId}`,
+        (event) => {
+          if (!isTerminalAlive()) return;
+          requestWake("session_error");
+          const message = String(
+            event.payload || tRef.current("terminal.connectionFailed"),
+          );
+          enterDisconnectedState({
+            title: tRef.current("terminal.connectionFailed"),
+            message,
+            titleColor: "31",
+            showReconnectPrompt: false,
+          });
+          toast.error(message);
+          onConnectionErrorRef.current?.(sessionIdRef.current, message);
+        },
+      );
       if (disposed) {
         nextErrorUnlisten();
         return;
       }
       errorUnlisten = nextErrorUnlisten;
 
-      const nextClosedUnlisten = await listen<void>(`session-closed-${sessionId}`, () => {
-        if (!isTerminalAlive()) return;
-        requestWake("session_closed");
-        enterDisconnectedState({
-          title: tRef.current("terminal.sessionDisconnected"),
-          titleColor: "31",
-          showReconnectPrompt: true,
-        });
-      });
+      const nextClosedUnlisten = await listen<void>(
+        `session-closed-${sessionId}`,
+        () => {
+          if (!isTerminalAlive()) return;
+          requestWake("session_closed");
+          enterDisconnectedState({
+            title: tRef.current("terminal.sessionDisconnected"),
+            titleColor: "31",
+            showReconnectPrompt: true,
+          });
+        },
+      );
       if (disposed) {
         nextClosedUnlisten();
         return;
       }
       closedUnlisten = nextClosedUnlisten;
 
-      const nextFocusUnlisten = await listen<void>(`focus-terminal-${sessionId}`, () => {
-        if (!isTerminalAlive()) return;
-        requestWake("focus");
-        terminal.focus();
-      });
+      const nextFocusUnlisten = await listen<void>(
+        `focus-terminal-${sessionId}`,
+        () => {
+          if (!isTerminalAlive()) return;
+          requestWake("focus");
+          terminal.focus();
+        },
+      );
       if (disposed) {
         nextFocusUnlisten();
         return;
@@ -2444,9 +2831,15 @@ export default function XTerminal({
         (event) => {
           if (!isTerminalAlive()) return;
           requestWake("zmodem");
-          if (event.payload.type === "detected" || event.payload.type === "progress") {
+          if (
+            event.payload.type === "detected" ||
+            event.payload.type === "progress"
+          ) {
             zmodemActiveRef.current = true;
-          } else if (event.payload.type === "complete" || event.payload.type === "failed") {
+          } else if (
+            event.payload.type === "complete" ||
+            event.payload.type === "failed"
+          ) {
             zmodemActiveRef.current = false;
           }
           zmodemHandler.handle(event.payload);
@@ -2468,9 +2861,13 @@ export default function XTerminal({
           hibernationPhaseRef.current === "waking" ||
           hibernationPhaseRef.current === "hibernated"
         ) {
-          logHibernation("wake", "Attached backend output after terminal wake", {
-            reason: "terminal_ready",
-          });
+          logHibernation(
+            "wake",
+            "Attached backend output after terminal wake",
+            {
+              reason: "terminal_ready",
+            },
+          );
         }
         hibernationPhaseRef.current = "idle";
         updateOutputDrainMode();
@@ -2487,7 +2884,10 @@ export default function XTerminal({
     };
     void setupListeners();
 
-    const removePreviewListener = listenSessionInputPreview(sessionId, handleInputPreview);
+    const removePreviewListener = listenSessionInputPreview(
+      sessionId,
+      handleInputPreview,
+    );
 
     const dataDisposable = terminal.onData((data) => {
       if (aiCapturingRef.current) return;
@@ -2496,7 +2896,11 @@ export default function XTerminal({
       }
 
       if (disconnectedRef.current) {
-        if (data === "\r" && canReconnectDisconnectedSession() && !reconnectingRef.current) {
+        if (
+          data === "\r" &&
+          canReconnectDisconnectedSession() &&
+          !reconnectingRef.current
+        ) {
           reconnectingRef.current = true;
           void (async () => {
             try {
@@ -2539,7 +2943,10 @@ export default function XTerminal({
         return;
       }
 
-      if (credentialShowPanelRef.current && credentialMatchesRef.current.length > 0) {
+      if (
+        credentialShowPanelRef.current &&
+        credentialMatchesRef.current.length > 0
+      ) {
         if (data === "\x1b[A") {
           moveCredentialSelection(-1);
           return;
@@ -2557,7 +2964,8 @@ export default function XTerminal({
           return;
         }
         if (data === "\r" && credentialSelectedIndexRef.current >= 0) {
-          const selected = credentialMatchesRef.current[credentialSelectedIndexRef.current];
+          const selected =
+            credentialMatchesRef.current[credentialSelectedIndexRef.current];
           if (selected) void handleCredentialSelect(selected);
           return;
         }
@@ -2643,13 +3051,19 @@ export default function XTerminal({
       let command = "";
       if (data === "\r") {
         const currentInputState = inputStateRef.current;
-        const recovered = resyncFromTerminalLine(currentInputState, readCurrentInputLine(terminal));
+        const recovered = resyncFromTerminalLine(
+          currentInputState,
+          readCurrentInputLine(terminal),
+        );
         command = getTrackedSubmissionCommand(recovered ?? currentInputState);
       }
       if (data === "\r") {
         refreshCommandLineTimestamp();
       }
-      inputStateRef.current = applyTerminalInputData(inputStateRef.current, data);
+      inputStateRef.current = applyTerminalInputData(
+        inputStateRef.current,
+        data,
+      );
       if (data === "\r" || data === "\u0003") {
         clearCredentialPromptInputMode();
       }
@@ -2680,7 +3094,10 @@ export default function XTerminal({
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0];
       if (!entry) return;
-      fitScheduler.observeResize(entry.contentRect.width, entry.contentRect.height);
+      fitScheduler.observeResize(
+        entry.contentRect.width,
+        entry.contentRect.height,
+      );
     });
     observer.observe(containerRef.current);
 
@@ -2711,7 +3128,13 @@ export default function XTerminal({
       removeLinkPopup();
       clearSearchSelectionState();
 
-      if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      if (
+        e.button === 0 &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        !e.shiftKey
+      ) {
         primaryMouseDown = { x: e.clientX, y: e.clientY };
       } else {
         primaryMouseDown = null;
@@ -2733,17 +3156,26 @@ export default function XTerminal({
           !e.altKey &&
           !e.shiftKey;
         const isStationaryMouseUp =
-          !!down && Math.abs(e.clientX - down.x) <= 4 && Math.abs(e.clientY - down.y) <= 4;
+          !!down &&
+          Math.abs(e.clientX - down.x) <= 4 &&
+          Math.abs(e.clientY - down.y) <= 4;
 
         if (isPlainPrimaryMouseUp && terminal.hasSelection()) {
           const selectedInputRange = getSmartCursorSelectedInputRange();
           if (selectedInputRange) {
             if (e.detail >= 2 || isStationaryMouseUp) {
-              moveInputCursorAfterSelection(selectedInputRange, selectedInputRange.end);
+              moveInputCursorAfterSelection(
+                selectedInputRange,
+                selectedInputRange.end,
+              );
             } else {
               const position = getMouseBufferPosition(terminal, e);
               const targetCursor = position
-                ? getInputIndexAtBufferPosition(terminal, inputStateRef.current, position)
+                ? getInputIndexAtBufferPosition(
+                    terminal,
+                    inputStateRef.current,
+                    position,
+                  )
                 : null;
               if (targetCursor !== null) {
                 moveInputCursorAfterSelection(selectedInputRange, targetCursor);
@@ -2755,7 +3187,11 @@ export default function XTerminal({
           if (canUseSmartCursor(state)) {
             const position = getMouseBufferPosition(terminal, e);
             if (position) {
-              const targetCursor = getInputIndexAtBufferPosition(terminal, state, position);
+              const targetCursor = getInputIndexAtBufferPosition(
+                terminal,
+                state,
+                position,
+              );
               if (targetCursor !== null) {
                 moveInputCursor(targetCursor);
               }
@@ -2830,14 +3266,23 @@ export default function XTerminal({
 
     containerRef.current.addEventListener("mousedown", handleTerminalMouseDown);
     containerRef.current.addEventListener("mouseup", handleTerminalMouseUp);
-    containerRef.current.addEventListener("pointercancel", handleTerminalPointerCancel);
-    containerRef.current.addEventListener("mouseleave", handleTerminalMouseLeave);
+    containerRef.current.addEventListener(
+      "pointercancel",
+      handleTerminalPointerCancel,
+    );
+    containerRef.current.addEventListener(
+      "mouseleave",
+      handleTerminalMouseLeave,
+    );
     containerRef.current.addEventListener("dragstart", handleTerminalDragStart);
     if (isMacOS) {
       document.addEventListener("mousemove", handleMacReleasedMouseMove, true);
     }
     window.addEventListener("blur", handleTerminalWindowBlur);
-    document.addEventListener("visibilitychange", handleTerminalVisibilityChange);
+    document.addEventListener(
+      "visibilitychange",
+      handleTerminalVisibilityChange,
+    );
     const containerEl = containerRef.current;
 
     fitScheduler.schedule({
@@ -2856,7 +3301,8 @@ export default function XTerminal({
       handleVisibilityChangeRef.current = null;
       const cleanupDetachedEpoch = detachedHibernateEpochRef.current;
       const isHibernateRendererCleanup =
-        hibernationCleanupRef.current && hibernationPhaseRef.current === "hibernated";
+        hibernationCleanupRef.current &&
+        hibernationPhaseRef.current === "hibernated";
       if (isHibernateRendererCleanup) {
         clearHibernateTimer();
       } else {
@@ -2869,10 +3315,14 @@ export default function XTerminal({
               detachedHibernateEpochRef.current = null;
             }
             hibernationPhaseRef.current = "idle";
-            logHibernation("rollback", "Rolled back detached renderer during cleanup", {
-              reason: "cleanup",
-              epoch: cleanupDetachedEpoch,
-            });
+            logHibernation(
+              "rollback",
+              "Rolled back detached renderer during cleanup",
+              {
+                reason: "cleanup",
+                epoch: cleanupDetachedEpoch,
+              },
+            );
           })
           .catch((error) => {
             hibernationPhaseRef.current = "failed";
@@ -2887,14 +3337,24 @@ export default function XTerminal({
       setTerminalReady(false);
       containerEl.removeEventListener("mousedown", handleTerminalMouseDown);
       containerEl.removeEventListener("mouseup", handleTerminalMouseUp);
-      containerEl.removeEventListener("pointercancel", handleTerminalPointerCancel);
+      containerEl.removeEventListener(
+        "pointercancel",
+        handleTerminalPointerCancel,
+      );
       containerEl.removeEventListener("mouseleave", handleTerminalMouseLeave);
       containerEl.removeEventListener("dragstart", handleTerminalDragStart);
       if (isMacOS) {
-        document.removeEventListener("mousemove", handleMacReleasedMouseMove, true);
+        document.removeEventListener(
+          "mousemove",
+          handleMacReleasedMouseMove,
+          true,
+        );
       }
       window.removeEventListener("blur", handleTerminalWindowBlur);
-      document.removeEventListener("visibilitychange", handleTerminalVisibilityChange);
+      document.removeEventListener(
+        "visibilitychange",
+        handleTerminalVisibilityChange,
+      );
       if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
       inputStateRef.current = createTerminalInputState();
       clearCredentialPromptInputMode();
@@ -2943,7 +3403,8 @@ export default function XTerminal({
       if (
         !hibernationCleanupRef.current &&
         latestLifecycleState.sessionId === sessionId &&
-        latestLifecycleState.terminalTransparencyEnabled !== terminalTransparencyEnabled
+        latestLifecycleState.terminalTransparencyEnabled !==
+          terminalTransparencyEnabled
       ) {
         preservedReconnectContentRef.current = captureReconnectSnapshot();
       }
@@ -3057,6 +3518,10 @@ export default function XTerminal({
     pasteTextRef.current(text);
   }, []);
 
+  const handleClearAll = useCallback(() => {
+    clearAllRef.current();
+  }, []);
+
   const handleDirectMultiLinePaste = useCallback((text: string) => {
     if (!text) return;
     setMultiLinePasteText(null);
@@ -3123,10 +3588,16 @@ export default function XTerminal({
         style={{ backgroundColor: terminalBackground }}
       >
         <TerminalContextMenu
+          sessionId={sessionId}
+          sessionName={sessionName}
           terminalRef={terminalRef}
           onFind={doFind}
           onPasteText={handlePasteText}
           onPasteClipboard={pasteClipboard}
+          onClearAll={handleClearAll}
+          recordingStatus={recordingStatus}
+          onToggleRecording={onToggleRecording}
+          onSaveTranscript={onSaveTranscript}
         >
           <div
             className={`nyaterm-wallpaper-transparent-surface h-full w-full ${
@@ -3144,7 +3615,10 @@ export default function XTerminal({
         </TerminalContextMenu>
 
         {isExternalDropActive && (
-          <ExternalFileDropOverlay title={dropOverlayCopy.title} hint={dropOverlayCopy.hint} />
+          <ExternalFileDropOverlay
+            title={dropOverlayCopy.title}
+            hint={dropOverlayCopy.hint}
+          />
         )}
 
         {syncOverlay && <SyncActionOverlay overlay={syncOverlay} />}

@@ -17,6 +17,7 @@ import { RdpForm } from "@/components/sessions/RdpForm";
 import { SerialForm } from "@/components/sessions/SerialForm";
 import { type SshAuthMode, SshForm } from "@/components/sessions/SshForm";
 import { TelnetForm } from "@/components/sessions/TelnetForm";
+import { VncForm, type VncScaleMode, type VncSecurityMode } from "@/components/sessions/VncForm";
 import { ActionButton, ActionFooter } from "@/components/ui/action-footer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -153,6 +154,7 @@ export default function NewSessionPage() {
   const [sshPort, setSshPort] = useState(22);
   const [telnetPort, setTelnetPort] = useState(23);
   const [rdpPort, setRdpPort] = useState(3389);
+  const [vncPort, setVncPort] = useState(5900);
   const [username, setUsername] = useState("root");
   const [rdpDomain, setRdpDomain] = useState("");
   const [authType, setAuthType] = useState<SshAuthMode>("password");
@@ -180,6 +182,13 @@ export default function NewSessionPage() {
   const [rdpClipboardMode, setRdpClipboardMode] = useState<RdpClipboardMode>("text-only");
   const [rdpReconnectEnabled, setRdpReconnectEnabled] = useState(true);
   const [rdpReconnectMaxAttempts, setRdpReconnectMaxAttempts] = useState(5);
+  const [vncScaleMode, setVncScaleMode] = useState<VncScaleMode>("fit");
+  const [vncSecurityMode, setVncSecurityMode] = useState<VncSecurityMode>("auto");
+  const [vncShared, setVncShared] = useState(true);
+  const [vncViewOnly, setVncViewOnly] = useState(false);
+  const [vncClipboardEnabled, setVncClipboardEnabled] = useState(true);
+  const [vncReconnectEnabled, setVncReconnectEnabled] = useState(true);
+  const [vncReconnectMaxAttempts, setVncReconnectMaxAttempts] = useState(5);
 
   // Proxy
   const [proxyId, setProxyId] = useState("");
@@ -273,6 +282,7 @@ export default function NewSessionPage() {
           telnet: "telnet",
           serial: "serial",
           rdp: "rdp",
+          vnc: "vnc",
         };
         setCurrentTab(tabMap[found.type] || "ssh");
         setEncoding(found.encoding || "global");
@@ -348,6 +358,18 @@ export default function NewSessionPage() {
           setRdpClipboardMode(found.clipboard?.mode ?? "text-only");
           setRdpReconnectEnabled(found.reconnect?.enabled ?? true);
           setRdpReconnectMaxAttempts(found.reconnect?.max_attempts ?? 5);
+        } else if (found.type === "vnc") {
+          setHost(found.host || "");
+          setVncPort(found.port || 5900);
+          setPasswordId(found.auth?.password_id || "");
+          setHasPassword(found.auth?.has_password || false);
+          setVncSecurityMode(found.security?.mode ?? "auto");
+          setVncScaleMode(found.display?.scale_mode ?? "fit");
+          setVncShared(found.shared ?? true);
+          setVncViewOnly(found.view_only ?? false);
+          setVncClipboardEnabled(found.clipboard?.enabled ?? true);
+          setVncReconnectEnabled(found.reconnect?.enabled ?? true);
+          setVncReconnectMaxAttempts(found.reconnect?.max_attempts ?? 5);
         }
       })
       .catch((e) => setError(getErrorMessage(e)));
@@ -384,6 +406,7 @@ export default function NewSessionPage() {
     setSshPort(22);
     setTelnetPort(23);
     setRdpPort(3389);
+    setVncPort(5900);
     setUsername(currentTab === "rdp" ? DEFAULT_RDP_USERNAME : "root");
     setRdpDomain("");
     setAuthType("password");
@@ -434,6 +457,13 @@ export default function NewSessionPage() {
     setRdpClipboardMode("text-only");
     setRdpReconnectEnabled(true);
     setRdpReconnectMaxAttempts(5);
+    setVncScaleMode("fit");
+    setVncSecurityMode("auto");
+    setVncShared(true);
+    setVncViewOnly(false);
+    setVncClipboardEnabled(true);
+    setVncReconnectEnabled(true);
+    setVncReconnectMaxAttempts(5);
     setEncoding("global");
     setRecordingUseGlobal(true);
     setRecordingAutoStart(appSettings.recording.auto_start);
@@ -681,6 +711,20 @@ export default function NewSessionPage() {
       }
     }
 
+    if (currentTab === "vnc") {
+      if (!host.trim()) return t("dialog.hostRequired");
+      if (!isValidPort(vncPort)) {
+        return t("dialog.portInvalid", "Port must be between 1 and 65535");
+      }
+      if (
+        vncSecurityMode === "vnc-auth" &&
+        password &&
+        new TextEncoder().encode(password).length > 8
+      ) {
+        return t("dialog.vncPasswordTooLong");
+      }
+    }
+
     if (currentTab === "serial") {
       if (!serialPortName.trim()) {
         return t("dialog.serialPortRequired", "Serial port is required");
@@ -719,6 +763,9 @@ export default function NewSessionPage() {
     telnetPort,
     t,
     username,
+    vncPort,
+    vncSecurityMode,
+    password,
   ]);
 
   const validationError = getValidationError();
@@ -764,7 +811,9 @@ export default function NewSessionPage() {
               ? `${normalizedHost}:${telnetPort}`
               : currentTab === "rdp"
                 ? `${normalizedHost}:${rdpPort}`
-                : normalizedHost;
+                : currentTab === "vnc"
+                  ? `${normalizedHost}:${vncPort}`
+                  : normalizedHost;
 
       const typeTag =
         currentTab === "ssh"
@@ -775,7 +824,9 @@ export default function NewSessionPage() {
               ? "telnet"
               : currentTab === "rdp"
                 ? "rdp"
-                : "serial";
+                : currentTab === "vnc"
+                  ? "vnc"
+                  : "serial";
       const network =
         currentTab === "ssh"
           ? (() => {
@@ -790,10 +841,13 @@ export default function NewSessionPage() {
             })()
           : undefined;
       const auth =
-        currentTab === "ssh" || currentTab === "telnet" || currentTab === "rdp"
+        currentTab === "ssh" ||
+        currentTab === "telnet" ||
+        currentTab === "rdp" ||
+        currentTab === "vnc"
           ? (() => {
               const resolvedAuthMode: SshAuthMode =
-                currentTab === "telnet" || currentTab === "rdp"
+                currentTab === "telnet" || currentTab === "rdp" || currentTab === "vnc"
                   ? authType === "none"
                     ? "none"
                     : "password"
@@ -954,6 +1008,22 @@ export default function NewSessionPage() {
               },
             }
           : {}),
+        ...(currentTab === "vnc"
+          ? {
+              host: normalizedHost,
+              port: vncPort,
+              auth,
+              security: { mode: vncSecurityMode },
+              display: { scale_mode: vncScaleMode },
+              clipboard: { enabled: vncClipboardEnabled },
+              reconnect: {
+                enabled: vncReconnectEnabled,
+                max_attempts: vncReconnectMaxAttempts,
+              },
+              shared: vncShared,
+              view_only: vncViewOnly,
+            }
+          : {}),
       };
 
       const savedId = await invoke<string>("save_connection", { connection });
@@ -991,7 +1061,7 @@ export default function NewSessionPage() {
         className="flex-1 min-h-0 flex flex-col overflow-hidden"
       >
         <div className="shrink-0 px-4 pt-3 sm:px-5">
-          <TabsList className="grid h-8 w-full grid-cols-5 pointer-events-auto">
+          <TabsList className="grid h-8 w-full grid-cols-6 pointer-events-auto">
             <TabsTrigger value="ssh" className="text-xs">
               SSH
             </TabsTrigger>
@@ -1006,6 +1076,9 @@ export default function NewSessionPage() {
             </TabsTrigger>
             <TabsTrigger value="rdp" className="text-xs">
               RDP
+            </TabsTrigger>
+            <TabsTrigger value="vnc" className="text-xs">
+              VNC
             </TabsTrigger>
           </TabsList>
         </div>
@@ -1463,6 +1536,36 @@ export default function NewSessionPage() {
               setReconnectEnabled={setRdpReconnectEnabled}
               reconnectMaxAttempts={rdpReconnectMaxAttempts}
               setReconnectMaxAttempts={setRdpReconnectMaxAttempts}
+              connectionId={initialData?.id || editId}
+            />
+          </TabsContent>
+
+          <TabsContent value="vnc" className="space-y-3 m-0 border-0 outline-none w-full">
+            <VncForm
+              host={host}
+              setHost={setHost}
+              port={vncPort}
+              setPort={setVncPort}
+              passwordId={passwordId}
+              setPasswordId={setPasswordId}
+              password={password}
+              setPassword={setPassword}
+              hasPassword={hasPassword}
+              setHasPassword={setHasPassword}
+              scaleMode={vncScaleMode}
+              setScaleMode={setVncScaleMode}
+              securityMode={vncSecurityMode}
+              setSecurityMode={setVncSecurityMode}
+              shared={vncShared}
+              setShared={setVncShared}
+              viewOnly={vncViewOnly}
+              setViewOnly={setVncViewOnly}
+              clipboardEnabled={vncClipboardEnabled}
+              setClipboardEnabled={setVncClipboardEnabled}
+              reconnectEnabled={vncReconnectEnabled}
+              setReconnectEnabled={setVncReconnectEnabled}
+              reconnectMaxAttempts={vncReconnectMaxAttempts}
+              setReconnectMaxAttempts={setVncReconnectMaxAttempts}
               connectionId={initialData?.id || editId}
             />
           </TabsContent>

@@ -4,13 +4,14 @@ sidebar_position: 0
 
 # Session Types
 
-NyaTerm is not just an SSH client. It is a desktop app that puts multiple terminal and remote-desktop workflows into one workspace. It currently supports five session types:
+NyaTerm is not just an SSH client. It is a desktop app that puts multiple terminal and remote-desktop workflows into one workspace. It currently supports six session types:
 
 - **SSH**
 - **Local Terminal**
 - **Telnet**
 - **Serial**
 - **RDP**
+- **VNC**
 
 Understanding the differences helps explain why some panels or enhancements only appear for certain tabs.
 
@@ -23,6 +24,7 @@ Understanding the differences helps explain why some panels or enhancements only
 | Telnet | Legacy devices, lab environments, compatibility troubleshooting | Terminal workspace features with `Backspace Mode`, but not SSH-only features |
 | Serial | Routers, switches, boards, embedded debug ports | Serial port settings, `Backspace Mode`, and terminal workspace features |
 | RDP | Windows Remote Desktop or graphical administration entry points | Remote desktop display, NLA/CredSSP, certificate verification, text clipboard, window fitting, and reconnects |
+| VNC | Raw TCP VNC services, VM consoles, lightweight graphical remote desktops | Raw / ZRLE / Tight / Tight JPEG display, None / VNC Auth, window scaling, text clipboard, and reconnects |
 
 ## SSH
 
@@ -118,6 +120,32 @@ When connecting to an RDP host with an unknown certificate, NyaTerm opens a cert
 
 RDP does not provide terminal command history, the SFTP file explorer, SSH proxy/jump-host behavior, or remote resource monitoring. If you need command-line enhancements, use SSH, Local Terminal, Telnet, or Serial instead.
 
+## VNC
+
+VNC sessions are for traditional RFB / VNC services such as VM consoles, lab environments, and lightweight graphical desktops. Like RDP, they use a remote-desktop pane and share NyaTerm's saved-connection, recent-use, tab, and split-pane workspace model.
+
+When creating a VNC session, you can configure:
+
+- Host and port
+- Security mode: automatic, None, or classic VNC Authentication
+- Display mode: fit to window, actual size, or stretch
+- Text clipboard toggle
+- Automatic reconnect attempts
+- Shared / view-only behavior
+
+The current VNC transport is direct TCP only, with no TLS / VeNCrypt. Classic VNC Authentication passwords are limited to 8 bytes; NyaTerm rejects longer passwords instead of truncating them. Framebuffer encodings are advertised by default as `DesktopSizePseudo`, ZRLE, Tight, then Raw; Tight JPEG is decoded in the backend into the same RGBA framebuffer path, and Raw remains the stable fallback. CopyRect, cursor pseudo-encoding, remote resize, proxies, and SSH transport are not supported. Text clipboard exchange is limited to Latin-1 text so binary or oversized payloads do not enter the VNC protocol path.
+
+### VNC Interop Matrix
+
+| Scenario | Security | Encoding | Status |
+| --- | --- | --- | --- |
+| Scripted RFB 3.8 fixture | None | ZRLE / Tight / Tight JPEG -> RGBA RawImage | Automated test passed |
+| Scripted RFB 3.8 fixture | classic VNC Auth | ZRLE / Tight / Tight JPEG -> RGBA RawImage | Automated test passed |
+| TigerVNC | None / VNC Auth | Raw / ZRLE / Tight / JPEG | Real server untested |
+| TightVNC | None / VNC Auth | Raw / Tight / JPEG | Real server untested |
+| x11vnc / LibVNCServer | None / VNC Auth | Raw / ZRLE / Tight / JPEG | Real server untested |
+| QEMU / KVM VNC | None / VNC Auth | Raw / ZRLE / Tight / JPEG | Real server untested |
+
 ## How to choose
 
 A simple rule of thumb:
@@ -127,6 +155,7 @@ A simple rule of thumb:
 - Need a traditional remote terminal? Use **Telnet**
 - Need a device console or debug port? Use **Serial**
 - Need a graphical Windows remote desktop? Use **RDP**
+- Need a VNC / VM console graphical desktop? Use **VNC**
 
 ## Mix them in one workspace
 
@@ -136,6 +165,7 @@ One of NyaTerm's strengths is that you can mix these session types in the same w
 - Local Terminal on the right to run packaging or Git commands
 - A Serial tab open to watch device boot output
 - An RDP pane open to inspect a Windows remote desktop
+- A VNC pane open to operate a VM console
 
 That is why some features are documented as session-specific. The workspace is shared, but the capability boundary still depends on the underlying session type.
 

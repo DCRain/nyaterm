@@ -383,6 +383,7 @@ fn connection_protocol(config: &crate::config::ConnectionType) -> &'static str {
         crate::config::ConnectionType::Telnet { .. } => "telnet",
         crate::config::ConnectionType::Serial { .. } => "serial",
         crate::config::ConnectionType::Rdp { .. } => "rdp",
+        crate::config::ConnectionType::Vnc { .. } => "vnc",
     }
 }
 pub(super) fn sort_connections(connections: &mut [crate::config::SavedConnection]) {

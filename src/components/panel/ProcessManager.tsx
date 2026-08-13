@@ -47,14 +47,14 @@ type ProcessDisplayMode = "compact" | "medium" | "narrow" | "wide";
 const MAX_CONSECUTIVE_FAILURES = 3;
 const PROCESS_UNSUPPORTED_ERROR = "process listing is unsupported on this remote host";
 const PROCESS_ROW_HEIGHT = 38;
-const PROCESS_DETAILS_HEIGHT = 176;
-const PROCESS_COMPACT_ROW_HEIGHT = 62;
-const PROCESS_NARROW_DETAILS_HEIGHT = 218;
-const PROCESS_COMPACT_DETAILS_HEIGHT = 274;
+const PROCESS_DETAILS_HEIGHT = 120;
+const PROCESS_COMPACT_ROW_HEIGHT = 46;
+const PROCESS_NARROW_DETAILS_HEIGHT = 132;
+const PROCESS_COMPACT_DETAILS_HEIGHT = 132;
 
 function getProcessDisplayMode(width: number): ProcessDisplayMode {
-  if (width > 0 && width < 320) return "compact";
-  if (width > 0 && width < 430) return "narrow";
+  if (width > 0 && width < 260) return "compact";
+  if (width > 0 && width < 380) return "narrow";
   if (width > 0 && width < 540) return "medium";
   return "wide";
 }
@@ -121,56 +121,21 @@ function processMatches(process: RemoteProcess, query: string) {
 function cpuTone(value: number) {
   if (value >= 80) return "text-red-400";
   if (value >= 50) return "text-amber-300";
-  if (value >= 10) return "text-sky-300";
-  return "text-emerald-300";
+  return "text-foreground";
 }
 
 function memoryTone(value: number) {
   if (value >= 80) return "text-red-400";
   if (value >= 50) return "text-amber-300";
-  if (value >= 10) return "text-cyan-300";
   return "text-muted-foreground";
-}
-
-function rowAccent(process: RemoteProcess) {
-  if (process.cpu_percent >= 80 || process.memory_percent >= 80) return "border-l-red-500";
-  if (process.cpu_percent >= 50 || process.memory_percent >= 50) return "border-l-amber-400";
-  if (process.cpu_percent >= 10) return "border-l-sky-400";
-  return "border-l-transparent";
 }
 
 function stateTone(state: string) {
   const normalized = state.toUpperCase();
-  if (normalized.startsWith("R")) return "border-emerald-500/40 bg-emerald-500/10 text-emerald-300";
-  if (normalized.startsWith("S") || normalized.startsWith("I")) {
-    return "border-sky-500/35 bg-sky-500/10 text-sky-300";
-  }
-  if (normalized.startsWith("T")) return "border-violet-500/40 bg-violet-500/10 text-violet-300";
-  if (normalized.startsWith("D")) return "border-amber-500/40 bg-amber-500/10 text-amber-300";
   if (normalized.startsWith("Z")) return "border-red-500/40 bg-red-500/10 text-red-300";
+  if (normalized.startsWith("D")) return "border-amber-500/40 bg-amber-500/10 text-amber-300";
   return "border-border bg-background text-muted-foreground";
 }
-
-function metricTone(tone?: MetricTone) {
-  switch (tone) {
-    case "amber":
-      return "border-amber-500/30 bg-amber-500/10 text-amber-300";
-    case "blue":
-      return "border-sky-500/30 bg-sky-500/10 text-sky-300";
-    case "cyan":
-      return "border-cyan-500/30 bg-cyan-500/10 text-cyan-300";
-    case "emerald":
-      return "border-emerald-500/30 bg-emerald-500/10 text-emerald-300";
-    case "red":
-      return "border-red-500/30 bg-red-500/10 text-red-300";
-    case "violet":
-      return "border-violet-500/30 bg-violet-500/10 text-violet-300";
-    default:
-      return "";
-  }
-}
-
-type MetricTone = "amber" | "blue" | "cyan" | "emerald" | "red" | "violet";
 
 function isProcessUnsupportedError(message: string) {
   return message.toLowerCase().includes(PROCESS_UNSUPPORTED_ERROR);
@@ -191,7 +156,6 @@ export default function ProcessManager({ activeSessionId }: ProcessManagerProps)
     direction: "desc",
   });
   const [selectedPid, setSelectedPid] = useState<number | null>(null);
-  const [niceValue, setNiceValue] = useState("0");
   const [pendingSignal, setPendingSignal] = useState<PendingSignal>(null);
   const [isManualRefreshing, setIsManualRefreshing] = useState(false);
   const [displayMode, setDisplayMode] = useState<ProcessDisplayMode>("wide");
@@ -341,6 +305,13 @@ export default function ProcessManager({ activeSessionId }: ProcessManagerProps)
     }
   }, [selectedPid, selectedProcess]);
 
+  const toggleSelectedPid = useCallback(
+    (pid: number) => {
+      setSelectedPid(selectedPid === pid ? null : pid);
+    },
+    [selectedPid],
+  );
+
   useEffect(() => {
     setSort((current) => {
       if (displayMode !== "wide" && current.key === "user") {
@@ -370,26 +341,6 @@ export default function ProcessManager({ activeSessionId }: ProcessManagerProps)
     },
     [activeSessionId, fetchProcesses, t],
   );
-
-  const applyNice = useCallback(async () => {
-    if (!activeSessionId || !selectedProcess) return;
-    const nice = Number(niceValue);
-    if (!Number.isInteger(nice) || nice < -20 || nice > 19) {
-      toast.error(t("processManager.invalidNice"));
-      return;
-    }
-    try {
-      await invoke("renice_remote_process", {
-        sessionId: activeSessionId,
-        pid: selectedProcess.pid,
-        nice,
-      });
-      toast.success(t("processManager.reniceSuccess", { pid: selectedProcess.pid }));
-      void fetchProcesses(activeSessionId, true);
-    } catch (error) {
-      toast.error(getErrorMessage(error));
-    }
-  }, [activeSessionId, fetchProcesses, niceValue, selectedProcess, t]);
 
   const copyProcessText = useCallback(
     async (value: string, successMessage: string) => {
@@ -461,13 +412,13 @@ export default function ProcessManager({ activeSessionId }: ProcessManagerProps)
                 />
               </div>
               <div
-                className="flex h-8 shrink-0 items-center gap-1 rounded-md border border-sky-500/30 bg-sky-500/10 px-2 font-mono text-xs text-sky-300"
+                className="flex h-8 shrink-0 items-center gap-1 px-1.5 font-mono text-xs text-muted-foreground"
                 title={t("processManager.total")}
               >
-                <span className="hidden text-[0.625rem] uppercase opacity-70 min-[340px]:inline">
+                <span className="hidden text-[0.625rem] uppercase min-[340px]:inline">
                   {t("processManager.total")}
                 </span>
-                <span className="font-semibold">{processes.length}</span>
+                <span className="font-semibold text-foreground">{processes.length}</span>
               </div>
             </div>
 
@@ -492,20 +443,15 @@ export default function ProcessManager({ activeSessionId }: ProcessManagerProps)
                     <div
                       key={process.pid}
                       className={cn(
-                        "border-b border-l-2 text-xs transition-colors hover:bg-sky-500/5",
-                        rowAccent(process),
-                        process.pid === selectedProcess?.pid && "bg-sky-500/10",
+                        "border-b border-l-2 border-l-transparent text-xs transition-colors hover:bg-muted/30",
+                        process.pid === selectedProcess?.pid && "bg-muted/40",
                       )}
                       style={{ borderBottomColor: "var(--df-border)" }}
                     >
                       {isCompactMode ? (
                         <CompactProcessRow
                           process={process}
-                          onSelect={() =>
-                            setSelectedPid((current) =>
-                              current === process.pid ? null : process.pid,
-                            )
-                          }
+                          onSelect={() => toggleSelectedPid(process.pid)}
                           onSignal={(signal, destructive) => {
                             if (destructive) {
                               setPendingSignal({ process, signal, destructive });
@@ -530,11 +476,7 @@ export default function ProcessManager({ activeSessionId }: ProcessManagerProps)
                         <ProcessTableRow
                           mode={displayMode}
                           process={process}
-                          onSelect={() =>
-                            setSelectedPid((current) =>
-                              current === process.pid ? null : process.pid,
-                            )
-                          }
+                          onSelect={() => toggleSelectedPid(process.pid)}
                           onSignal={(signal, destructive) => {
                             if (destructive) {
                               setPendingSignal({ process, signal, destructive });
@@ -559,16 +501,13 @@ export default function ProcessManager({ activeSessionId }: ProcessManagerProps)
                       {process.pid === selectedProcess?.pid && (
                         <ProcessDetails
                           mode={displayMode}
-                          niceValue={niceValue}
                           process={process}
-                          onApplyNice={applyNice}
                           onCopyCommand={() =>
                             void copyProcessText(
                               process.command_line || process.command,
                               t("processManager.commandCopied"),
                             )
                           }
-                          onNiceChange={setNiceValue}
                         />
                       )}
                     </div>
@@ -804,20 +743,22 @@ function CompactProcessRow({
   onCopyPid: () => void;
 }) {
   return (
-    <div className="flex h-[62px] items-center gap-2 px-2 py-2">
+    <div className="flex h-[46px] items-center gap-2 px-2">
       <button
         type="button"
-        className="flex h-full min-w-0 flex-1 cursor-pointer flex-col justify-center text-left"
+        className="grid h-full min-w-0 flex-1 cursor-pointer grid-cols-[minmax(0,1fr)_4rem] items-center gap-2 text-left"
         onClick={onSelect}
       >
-        <span className="truncate text-xs font-medium" title={process.command_line}>
-          {process.command}
-        </span>
-        <span className="mt-1 truncate font-mono text-[0.6875rem] text-muted-foreground">
-          PID {process.pid} ·{" "}
-          <span className={cn("font-semibold", cpuTone(process.cpu_percent))}>
-            {process.cpu_percent.toFixed(1)}%
+        <span className="min-w-0">
+          <span className="block truncate text-xs font-medium" title={process.command_line}>
+            {process.command}
           </span>
+          <span className="mt-0.5 block truncate font-mono text-[0.6875rem] text-muted-foreground">
+            PID {process.pid}
+          </span>
+        </span>
+        <span className={cn("truncate text-right font-mono text-xs font-semibold", cpuTone(process.cpu_percent))}>
+          {process.cpu_percent.toFixed(1)}%
         </span>
       </button>
       <div className="flex w-6 shrink-0 justify-end">
@@ -863,74 +804,56 @@ function ProcessColumnHeader({
 
 function ProcessDetails({
   mode,
-  niceValue,
   process,
-  onApplyNice,
   onCopyCommand,
-  onNiceChange,
 }: {
   mode: ProcessDisplayMode;
-  niceValue: string;
   process: RemoteProcess;
-  onApplyNice: () => void;
   onCopyCommand: () => void;
-  onNiceChange: (value: string) => void;
 }) {
   const { t } = useTranslation();
   const compact = mode === "compact";
   const narrow = compact || mode === "narrow";
+  const detailHeight = compact ? "h-[132px]" : narrow ? "h-[132px]" : "h-[120px]";
+
   return (
     <div
-      className={cn(
-        "overflow-hidden border-t border-l-2 px-2 py-2",
-        compact ? "h-[274px]" : narrow ? "h-[218px]" : "h-[176px]",
-        rowAccent(process),
-      )}
+      className={cn("overflow-hidden border-t px-2 py-2", detailHeight)}
       style={{ backgroundColor: "var(--df-bg)", borderTopColor: "var(--df-border)" }}
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="truncate text-xs font-semibold" title={process.command}>
-            {process.command}
-          </div>
-          <div className="mt-0.5 font-mono text-[0.6875rem] text-muted-foreground">
-            PID {process.pid} · PPID {process.ppid} · {process.user}
-          </div>
-        </div>
-        <Badge className={cn("shrink-0", stateTone(process.state))} variant="outline">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[0.6875rem] text-muted-foreground">
+        <span>PPID {process.ppid}</span>
+        <span className="truncate">{process.user}</span>
+        <Badge className={cn("h-5 shrink-0 px-1.5 font-mono text-[0.625rem]", stateTone(process.state))} variant="outline">
           {process.state}
         </Badge>
       </div>
-      <div className={cn("mt-2 grid gap-1", narrow ? "grid-cols-2" : "grid-cols-4")}>
+
+      <div className={cn("mt-2 grid gap-x-4 gap-y-1", narrow ? "grid-cols-2" : "grid-cols-4")}>
+        <Metric label="CPU" value={`${process.cpu_percent.toFixed(1)}%`} valueClassName={cpuTone(process.cpu_percent)} />
         <Metric
-          label="CPU"
-          tone={process.cpu_percent >= 80 ? "red" : process.cpu_percent >= 50 ? "amber" : "blue"}
-          value={`${process.cpu_percent.toFixed(1)}%`}
-        />
-        <Metric
-          label={t("resourceMonitor.memory")}
-          tone={
-            process.memory_percent >= 80 ? "red" : process.memory_percent >= 50 ? "amber" : "cyan"
-          }
+          label="MEM"
           value={`${process.memory_percent.toFixed(1)}%`}
+          valueClassName={memoryTone(process.memory_percent)}
         />
-        <Metric label="RSS" tone="violet" value={formatKb(process.rss_kb)} />
-        <Metric label={t("processManager.elapsed")} tone="emerald" value={process.elapsed} />
+        <Metric label="RSS" value={formatKb(process.rss_kb)} />
+        <Metric label={t("processManager.elapsed")} value={process.elapsed} />
       </div>
+
       <div
         className={cn(
-          "relative mt-2 overflow-y-auto break-all rounded-md border border-sky-500/20 bg-sky-500/5 py-1 pr-8 pl-2 font-mono text-[0.6875rem] text-sky-100/80 terminal-scroll",
-          compact ? "max-h-20" : narrow ? "max-h-12" : "max-h-9",
+          "relative mt-2 overflow-y-auto break-all rounded-md bg-muted/30 py-1 pr-8 pl-2 font-mono text-[0.6875rem] text-muted-foreground terminal-scroll",
+          compact ? "max-h-12" : narrow ? "max-h-10" : "max-h-8",
         )}
       >
-        {process.command_line}
+        {process.command_line || process.command}
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
               type="button"
               variant="ghost"
               size="icon-xs"
-              className="absolute top-1 right-1 h-5 w-5 text-sky-100/70 hover:text-sky-100"
+              className="absolute top-1 right-1 h-5 w-5 text-muted-foreground hover:text-foreground"
               onClick={onCopyCommand}
               aria-label={t("processManager.copyCommand")}
             >
@@ -940,43 +863,25 @@ function ProcessDetails({
           <TooltipContent side="top">{t("processManager.copyCommand")}</TooltipContent>
         </Tooltip>
       </div>
-      <div
-        className={cn(
-          "mt-2 gap-2",
-          compact ? "grid grid-cols-[minmax(0,1fr)_auto]" : "flex items-center",
-        )}
-      >
-        <Input
-          className={cn("h-7 text-xs", compact ? "min-w-0" : "w-20")}
-          value={niceValue}
-          onChange={(event) => onNiceChange(event.target.value)}
-          aria-label={t("processManager.niceValue")}
-        />
-        <Button size="xs" variant="outline" onClick={onApplyNice}>
-          {t("processManager.applyNice")}
-        </Button>
-      </div>
     </div>
   );
 }
 
-function Metric({ label, tone, value }: { label: string; tone?: MetricTone; value: string }) {
+function Metric({
+  label,
+  value,
+  valueClassName,
+}: {
+  label: string;
+  value: string;
+  valueClassName?: string;
+}) {
   return (
-    <div
-      className={cn("min-w-0 rounded-md border px-2 py-1.5", metricTone(tone))}
-      style={
-        !tone ? { borderColor: "var(--df-border)", backgroundColor: "var(--df-bg)" } : undefined
-      }
-    >
-      <div
-        className={cn(
-          "truncate text-[0.625rem]",
-          tone ? "text-current opacity-70" : "text-muted-foreground",
-        )}
-      >
-        {label}
-      </div>
-      <div className="truncate font-mono text-xs font-semibold">{value}</div>
+    <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-baseline gap-2">
+      <span className="truncate text-[0.625rem] uppercase text-muted-foreground">{label}</span>
+      <span className={cn("truncate text-right font-mono text-xs font-semibold", valueClassName)}>
+        {value}
+      </span>
     </div>
   );
 }

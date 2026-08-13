@@ -413,6 +413,9 @@ pub fn load_app_settings(app: &AppHandle) -> AppResult<AppSettings> {
             migrated = true;
         }
     }
+    if settings.ui.normalize_quick_command_sort_mode() {
+        migrated = true;
+    }
 
     if migrated && secrets_ready_for_persist {
         persist_migrated_app_settings(app, &settings);

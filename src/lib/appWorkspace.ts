@@ -36,9 +36,34 @@ export type TrayAction =
   | { type: "request_quit"; targetWindowLabel?: string | null };
 
 export function canCreateSessionFromPane(
-  pane: Pick<SessionPane, "type" | "connectionId"> | null | undefined,
-): pane is Pick<SessionPane, "type" | "connectionId"> {
-  return !!pane && (pane.type === "Local" || !!pane.connectionId);
+  pane: Pick<SessionPane, "type" | "connectionId" | "temporaryConfig"> | null | undefined,
+): pane is Pick<SessionPane, "type" | "connectionId" | "temporaryConfig"> {
+  return (
+    !!pane && (pane.type === "Local" || !!pane.connectionId || hasMatchingTemporaryConfig(pane))
+  );
+}
+
+export function hasMatchingTemporaryConfig(
+  pane: Pick<SessionPane, "type" | "temporaryConfig"> | null | undefined,
+) {
+  if (!pane?.temporaryConfig) return false;
+  switch (pane.type) {
+    case "SSH":
+      return pane.temporaryConfig.protocol === "ssh";
+    case "Telnet":
+      return pane.temporaryConfig.protocol === "telnet";
+    case "Serial":
+      return pane.temporaryConfig.protocol === "serial";
+    default:
+      return false;
+  }
+}
+
+export function assertMatchingTemporaryConfig<
+  T extends Pick<SessionPane, "type" | "temporaryConfig">,
+>(pane: T) {
+  if (!pane.temporaryConfig || hasMatchingTemporaryConfig(pane)) return;
+  throw new Error("Temporary session config protocol mismatch");
 }
 
 export function hasLiveSession<T extends Pick<SessionPane, "connecting" | "connectError">>(

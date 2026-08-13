@@ -13,10 +13,16 @@ export interface QuickCommandCategoryTreeRow {
 }
 
 export type QuickCommandCategoryMoveDirection = "up" | "down";
+export type QuickCommandCategoryDropPosition = "before" | "after" | "inside";
 
 export interface QuickCommandCategoryMoveState {
   canMoveUp: boolean;
   canMoveDown: boolean;
+}
+
+export interface QuickCommandCategoryMoveTarget {
+  categoryId: string | null;
+  position: QuickCommandCategoryDropPosition;
 }
 
 export function buildQuickCommandCategoryList(
@@ -286,6 +292,83 @@ export function moveQuickCommandCategory(
   );
 }
 
+export function moveQuickCommandCategoryToTarget(
+  categories: QuickCommandCategory[],
+  sourceId: string,
+  target: QuickCommandCategoryMoveTarget,
+) {
+  const normalizedCategories = buildQuickCommandCategoryList(categories, []);
+  const categoryById = new Map(
+    normalizedCategories.map((category) => [category.id, category]),
+  );
+  const source = categoryById.get(sourceId);
+  if (!source) return categories;
+
+  const targetCategory = target.categoryId
+    ? categoryById.get(target.categoryId)
+    : undefined;
+  if (target.categoryId && !targetCategory) return categories;
+  if (target.categoryId === sourceId) return categories;
+
+  const sourceDescendantIds = collectQuickCommandCategoryDescendantIds(
+    normalizedCategories,
+    sourceId,
+  );
+  if (target.categoryId && sourceDescendantIds.has(target.categoryId)) {
+    return categories;
+  }
+
+  const targetParentId =
+    target.position === "inside"
+      ? targetCategory?.id
+      : targetCategory
+        ? getUsableParentId(targetCategory, categoryById)
+        : undefined;
+  if (targetParentId === sourceId) return categories;
+
+  const targetSiblings = normalizedCategories.filter(
+    (category) =>
+      category.id !== sourceId &&
+      getUsableParentId(category, categoryById) === targetParentId,
+  );
+
+  let insertIndex = targetSiblings.length;
+  if (target.position !== "inside" && targetCategory) {
+    const targetIndex = targetSiblings.findIndex(
+      (category) => category.id === targetCategory.id,
+    );
+    if (targetIndex < 0) return categories;
+    insertIndex = target.position === "before" ? targetIndex : targetIndex + 1;
+  }
+
+  const reorderedSiblings = [...targetSiblings];
+  reorderedSiblings.splice(insertIndex, 0, {
+    ...source,
+    parent_id: targetParentId,
+  });
+
+  const targetParentById = new Map(
+    reorderedSiblings.map((category, sortOrder) => [
+      category.id,
+      { parentId: targetParentId, sortOrder },
+    ]),
+  );
+
+  const nextCategories = categories.map((category) => {
+    const nextTarget = targetParentById.get(category.id);
+    if (!nextTarget) return category;
+    return {
+      ...category,
+      parent_id: nextTarget.parentId,
+      sort_order: nextTarget.sortOrder,
+    };
+  });
+
+  return categoriesEqualForOrdering(categories, nextCategories)
+    ? categories
+    : nextCategories;
+}
+
 export function getQuickCommandCategoryDirectCounts(commands: QuickCommand[]) {
   const counts = new Map<string, number>();
   for (const command of commands) {
@@ -355,4 +438,19 @@ function compareQuickCommandCategories(
     left.name.localeCompare(right.name, undefined, { sensitivity: "base" }) ||
     left.id.localeCompare(right.id)
   );
+}
+
+function categoriesEqualForOrdering(
+  left: QuickCommandCategory[],
+  right: QuickCommandCategory[],
+) {
+  if (left.length !== right.length) return false;
+  return left.every((category, index) => {
+    const other = right[index];
+    return (
+      category.id === other.id &&
+      normalizeParentId(category.parent_id) === normalizeParentId(other.parent_id) &&
+      (category.sort_order ?? 0) === (other.sort_order ?? 0)
+    );
+  });
 }
