@@ -559,6 +559,14 @@ mod tests {
     }
 
     #[test]
+    fn truncated_zip_portable_snapshot_returns_error() {
+        let error = super::decode_portable_snapshot(b"PK\x03\x04truncated")
+            .expect_err("truncated zip snapshot should fail");
+
+        assert!(matches!(error, AppError::Storage(_)));
+    }
+
+    #[test]
     fn portable_snapshot_legacy_redb_roundtrip() {
         let snapshot = sample_snapshot();
 
