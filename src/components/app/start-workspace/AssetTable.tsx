@@ -9,6 +9,7 @@ import type { AssetDisplayLabels } from "./assetFormatters";
 import {
   formatAccelerators,
   formatAssetAddress,
+  formatAssetConnectionTime,
   formatBytes,
   formatCpuSummary,
   formatDiskSummary,
@@ -31,6 +32,7 @@ type AssetTableColumnKey = AssetSortKey | "actions";
 const ASSET_TABLE_COLUMNS: AssetTableColumnKey[] = [
   "name",
   "address",
+  "connectionTime",
   "cpu",
   "memory",
   "storage",
@@ -41,6 +43,7 @@ const ASSET_TABLE_COLUMNS: AssetTableColumnKey[] = [
 const DEFAULT_COLUMN_WIDTHS: Record<AssetTableColumnKey, number> = {
   name: 280,
   address: 150,
+  connectionTime: 170,
   cpu: 110,
   memory: 110,
   storage: 120,
@@ -51,6 +54,7 @@ const DEFAULT_COLUMN_WIDTHS: Record<AssetTableColumnKey, number> = {
 const MIN_COLUMN_WIDTHS: Record<AssetTableColumnKey, number> = {
   name: 180,
   address: 120,
+  connectionTime: 140,
   cpu: 80,
   memory: 88,
   storage: 96,
@@ -147,6 +151,14 @@ export default function AssetTable({
               onResizeStart={(event) => handleColumnResizeStart("address", event)}
             />
             <SortableHeaderCell
+              label={t("assets.connectionTime")}
+              sortKey="connectionTime"
+              sortState={sortState}
+              onSortChange={onSortChange}
+              width={columnWidths.connectionTime}
+              onResizeStart={(event) => handleColumnResizeStart("connectionTime", event)}
+            />
+            <SortableHeaderCell
               label={t("assets.cpu")}
               sortKey="cpu"
               sortState={sortState}
@@ -192,7 +204,8 @@ export default function AssetTable({
         </thead>
         <tbody>
           {paddingTop > 0 ? <SpacerRow height={paddingTop} /> : null}
-          {visibleItems.map(({ item: { connection, groupPath } }) => {
+          {visibleItems.map(({ item }) => {
+            const { connection, groupPath } = item;
             const asset = connection.asset;
             return (
               <tr
@@ -219,6 +232,7 @@ export default function AssetTable({
                   </div>
                 </BodyCell>
                 <BodyCell>{formatAssetAddress(connection, labels)}</BodyCell>
+                <BodyCell>{formatAssetConnectionTime(item.connectionTimeMs, labels)}</BodyCell>
                 <BodyCell className="asset-col-cpu">{formatCpuSummary(asset, labels)}</BodyCell>
                 <BodyCell className="asset-col-memory">
                   {formatBytes(asset?.memory_bytes, labels)}
@@ -258,7 +272,7 @@ export default function AssetTable({
 function SpacerRow({ height }: { height: number }) {
   return (
     <tr>
-      <td colSpan={7} style={{ height, padding: 0, border: 0 }} />
+      <td colSpan={ASSET_TABLE_COLUMNS.length} style={{ height, padding: 0, border: 0 }} />
     </tr>
   );
 }

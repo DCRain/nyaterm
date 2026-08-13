@@ -30,9 +30,25 @@ export function isTerminalPane(
   return isSessionPane(node) && node.paneKind === "terminal";
 }
 
-export function isRdpPane(node: PaneNode): node is Extract<SessionPane, { paneKind: "rdp" }> {
-  return isSessionPane(node) && node.paneKind === "rdp";
+export function isRemoteDesktopPane(
+  node: PaneNode,
+): node is Extract<SessionPane, { paneKind: "remote-desktop" }> {
+  return isSessionPane(node) && node.paneKind === "remote-desktop";
 }
+
+export function isRdpPane(node: PaneNode): node is Extract<SessionPane, { type: "RDP" }> {
+  return isRemoteDesktopPane(node) && node.type === "RDP";
+}
+
+function isRemoteDesktopSessionType(type: WorkspaceSessionType): type is "RDP" | "VNC" {
+  return type === "RDP" || type === "VNC";
+}
+
+const DEFAULT_REMOTE_DESKTOP_DISPLAY = {
+  remoteWidth: 1920,
+  remoteHeight: 1080,
+  scaleMode: "fit",
+} as const;
 
 export function createSessionPane(
   name: string,
@@ -40,7 +56,8 @@ export function createSessionPane(
   connectionId?: string,
   overrides?: Partial<SessionPane>,
 ): SessionPane {
-  const paneKind = type === "RDP" ? "rdp" : "terminal";
+  const remoteDesktop = isRemoteDesktopSessionType(type);
+  const paneKind = remoteDesktop ? "remote-desktop" : "terminal";
   return {
     id: overrides?.id ?? createWorkspaceId("pane"),
     kind: "leaf",
@@ -50,17 +67,15 @@ export function createSessionPane(
     type,
     connectionId,
     view: overrides?.view,
-    display:
-      type === "RDP"
-        ? ((overrides && "display" in overrides ? overrides.display : undefined) ?? {
-            remoteWidth: 1920,
-            remoteHeight: 1080,
-            scaleMode: "fit",
-          })
-        : undefined,
+    display: remoteDesktop
+      ? ((overrides && "display" in overrides ? overrides.display : undefined) ?? {
+          ...DEFAULT_REMOTE_DESKTOP_DISPLAY,
+        })
+      : undefined,
     connecting: overrides?.connecting,
     createRequestId: overrides?.createRequestId,
     connectError: overrides?.connectError,
+    temporaryConfig: overrides?.temporaryConfig,
   } as SessionPane;
 }
 
@@ -139,9 +154,27 @@ export function updateSessionPane(
     >
   >,
 ): PaneNode {
-  return updatePaneTree(root, paneId, (current) =>
-    isSessionPane(current) ? ({ ...current, ...updates } as SessionPane) : current,
-  );
+  return updatePaneTree(root, paneId, (current) => {
+    if (!isSessionPane(current)) return current;
+    const type = updates.type ?? current.type;
+    const remoteDesktop = isRemoteDesktopSessionType(type);
+    const display = remoteDesktop
+      ? (("display" in current ? current.display : undefined) ?? {
+          ...DEFAULT_REMOTE_DESKTOP_DISPLAY,
+        })
+      : undefined;
+    const next = {
+      ...current,
+      ...updates,
+      type,
+      paneKind: remoteDesktop ? "remote-desktop" : "terminal",
+    };
+    if (remoteDesktop) {
+      return { ...next, display } as SessionPane;
+    }
+    const { display: _display, ...terminalPane } = next as typeof next & { display?: unknown };
+    return terminalPane as SessionPane;
+  });
 }
 
 export function splitSessionPane(
@@ -251,6 +284,7 @@ function serializePane(node: PaneNode): RestorablePaneNode {
       session_type: node.type,
       connection_id: node.connectionId,
       view: node.view === "sftp" ? "sftp" : undefined,
+      display: isRemoteDesktopPane(node) ? node.display : undefined,
     };
   }
 
@@ -305,6 +339,9 @@ export function normalizeSessionType(value: string): WorkspaceSessionType | null
     case "RDP":
     case "rdp":
       return "RDP";
+    case "VNC":
+    case "vnc":
+      return "VNC";
     default:
       return null;
   }
@@ -314,8 +351,13 @@ function restorePane(node: RestorablePaneNode): PaneNode | null {
   if (node.kind === "leaf") {
     const type = normalizeSessionType(node.session_type);
     if (!type) return null;
-    const paneKind = node.pane_kind ?? (type === "RDP" ? "rdp" : "terminal");
-    if ((paneKind === "rdp") !== (type === "RDP")) return null;
+    const remoteDesktop = isRemoteDesktopSessionType(type);
+    const persistedPaneKind = node.pane_kind;
+    const paneKind =
+      persistedPaneKind === "rdp"
+        ? "remote-desktop"
+        : (persistedPaneKind ?? (remoteDesktop ? "remote-desktop" : "terminal"));
+    if ((paneKind === "remote-desktop") !== remoteDesktop) return null;
     return {
       id: node.id || createWorkspaceId("pane"),
       kind: "leaf",
@@ -325,14 +367,12 @@ function restorePane(node: RestorablePaneNode): PaneNode | null {
       type,
       connectionId: node.connection_id,
       view: node.view === "sftp" ? "sftp" : undefined,
-      display:
-        paneKind === "rdp"
-          ? {
-              remoteWidth: 1920,
-              remoteHeight: 1080,
-              scaleMode: "fit",
-            }
-          : undefined,
+      display: remoteDesktop
+        ? {
+            ...DEFAULT_REMOTE_DESKTOP_DISPLAY,
+            ...node.display,
+          }
+        : undefined,
       connecting: true,
       createRequestId: crypto.randomUUID(),
     } as SessionPane;

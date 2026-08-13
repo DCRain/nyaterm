@@ -60,10 +60,7 @@ pub async fn create_ssh_session(
         Some(connection_id.clone()),
         Some(window.label().to_string()),
         cancel_rx,
-        startup_command.map(|command| ssh::SshStartupCommand {
-            command: command.command,
-            delay_ms: command.delay_ms,
-        }),
+        startup_command.map(startup_command_payload_to_ssh),
         Some(build_auto_recording_hook(
             app.clone(),
             recording_state.inner().clone(),
@@ -71,9 +68,7 @@ pub async fn create_ssh_session(
     )
     .await?;
     drop(guard);
-    if let Err(error) = crate::storage::mark_connection_used(&connection_id) {
-        tracing::warn!(connection_id, %error, "Failed to mark connection as recently used");
-    }
+    mark_connection_used(&app, &connection_id);
     Ok(session_id)
 }
 
@@ -85,6 +80,7 @@ pub async fn create_temporary_ssh_session(
     recording_state: tauri::State<'_, Arc<RecordingManager>>,
     config: ssh::SshConfig,
     create_request_id: Option<String>,
+    startup_command: Option<StartupCommandPayload>,
 ) -> AppResult<String> {
     let encoding = crate::config::load_app_settings(&app)
         .map(|settings| settings.interaction.default_encoding)
@@ -103,7 +99,7 @@ pub async fn create_temporary_ssh_session(
         None,
         Some(window.label().to_string()),
         cancel_rx,
-        None,
+        startup_command.map(startup_command_payload_to_ssh),
         Some(build_auto_recording_hook(
             app.clone(),
             recording_state.inner().clone(),
@@ -112,6 +108,13 @@ pub async fn create_temporary_ssh_session(
     .await?;
     drop(guard);
     Ok(session_id)
+}
+
+fn startup_command_payload_to_ssh(command: StartupCommandPayload) -> ssh::SshStartupCommand {
+    ssh::SshStartupCommand {
+        command: command.command,
+        delay_ms: command.delay_ms,
+    }
 }
 
 fn normalize_temporary_ssh_config(mut config: ssh::SshConfig, encoding: &str) -> ssh::SshConfig {
@@ -240,9 +243,7 @@ pub async fn create_local_session(
     .await?;
     drop(guard);
     if let Some(connection_id) = connection_id {
-        if let Err(error) = crate::storage::mark_connection_used(&connection_id) {
-            tracing::warn!(connection_id, %error, "Failed to mark connection as recently used");
-        }
+        mark_connection_used(&app, &connection_id);
     }
     Ok(session_id)
 }
@@ -339,9 +340,7 @@ pub async fn create_telnet_session(
     .await?;
     drop(guard);
     if let Some(connection_id) = marked_connection_id {
-        if let Err(error) = crate::storage::mark_connection_used(&connection_id) {
-            tracing::warn!(connection_id, %error, "Failed to mark connection as recently used");
-        }
+        mark_connection_used(&app, &connection_id);
     }
     Ok(session_id)
 }
@@ -455,11 +454,17 @@ pub async fn create_serial_session(
     .await?;
     drop(guard);
     if let Some(connection_id) = marked_connection_id {
-        if let Err(error) = crate::storage::mark_connection_used(&connection_id) {
-            tracing::warn!(connection_id, %error, "Failed to mark connection as recently used");
-        }
+        mark_connection_used(&app, &connection_id);
     }
     Ok(session_id)
+}
+
+fn mark_connection_used(app: &tauri::AppHandle, connection_id: &str) {
+    if let Err(error) = crate::storage::mark_connection_used(connection_id) {
+        tracing::warn!(connection_id, %error, "Failed to mark connection as recently used");
+        return;
+    }
+    let _ = app.emit("connections-changed", ());
 }
 
 fn build_auto_recording_hook(
@@ -620,12 +625,9 @@ fn build_recording_context(
             Some(*port),
             Some(username.clone()),
         ),
-        Some(config::ConnectionType::Vnc { host, port }) => (
-            "vnc".to_string(),
-            Some(host.clone()),
-            Some(*port),
-            None,
-        ),
+        Some(config::ConnectionType::Vnc { host, port, .. }) => {
+            ("vnc".to_string(), Some(host.clone()), Some(*port), None)
+        }
         Some(config::ConnectionType::Serial { port_name, .. }) => {
             ("serial".to_string(), Some(port_name.clone()), None, None)
         }
@@ -688,7 +690,10 @@ fn default_recording_dir(app: &tauri::AppHandle) -> AppResult<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_temporary_ssh_config, resolve_telnet_connection_password_with};
+    use super::{
+        StartupCommandPayload, normalize_temporary_ssh_config,
+        resolve_telnet_connection_password_with, startup_command_payload_to_ssh,
+    };
     use crate::config::ConnectionAuth;
 
     #[test]
@@ -734,6 +739,17 @@ mod tests {
         assert!(normalized.proxy.is_none());
         assert!(normalized.proxy_jump.is_none());
         assert!(normalized.post_login.is_none());
+    }
+
+    #[test]
+    fn maps_startup_command_payload_to_ssh_command() {
+        let command = startup_command_payload_to_ssh(StartupCommandPayload {
+            command: "uptime".to_string(),
+            delay_ms: 750,
+        });
+
+        assert_eq!(command.command, "uptime");
+        assert_eq!(command.delay_ms, 750);
     }
 
     #[test]

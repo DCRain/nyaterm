@@ -71,6 +71,21 @@ type SettingsTabConfig = {
   Component?: ComponentType;
 };
 
+const SETTINGS_GROUP_DEFAULT_TABS: Record<string, string> = {
+  ai: "ai-general",
+  ai_group: "ai-general",
+  security_group: "security",
+  syncBackup_group: "syncBackup",
+  terminal: "terminal-general",
+  terminal_session: "terminal-general",
+  transfer_group: "transfer",
+  workspace: "general",
+};
+
+function normalizeSettingsTab(tab: string) {
+  return SETTINGS_GROUP_DEFAULT_TABS[tab] ?? tab;
+}
+
 function getCloudSyncValidationMessage(
   code: CloudSyncValidationCode,
   t: ReturnType<typeof useTranslation>["t"],
@@ -101,7 +116,7 @@ export default function SettingsPage() {
   const params = new URLSearchParams(window.location.search);
   const requestedInitialTab = params.get("tab") || "general";
   const ownerWindowLabel = params.get("owner") || "main";
-  const initialTab = requestedInitialTab === "ai" ? "ai-general" : requestedInitialTab;
+  const initialTab = normalizeSettingsTab(requestedInitialTab);
   const [activeTab, setActiveTab] = useState(initialTab);
   const { draftSettings, isDirty, updateDraftSettings, acceptSavedSettings, discardDraftSettings } =
     useSettingsDraftState<AppSettings>(committedSettings);
@@ -123,7 +138,7 @@ export default function SettingsPage() {
       "settings-open-tab",
       ({ payload }) => {
         if (payload.targetWindowLabel && payload.targetWindowLabel !== ownerWindowLabel) return;
-        setActiveTab(payload.tab === "ai" ? "ai-general" : payload.tab);
+        setActiveTab(normalizeSettingsTab(payload.tab));
       },
     );
 

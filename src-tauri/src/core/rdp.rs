@@ -1,4 +1,7 @@
 use crate::config::{self, ConnectionAuth, ConnectionType};
+use crate::core::remote_desktop::frame::{
+    RemoteDesktopFramePatch, RemoteDesktopPixelFormat, encode_frame_patch,
+};
 use crate::error::{AppError, AppResult};
 use async_trait::async_trait;
 use base64::Engine as _;
@@ -43,8 +46,6 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::time::{Duration, sleep};
 use x509_cert::der::Decode as _;
 
-const FRAME_HEADER_BYTES: usize = 44;
-const PIXEL_FORMAT_RGBA8888: u32 = 2;
 const MAX_FRAME_QUEUE: usize = 2;
 const MAX_CLIPBOARD_TEXT_BYTES: usize = 16 * 1024 * 1024;
 const CLIPBOARD_POLL_INTERVAL: Duration = Duration::from_millis(750);
@@ -726,7 +727,7 @@ fn spawn_ironrdp_engine(app: AppHandle, session: Arc<RdpSession>, generation: u6
                             let _ = app.emit("sessions-changed", ());
                         }
                         let sequence = next_frame_sequence(&session).await;
-                        let frame = build_frame_from_ironrdp_image(
+                        match build_frame_from_ironrdp_image(
                             &buffer,
                             desktop_width,
                             desktop_height,
@@ -735,8 +736,13 @@ fn spawn_ironrdp_engine(app: AppHandle, session: Arc<RdpSession>, generation: u6
                             width,
                             height,
                             sequence,
-                        );
-                        queue_or_send_frame(&session, frame).await;
+                        ) {
+                            Ok(frame) => queue_or_send_frame(&session, frame).await,
+                            Err(error) => tracing::warn!(
+                                session_id = %session_id,
+                                "Discarded invalid RDP frame patch: {error}"
+                            ),
+                        }
                     }
                     RdpOutputEvent::ConnectionFailure(error) => {
                         saw_terminal_event = true;
@@ -1771,41 +1777,40 @@ fn build_frame_from_ironrdp_image(
     patch_width: u16,
     patch_height: u16,
     sequence: u64,
-) -> Vec<u8> {
-    let desktop_width = u32::from(desktop_width);
-    let desktop_height = u32::from(desktop_height);
-    let patch_x = u32::from(patch_x);
-    let patch_y = u32::from(patch_y);
-    let patch_width = u32::from(patch_width);
-    let patch_height = u32::from(patch_height);
-    let stride = patch_width * 4;
-    let payload_len = (stride * patch_height) as usize;
-    let mut buffer = vec![0_u8; FRAME_HEADER_BYTES + payload_len];
-    write_u64(&mut buffer, 0, sequence);
-    write_u32(&mut buffer, 8, desktop_width);
-    write_u32(&mut buffer, 12, desktop_height);
-    write_u32(&mut buffer, 16, patch_x);
-    write_u32(&mut buffer, 20, patch_y);
-    write_u32(&mut buffer, 24, patch_width);
-    write_u32(&mut buffer, 28, patch_height);
-    write_u32(&mut buffer, 32, stride);
-    write_u32(&mut buffer, 36, PIXEL_FORMAT_RGBA8888);
-    write_u32(&mut buffer, 40, payload_len as u32);
-
-    for (index, pixel) in pixels
-        .iter()
-        .take((patch_width * patch_height) as usize)
-        .enumerate()
-    {
+) -> AppResult<Vec<u8>> {
+    let pixel_count = usize::from(patch_width)
+        .checked_mul(usize::from(patch_height))
+        .ok_or_else(|| AppError::Config("RDP frame pixel count overflows".to_string()))?;
+    if pixels.len() < pixel_count {
+        return Err(AppError::Config(
+            "RDP frame pixel buffer is smaller than the patch".to_string(),
+        ));
+    }
+    let payload_len = pixel_count
+        .checked_mul(4)
+        .ok_or_else(|| AppError::Config("RDP frame payload size overflows".to_string()))?;
+    let mut payload = vec![0_u8; payload_len];
+    for (index, pixel) in pixels.iter().take(pixel_count).enumerate() {
         let [_, red, green, blue] = pixel.to_be_bytes();
-        let offset = FRAME_HEADER_BYTES + index * 4;
-        buffer[offset] = red;
-        buffer[offset + 1] = green;
-        buffer[offset + 2] = blue;
-        buffer[offset + 3] = 255;
+        let offset = index * 4;
+        payload[offset] = red;
+        payload[offset + 1] = green;
+        payload[offset + 2] = blue;
+        payload[offset + 3] = 255;
     }
 
-    buffer
+    encode_frame_patch(&RemoteDesktopFramePatch {
+        sequence,
+        desktop_width: u32::from(desktop_width),
+        desktop_height: u32::from(desktop_height),
+        x: u32::from(patch_x),
+        y: u32::from(patch_y),
+        width: u32::from(patch_width),
+        height: u32::from(patch_height),
+        stride: u32::from(patch_width) * 4,
+        pixel_format: RemoteDesktopPixelFormat::Rgba8888,
+        payload: &payload,
+    })
 }
 
 fn client_build() -> u32 {
@@ -1910,14 +1915,6 @@ async fn flush_pending_frames(session: &RdpSession) {
     }
 }
 
-fn write_u32(buffer: &mut [u8], offset: usize, value: u32) {
-    buffer[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-}
-
-fn write_u64(buffer: &mut [u8], offset: usize, value: u64) {
-    buffer[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1968,7 +1965,8 @@ mod tests {
     #[test]
     fn ironrdp_image_patch_has_expected_header_and_payload() {
         let pixels = [0x0011_2233, 0x0044_5566, 0x0077_8899, 0x00aa_bbcc];
-        let frame = build_frame_from_ironrdp_image(&pixels, 1920, 1080, 10, 20, 2, 2, 9);
+        let frame = build_frame_from_ironrdp_image(&pixels, 1920, 1080, 10, 20, 2, 2, 9)
+            .expect("valid RDP patch should encode");
 
         assert_eq!(&frame[0..8], &9_u64.to_le_bytes());
         assert_eq!(&frame[8..12], &1920_u32.to_le_bytes());
@@ -1978,7 +1976,10 @@ mod tests {
         assert_eq!(&frame[24..28], &2_u32.to_le_bytes());
         assert_eq!(&frame[28..32], &2_u32.to_le_bytes());
         assert_eq!(&frame[32..36], &8_u32.to_le_bytes());
-        assert_eq!(&frame[36..40], &PIXEL_FORMAT_RGBA8888.to_le_bytes());
+        assert_eq!(
+            &frame[36..40],
+            &crate::core::remote_desktop::frame::PIXEL_FORMAT_RGBA8888.to_le_bytes()
+        );
         assert_eq!(&frame[40..44], &16_u32.to_le_bytes());
         assert_eq!(
             &frame[44..],

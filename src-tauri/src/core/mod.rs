@@ -24,6 +24,7 @@ pub mod sftp;
 pub mod ssh;
 pub(crate) mod terminal_session;
 pub mod translate;
+pub mod vnc;
 pub mod watcher;
 pub mod zmodem;
 
@@ -38,11 +39,11 @@ pub use recording::{
     RecordingMode, RecordingProfile, RecordingStatus, RotationPolicy, TerminalHistorySearchRequest,
     TerminalHistorySearchResponse,
 };
-pub(crate) use session::update_cwd_if_changed;
 pub use session::{
     SessionCommand, SessionHandle, SessionInfo, SessionManager, SessionReadyHook, SessionType,
     SharedCwd,
 };
+pub(crate) use session::{now_session_started_at, update_cwd_if_changed};
 pub use terminal_session::local::{
     LocalSessionConfig, LocalShellOption, create_local_session, list_local_shells,
 };
@@ -51,3 +52,4 @@ pub use terminal_session::telnet::{
     TelnetAutoLoginConfig, TelnetEnterMode, TelnetSessionConfig, TelnetStartupCommand,
     create_telnet_session,
 };
+pub use vnc::VncSessionManager;

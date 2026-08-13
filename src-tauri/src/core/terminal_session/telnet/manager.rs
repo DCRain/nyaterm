@@ -33,6 +33,7 @@ pub async fn create_telnet_session(
         id: session_id.clone(),
         name: config.name.clone(),
         session_type: SessionType::Telnet,
+        started_at: crate::core::now_session_started_at(),
         connection_id: connection_id.clone(),
         connected: true,
         owner_window_label,

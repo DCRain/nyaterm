@@ -673,6 +673,7 @@ mod tests {
                     id: "ssh-1".to_string(),
                     name: "SSH".to_string(),
                     session_type: SessionType::SSH,
+                    started_at: crate::core::now_session_started_at(),
                     connection_id: None,
                     connected: true,
                     owner_window_label: None,

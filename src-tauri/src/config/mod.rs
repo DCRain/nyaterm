@@ -31,7 +31,8 @@ pub use connection::{
     ConnectionRecordingSettings, ConnectionType, Group, MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS,
     MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS, SavedConnection, SessionsConfig, SftpCwdFollowMode,
     SftpSettings, SshAgentEndpoint, SshAlgorithmMode, SshAlgorithmPreferences, SshProfile,
-    SshTerminalType, TelnetAutoLoginConfig, effective_cwd_follow_mode,
+    SshTerminalType, TelnetAutoLoginConfig, VncClipboardSettings, VncDisplaySettings,
+    VncReconnectSettings, VncSecuritySettings, effective_cwd_follow_mode,
     effective_cwd_follow_mode_for_profile, load_config, load_connection_by_id, load_sessions,
     resolve_connection_encoding, resolve_ssh_terminal_type, save_config, save_sessions,
 };

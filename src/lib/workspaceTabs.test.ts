@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { RestorableTab } from "@/types/global";
+import type { TemporaryLinkConfig } from "@/types/temporaryConnection";
 import {
+  collectSessionPanes,
   createSessionPane,
   createWorkspaceTab,
   restoreTabFromPersistence,
   serializeTabsForPersistence,
+  splitSessionPane,
+  updateSessionPane,
 } from "./workspaceTabs";
 
-describe("workspaceTabs RDP persistence", () => {
+describe("workspaceTabs remote desktop persistence", () => {
   it("keeps legacy terminal tabs restorable without pane_kind", () => {
     const restored = restoreTabFromPersistence(
       {
@@ -25,6 +29,25 @@ describe("workspaceTabs RDP persistence", () => {
     expect(leaf?.connectionId).toBe("ssh-1");
   });
 
+  it("restores legacy RDP tabs without pane_kind as graphical leaves", () => {
+    const restored = restoreTabFromPersistence(
+      {
+        title: "Legacy Windows",
+        session_type: "rdp",
+        connection_id: "rdp-legacy",
+      } as RestorableTab,
+      0,
+    );
+
+    const leaf = restored?.root.kind === "leaf" ? restored.root : null;
+    expect(leaf).toMatchObject({
+      paneKind: "remote-desktop",
+      type: "RDP",
+      connectionId: "rdp-legacy",
+      connecting: true,
+    });
+  });
+
   it("serializes and restores RDP panes as graphical leaves", () => {
     const pane = createSessionPane("Windows", "RDP", "rdp-1", {
       id: "pane-rdp",
@@ -34,19 +57,168 @@ describe("workspaceTabs RDP persistence", () => {
 
     expect(serialized.root?.kind).toBe("leaf");
     if (serialized.root?.kind === "leaf") {
-      expect(serialized.root.pane_kind).toBe("rdp");
+      expect(serialized.root.pane_kind).toBe("remote-desktop");
       expect(serialized.root.session_type).toBe("RDP");
     }
 
     const restored = restoreTabFromPersistence(serialized, 0);
     const leaf = restored?.root.kind === "leaf" ? restored.root : null;
-    if (leaf?.paneKind !== "rdp") throw new Error("expected RDP leaf");
+    if (leaf?.paneKind !== "remote-desktop") throw new Error("expected RDP leaf");
     expect(leaf?.type).toBe("RDP");
     expect(leaf?.display).toMatchObject({
       remoteWidth: 1920,
       remoteHeight: 1080,
       scaleMode: "fit",
     });
+  });
+
+  it("round-trips mixed terminal and RDP split trees", () => {
+    const terminal = createSessionPane("Linux", "SSH", "ssh-1", {
+      id: "pane-ssh",
+      sessionId: "session-ssh",
+    });
+    const rdp = createSessionPane("Windows", "RDP", "rdp-1", {
+      id: "pane-rdp",
+      sessionId: "session-rdp",
+    });
+    const tab = createWorkspaceTab(terminal, 0);
+    tab.root = splitSessionPane(tab.root, terminal.id, "vertical", rdp);
+    tab.activePaneId = rdp.id;
+
+    const [serialized] = serializeTabsForPersistence([tab]);
+    expect(serialized.root).toMatchObject({
+      kind: "split",
+      direction: "vertical",
+      first: {
+        kind: "leaf",
+        pane_kind: "terminal",
+        session_type: "SSH",
+      },
+      second: {
+        kind: "leaf",
+        pane_kind: "remote-desktop",
+        session_type: "RDP",
+      },
+    });
+
+    const restored = restoreTabFromPersistence(serialized, 0);
+    expect(restored?.activePaneId).toBe("pane-rdp");
+    expect(restored && collectSessionPanes(restored.root)).toMatchObject([
+      { id: "pane-ssh", paneKind: "terminal", type: "SSH" },
+      { id: "pane-rdp", paneKind: "remote-desktop", type: "RDP" },
+    ]);
+  });
+
+  it("drops invalid leaves while preserving valid siblings in mixed persisted trees", () => {
+    const restored = restoreTabFromPersistence(
+      {
+        title: "Mixed",
+        session_type: "RDP",
+        active_pane_id: "invalid-rdp",
+        root: {
+          id: "split-mixed",
+          kind: "split",
+          direction: "horizontal",
+          ratio: 0.5,
+          first: {
+            id: "invalid-rdp",
+            kind: "leaf",
+            pane_kind: "rdp",
+            title: "Invalid RDP",
+            session_type: "SSH",
+          },
+          second: {
+            id: "valid-ssh",
+            kind: "leaf",
+            title: "Valid SSH",
+            session_type: "SSH",
+            connection_id: "ssh-1",
+          },
+        },
+      } as RestorableTab,
+      0,
+    );
+
+    expect(restored?.activePaneId).toBe("valid-ssh");
+    expect(restored?.root).toMatchObject({
+      id: "valid-ssh",
+      kind: "leaf",
+      paneKind: "terminal",
+      type: "SSH",
+      connectionId: "ssh-1",
+    });
+  });
+
+  it("restores legacy persisted pane_kind rdp and writes the generalized kind on save", () => {
+    const restored = restoreTabFromPersistence(
+      {
+        title: "Legacy Windows",
+        session_type: "RDP",
+        root: {
+          kind: "leaf",
+          pane_kind: "rdp",
+          title: "Legacy Windows",
+          session_type: "RDP",
+          connection_id: "rdp-legacy",
+        },
+      } as RestorableTab,
+      0,
+    );
+
+    const leaf = restored?.root.kind === "leaf" ? restored.root : null;
+    expect(leaf?.paneKind).toBe("remote-desktop");
+    const serialized = restored ? serializeTabsForPersistence([restored])[0] : null;
+    expect(serialized?.root?.kind === "leaf" && serialized.root.pane_kind).toBe("remote-desktop");
+  });
+
+  it("round-trips VNC display metadata as a remote desktop leaf", () => {
+    const pane = createSessionPane("VNC Desktop", "VNC", "vnc-1", {
+      id: "pane-vnc",
+      sessionId: "session-vnc",
+      display: {
+        remoteWidth: 1366,
+        remoteHeight: 768,
+        scaleMode: "stretch",
+        viewOnly: true,
+        clipboardEnabled: false,
+      },
+    });
+    const [serialized] = serializeTabsForPersistence([createWorkspaceTab(pane, 0)]);
+
+    expect(serialized.root).toMatchObject({
+      kind: "leaf",
+      pane_kind: "remote-desktop",
+      session_type: "VNC",
+      display: {
+        remoteWidth: 1366,
+        remoteHeight: 768,
+        scaleMode: "stretch",
+        viewOnly: true,
+        clipboardEnabled: false,
+      },
+    });
+    const restored = restoreTabFromPersistence(serialized, 0);
+    expect(restored?.root).toMatchObject({
+      paneKind: "remote-desktop",
+      type: "VNC",
+      display: {
+        remoteWidth: 1366,
+        remoteHeight: 768,
+        scaleMode: "stretch",
+        viewOnly: true,
+        clipboardEnabled: false,
+      },
+    });
+  });
+
+  it("keeps paneKind consistent when pane type changes", () => {
+    const terminal = createSessionPane("Terminal", "SSH", "ssh-1", { id: "pane-1" });
+    const remote = updateSessionPane(terminal, terminal.id, { type: "VNC" });
+    expect(remote).toMatchObject({ paneKind: "remote-desktop", type: "VNC" });
+
+    const terminalAgain = updateSessionPane(remote, terminal.id, { type: "Local" });
+    expect(terminalAgain).toMatchObject({ paneKind: "terminal", type: "Local" });
+    expect(terminalAgain).not.toHaveProperty("display");
   });
 
   it("rejects mismatched RDP pane kind and terminal session type", () => {
@@ -65,5 +237,29 @@ describe("workspaceTabs RDP persistence", () => {
     );
 
     expect(restored).toBeNull();
+  });
+});
+
+describe("workspaceTabs temporary session metadata", () => {
+  it("keeps temporaryConfig on runtime panes without persisting it", () => {
+    const temporaryConfig: TemporaryLinkConfig = {
+      protocol: "telnet",
+      name: "telnet://example.com:23",
+      host: "example.com",
+      port: 23,
+    };
+    const pane = createSessionPane("Temporary Telnet", "Telnet", undefined, {
+      temporaryConfig,
+    });
+
+    expect(pane.temporaryConfig).toBe(temporaryConfig);
+
+    const [serialized] = serializeTabsForPersistence([createWorkspaceTab(pane, 0)]);
+    expect(JSON.stringify(serialized)).not.toContain("temporaryConfig");
+    expect(serialized.root).toMatchObject({
+      kind: "leaf",
+      session_type: "Telnet",
+    });
+    expect(serialized.root?.kind === "leaf" && serialized.root.connection_id).toBeUndefined();
   });
 });

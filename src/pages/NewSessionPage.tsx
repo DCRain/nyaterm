@@ -34,7 +34,7 @@ import {
 import { SerialForm } from "@/components/sessions/SerialForm";
 import { type SshAuthMode, SshForm } from "@/components/sessions/SshForm";
 import { TelnetForm } from "@/components/sessions/TelnetForm";
-import { VncForm } from "@/components/sessions/VncForm";
+import { VncForm, type VncScaleMode, type VncSecurityMode } from "@/components/sessions/VncForm";
 import { ActionButton, ActionFooter } from "@/components/ui/action-footer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -250,6 +250,13 @@ export default function NewSessionPage() {
     params?: Record<string, string | number | undefined>;
     message: string;
   } | null>(null);
+  const [vncScaleMode, setVncScaleMode] = useState<VncScaleMode>("fit");
+  const [vncSecurityMode, setVncSecurityMode] = useState<VncSecurityMode>("auto");
+  const [vncShared, setVncShared] = useState(true);
+  const [vncViewOnly, setVncViewOnly] = useState(false);
+  const [vncClipboardEnabled, setVncClipboardEnabled] = useState(true);
+  const [vncReconnectEnabled, setVncReconnectEnabled] = useState(true);
+  const [vncReconnectMaxAttempts, setVncReconnectMaxAttempts] = useState(5);
 
   // Proxy
   const [proxyId, setProxyId] = useState("");
@@ -420,6 +427,15 @@ export default function NewSessionPage() {
         } else if (found.type === "vnc") {
           setHost(found.host || "");
           setVncPort(found.port || 5900);
+          setPasswordId(found.auth?.password_id || "");
+          setHasPassword(found.auth?.has_password || false);
+          setVncSecurityMode(found.security?.mode ?? "auto");
+          setVncScaleMode(found.display?.scale_mode ?? "fit");
+          setVncShared(found.shared ?? true);
+          setVncViewOnly(found.view_only ?? false);
+          setVncClipboardEnabled(found.clipboard?.enabled ?? true);
+          setVncReconnectEnabled(found.reconnect?.enabled ?? true);
+          setVncReconnectMaxAttempts(found.reconnect?.max_attempts ?? 5);
         } else if (found.type === "local_terminal") {
           setShellPath(found.shell_path || "powershell.exe");
           setShellArgs(found.shell_args || "");
@@ -528,6 +544,13 @@ export default function NewSessionPage() {
     setTelnetForceCharacterAtATime(false);
     setTelnetSendNaws(true);
     setTelnetSendSga(true);
+    setVncScaleMode("fit");
+    setVncSecurityMode("auto");
+    setVncShared(true);
+    setVncViewOnly(false);
+    setVncClipboardEnabled(true);
+    setVncReconnectEnabled(true);
+    setVncReconnectMaxAttempts(5);
     setEncoding("global");
     setRecordingUseGlobal(true);
     setRecordingAutoStart(appSettings.recording.auto_start);
@@ -742,6 +765,13 @@ export default function NewSessionPage() {
       if (!isValidPort(vncPort)) {
         return t("dialog.portInvalid", "Port must be between 1 and 65535");
       }
+      if (
+        vncSecurityMode === "vnc-auth" &&
+        password &&
+        new TextEncoder().encode(password).length > 8
+      ) {
+        return t("dialog.vncPasswordTooLong");
+      }
     }
 
     if (currentTab === "serial") {
@@ -787,6 +817,8 @@ export default function NewSessionPage() {
     t,
     username,
     vncPort,
+    vncSecurityMode,
+    password,
   ]);
 
   const validationError = getValidationError();
@@ -862,10 +894,13 @@ export default function NewSessionPage() {
             })()
           : undefined;
       const auth =
-        currentTab === "ssh" || currentTab === "telnet" || currentTab === "rdp"
+        currentTab === "ssh" ||
+        currentTab === "telnet" ||
+        currentTab === "rdp" ||
+        currentTab === "vnc"
           ? (() => {
               const resolvedAuthMode: SshAuthMode =
-                currentTab === "telnet" || currentTab === "rdp"
+                currentTab === "telnet" || currentTab === "rdp" || currentTab === "vnc"
                   ? authType === "none"
                     ? "none"
                     : "password"
@@ -1039,6 +1074,16 @@ export default function NewSessionPage() {
           ? {
               host: normalizedHost,
               port: vncPort,
+              auth,
+              security: { mode: vncSecurityMode },
+              display: { scale_mode: vncScaleMode },
+              clipboard: { enabled: vncClipboardEnabled },
+              reconnect: {
+                enabled: vncReconnectEnabled,
+                max_attempts: vncReconnectMaxAttempts,
+              },
+              shared: vncShared,
+              view_only: vncViewOnly,
             }
           : {}),
         ...(currentTab === "local"
@@ -1786,7 +1831,33 @@ export default function NewSessionPage() {
             </TabsContent>
 
             <TabsContent value="vnc" className="space-y-3 m-0 border-0 outline-none w-full">
-              <VncForm host={host} setHost={setHost} port={vncPort} setPort={setVncPort} />
+              <VncForm
+                host={host}
+                setHost={setHost}
+                port={vncPort}
+                setPort={setVncPort}
+                passwordId={passwordId}
+                setPasswordId={setPasswordId}
+                password={password}
+                setPassword={setPassword}
+                hasPassword={hasPassword}
+                setHasPassword={setHasPassword}
+                scaleMode={vncScaleMode}
+                setScaleMode={setVncScaleMode}
+                securityMode={vncSecurityMode}
+                setSecurityMode={setVncSecurityMode}
+                shared={vncShared}
+                setShared={setVncShared}
+                viewOnly={vncViewOnly}
+                setViewOnly={setVncViewOnly}
+                clipboardEnabled={vncClipboardEnabled}
+                setClipboardEnabled={setVncClipboardEnabled}
+                reconnectEnabled={vncReconnectEnabled}
+                setReconnectEnabled={setVncReconnectEnabled}
+                reconnectMaxAttempts={vncReconnectMaxAttempts}
+                setReconnectMaxAttempts={setVncReconnectMaxAttempts}
+                connectionId={initialData?.id || editId}
+              />
             </TabsContent>
 
             <div className="mt-5 space-y-3">

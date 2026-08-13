@@ -35,6 +35,7 @@ import type {
 } from "@/components/dialog/terminal/LocalShellPickerDialog";
 import TabRenameDialog from "@/components/dialog/terminal/TabRenameDialog";
 import TabStartupCommandDialog from "@/components/dialog/terminal/TabStartupCommandDialog";
+import { hasMatchingTemporaryConfig } from "@/lib/appWorkspace";
 import type { TabMouseAction } from "@/lib/interactionSettings";
 import { normalizeTabMouseAction } from "@/lib/interactionSettings";
 import { invoke } from "@/lib/invoke";
@@ -169,7 +170,11 @@ function compareSortOrder(left: { sort_order?: number }, right: { sort_order?: n
 
 function canSpawnSessionFromTab(tab: Tab): boolean {
   const pane = getActivePane(tab);
-  return !!pane && pane.paneKind === "terminal" && (pane.type === "Local" || !!pane.connectionId);
+  return (
+    !!pane &&
+    pane.paneKind === "terminal" &&
+    (pane.type === "Local" || !!pane.connectionId || hasMatchingTemporaryConfig(pane))
+  );
 }
 
 function getTabConnection(tab: Tab, savedConnections: SavedConnection[]) {
@@ -181,12 +186,16 @@ function getTabConnection(tab: Tab, savedConnections: SavedConnection[]) {
 
 function isSshTab(tab: Tab, savedConnections: SavedConnection[]): boolean {
   const pane = getActivePane(tab);
+  if (pane?.type !== "SSH") return false;
+  if (pane.temporaryConfig?.protocol === "ssh") return true;
   const connection = getTabConnection(tab, savedConnections);
-  return pane?.type === "SSH" && connection?.type === "ssh";
+  return connection?.type === "ssh";
 }
 
 function getTabServerIp(tab: Tab, savedConnections: SavedConnection[]): string | null {
-  if (!isSshTab(tab, savedConnections)) return null;
+  const pane = getActivePane(tab);
+  if (pane?.type !== "SSH") return null;
+  if (pane.temporaryConfig?.protocol === "ssh") return pane.temporaryConfig.host;
   return getTabConnection(tab, savedConnections)?.host || null;
 }
 
@@ -203,7 +212,11 @@ function canMultiplexTab(tab: Tab, savedConnections: SavedConnection[]): boolean
 
 function canReconnectTab(tab: Tab): boolean {
   const pane = getActivePane(tab);
-  return !!pane && !pane.connecting && (pane.type === "Local" || !!pane.connectionId);
+  return (
+    !!pane &&
+    !pane.connecting &&
+    (pane.type === "Local" || !!pane.connectionId || hasMatchingTemporaryConfig(pane))
+  );
 }
 
 function canDisconnectTab(tab: Tab): boolean {

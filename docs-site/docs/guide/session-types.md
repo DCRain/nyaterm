@@ -4,14 +4,14 @@ sidebar_position: 0
 
 # 会话类型
 
-NyaTerm 不只是 SSH 客户端，而是一个把多类终端与远程桌面工作流放到同一工作区中的桌面应用。当前支持：
+NyaTerm 不只是 SSH 客户端，而是一个把多类终端与远程桌面工作流放到同一工作区中的桌面应用。当前支持六类会话：
 
 - **SSH**
 - **本地终端**
 - **Telnet**
 - **串口**
 - **RDP**
-- **VNC**（外部客户端）
+- **VNC**
 
 理解它们之间的差异，有助于你判断某个功能为什么“只在某些标签页里出现”。
 
@@ -24,7 +24,7 @@ NyaTerm 不只是 SSH 客户端，而是一个把多类终端与远程桌面工�
 | Telnet | 旧设备、实验环境、兼容性排障 | 终端工作区能力，支持 `Backspace Mode`，但不包含 SSH 专属特性 |
 | 串口 | 路由器、交换机、板卡、嵌入式调试口 | 串口参数配置、`Backspace Mode` 与终端工作区能力 |
 | RDP | Windows 远程桌面、图形化运维入口 | 内嵌远程桌面画面、NLA/CredSSP、证书验证、文本剪贴板、窗口适配与重连；也可按平台启动外部 RDP 客户端 |
-| VNC | 图形桌面远程控制 | 保存连接后启动外部 VNC 客户端；不嵌入标签页 |
+| VNC | 裸 TCP VNC 服务、虚拟机控制台、轻量图形远程桌面 | 内嵌 Raw / ZRLE / Tight / Tight JPEG 显示、None / VNC Auth、窗口适配、文本剪贴板与重连；也可启动外部 VNC 客户端 |
 
 ## SSH
 
@@ -134,11 +134,37 @@ RDP 目前不提供终端命令历史、SFTP 文件浏览器、SSH 代理 / 跳�
 
 若未检测到可用客户端，NyaTerm 会弹出安装提示，并给出平台相关的安装命令或下载页。
 
-## VNC（外部客户端）
+## VNC
 
-VNC 连接可以保存在连接列表中，但 **不会** 在 NyaTerm 标签页内嵌桌面画面。点击连接时，NyaTerm 会按平台探测可用客户端并启动外部程序；密码由外部客户端自行提示输入。
+VNC 会话适合连接提供传统 RFB / VNC 服务的虚拟机控制台、实验环境或轻量图形桌面。它和 RDP 一样使用远程桌面 pane，并共享保存连接、最近使用、标签页和分屏工作区。
 
-### 推荐客户端
+创建 VNC 会话时可以配置：
+
+- 主机和端口
+- 安全模式：自动、None 或 classic VNC Authentication
+- 显示模式：适应窗口、实际尺寸或拉伸
+- 文本剪贴板开关
+- 自动重连次数
+- shared / view-only 行为
+
+当前 VNC 传输仅支持 direct TCP，没有 TLS / VeNCrypt。classic VNC Authentication 的密码限制为 8 字节以内，NyaTerm 会拒绝超长密码而不会截断。画面编码默认按 `DesktopSizePseudo`、ZRLE、Tight、Raw 顺序声明；Tight JPEG 会在后端解码成统一 RGBA framebuffer，Raw 仍保留为稳定 fallback。暂不支持 CopyRect、cursor pseudo-encoding、远程 resize、代理和 SSH transport。文本剪贴板限定为 Latin-1 文本，避免把二进制或超大内容塞进 VNC 协议路径。
+
+### VNC 互通矩阵
+
+| 场景 | 安全模式 | 编码 | 状态 |
+| --- | --- | --- | --- |
+| Scripted RFB 3.8 fixture | None | ZRLE / Tight / Tight JPEG -> RGBA RawImage | 已通过自动测试 |
+| Scripted RFB 3.8 fixture | classic VNC Auth | ZRLE / Tight / Tight JPEG -> RGBA RawImage | 已通过自动测试 |
+| TigerVNC | None / VNC Auth | Raw / ZRLE / Tight / JPEG | 真实服务器待测 |
+| TightVNC | None / VNC Auth | Raw / Tight / JPEG | 真实服务器待测 |
+| x11vnc / LibVNCServer | None / VNC Auth | Raw / ZRLE / Tight / JPEG | 真实服务器待测 |
+| QEMU / KVM VNC | None / VNC Auth | Raw / ZRLE / Tight / JPEG | 真实服务器待测 |
+
+### 外部 VNC 客户端
+
+部分连接配置也可按平台探测可用客户端并启动外部程序；密码由外部客户端自行提示输入。
+
+**推荐客户端**
 
 - macOS：内置 `open vnc://host:port`（屏幕共享），其次 TigerVNC Viewer / `vncviewer`
 - Windows：TigerVNC / UltraVNC / TightVNC / RealVNC 等 `vncviewer`
@@ -155,7 +181,7 @@ VNC 连接可以保存在连接列表中，但 **不会** 在 NyaTerm 标签页�
 - 要兼容传统远程终端：用 **Telnet**
 - 要接调试口 / 设备串口：用 **串口**
 - 要 Windows 图形远程桌面：用 **RDP**
-- 要其他图形远程桌面：用 **VNC**（外部客户端）
+- 要 VNC / 虚拟机控制台图形桌面：用 **VNC**
 
 ## 在一个工作区里混用
 
@@ -165,6 +191,6 @@ NyaTerm 的优势之一，是允许你把这些类型混合放进同一工作区
 - 右边本地终端执行打包脚本
 - 再开一个串口标签观察设备启动信息
 - 另一个分屏中打开 RDP 查看 Windows 远程桌面状态
-- 需要时从连接列表启动 VNC 外部桌面
+- 再开一个 VNC pane 操作虚拟机控制台
 
 这也是为什么文档里很多功能会写成“某会话类型专属”或“某会话类型才显示”的原因——工作区统一，但能力边界仍然取决于底层会话类型。

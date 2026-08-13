@@ -10,6 +10,7 @@ use crate::error::{AppError, AppResult};
 use russh::keys::agent::client::{AgentClient, AgentStream};
 #[cfg(windows)]
 use std::ffi::OsStr;
+#[cfg(unix)]
 use std::path::Path;
 use std::time::Duration;
 
@@ -171,6 +172,7 @@ async fn connect_pageant() -> AppResult<DynamicAgentStream> {
     Ok(client.into_inner())
 }
 
+#[cfg(any(unix, test))]
 fn normalize_environment_variable(value: &str) -> AppResult<&str> {
     let variable = value.trim().trim_start_matches('$').trim();
     if variable.is_empty() {

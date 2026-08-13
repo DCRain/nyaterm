@@ -26,7 +26,7 @@ debug = false
 debug-assertions = false
 overflow-checks = false
 incremental = false
-panic = "unwind"
+panic = "abort"
 rpath = false
 
 [profile.release-size]
@@ -36,7 +36,7 @@ lto = true
 codegen-units = 1
 strip = true
 debug = false
-panic = "unwind"
+panic = "abort"
 
 [profile.release-debug]
 inherits = "release"
@@ -178,6 +178,7 @@ redb = "4.1.0"
 zmodem2 = { path = "vendor/zmodem2" }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json"] }
 tower-http = { version = "0.6", default-features = false, features = ["cors"] }
+vnc-rs = { path = "vendor/vnc-rs" }
 
 [patch.crates-io]
 ironrdp-connector = { path = "vendor/ironrdp-connector" }

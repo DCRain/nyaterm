@@ -14,6 +14,7 @@ import {
   DEFAULT_ASSET_DISPLAY_LABELS,
   formatAccelerators,
   formatAssetAddress,
+  getAssetConnectionTimeMs,
   getDiskTotalBytes,
   hasGpu,
   hasNpu,
@@ -37,13 +38,17 @@ interface AssetViewProps {
 }
 
 export default function AssetView({ t, onConnectConnection, onEditConnection }: AssetViewProps) {
-  const { savedConnections, savedGroups, refreshConnections } = useApp();
+  const { appSettings, savedConnections, savedGroups, refreshConnections, updateUi } = useApp();
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
   const [filters, setFilters] = useState<Set<AssetFilterKey>>(new Set());
-  const [sortState, setSortState] = useState<AssetSortState | null>(null);
   const [viewMode, setViewMode] = useState<AssetViewMode>("list");
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const sortState = useMemo(
+    () =>
+      normalizeAssetSortState(appSettings.ui.asset_sort_key, appSettings.ui.asset_sort_direction),
+    [appSettings.ui.asset_sort_direction, appSettings.ui.asset_sort_key],
+  );
 
   useEffect(() => {
     void refreshConnections();
@@ -76,6 +81,7 @@ export default function AssetView({ t, onConnectConnection, onEditConnection }: 
         connection,
         groupPath,
         groupSortOrder: connection.group_id ? (groupSortById.get(connection.group_id) ?? 0) : 0,
+        connectionTimeMs: getAssetConnectionTimeMs(connection.last_used_at_ms),
         searchText: buildAssetSearchText(connection, groupPath),
       };
     });
@@ -126,11 +132,17 @@ export default function AssetView({ t, onConnectConnection, onEditConnection }: 
   }, []);
 
   const handleSortChange = useCallback((key: AssetSortKey) => {
-    setSortState((current) => {
-      if (!current || current.key !== key) return { key, direction: "asc" };
-      return { key, direction: current.direction === "asc" ? "desc" : "asc" };
+    updateUi((prev) => {
+      const current = normalizeAssetSortState(prev.asset_sort_key, prev.asset_sort_direction);
+      if (!current || current.key !== key) {
+        return { asset_sort_key: key, asset_sort_direction: "asc" };
+      }
+      return {
+        asset_sort_key: key,
+        asset_sort_direction: current.direction === "asc" ? "desc" : "asc",
+      };
     });
-  }, []);
+  }, [updateUi]);
 
   return (
     <div
@@ -209,6 +221,12 @@ function sortAssetRecords(
   sorted.sort((left, right) => {
     if (!sortState) return compareDefaultAssetOrder(left, right);
 
+    if (sortState.key === "connectionTime") {
+      const diff = compareConnectionTime(left, right, sortState.direction);
+      if (diff !== 0) return diff;
+      return compareDefaultAssetOrder(left, right);
+    }
+
     const direction = sortState.direction === "asc" ? 1 : -1;
     const diff = compareBySortKey(left, right, sortState.key, labels);
     if (diff !== 0) return diff * direction;
@@ -239,6 +257,8 @@ function compareBySortKey(
         formatAssetAddress(left.connection, labels),
         formatAssetAddress(right.connection, labels),
       );
+    case "connectionTime":
+      return compareConnectionTime(left, right, "asc");
     case "cpu":
       return compareNullableNumber(
         getCpuSortValue(left.connection),
@@ -266,6 +286,44 @@ function compareBySortKey(
       );
     }
   }
+}
+
+function normalizeAssetSortState(
+  key: string | null | undefined,
+  direction: string | null | undefined,
+): AssetSortState | null {
+  if (!isAssetSortKey(key)) return null;
+  return {
+    key,
+    direction: direction === "desc" ? "desc" : "asc",
+  };
+}
+
+function isAssetSortKey(value: string | null | undefined): value is AssetSortKey {
+  return (
+    value === "name" ||
+    value === "address" ||
+    value === "connectionTime" ||
+    value === "cpu" ||
+    value === "memory" ||
+    value === "storage" ||
+    value === "accelerators"
+  );
+}
+
+function compareConnectionTime(
+  left: AssetRecord,
+  right: AssetRecord,
+  direction: AssetSortState["direction"],
+): number {
+  const leftMs = left.connectionTimeMs;
+  const rightMs = right.connectionTimeMs;
+  const leftValid = leftMs !== null;
+  const rightValid = rightMs !== null;
+  if (leftValid && rightValid) return (leftMs - rightMs) * (direction === "asc" ? 1 : -1);
+  if (leftValid) return -1;
+  if (rightValid) return 1;
+  return 0;
 }
 
 function getCpuSortValue(connection: SavedConnection): number | null {

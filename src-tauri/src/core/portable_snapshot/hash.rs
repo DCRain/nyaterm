@@ -38,9 +38,10 @@ pub(crate) fn calculate_payload_hash(snapshot: &PortableSnapshot) -> AppResult<S
 fn decode_v3_snapshot(
     meta: PortableSnapshotMeta,
     entities: &BTreeMap<String, String>,
-) -> AppResult<PortableSnapshot> {
+) -> AppResult<DecodedPortableSnapshot> {
+    let source_payload_hash = meta.payload_hash.clone();
     let expected = calculate_v3_raw_payload_hash(entities)?;
-    if expected != meta.payload_hash {
+    if expected != source_payload_hash {
         return Err(AppError::Crypto(
             "Portable snapshot payload hash mismatch".to_string(),
         ));
@@ -71,10 +72,27 @@ fn decode_v3_snapshot(
         notes: read_entity_or_default(entities, "notes")?,
     };
     snapshot.payload_hash = calculate_payload_hash(&snapshot)?;
-    Ok(snapshot)
+    log_snapshot_hash_normalized(&snapshot, &source_payload_hash);
+    Ok(DecodedPortableSnapshot {
+        snapshot,
+        source_payload_hash,
+    })
 }
 
-fn calculate_v3_raw_payload_hash(entities: &BTreeMap<String, String>) -> AppResult<String> {
+fn log_snapshot_hash_normalized(snapshot: &PortableSnapshot, source_payload_hash: &str) {
+    if snapshot.payload_hash == source_payload_hash {
+        return;
+    }
+    tracing::info!(
+        revision = %snapshot.revision_id,
+        app_version = %snapshot.app_version,
+        source_payload_hash = %source_payload_hash,
+        normalized_payload_hash = %snapshot.payload_hash,
+        "Portable snapshot payload hash normalized after decoding legacy entity shape"
+    );
+}
+
+pub(crate) fn calculate_v3_raw_payload_hash(entities: &BTreeMap<String, String>) -> AppResult<String> {
     let settings = read_raw_entity(entities, "settings")?;
     let sessions = read_raw_entity(entities, "sessions")?;
     let keys = read_raw_entity(entities, "keys")?;

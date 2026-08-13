@@ -14,6 +14,21 @@ fn default_split_ratio() -> f64 {
     0.5
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteDesktopDisplayMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_height: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_only: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clipboard_enabled: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum RestorablePaneNode {
@@ -21,12 +36,16 @@ pub enum RestorablePaneNode {
     Leaf {
         #[serde(default = "default_leaf_id")]
         id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pane_kind: Option<String>,
         title: String,
         session_type: String,
         connection_id: Option<String>,
         /// Dual-pane SFTP workspace when Some("sftp"); omitted means terminal.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         view: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display: Option<RemoteDesktopDisplayMetadata>,
     },
     #[serde(rename = "split")]
     Split {
@@ -94,6 +113,7 @@ impl RestorableTab {
             let leaf_id = default_leaf_id();
             self.root = Some(RestorablePaneNode::Leaf {
                 id: leaf_id.clone(),
+                pane_kind: None,
                 title: if self.title.is_empty() {
                     "Session".to_string()
                 } else {
@@ -102,6 +122,7 @@ impl RestorableTab {
                 session_type: self.session_type.clone(),
                 connection_id: self.connection_id.clone(),
                 view: None,
+                display: None,
             });
             if self.active_pane_id.is_none() {
                 self.active_pane_id = Some(leaf_id);
@@ -309,6 +330,10 @@ pub struct UiConfig {
     #[serde(default)]
     pub saved_connections_expanded_group_ids: Vec<String>,
     #[serde(default)]
+    pub asset_sort_key: Option<String>,
+    #[serde(default)]
+    pub asset_sort_direction: Option<String>,
+    #[serde(default)]
     pub recent_connection_ids: Vec<String>,
     #[serde(default = "default_transfer_height")]
     pub transfer_height: f64,
@@ -477,6 +502,8 @@ impl Default for UiConfig {
             docker_manager_interval: default_docker_manager_interval(),
             saved_connections_sort_mode: default_sort_mode(),
             saved_connections_expanded_group_ids: vec![],
+            asset_sort_key: None,
+            asset_sort_direction: None,
             recent_connection_ids: vec![],
             transfer_height: default_transfer_height(),
             file_explorer_show_hidden_files: true,
@@ -486,5 +513,96 @@ impl Default for UiConfig {
             notes_last_selected_node_id: None,
             activity_bar_layout: ActivityBarLayout::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RestorablePaneNode, RestorableTab};
+    use serde_json::json;
+
+    #[test]
+    fn current_leaf_schema_round_trips_terminal_fields() {
+        let raw = json!({
+            "kind": "leaf",
+            "id": "pane-ssh",
+            "title": "Linux",
+            "session_type": "SSH",
+            "connection_id": "ssh-1"
+        });
+
+        let pane: RestorablePaneNode = serde_json::from_value(raw.clone()).expect("terminal leaf");
+        let encoded = serde_json::to_value(pane).expect("serialized terminal leaf");
+
+        assert_eq!(encoded, raw);
+    }
+
+    #[test]
+    fn current_leaf_schema_preserves_remote_desktop_metadata() {
+        let raw = json!({
+            "kind": "leaf",
+            "id": "pane-rdp",
+            "pane_kind": "remote-desktop",
+            "title": "Windows",
+            "session_type": "RDP",
+            "connection_id": "rdp-1",
+            "display": {
+                "remoteWidth": 1600,
+                "remoteHeight": 900,
+                "scaleMode": "actual",
+                "viewOnly": true,
+                "clipboardEnabled": false
+            }
+        });
+        let pane: RestorablePaneNode =
+            serde_json::from_value(raw.clone()).expect("remote desktop leaf");
+        let encoded = serde_json::to_value(pane).expect("serialized remote desktop leaf");
+
+        assert_eq!(encoded, raw);
+    }
+
+    #[test]
+    fn mixed_tab_round_trip_preserves_each_pane_kind() {
+        let raw = json!({
+            "active_pane_id": "pane-rdp",
+            "root": {
+                "kind": "split",
+                "id": "split-1",
+                "direction": "vertical",
+                "ratio": 0.4,
+                "first": {
+                    "kind": "leaf",
+                    "id": "pane-ssh",
+                    "pane_kind": "terminal",
+                    "title": "Linux",
+                    "session_type": "SSH",
+                    "connection_id": "ssh-1"
+                },
+                "second": {
+                    "kind": "leaf",
+                    "id": "pane-rdp",
+                    "pane_kind": "remote-desktop",
+                    "title": "Windows",
+                    "session_type": "RDP",
+                    "connection_id": "rdp-1"
+                }
+            },
+            "title": "Windows",
+            "session_type": "RDP",
+            "connection_id": "rdp-1",
+            "custom_name": null,
+            "tab_color": null,
+            "locked": false
+        });
+
+        let tab: RestorableTab = serde_json::from_value(raw).expect("mixed tab");
+        let encoded = serde_json::to_value(tab).expect("serialized mixed tab");
+
+        assert_eq!(encoded["active_pane_id"], "pane-rdp");
+        assert_eq!(encoded["root"]["direction"], "vertical");
+        assert_eq!(encoded["root"]["first"]["session_type"], "SSH");
+        assert_eq!(encoded["root"]["second"]["session_type"], "RDP");
+        assert_eq!(encoded["root"]["first"]["pane_kind"], "terminal");
+        assert_eq!(encoded["root"]["second"]["pane_kind"], "remote-desktop");
     }
 }

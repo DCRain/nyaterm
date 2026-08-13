@@ -52,6 +52,7 @@ pub fn save_connection(
     validate_ssh_algorithm_config(&connection)?;
     validate_sftp_settings_config(&connection)?;
     validate_rdp_config(&connection)?;
+    validate_vnc_config(&connection)?;
 
     if let Some(ref mut auth) = connection.auth {
         // password_id: Some("") means explicitly cleared, None means preserve existing
@@ -385,6 +386,42 @@ fn validate_rdp_config(connection: &SavedConnection) -> AppResult<()> {
     Ok(())
 }
 
+fn validate_vnc_config(connection: &SavedConnection) -> AppResult<()> {
+    let config::ConnectionType::Vnc {
+        host,
+        port,
+        security,
+        display,
+        reconnect,
+        ..
+    } = &connection.config
+    else {
+        return Ok(());
+    };
+
+    if host.trim().is_empty() {
+        return Err(AppError::Config("VNC host is required".to_string()));
+    }
+    if *port == 0 {
+        return Err(AppError::Config(
+            "VNC port must be between 1 and 65535".to_string(),
+        ));
+    }
+    if !matches!(security.mode.as_str(), "auto" | "vnc-auth" | "none") {
+        return Err(AppError::Config("VNC security mode is invalid".to_string()));
+    }
+    if !matches!(display.scale_mode.as_str(), "fit" | "actual" | "stretch") {
+        return Err(AppError::Config("VNC scale mode is invalid".to_string()));
+    }
+    if reconnect.max_attempts > 20 {
+        return Err(AppError::Config(
+            "VNC reconnect attempts must be 20 or fewer".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 fn should_validate_shell_path(value: &str) -> bool {
     let path = Path::new(trim_wrapping_quotes(value));
     path.is_absolute() || value.contains('\\') || value.contains('/')
@@ -566,12 +603,13 @@ mod tests {
         delete_group_from_config, resolve_private_key_for_save, resolve_text_secret_input,
         update_connection_asset_from_monitoring_in_config, update_connection_icon_in_config,
         validate_certificate_content, validate_local_terminal_config, validate_private_key_content,
-        validate_proxy_jump_config, validate_sftp_settings_config,
+        validate_proxy_jump_config, validate_sftp_settings_config, validate_vnc_config,
     };
     use crate::config::{
         AiExecutionProfile, AssetAccelerator, AssetAcceleratorType, AssetDisk, AssetDiskPurpose,
         AssetMetadata, ConnectionAuth, ConnectionNetwork, ConnectionType, Group, SavedConnection,
-        SessionsConfig, SftpSettings, SshKey,
+        SessionsConfig, SftpSettings, SshKey, VncClipboardSettings, VncDisplaySettings,
+        VncReconnectSettings, VncSecuritySettings,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -588,6 +626,73 @@ FkHpYgNw65KCWCTXtP7ye2czMC3zjn2r98pJLobsLYQgRiHIv/CUdAdsqbvMPECB+wl/UQ
 e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
 7/wNsnDM0T7nLv/Q==
 -----END OPENSSH PRIVATE KEY-----";
+
+    fn vnc_connection() -> SavedConnection {
+        SavedConnection {
+            id: "vnc-1".to_string(),
+            name: "VNC".to_string(),
+            config: ConnectionType::Vnc {
+                host: "example.com".to_string(),
+                port: 5900,
+                security: VncSecuritySettings::default(),
+                display: VncDisplaySettings::default(),
+                clipboard: VncClipboardSettings::default(),
+                reconnect: VncReconnectSettings::default(),
+                shared: true,
+                view_only: false,
+            },
+            group_id: None,
+            description: None,
+            sort_order: 0,
+            icon: None,
+            icon_auto_detect: None,
+            auth: None,
+            network: None,
+            post_login: None,
+            recording: None,
+            ssh_algorithms: None,
+            ssh_profile: Default::default(),
+            terminal_type: None,
+            sftp: SftpSettings::default(),
+            asset: None,
+            created_at_ms: None,
+            updated_at_ms: None,
+            last_used_at_ms: None,
+        }
+    }
+
+    #[test]
+    fn validates_vnc_settings() {
+        let mut connection = vnc_connection();
+        assert!(validate_vnc_config(&connection).is_ok());
+
+        if let ConnectionType::Vnc { security, .. } = &mut connection.config {
+            security.mode = "tls".to_string();
+        } else {
+            panic!("expected VNC connection");
+        }
+        assert!(validate_vnc_config(&connection).is_err());
+        if let ConnectionType::Vnc {
+            security, display, ..
+        } = &mut connection.config
+        {
+            security.mode = "auto".to_string();
+            display.scale_mode = "remote-resize".to_string();
+        } else {
+            panic!("expected VNC connection");
+        }
+        assert!(validate_vnc_config(&connection).is_err());
+        if let ConnectionType::Vnc {
+            display, reconnect, ..
+        } = &mut connection.config
+        {
+            display.scale_mode = "fit".to_string();
+            reconnect.max_attempts = 21;
+        } else {
+            panic!("expected VNC connection");
+        }
+        assert!(validate_vnc_config(&connection).is_err());
+    }
 
     fn ssh_connection(id: &str, proxy_jump_id: Option<&str>) -> SavedConnection {
         SavedConnection {

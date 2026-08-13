@@ -110,6 +110,26 @@ export function formatAssetUpdatedAt(
   return date.toLocaleDateString();
 }
 
+export function formatAssetConnectionTime(
+  value: string | number | null | undefined,
+  labels: Pick<AssetDisplayLabels, "notApplicable"> = DEFAULT_ASSET_DISPLAY_LABELS,
+): string {
+  const time = getAssetConnectionTimeMs(value);
+  if (time === null) return labels.notApplicable;
+  const date = new Date(time);
+  return date.toLocaleString();
+}
+
+export function getAssetConnectionTimeMs(value: string | number | null | undefined): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  }
+  const raw = text(value);
+  if (!raw) return null;
+  const time = Date.parse(raw);
+  return Number.isFinite(time) ? time : null;
+}
+
 export function formatAssetAddress(
   connection: Pick<SavedConnection, "type" | "host" | "port_name">,
   labels: Pick<AssetDisplayLabels, "localMachine" | "notApplicable"> = DEFAULT_ASSET_DISPLAY_LABELS,

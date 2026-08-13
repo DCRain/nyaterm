@@ -5,6 +5,7 @@
 
 mod detect;
 mod launch;
+pub mod frame;
 
 pub use detect::{RemoteDesktopClientInfo, RemoteDesktopProtocol, list_remote_desktop_clients};
 pub use launch::{LaunchRemoteDesktopRequest, LaunchRemoteDesktopResult, launch_remote_desktop};

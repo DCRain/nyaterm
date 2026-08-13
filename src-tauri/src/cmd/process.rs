@@ -51,30 +51,6 @@ pub async fn signal_remote_process(
     ensure_success(output, "Failed to signal process")
 }
 
-#[tauri::command]
-pub async fn renice_remote_process(
-    state: tauri::State<'_, Arc<SessionManager>>,
-    session_id: String,
-    pid: u32,
-    nice: i32,
-) -> AppResult<RemoteCommandOutput> {
-    if !(-20..=19).contains(&nice) {
-        return Err(AppError::Config(
-            "Nice value must be between -20 and 19".to_string(),
-        ));
-    }
-
-    let command = format!("renice -n {nice} -p {pid}");
-    let output = exec_ssh_session_command(
-        state.inner(),
-        &session_id,
-        command.as_bytes(),
-        PROCESS_TIMEOUT,
-    )
-    .await?;
-    ensure_success(output, "Failed to renice process")
-}
-
 fn normalize_signal(signal: &str) -> AppResult<&'static str> {
     match signal.trim().to_ascii_uppercase().as_str() {
         "TERM" | "SIGTERM" | "15" => Ok("TERM"),

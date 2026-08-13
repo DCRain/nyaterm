@@ -4,7 +4,7 @@ use tauri::Manager;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri_plugin_deep_link::DeepLinkExt;
 
-use crate::core::{CloudSyncManager, QuickCommandsStore, SessionManager};
+use crate::core::{CloudSyncManager, QuickCommandsStore, SessionManager, VncSessionManager};
 use crate::runtime::AppRuntime;
 
 /// Whether the main window should be maximized after the first reveal.
@@ -463,6 +463,14 @@ pub fn prepare_app_shutdown(app: &tauri::AppHandle) {
 
     let session_manager = app.state::<Arc<SessionManager>>();
     session_manager.flush_history_before_shutdown();
+
+    if let Some(vnc_manager) = app.try_state::<Arc<VncSessionManager>>() {
+        let manager = vnc_manager.inner().clone();
+        let app_handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            manager.close_all(&app_handle).await;
+        });
+    }
 
     for window in main_windows(app) {
         close_scoped_child_windows(app, window.label());

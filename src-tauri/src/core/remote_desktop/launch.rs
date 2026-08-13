@@ -183,7 +183,7 @@ fn resolve_launch_target(
                     keyboard_hook: normalize_keyboard_hook(keyboard_hook),
                 }),
             }),
-            ConnectionType::Vnc { host, port } => Ok(LaunchTarget {
+            ConnectionType::Vnc { host, port, .. } => Ok(LaunchTarget {
                 protocol: RemoteDesktopProtocol::Vnc,
                 host,
                 port,

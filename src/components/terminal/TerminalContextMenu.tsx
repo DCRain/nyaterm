@@ -9,17 +9,24 @@ import {
   MdContentPaste,
   MdContentPasteGo,
   MdDeleteSweep,
+  MdFolderOpen,
+  MdOutlineDescription,
   MdSearch,
+  MdSettings,
   MdSelectAll,
+  MdStop,
   MdTranslate,
   MdTravelExplore,
 } from "react-icons/md";
+import { PiRecordFill } from "react-icons/pi";
 import { useTerminalAppSettings } from "@/context/AppContext";
 import { resolveDisplayKeys } from "@/hooks/useShortcutMap";
 import { openAIAssistant } from "@/lib/aiEvents";
 import { writeClipboardText } from "@/lib/clipboard";
+import { invoke } from "@/lib/invoke";
 import { sendTerminalClearInput } from "@/lib/terminalControlInput";
-import type { SearchEngine } from "@/types/global";
+import { openSettings } from "@/lib/windowManager";
+import type { RecordingMode, RecordingStatus, SearchEngine } from "@/types/global";
 import TranslationDialog from "../dialog/terminal/TranslationDialog";
 import { type QuickIconDef, SEARCH_ICONS } from "../icons";
 import {
@@ -36,20 +43,30 @@ import {
 
 interface TerminalContextMenuProps {
   children: React.ReactNode;
+  sessionId: string;
+  sessionName?: string;
   terminalRef: React.RefObject<Terminal | null>;
   onFind: (selection?: string) => void;
   onPasteText: (text: string) => void;
   onPasteClipboard: () => Promise<void> | void;
   onClearAll: () => void;
+  recordingStatus?: RecordingStatus;
+  onToggleRecording?: (sessionId: string, mode?: RecordingMode) => Promise<void> | void;
+  onSaveTranscript?: (sessionId: string, sessionName?: string) => Promise<void> | void;
 }
 
 export default function TerminalContextMenu({
   children,
+  sessionId,
+  sessionName,
   terminalRef,
   onFind,
   onPasteText,
   onPasteClipboard,
   onClearAll,
+  recordingStatus,
+  onToggleRecording,
+  onSaveTranscript,
 }: TerminalContextMenuProps) {
   const { t } = useTranslation();
   const termSettings = useTerminalAppSettings();
@@ -173,6 +190,37 @@ export default function TerminalContextMenu({
   const doSelectAll = useCallback(() => {
     terminalRef.current?.selectAll();
     terminalRef.current?.focus();
+  }, [terminalRef]);
+
+  const toggleRecording = useCallback(
+    (mode: RecordingMode = "transcript") => {
+      void Promise.resolve(onToggleRecording?.(sessionId, mode)).finally(() =>
+        terminalRef.current?.focus(),
+      );
+    },
+    [onToggleRecording, sessionId, terminalRef],
+  );
+
+  const saveTranscript = useCallback(() => {
+    void Promise.resolve(onSaveTranscript?.(sessionId, sessionName)).finally(() =>
+      terminalRef.current?.focus(),
+    );
+  }, [onSaveTranscript, sessionId, sessionName, terminalRef]);
+
+  const openRecordingPath = useCallback(
+    (command: "open_recording_file" | "show_recording_in_folder") => {
+      if (!recordingStatus?.filePath) return;
+      void invoke(command, { filePath: recordingStatus.filePath })
+        .catch(() => {})
+        .finally(() => terminalRef.current?.focus());
+    },
+    [recordingStatus?.filePath, terminalRef],
+  );
+
+  const openRecordingSettings = useCallback(() => {
+    void openSettings("terminal-general")
+      .catch(() => {})
+      .finally(() => terminalRef.current?.focus());
   }, [terminalRef]);
 
   return (
@@ -328,6 +376,59 @@ export default function TerminalContextMenu({
             <MdDeleteSweep className="text-[0.875rem] text-muted-foreground mr-2" />
             {t("terminalCtx.clearAll")}
           </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuSub>
+            <ContextMenuSubTrigger>
+              <PiRecordFill className="text-[0.875rem] text-muted-foreground mr-2" />
+              {t("terminalCtx.recordingLogs")}
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent>
+              {recordingStatus ? (
+                <>
+                  <ContextMenuItem
+                    disabled={!onToggleRecording}
+                    onClick={() => toggleRecording("transcript")}
+                  >
+                    <MdStop className="text-[0.875rem] text-muted-foreground mr-2" />
+                    {t("recording.stop")}
+                    <ContextMenuShortcut>{dk("terminal.recording.toggle")}</ContextMenuShortcut>
+                  </ContextMenuItem>
+                  <ContextMenuItem onClick={() => openRecordingPath("open_recording_file")}>
+                    <MdOutlineDescription className="text-[0.875rem] text-muted-foreground mr-2" />
+                    {t("recording.openLog")}
+                  </ContextMenuItem>
+                  <ContextMenuItem onClick={() => openRecordingPath("show_recording_in_folder")}>
+                    <MdFolderOpen className="text-[0.875rem] text-muted-foreground mr-2" />
+                    {t("recording.showInFolder")}
+                  </ContextMenuItem>
+                </>
+              ) : (
+                <>
+                  <ContextMenuItem
+                    disabled={!onToggleRecording}
+                    onClick={() => toggleRecording("transcript")}
+                  >
+                    <MdOutlineDescription className="text-[0.875rem] text-muted-foreground mr-2" />
+                    {t("recording.startTranscriptLog")}
+                    <ContextMenuShortcut>{dk("terminal.recording.toggle")}</ContextMenuShortcut>
+                  </ContextMenuItem>
+                  <ContextMenuItem disabled={!onToggleRecording} onClick={() => toggleRecording("raw")}>
+                    <PiRecordFill className="text-[0.875rem] text-muted-foreground mr-2" />
+                    {t("recording.startRawLog")}
+                  </ContextMenuItem>
+                </>
+              )}
+              <ContextMenuSeparator />
+              <ContextMenuItem disabled={!onSaveTranscript} onClick={saveTranscript}>
+                <MdOutlineDescription className="text-[0.875rem] text-muted-foreground mr-2" />
+                {t("recording.saveTranscript")}
+              </ContextMenuItem>
+              <ContextMenuItem onClick={openRecordingSettings}>
+                <MdSettings className="text-[0.875rem] text-muted-foreground mr-2" />
+                {t("terminalCtx.recordingSettings")}
+              </ContextMenuItem>
+            </ContextMenuSubContent>
+          </ContextMenuSub>
           <ContextMenuSeparator />
           <ContextMenuItem onClick={doSelectAll}>
             <MdSelectAll className="text-[0.875rem] text-muted-foreground mr-2" />

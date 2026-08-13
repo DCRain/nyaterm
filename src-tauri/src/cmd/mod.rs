@@ -27,4 +27,5 @@ pub mod stats;
 pub mod translate;
 pub mod tunnel;
 pub mod updater;
+pub mod vnc;
 pub mod watcher;

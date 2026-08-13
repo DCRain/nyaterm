@@ -194,6 +194,8 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     docker_manager_interval: 10,
     saved_connections_sort_mode: "default",
     saved_connections_expanded_group_ids: [],
+    asset_sort_key: null,
+    asset_sort_direction: null,
     recent_connection_ids: [],
     transfer_height: 180,
     file_explorer_show_hidden_files: true,

@@ -16,7 +16,11 @@ import {
   type TerminalWindowNode,
   type TerminalWindowSplit,
 } from "@/lib/tabWindows";
-import type { Tab } from "@/types/global";
+import type {
+  RecordingMode,
+  RecordingStatus,
+  Tab,
+} from "@/types/global";
 import PaneWorkspace from "./PaneWorkspace";
 import DropZoneOverlay, { type DropZone } from "./TabDockDropOverlay";
 
@@ -55,6 +59,9 @@ interface TabWindowsWorkspaceProps {
   onReconnected?: (oldSessionId: string, newSessionId: string) => void;
   onDisconnectedCloseRequested?: (tabId: string, paneId: string) => void | Promise<void>;
   onConnectionError?: (tabId: string, paneId: string, sessionId: string, error: string) => void;
+  recordingStatuses?: RecordingStatus[];
+  onToggleSessionRecording?: (sessionId: string, mode?: RecordingMode) => Promise<void> | void;
+  onSaveSessionTranscript?: (sessionId: string, sessionName?: string) => Promise<void> | void;
 }
 
 type LeafContentRectChange = (leafId: string, rect: LeafContentRect | null) => void;
@@ -323,6 +330,9 @@ function TerminalContentHost({
   onReconnected,
   onDisconnectedCloseRequested,
   onConnectionError,
+  recordingStatuses,
+  onToggleSessionRecording,
+  onSaveSessionTranscript,
   onLeafDragOver,
   onLeafDragLeave,
   onLeafDrop,
@@ -330,13 +340,16 @@ function TerminalContentHost({
   placements: TabPlacement[];
   leafRects: Map<string, LeafContentRect>;
   dropState: DropState | null;
-  onSelectTab: (leafId: string, tabId: string) => void;
-  onActivatePane: (tabId: string, paneId: string) => void;
-  onUpdatePaneSplitRatio: (tabId: string, splitId: string, ratio: number) => void;
-  onReconnectPane?: (tabId: string, paneId: string) => void | Promise<void>;
-  onReconnected?: (oldSessionId: string, newSessionId: string) => void;
-  onDisconnectedCloseRequested?: (tabId: string, paneId: string) => void | Promise<void>;
-  onConnectionError?: (tabId: string, paneId: string, sessionId: string, error: string) => void;
+  onSelectTab: TabWindowsWorkspaceProps["onSelectTab"];
+  onActivatePane: TabWindowsWorkspaceProps["onActivatePane"];
+  onUpdatePaneSplitRatio: TabWindowsWorkspaceProps["onUpdatePaneSplitRatio"];
+  onReconnectPane?: TabWindowsWorkspaceProps["onReconnectPane"];
+  onReconnected?: TabWindowsWorkspaceProps["onReconnected"];
+  onDisconnectedCloseRequested?: TabWindowsWorkspaceProps["onDisconnectedCloseRequested"];
+  onConnectionError?: TabWindowsWorkspaceProps["onConnectionError"];
+  recordingStatuses?: TabWindowsWorkspaceProps["recordingStatuses"];
+  onToggleSessionRecording?: TabWindowsWorkspaceProps["onToggleSessionRecording"];
+  onSaveSessionTranscript?: TabWindowsWorkspaceProps["onSaveSessionTranscript"];
   onLeafDragOver: LeafDragHandler;
   onLeafDragLeave: LeafDragHandler;
   onLeafDrop: LeafDragHandler;
@@ -377,6 +390,9 @@ function TerminalContentHost({
               onReconnected={onReconnected}
               onDisconnectedCloseRequested={onDisconnectedCloseRequested}
               onConnectionError={onConnectionError}
+              recordingStatuses={recordingStatuses}
+              onToggleSessionRecording={onToggleSessionRecording}
+              onSaveSessionTranscript={onSaveSessionTranscript}
             />
             {visible && dropZone && <DropZoneOverlay zone={dropZone} />}
           </div>
@@ -399,6 +415,9 @@ function TabWindowsWorkspace({
   onReconnected,
   onDisconnectedCloseRequested,
   onConnectionError,
+  recordingStatuses,
+  onToggleSessionRecording,
+  onSaveSessionTranscript,
 }: TabWindowsWorkspaceProps) {
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const [leafRects, setLeafRects] = useState<Map<string, LeafContentRect>>(() => new Map());
@@ -589,6 +608,9 @@ function TabWindowsWorkspace({
         onReconnected={onReconnected}
         onDisconnectedCloseRequested={onDisconnectedCloseRequested}
         onConnectionError={onConnectionError}
+        recordingStatuses={recordingStatuses}
+        onToggleSessionRecording={onToggleSessionRecording}
+        onSaveSessionTranscript={onSaveSessionTranscript}
         onLeafDragOver={handleLeafDragOver}
         onLeafDragLeave={handleLeafDragLeave}
         onLeafDrop={handleLeafDrop}

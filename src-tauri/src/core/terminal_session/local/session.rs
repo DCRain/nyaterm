@@ -31,6 +31,7 @@ pub async fn create_local_session(
         id: session_id.clone(),
         name: session_name,
         session_type: SessionType::Local,
+        started_at: crate::core::now_session_started_at(),
         connection_id: config.as_ref().and_then(|cfg| cfg.connection_id.clone()),
         connected: true,
         owner_window_label,

@@ -4,14 +4,14 @@ sidebar_position: 0
 
 # Session Types
 
-NyaTerm is not just an SSH client. It is a desktop app that puts multiple terminal and remote-desktop workflows into one workspace. It currently supports:
+NyaTerm is not just an SSH client. It is a desktop app that puts multiple terminal and remote-desktop workflows into one workspace. It currently supports six session types:
 
 - **SSH**
 - **Local Terminal**
 - **Telnet**
 - **Serial**
 - **RDP**
-- **VNC** (external client)
+- **VNC**
 
 Understanding the differences helps explain why some panels or enhancements only appear for certain tabs.
 
@@ -24,7 +24,7 @@ Understanding the differences helps explain why some panels or enhancements only
 | Telnet | Legacy devices, lab environments, compatibility troubleshooting | Terminal workspace features with `Backspace Mode`, but not SSH-only features |
 | Serial | Routers, switches, boards, embedded debug ports | Serial port settings, `Backspace Mode`, and terminal workspace features |
 | RDP | Windows Remote Desktop or graphical administration entry points | Embedded remote desktop display, NLA/CredSSP, certificate verification, text clipboard, window fitting, reconnects; can also launch external RDP clients per platform |
-| VNC | Graphical remote desktop | Saved connections launch an external VNC client; not embedded in tabs |
+| VNC | Raw TCP VNC services, VM consoles, lightweight graphical remote desktops | Embedded Raw / ZRLE / Tight / Tight JPEG display, None / VNC Auth, window scaling, text clipboard, and reconnects; can also launch external VNC clients |
 
 ## SSH
 
@@ -132,11 +132,37 @@ Some connection configurations can also detect an available platform client and 
 
 If no client is found, NyaTerm shows an install prompt with platform-specific commands and download links.
 
-## VNC (external client)
+## VNC
 
-VNC connections can be saved in the connection list, but they are **not** embedded as desktop views inside NyaTerm tabs. When you connect, NyaTerm detects an available client for your platform and launches it externally. Passwords are prompted by the external client.
+VNC sessions are for traditional RFB / VNC services such as VM consoles, lab environments, and lightweight graphical desktops. Like RDP, they use a remote-desktop pane and share NyaTerm's saved-connection, recent-use, tab, and split-pane workspace model.
 
-### Recommended clients
+When creating a VNC session, you can configure:
+
+- Host and port
+- Security mode: automatic, None, or classic VNC Authentication
+- Display mode: fit to window, actual size, or stretch
+- Text clipboard toggle
+- Automatic reconnect attempts
+- Shared / view-only behavior
+
+The current VNC transport is direct TCP only, with no TLS / VeNCrypt. Classic VNC Authentication passwords are limited to 8 bytes; NyaTerm rejects longer passwords instead of truncating them. Framebuffer encodings are advertised by default as `DesktopSizePseudo`, ZRLE, Tight, then Raw; Tight JPEG is decoded in the backend into the same RGBA framebuffer path, and Raw remains the stable fallback. CopyRect, cursor pseudo-encoding, remote resize, proxies, and SSH transport are not supported. Text clipboard exchange is limited to Latin-1 text so binary or oversized payloads do not enter the VNC protocol path.
+
+### VNC Interop Matrix
+
+| Scenario | Security | Encoding | Status |
+| --- | --- | --- | --- |
+| Scripted RFB 3.8 fixture | None | ZRLE / Tight / Tight JPEG -> RGBA RawImage | Automated test passed |
+| Scripted RFB 3.8 fixture | classic VNC Auth | ZRLE / Tight / Tight JPEG -> RGBA RawImage | Automated test passed |
+| TigerVNC | None / VNC Auth | Raw / ZRLE / Tight / JPEG | Real server untested |
+| TightVNC | None / VNC Auth | Raw / Tight / JPEG | Real server untested |
+| x11vnc / LibVNCServer | None / VNC Auth | Raw / ZRLE / Tight / JPEG | Real server untested |
+| QEMU / KVM VNC | None / VNC Auth | Raw / ZRLE / Tight / JPEG | Real server untested |
+
+### External VNC clients
+
+Some connection configurations can also detect an available platform client and launch it externally. Passwords are prompted by the external client.
+
+**Recommended clients**
 
 - macOS: built-in `open vnc://host:port` (Screen Sharing), then TigerVNC Viewer / `vncviewer`
 - Windows: TigerVNC / UltraVNC / TightVNC / RealVNC `vncviewer`
@@ -153,7 +179,7 @@ A simple rule of thumb:
 - Need a traditional remote terminal? Use **Telnet**
 - Need a device console or debug port? Use **Serial**
 - Need a graphical Windows remote desktop? Use **RDP**
-- Need another graphical remote desktop? Use **VNC** (external client)
+- Need a VNC / VM console graphical desktop? Use **VNC**
 
 ## Mix them in one workspace
 
@@ -163,7 +189,7 @@ One of NyaTerm's strengths is that you can mix these session types in the same w
 - Local Terminal on the right to run packaging or Git commands
 - A Serial tab open to watch device boot output
 - An RDP pane open to inspect a Windows remote desktop
-- Launch VNC from the connection list when you need a full desktop
+- A VNC pane open to operate a VM console
 
 That is why some features are documented as session-specific. The workspace is shared, but the capability boundary still depends on the underlying session type.
 

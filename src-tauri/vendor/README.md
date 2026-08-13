@@ -33,6 +33,22 @@ This directory contains local copies of upstream crates used by NyaTerm's RDP st
 - Why vendored: CredSSP/NLA support must remain compatible with the vendored IronRDP connector and pinned `picky` version.
 - NyaTerm changes: no intentional RDP behavior patches in this round.
 
+## vnc-rs
+
+- Upstream: https://github.com/HsuJv/vnc-rs
+- Crate/version: `vnc-rs` `0.5.3`
+- Pinned revision: `ab684d009d767c968af2f7559576334038623124`
+- License: `MIT OR Apache-2.0`; both upstream `LICENSE-MIT` and `LICENSE-APACHE` are preserved in `vnc-rs/`, together with upstream author attribution in its manifest.
+- Why vendored: The published client parser contains network-reachable unsafe conversions, uninitialized buffers, panics, and unbounded server-controlled allocations that must be hardened before NyaTerm integration.
+- NyaTerm changes:
+  - Forbids unsafe code and replaces unsafe enum conversion/uninitialized buffers/copies with checked safe code.
+  - Adds typed errors for unknown security types/results/encodings and unsupported messages.
+  - Correctly validates the RFB 3.8 None `SecurityResult` and uses exact-length reads for failure strings.
+  - Adds configurable limits for strings, dimensions, rectangles, encoded/decoded payloads, clipboard data, and channels.
+  - Reduces internal channel capacity and adds deterministic protocol/parser regression tests.
+  - Adds an explicit security policy so NyaTerm can fail closed for `none`, `vnc-auth`, or password-aware `auto`.
+- Integration status: used by NyaTerm's VNC direct-TCP manager and React pane. Raw is the required fallback; compressed encodings must remain gated by fork tests and interoperability checks before being advertised.
+
 ## Update Method
 
 1. Record the current NyaTerm patches with `git diff -- src-tauri/vendor/<crate>`.
