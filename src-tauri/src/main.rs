@@ -8,6 +8,9 @@ fn main() {
     if nyaterm_lib::run_portable_update_helper_if_requested() {
         return;
     }
+    if nyaterm_lib::run_cloud_snapshot_decode_helper_if_requested() {
+        return;
+    }
 
     nyaterm_lib::run();
 }

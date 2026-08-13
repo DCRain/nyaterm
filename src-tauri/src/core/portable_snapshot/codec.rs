@@ -1,9 +1,16 @@
 pub fn decode_portable_snapshot(bytes: &[u8]) -> AppResult<PortableSnapshot> {
-    let payload = if is_zip_snapshot_payload(bytes) {
-        decode_compressed_snapshot_payload(bytes)?
-    } else {
-        bytes.to_vec()
-    };
+    let payload = catch_unwind(AssertUnwindSafe(|| -> AppResult<Vec<u8>> {
+        if is_zip_snapshot_payload(bytes) {
+            decode_compressed_snapshot_payload(bytes)
+        } else {
+            Ok(bytes.to_vec())
+        }
+    }))
+    .unwrap_or_else(|_| {
+        Err(AppError::Storage(
+            "Portable snapshot compressed payload is corrupt or incomplete".to_string(),
+        ))
+    })?;
     decode_portable_snapshot_redb(&payload)
 }
 
