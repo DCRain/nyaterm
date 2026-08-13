@@ -310,6 +310,7 @@
     "basicInfo": "Basic Info",
     "cards": "Cards",
     "cloud": "Cloud",
+    "connectionTime": "Connected At",
     "cpu": "CPU",
     "cpuCores": "Cores",
     "cpuModel": "CPU Model",

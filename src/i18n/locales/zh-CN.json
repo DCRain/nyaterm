@@ -310,6 +310,7 @@
     "basicInfo": "基本信息",
     "cards": "卡片",
     "cloud": "云主机",
+    "connectionTime": "连接时间",
     "cpu": "CPU",
     "cpuCores": "核心",
     "cpuModel": "CPU 型号",
