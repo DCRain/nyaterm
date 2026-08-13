@@ -25,7 +25,7 @@ export default function ReloadDirtyDialog({
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent size="sm">
+      <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>{t("fileEditor.reloadDirtyTitle")}</AlertDialogTitle>
           <AlertDialogDescription>{t("fileEditor.reloadDirtyDesc")}</AlertDialogDescription>

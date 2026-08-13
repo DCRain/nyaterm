@@ -14,6 +14,7 @@ import type { SshAgentAuthRequest } from "./components/dialog/connections/SshAge
 import type { SshAuthRequest } from "./components/dialog/connections/SshAuthDialog";
 import TemporarySshLinkDialog from "./components/dialog/connections/TemporarySshLinkDialog";
 import type { DockerSudoPasswordRequest } from "./components/dialog/docker/DockerSudoPasswordDialog";
+import UnsavedChangesDialog from "./components/dialog/remote-file-editor/UnsavedChangesDialog";
 import SessionQuickSwitcher, {
   type QuickSwitcherSession,
 } from "./components/dialog/terminal/SessionQuickSwitcherDialog";
@@ -41,6 +42,27 @@ import { useRemoteStats } from "./hooks/useRemoteStats";
 import { resolveDisplayKeys } from "./hooks/useShortcutMap";
 import { useTerminalZoom } from "./hooks/useTerminalZoom";
 import { useTabStatusIndicators } from "./hooks/useUnreadTabs";
+
+interface PendingFileDocumentClose {
+  paneIds: string[];
+  action: () => Promise<void>;
+}
+
+function collectFileDocumentPaneIds(tabs: Tab[]) {
+  return tabs.flatMap((tab) =>
+    collectSessionPanes(tab.root)
+      .filter((pane) => pane.paneKind === "file")
+      .map((pane) => pane.id),
+  );
+}
+
+function removePaneFromTabs(tabs: Tab[], tabId: string, paneId: string) {
+  return tabs.flatMap((tab) => {
+    if (tab.id !== tabId) return [tab];
+    const root = removeSessionPane(tab.root, paneId);
+    return root ? [{ ...tab, root }] : [];
+  });
+}
 
 type SecurityPrompt =
   | { kind: "host-key"; request: HostKeyVerifyRequest }
@@ -86,6 +108,11 @@ import {
   findExternalConnectionMatches,
   parseExternalOpenUrl,
 } from "./lib/externalOpen";
+import {
+  discardFileDocuments,
+  getDirtyFileDocumentIds,
+  saveFileDocuments,
+} from "./lib/fileDocumentRegistry";
 import { normalizeHeaderStatusMode } from "./lib/headerStatus";
 import { invoke } from "./lib/invoke";
 import { logger } from "./lib/logger";
@@ -140,7 +167,9 @@ import {
   findSessionPaneById,
   findTabBySessionId,
   getActivePane,
+  getReleasedSessionIds,
   getTabDisplayName,
+  removeSessionPane,
 } from "./lib/workspaceTabs";
 import type {
   AppSettings,
@@ -391,6 +420,7 @@ function App() {
     updateTabSession,
     markTabConnectionFailed,
     updatePaneSession,
+    replaceSessionReferences,
     markPaneConnectionFailed,
     markPaneConnecting,
     hasTab,
@@ -455,6 +485,9 @@ function App() {
   const [showUpdateDialog, setShowUpdateDialog] = useState(false);
   const [showSyncGroupDialog, setShowSyncGroupDialog] = useState(false);
   const [showQuitConfirm, setShowQuitConfirm] = useState(false);
+  const [pendingFileDocumentClose, setPendingFileDocumentClose] =
+    useState<PendingFileDocumentClose | null>(null);
+  const [savingFileDocuments, setSavingFileDocuments] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [helpDotVisible, setHelpDotVisible] = useState(false);
   const [sendCommandDraft, setSendCommandDraft] = useState<SendCommandPanelDraft | null>(null);
@@ -465,6 +498,44 @@ function App() {
   );
   const [postLoginConfirm, setPostLoginConfirm] = useState<PostLoginConfirmState | null>(null);
   const allowProgrammaticWindowCloseRef = useRef(false);
+
+  const requestFileDocumentClose = useCallback(
+    async (paneIds: string[], action: () => Promise<void>) => {
+      const dirtyPaneIds = getDirtyFileDocumentIds(new Set(paneIds));
+      if (dirtyPaneIds.length === 0) {
+        await action();
+        return;
+      }
+      setPendingFileDocumentClose({ paneIds: dirtyPaneIds, action });
+    },
+    [],
+  );
+
+  const handleSaveFileDocumentsAndClose = useCallback(async () => {
+    const pending = pendingFileDocumentClose;
+    if (!pending || savingFileDocuments) return;
+
+    setSavingFileDocuments(true);
+    try {
+      if (!(await saveFileDocuments(pending.paneIds))) {
+        setPendingFileDocumentClose(null);
+        return;
+      }
+      setPendingFileDocumentClose(null);
+      await pending.action();
+    } finally {
+      setSavingFileDocuments(false);
+    }
+  }, [pendingFileDocumentClose, savingFileDocuments]);
+
+  const handleDiscardFileDocumentsAndClose = useCallback(() => {
+    const pending = pendingFileDocumentClose;
+    if (!pending) return;
+    discardFileDocuments(pending.paneIds);
+    setPendingFileDocumentClose(null);
+    void pending.action();
+  }, [pendingFileDocumentClose]);
+
   const handleSendCommandDraftConsumed = useCallback(() => {
     setSendCommandDraft(null);
   }, []);
@@ -982,6 +1053,7 @@ function App() {
     for (const tab of tabs) {
       for (const pane of collectSessionPanes(tab.root)) {
         if (
+          pane.paneKind === "terminal" &&
           !pane.connecting &&
           !pane.connectError &&
           pane.type === "SSH" &&
@@ -1764,10 +1836,16 @@ function App() {
     [flushAssetMonitoringCache, setSyncGroups],
   );
 
-  const closeWorkspaceTabSessions = useCallback(
-    async (tab: Tab) => {
+  const closeReleasedSessions = useCallback(
+    async (previousTabs: Tab[], nextTabs: Tab[]) => {
+      const releasedSessionIds = getReleasedSessionIds(previousTabs, nextTabs);
       const results = await Promise.all(
-        collectSessionPanes(tab.root).map((pane) => closePaneBackendSession(pane)),
+        releasedSessionIds.map((sessionId) => {
+          const pane = previousTabs
+            .flatMap((tab) => collectSessionPanes(tab.root))
+            .find((candidate) => candidate.sessionId === sessionId);
+          return pane ? closePaneBackendSession(pane) : Promise.resolve(true);
+        }),
       );
       return results.every(Boolean);
     },
@@ -1797,22 +1875,68 @@ function App() {
     toast.info(t("tabCtx.lockedCloseBlocked"));
   }, [t]);
 
+  const executeCloseTabs = useCallback(
+    async (tabIds: string[], options?: { nextActiveTabId?: string | null }) => {
+      const targetIds = new Set(tabIds);
+      const nextTabs = tabs.filter((tab) => !targetIds.has(tab.id));
+      const allClosed = await closeReleasedSessions(tabs, nextTabs);
+      if (!allClosed) {
+        toast.error(t("tabCtx.closeFailed"));
+        return;
+      }
+      closeTabs(tabIds, options);
+      await persistWorkspaceNow(t("tabCtx.closeFailed"));
+    },
+    [closeReleasedSessions, closeTabs, persistWorkspaceNow, t, tabs],
+  );
+
+  const requestCloseTabs = useCallback(
+    async (
+      tabsToClose: Tab[],
+      options?: { nextActiveTabId?: string | null },
+    ) => {
+      const tabIds = tabsToClose.map((tab) => tab.id);
+      const paneIds = collectFileDocumentPaneIds(tabsToClose);
+      await requestFileDocumentClose(paneIds, () =>
+        executeCloseTabs(tabIds, options),
+      );
+    },
+    [executeCloseTabs, requestFileDocumentClose],
+  );
+
+  const executeClosePane = useCallback(
+    async (tabId: string, paneId: string) => {
+      const nextTabs = removePaneFromTabs(tabs, tabId, paneId);
+      const allClosed = await closeReleasedSessions(tabs, nextTabs);
+      if (!allClosed) {
+        toast.error(t("tabCtx.closeFailed"));
+        return;
+      }
+      closePane(tabId, paneId);
+      await persistWorkspaceNow(t("tabCtx.closeFailed"));
+    },
+    [closePane, closeReleasedSessions, persistWorkspaceNow, t, tabs],
+  );
+
+  const requestClosePane = useCallback(
+    async (tab: Tab, pane: SessionPane) => {
+      const paneIds = pane.paneKind === "file" ? [pane.id] : [];
+      await requestFileDocumentClose(paneIds, () =>
+        executeClosePane(tab.id, pane.id),
+      );
+    },
+    [executeClosePane, requestFileDocumentClose],
+  );
+
   const handleCloseWorkspaceTab = useCallback(
     async (tab: Tab) => {
       if (tab.locked) {
         notifyLockedTabCloseBlocked();
         return;
       }
-
-      const allClosed = await closeWorkspaceTabSessions(tab);
-      if (!allClosed) {
-        toast.error(t("tabCtx.closeFailed"));
-        return;
-      }
-      closeTabs([tab.id]);
-      await persistWorkspaceNow(t("tabCtx.closeFailed"));
+      await requestCloseTabs([tab]);
     },
-    [closeTabs, closeWorkspaceTabSessions, notifyLockedTabCloseBlocked, persistWorkspaceNow, t],
+    [notifyLockedTabCloseBlocked, requestCloseTabs],
   );
 
   const handleCloseDisconnectedPane = useCallback(
@@ -1824,17 +1948,9 @@ function App() {
         notifyLockedTabCloseBlocked();
         return;
       }
-
-      const closed = await closePaneBackendSession(pane);
-      if (!closed) {
-        toast.error(t("tabCtx.closeFailed"));
-        return;
-      }
-
-      closePane(tab.id, pane.id);
-      await persistWorkspaceNow(t("tabCtx.closeFailed"));
+      await requestClosePane(tab, pane);
     },
-    [closePane, closePaneBackendSession, notifyLockedTabCloseBlocked, persistWorkspaceNow, t, tabs],
+    [notifyLockedTabCloseBlocked, requestClosePane, tabs],
   );
 
   const handleSessionClick = useCallback(
@@ -1862,7 +1978,8 @@ function App() {
 
   const handleHistoryCommand = useCallback(
     (command: string, execute: boolean = true) => {
-      if (!hasLiveSession(activePane)) return;
+      if (activePane?.paneKind !== "terminal" || !hasLiveSession(activePane))
+        return;
 
       const { sessionId } = activePane;
       const data = buildTerminalCommandInput(command, execute);
@@ -1891,7 +2008,13 @@ function App() {
       const data = buildTerminalCommandInput(command, execute);
       for (const tab of tabs) {
         for (const pane of collectSessionPanes(tab.root)) {
-          if (!hasLiveSession(pane) || !isNonSerialSessionType(pane.type)) continue;
+          if (
+            pane.paneKind !== "terminal" ||
+            !hasLiveSession(pane) ||
+            !isNonSerialSessionType(pane.type)
+          ) {
+            continue;
+          }
           const { sessionId } = pane;
           void sendSessionInput(sessionId, data, {
             preview: execute ? { kind: "reset" } : { kind: "data", data: command },
@@ -1907,12 +2030,11 @@ function App() {
     (oldSessionId: string, newSessionId: string) => {
       const tab = findTabBySessionId(tabs, oldSessionId);
       const pane = tab ? findPaneBySessionId(tab, oldSessionId) : null;
-      if (tab && pane) {
-        updatePaneSession(tab.id, pane.id, newSessionId);
+      if (!pane) return;
+      replaceSessionReferences(oldSessionId, newSessionId);
         updateAutoIconForSessionStart(pane.connectionId, newSessionId);
-      }
     },
-    [tabs, updateAutoIconForSessionStart, updatePaneSession],
+    [replaceSessionReferences, tabs, updateAutoIconForSessionStart],
   );
 
   const handleConnectionError = useCallback(
@@ -2057,11 +2179,19 @@ function App() {
       return;
     }
 
+    const restorableTabs = tabsRef.current.filter((tab) =>
+      collectSessionPanes(tab.root).some((pane) => pane.paneKind !== "file"),
+    );
     const terminalWindowLayout =
       appSettings.general.startup_restore_window_layout === false
         ? null
-        : serializeTerminalWindowLayout(terminalWindowsRef.current, tabsRef.current);
-    lastPersistedTerminalWindowLayoutKeyRef.current = JSON.stringify(terminalWindowLayout ?? null);
+        : serializeTerminalWindowLayout(
+            terminalWindowsRef.current,
+            restorableTabs,
+          );
+    lastPersistedTerminalWindowLayoutKeyRef.current = JSON.stringify(
+      terminalWindowLayout ?? null,
+    );
     await persistTabsNow({ terminal_window_layout: terminalWindowLayout });
   }, [
     appSettings.general.startup_restore_window_layout,
@@ -2072,19 +2202,21 @@ function App() {
 
   const handleQuitApplication = useCallback(() => {
     setShowQuitConfirm(false);
-    void persistWorkspaceLayoutNow()
-      .catch((error) => {
-        logger.error({
-          domain: "settings.persistence",
-          event: "workspace_layout.persist_before_quit_failed",
-          message: "Failed to persist workspace layout before quit",
-          error,
+    void requestFileDocumentClose(
+      collectFileDocumentPaneIds(tabs),
+      async () => {
+        await persistWorkspaceLayoutNow().catch((error) => {
+          logger.error({
+            domain: "settings.persistence",
+            event: "workspace_layout.persist_before_quit_failed",
+            message: "Failed to persist workspace layout before quit",
+            error,
+          });
         });
-      })
-      .finally(() => {
-        void invoke<void>("quit_application");
-      });
-  }, [persistWorkspaceLayoutNow]);
+        await invoke<void>("quit_application");
+      },
+    );
+  }, [persistWorkspaceLayoutNow, requestFileDocumentClose, tabs]);
 
   useEffect(() => {
     if (!settingsLoaded) return;
@@ -2098,29 +2230,47 @@ function App() {
 
           event.preventDefault();
 
-          try {
-            await persistWorkspaceLayoutNow();
-          } catch (error) {
-            logger.error({
-              domain: "settings.persistence",
-              event: "workspace_layout.persist_before_close_failed",
-              message: "Failed to persist workspace layout before close",
-              error,
-            });
-          }
-
           if (appSettings.general.minimize_to_tray) {
+            await persistWorkspaceLayoutNow().catch((error) => {
+              logger.error({
+                domain: "settings.persistence",
+                event: "workspace_layout.persist_before_close_failed",
+                message: "Failed to persist workspace layout before close",
+                error,
+              });
+            });
             await invoke<void>("hide_main_window").catch(() => {});
             return;
           }
 
-          allowProgrammaticWindowCloseRef.current = true;
-          await currentWindow.close().catch(() => {
-            allowProgrammaticWindowCloseRef.current = false;
-          });
-          window.setTimeout(() => {
-            allowProgrammaticWindowCloseRef.current = false;
-          }, 1000);
+          if (
+            tabs.length > 0 &&
+            appSettings.general.confirm_on_close !== false
+          ) {
+            setShowQuitConfirm(true);
+            return;
+          }
+
+          await requestFileDocumentClose(
+            collectFileDocumentPaneIds(tabs),
+            async () => {
+              await persistWorkspaceLayoutNow().catch((error) => {
+                logger.error({
+                  domain: "settings.persistence",
+                  event: "workspace_layout.persist_before_close_failed",
+                  message: "Failed to persist workspace layout before close",
+                  error,
+                });
+              });
+              allowProgrammaticWindowCloseRef.current = true;
+              await currentWindow.close().catch(() => {
+                allowProgrammaticWindowCloseRef.current = false;
+              });
+              window.setTimeout(() => {
+                allowProgrammaticWindowCloseRef.current = false;
+              }, 1000);
+            },
+          );
         });
       })
       .then((unlisten) => {
@@ -2131,7 +2281,14 @@ function App() {
     return () => {
       unlistenCloseRequested?.();
     };
-  }, [appSettings.general.minimize_to_tray, persistWorkspaceLayoutNow, settingsLoaded]);
+  }, [
+    appSettings.general.confirm_on_close,
+    appSettings.general.minimize_to_tray,
+    persistWorkspaceLayoutNow,
+    requestFileDocumentClose,
+    settingsLoaded,
+    tabs,
+  ]);
 
   const handleRequestQuit = useCallback(() => {
     if (tabs.length > 0 && appSettings.general.confirm_on_close !== false) {
@@ -2152,23 +2309,14 @@ function App() {
       return;
     }
 
-    import("@tauri-apps/api/window")
-      .then(({ getCurrentWindow }) => {
-        allowProgrammaticWindowCloseRef.current = true;
-        return getCurrentWindow()
-          .close()
-          .catch((error) => {
-            allowProgrammaticWindowCloseRef.current = false;
-            throw error;
-          });
-      })
-      .catch(() => {})
-      .finally(() => {
-        window.setTimeout(() => {
-          allowProgrammaticWindowCloseRef.current = false;
-        }, 1000);
-      });
-  }, [appSettings.general.confirm_on_close, appSettings.general.minimize_to_tray, tabs.length]);
+    void import("@tauri-apps/api/window").then(({ getCurrentWindow }) =>
+      getCurrentWindow().close(),
+    );
+  }, [
+    appSettings.general.confirm_on_close,
+    appSettings.general.minimize_to_tray,
+    tabs.length,
+  ]);
 
   useEffect(() => {
     const unlisten = listen<TrayAction>("tray-action", ({ payload }) => {
@@ -2302,7 +2450,15 @@ function App() {
   const handleMultiplexSshSession = useCallback(
     async (tab: Tab, startupCommand?: StartupCommandRequest) => {
       const pane = getActivePane(tab);
-      if (!pane || pane.type !== "SSH" || pane.connecting || pane.connectError) return;
+      if (
+        !pane ||
+        pane.paneKind !== "terminal" ||
+        pane.type !== "SSH" ||
+        pane.connecting ||
+        pane.connectError
+      ) {
+        return;
+      }
 
       let tabId: string | undefined;
 
@@ -2411,10 +2567,28 @@ function App() {
     );
   }, [getActiveTab]);
 
+  const hasFileDocumentDependency = useCallback(
+    (sessionId: string) =>
+      tabs.some((tab) =>
+        collectSessionPanes(tab.root).some(
+          (pane) => pane.paneKind === "file" && pane.sessionId === sessionId,
+        ),
+      ),
+    [tabs],
+  );
+
+  const notifyFileDocumentDependency = useCallback(() => {
+    toast.info(t("tabCtx.fileSessionInUse"));
+  }, [t]);
+
   const handleReconnectSession = useCallback(
     async (tab: Tab) => {
       const pane = getActivePane(tab);
       if (!pane || pane.connecting || !canCreateSessionFromPane(pane)) return;
+      if (hasFileDocumentDependency(pane.sessionId)) {
+        notifyFileDocumentDependency();
+        return;
+      }
 
       toast.info(t("tabCtx.reconnecting"));
 
@@ -2469,8 +2643,10 @@ function App() {
     [
       closePaneBackendSession,
       createSessionForPane,
+      hasFileDocumentDependency,
       hasPane,
       maybePromptConnectionEdit,
+      notifyFileDocumentDependency,
       recordRecentConnection,
       t,
       updateAutoIconForSessionStart,
@@ -2481,7 +2657,17 @@ function App() {
   const handleDisconnectSession = useCallback(
     async (tab: Tab) => {
       const pane = getActivePane(tab);
-      if (!pane || pane.connecting || pane.connectError) return;
+      if (
+        !pane ||
+        pane.connecting ||
+        pane.connectError ||
+        pane.paneKind === "file"
+      )
+        return;
+      if (hasFileDocumentDependency(pane.sessionId)) {
+        notifyFileDocumentDependency();
+        return;
+      }
 
       const closed = await closePaneBackendSession(pane);
       if (!closed) {
@@ -2491,14 +2677,24 @@ function App() {
 
       toast.success(t("tabCtx.disconnectSuccess"));
     },
-    [closePaneBackendSession, t],
+    [
+      closePaneBackendSession,
+      hasFileDocumentDependency,
+      notifyFileDocumentDependency,
+      t,
+    ],
   );
 
   const handleReconnectSessionById = useCallback(
     async (sessionId: string) => {
       const tab = findTabBySessionId(tabs, sessionId);
       const pane = tab ? findPaneBySessionId(tab, sessionId) : null;
-      if (!tab || !pane || pane.connecting || !canCreateSessionFromPane(pane)) return;
+      if (!tab || !pane || pane.connecting || !canCreateSessionFromPane(pane))
+        return;
+      if (hasFileDocumentDependency(pane.sessionId)) {
+        notifyFileDocumentDependency();
+        return;
+      }
 
       toast.info(t("tabCtx.reconnecting"));
 
@@ -2553,8 +2749,10 @@ function App() {
     [
       closePaneBackendSession,
       createSessionForPane,
+      hasFileDocumentDependency,
       hasPane,
       maybePromptConnectionEdit,
+      notifyFileDocumentDependency,
       recordRecentConnection,
       t,
       tabs,
@@ -2566,8 +2764,11 @@ function App() {
   const handleSplitSession = useCallback(
     async (tab: Tab, direction: PaneSplitDirection) => {
       const pane = getActivePane(tab);
-      if (!pane || !canCreateSessionFromPane(pane)) return;
-      const leaf = terminalWindows ? findTerminalWindowLeafByTabId(terminalWindows, tab.id) : null;
+      if (!pane || pane.paneKind === "file" || !canCreateSessionFromPane(pane))
+        return;
+      const leaf = terminalWindows
+        ? findTerminalWindowLeafByTabId(terminalWindows, tab.id)
+        : null;
       if (!leaf) {
         toast.error(t("tabCtx.splitFailed"));
         return;
@@ -2669,6 +2870,10 @@ function App() {
         ? (collectSessionPanes(tab.root).find((item) => item.id === paneId) ?? null)
         : null;
       if (!pane || pane.connecting || !canCreateSessionFromPane(pane)) return;
+      if (hasFileDocumentDependency(pane.sessionId)) {
+        notifyFileDocumentDependency();
+        return;
+      }
 
       try {
         if (pane.connectionId) {
@@ -2722,9 +2927,11 @@ function App() {
     [
       closePaneBackendSession,
       createSessionForPane,
+      hasFileDocumentDependency,
       hasPane,
       markPaneConnectionFailed,
       maybePromptConnectionEdit,
+      notifyFileDocumentDependency,
       recordRecentConnection,
       tabs,
       updateAutoIconForSessionStart,
@@ -2741,23 +2948,20 @@ function App() {
 
       const pane = getActivePane(tab);
       if (!pane) return;
-
-      const closed = await closePaneBackendSession(pane);
-      if (!closed) {
-        toast.error(t("tabCtx.closeFailed"));
-        return;
-      }
-
-      closePane(tab.id, pane.id);
-      await persistWorkspaceNow(t("tabCtx.closeFailed"));
+      await requestClosePane(tab, pane);
     },
-    [closePane, closePaneBackendSession, notifyLockedTabCloseBlocked, persistWorkspaceNow, t],
+    [notifyLockedTabCloseBlocked, requestClosePane],
   );
 
   const handleDisconnectSessionById = useCallback(
     async (sessionId: string) => {
       const tab = findTabBySessionId(tabs, sessionId);
       const pane = tab ? findPaneBySessionId(tab, sessionId) : null;
+
+      if (pane && hasFileDocumentDependency(sessionId)) {
+        notifyFileDocumentDependency();
+        return;
+      }
 
       if (!tab || !pane) {
         try {
@@ -2777,46 +2981,38 @@ function App() {
         return;
       }
 
-      const closed = await closePaneBackendSession(pane);
-      if (!closed) {
-        toast.error(t("tabCtx.closeFailed"));
-        return;
-      }
-
-      closePane(tab.id, pane.id);
-      await persistWorkspaceNow(t("tabCtx.closeFailed"));
+      await requestClosePane(tab, pane);
     },
-    [closePane, closePaneBackendSession, persistWorkspaceNow, t, tabs],
+    [
+      hasFileDocumentDependency,
+      notifyFileDocumentDependency,
+      requestClosePane,
+      t,
+      tabs,
+    ],
   );
 
   const canReconnectSessionById = useCallback(
     (sessionId: string) => {
       const tab = findTabBySessionId(tabs, sessionId);
       const pane = tab ? findPaneBySessionId(tab, sessionId) : null;
-      return !!pane && !pane.connecting && canCreateSessionFromPane(pane);
+      return (
+        !!pane &&
+        pane.paneKind !== "file" &&
+        !pane.connecting &&
+        !hasFileDocumentDependency(sessionId) &&
+        canCreateSessionFromPane(pane)
+      );
     },
-    [tabs],
+    [hasFileDocumentDependency, tabs],
   );
 
   const handleCloseAllTabs = useCallback(async () => {
     const tabsToClose = tabs.filter((tab) => !tab.locked);
     const skippedLockedCount = tabs.length - tabsToClose.length;
-    const results = await Promise.all(tabsToClose.map((tab) => closeWorkspaceTabSessions(tab)));
-    const successfulTabIds = tabsToClose.filter((_, index) => results[index]).map((tab) => tab.id);
-
-    if (successfulTabIds.length > 0) {
-      closeTabs(successfulTabIds);
-      await persistWorkspaceNow(t("tabCtx.closeFailed"));
-    }
-
-    if (skippedLockedCount > 0) {
-      toast.info(t("tabCtx.lockedTabsSkipped"));
-    }
-
-    if (successfulTabIds.length !== tabsToClose.length) {
-      toast.error(t("tabCtx.closeFailed"));
-    }
-  }, [closeTabs, closeWorkspaceTabSessions, persistWorkspaceNow, t, tabs]);
+    if (tabsToClose.length > 0) await requestCloseTabs(tabsToClose);
+    if (skippedLockedCount > 0) toast.info(t("tabCtx.lockedTabsSkipped"));
+  }, [requestCloseTabs, t, tabs]);
 
   const handleCloseInactiveTabs = useCallback(
     async (keepTabId: string) => {
@@ -2829,39 +3025,16 @@ function App() {
       );
       const tabsToClose = targetTabsToClose.filter((tab) => !tab.locked);
       const skippedLockedCount = targetTabsToClose.length - tabsToClose.length;
-      const results = await Promise.all(tabsToClose.map((tab) => closeWorkspaceTabSessions(tab)));
 
-      const successfulTabIds = tabsToClose
-        .filter((_, index) => results[index])
-        .map((tab) => tab.id);
-
-      if (successfulTabIds.length > 0) {
-        closeTabs(successfulTabIds, { nextActiveTabId: keepTabId });
-        await persistWorkspaceNow(t("tabCtx.closeFailed"));
-      }
-
-      if (!successfulTabIds.length && activeTabId !== keepTabId) {
+      if (tabsToClose.length > 0) {
+        await requestCloseTabs(tabsToClose, { nextActiveTabId: keepTabId });
+      } else if (activeTabId !== keepTabId) {
         setActiveTabId(keepTabId);
       }
 
-      if (skippedLockedCount > 0) {
-        toast.info(t("tabCtx.lockedTabsSkipped"));
-      }
-
-      if (successfulTabIds.length !== tabsToClose.length) {
-        toast.error(t("tabCtx.closeFailed"));
-      }
+      if (skippedLockedCount > 0) toast.info(t("tabCtx.lockedTabsSkipped"));
     },
-    [
-      activeTabId,
-      closeTabs,
-      closeWorkspaceTabSessions,
-      persistWorkspaceNow,
-      setActiveTabId,
-      t,
-      tabs,
-      terminalWindows,
-    ],
+    [activeTabId, requestCloseTabs, setActiveTabId, t, tabs, terminalWindows],
   );
 
   const handleCloseRightTabs = useCallback(
@@ -2875,26 +3048,11 @@ function App() {
       const targetTabsToClose = tabs.filter((tab) => rightTabIds.includes(tab.id));
       const tabsToClose = targetTabsToClose.filter((tab) => !tab.locked);
       const skippedLockedCount = targetTabsToClose.length - tabsToClose.length;
-      const results = await Promise.all(tabsToClose.map((tab) => closeWorkspaceTabSessions(tab)));
 
-      const successfulTabIds = tabsToClose
-        .filter((_, index) => results[index])
-        .map((tab) => tab.id);
-
-      if (successfulTabIds.length > 0) {
-        closeTabs(successfulTabIds);
-        await persistWorkspaceNow(t("tabCtx.closeFailed"));
-      }
-
-      if (skippedLockedCount > 0) {
-        toast.info(t("tabCtx.lockedTabsSkipped"));
-      }
-
-      if (successfulTabIds.length !== tabsToClose.length) {
-        toast.error(t("tabCtx.closeFailed"));
-      }
+      if (tabsToClose.length > 0) await requestCloseTabs(tabsToClose);
+      if (skippedLockedCount > 0) toast.info(t("tabCtx.lockedTabsSkipped"));
     },
-    [closeTabs, closeWorkspaceTabSessions, persistWorkspaceNow, t, tabs, terminalWindows],
+    [requestCloseTabs, t, tabs, terminalWindows],
   );
 
   const handleSessionInfo = useCallback((tab: Tab) => {
@@ -3150,9 +3308,18 @@ function App() {
   // --- Panel content rendering (side-independent) ---
 
   const activeSessionId =
-    activePane && !activePane.connecting && !activePane.connectError ? activePane.sessionId : null;
+    activePane &&
+    activePane.paneKind === "terminal" &&
+    !activePane.connecting &&
+    !activePane.connectError
+      ? activePane.sessionId
+      : null;
   const activeSshSessionId =
-    activePane && !activePane.connecting && !activePane.connectError && activePane.type === "SSH"
+    activePane &&
+    activePane.paneKind === "terminal" &&
+    !activePane.connecting &&
+    !activePane.connectError &&
+    activePane.type === "SSH"
       ? activePane.sessionId
       : null;
   const activeLiveSshSessionId =
@@ -3216,11 +3383,16 @@ function App() {
   }, [activeStatsSessionId, handleAssetMonitoringPatch, npuOverviewState.overview]);
 
   const activeSerialSessionId =
-    activePane && !activePane.connecting && !activePane.connectError && activePane.type === "Serial"
+    activePane &&
+    activePane.paneKind === "terminal" &&
+    !activePane.connecting &&
+    !activePane.connectError &&
+    activePane.type === "Serial"
       ? activePane.sessionId
       : null;
   const activeNonSerialSessionId =
     activePane &&
+    activePane.paneKind === "terminal" &&
     !activePane.connecting &&
     !activePane.connectError &&
     isNonSerialSessionType(activePane.type)
@@ -3707,7 +3879,7 @@ function App() {
       />
       <SessionQuickSwitcher
         open={showSessionQuickSwitcher}
-        activeSessionId={activePane?.sessionId ?? null}
+        activeSessionId={activeSessionId}
         workspaceSessions={quickSwitcherSessions}
         savedConnections={savedConnections}
         onClose={handleCloseSessionQuickSwitcher}
@@ -3729,7 +3901,21 @@ function App() {
         onSelectConnection={handleExternalMatchConnection}
         onUseTemporary={handleExternalMatchTemporary}
       />
-      <AlertDialog open={postLoginConfirm !== null} onOpenChange={handlePostLoginConfirmOpenChange}>
+      <UnsavedChangesDialog
+        open={pendingFileDocumentClose !== null}
+        dirtyCount={pendingFileDocumentClose?.paneIds.length ?? 0}
+        hasPendingTab={false}
+        saving={savingFileDocuments}
+        onOpenChange={(open) => {
+          if (!open && !savingFileDocuments) setPendingFileDocumentClose(null);
+        }}
+        onSaveAndClose={handleSaveFileDocumentsAndClose}
+        onDiscard={handleDiscardFileDocumentsAndClose}
+      />
+      <AlertDialog
+        open={postLoginConfirm !== null}
+        onOpenChange={handlePostLoginConfirmOpenChange}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{t("externalOpen.postLoginConfirmTitle")}</AlertDialogTitle>

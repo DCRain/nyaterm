@@ -859,7 +859,7 @@ export default function RemoteFileEditorPage() {
         onOpenChange={(open) => {
           if (!open) setConflictTabId(null);
         }}
-        onReload={() => {
+        onDiscardAndReload={() => {
           const id = conflictTabId;
           setConflictTabId(null);
           if (id) void loadFile(id);

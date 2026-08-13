@@ -13,7 +13,10 @@ import { useAppLockState } from "@/hooks/useAppLockState";
 import { DEFAULT_AI_SETTINGS } from "@/lib/aiSettings";
 import { DEFAULT_CLOUD_SYNC_SETTINGS } from "@/lib/cloudSync";
 import { updateConnectionAutoIconAfterSessionStart } from "@/lib/connectionAutoIcon";
-import { DEFAULT_TERMINAL_FONT_FAMILY, getDefaultUiFontFamily } from "@/lib/defaultFonts";
+import {
+  DEFAULT_TERMINAL_FONT_FAMILY,
+  getDefaultUiFontFamily,
+} from "@/lib/defaultFonts";
 import { getErrorMessage } from "@/lib/errors";
 import {
   DEFAULT_COMMAND_SUGGESTION_MAX_CHARS,
@@ -28,15 +31,18 @@ import {
 } from "@/lib/quickCommandSettings";
 import {
   collectSessionPanes,
+  createFileDocumentPane,
   createSessionPane,
   createWorkspaceTab,
   ensureActivePane,
+  findOpenFileDocument,
   findSessionPaneById,
   getFirstSessionPane,
   getNextPersistOrder,
   insertTabAfter,
   moveTab,
   removeSessionPane,
+  replaceSessionReferences as replacePaneSessionReferences,
   restoreTabFromPersistence,
   serializeTabsForPersistence,
   splitSessionPane,
@@ -46,11 +52,14 @@ import {
 import type {
   AppRuntimeInfo,
   AppSettings,
+  FileDocumentBackend,
+  FileDocumentSnapshot,
   Group,
   PaneSplitDirection,
   RemoteDesktopSessionPane,
   SavedConnection,
   SessionPane,
+  SessionType,
   SyncGroup,
   Tab,
   UiConfig,
@@ -93,8 +102,17 @@ interface AppContextType {
   markTabConnectionFailed: (tabId: string, error: string) => void;
   /** Update one specific pane's session binding. */
   updatePaneSession: (tabId: string, paneId: string, sessionId: string) => void;
+  /** Replace every pane reference when a backend session reconnects with a new id. */
+  replaceSessionReferences: (
+    oldSessionId: string,
+    newSessionId: string,
+  ) => void;
   /** Mark a specific pane as failed while keeping the layout intact. */
-  markPaneConnectionFailed: (tabId: string, paneId: string, error: string) => void;
+  markPaneConnectionFailed: (
+    tabId: string,
+    paneId: string,
+    error: string,
+  ) => void;
   /** Put a specific pane back into connecting state, optionally refreshing its metadata first. */
   markPaneConnecting: (
     tabId: string,
@@ -112,7 +130,20 @@ interface AppContextType {
     pane: SessionPane,
     options?: { immediatePersist?: boolean },
   ) => string | null;
-  closePane: (tabId: string, paneId: string, options?: { immediatePersist?: boolean }) => void;
+  openFileDocument: (input: {
+    sessionId: string;
+    name: string;
+    type: SessionType;
+    connectionId?: string;
+    backend: FileDocumentBackend;
+    path: string;
+    file: FileDocumentSnapshot;
+  }) => { tabId: string; paneId: string; created: boolean };
+  closePane: (
+    tabId: string,
+    paneId: string,
+    options?: { immediatePersist?: boolean },
+  ) => void;
   reorderTabs: (fromTabId: string, toIndex: number) => void;
   /** Update user-editable tab properties (customName, tabColor, locked). */
   updateTab: (
@@ -130,10 +161,14 @@ interface AppContextType {
   // App Settings (includes UI config)
   appSettings: AppSettings;
   updateAppSettings: (
-    updates: Partial<AppSettings> | ((prev: AppSettings) => Partial<AppSettings>),
+    updates:
+      | Partial<AppSettings>
+      | ((prev: AppSettings) => Partial<AppSettings>),
   ) => void;
   replaceAppSettings: (next: AppSettings) => void;
-  updateUi: (updates: Partial<UiConfig> | ((prev: UiConfig) => Partial<UiConfig>)) => void;
+  updateUi: (
+    updates: Partial<UiConfig> | ((prev: UiConfig) => Partial<UiConfig>),
+  ) => void;
 
   // Data
   savedConnections: SavedConnection[];
@@ -151,7 +186,9 @@ interface AppContextType {
 
   // Sync Input Groups
   syncGroups: SyncGroup[];
-  setSyncGroups: (groups: SyncGroup[] | ((prev: SyncGroup[]) => SyncGroup[])) => void;
+  setSyncGroups: (
+    groups: SyncGroup[] | ((prev: SyncGroup[]) => SyncGroup[]),
+  ) => void;
   broadcastToAll: boolean;
   setBroadcastToAll: (value: boolean | ((prev: boolean) => boolean)) => void;
 
@@ -192,7 +229,9 @@ export type TerminalAppSettings = Pick<
  * and dialog visibility. Updates via setState/useCallback; config persisted to backend.
  */
 export const AppContext = createContext<AppContextType | null>(null);
-const TerminalAppSettingsContext = createContext<TerminalAppSettings | null>(null);
+const TerminalAppSettingsContext = createContext<TerminalAppSettings | null>(
+  null,
+);
 
 const DEFAULT_APP_SETTINGS: AppSettings = {
   general: {
@@ -232,9 +271,21 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   },
   search: {
     custom_engines: [
-      { name: "Google", url_template: "https://google.com/search?q=%s", show_in_menu: true },
-      { name: "Bing", url_template: "https://bing.com/search?q=%s", show_in_menu: true },
-      { name: "GitHub", url_template: "https://github.com/search?q=%s", show_in_menu: true },
+      {
+        name: "Google",
+        url_template: "https://google.com/search?q=%s",
+        show_in_menu: true,
+      },
+      {
+        name: "Bing",
+        url_template: "https://bing.com/search?q=%s",
+        show_in_menu: true,
+      },
+      {
+        name: "GitHub",
+        url_template: "https://github.com/search?q=%s",
+        show_in_menu: true,
+      },
     ],
   },
   translation: {
@@ -298,7 +349,8 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     auto_start: false,
     default_mode: "transcript",
     base_path: "",
-    path_template: "{group}/{session}/{yyyy}-{MM}-{dd}/{HH}-{mm}-{ss}-{SSS}-{session_short_id}.log",
+    path_template:
+      "{group}/{session}/{yyyy}-{MM}-{dd}/{HH}-{mm}-{ss}-{SSS}-{session_short_id}.log",
     include_timestamps: true,
     include_io_labels: true,
     include_session_metadata: true,
@@ -421,7 +473,12 @@ function areSettingsValuesEqual(left: unknown, right: unknown): boolean {
   if (left === null || right === null) return left === right;
 
   if (Array.isArray(left) || Array.isArray(right)) {
-    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    if (
+      !Array.isArray(left) ||
+      !Array.isArray(right) ||
+      left.length !== right.length
+    )
+      return false;
     for (let index = 0; index < left.length; index += 1) {
       if (!areSettingsValuesEqual(left[index], right[index])) {
         return false;
@@ -450,13 +507,22 @@ function areSettingsValuesEqual(left: unknown, right: unknown): boolean {
   return true;
 }
 
-function preserveAppSettingsReferences(prev: AppSettings, next: AppSettings): AppSettings {
-  const general = areSettingsValuesEqual(prev.general, next.general) ? prev.general : next.general;
+function preserveAppSettingsReferences(
+  prev: AppSettings,
+  next: AppSettings,
+): AppSettings {
+  const general = areSettingsValuesEqual(prev.general, next.general)
+    ? prev.general
+    : next.general;
   const appearance = areSettingsValuesEqual(prev.appearance, next.appearance)
     ? prev.appearance
     : next.appearance;
-  const proxy = areSettingsValuesEqual(prev.proxy, next.proxy) ? prev.proxy : next.proxy;
-  const search = areSettingsValuesEqual(prev.search, next.search) ? prev.search : next.search;
+  const proxy = areSettingsValuesEqual(prev.proxy, next.proxy)
+    ? prev.proxy
+    : next.proxy;
+  const search = areSettingsValuesEqual(prev.search, next.search)
+    ? prev.search
+    : next.search;
   const translation = areSettingsValuesEqual(prev.translation, next.translation)
     ? prev.translation
     : next.translation;
@@ -531,21 +597,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const activeTabIdRef = useRef<string | null>(null);
 
   // App Settings State (includes UI config)
-  const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS);
+  const [appSettings, setAppSettings] =
+    useState<AppSettings>(DEFAULT_APP_SETTINGS);
   const appSettingsRef = useRef<AppSettings>(DEFAULT_APP_SETTINGS);
   const appSettingsLoaded = useRef(false);
-  const appSettingsSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const appSettingsSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const uiSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Data State
-  const [savedConnections, setSavedConnections] = useState<SavedConnection[]>([]);
+  const [savedConnections, setSavedConnections] = useState<SavedConnection[]>(
+    [],
+  );
   const [savedGroups, setSavedGroups] = useState<Group[]>([]);
 
   // Dialog State
   const [showNewSession, setShowNewSession] = useState(false);
-  const [editingConnection, setEditingConnection] = useState<SavedConnection | undefined>(
-    undefined,
-  );
+  const [editingConnection, setEditingConnection] = useState<
+    SavedConnection | undefined
+  >(undefined);
   const [showSettingsDialog, setShowSettingsDialog] = useState(false);
 
   // Sync Input Groups
@@ -558,7 +629,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Loading State
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [startupRestoreComplete, setStartupRestoreComplete] = useState(false);
-  const [runtimeInfo, setRuntimeInfo] = useState<AppRuntimeInfo>(DEFAULT_RUNTIME_INFO);
+  const [runtimeInfo, setRuntimeInfo] =
+    useState<AppRuntimeInfo>(DEFAULT_RUNTIME_INFO);
   const [runtimeInfoLoaded, setRuntimeInfoLoaded] = useState(false);
 
   const setActiveTabId = useCallback((id: string | null) => {
@@ -617,9 +689,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // 2. Save App Settings Debounced
   const updateAppSettings = useCallback(
-    (updates: Partial<AppSettings> | ((prev: AppSettings) => Partial<AppSettings>)) => {
+    (
+      updates:
+        | Partial<AppSettings>
+        | ((prev: AppSettings) => Partial<AppSettings>),
+    ) => {
       setAppSettings((prev) => {
-        const nextUpdates = typeof updates === "function" ? updates(prev) : updates;
+        const nextUpdates =
+          typeof updates === "function" ? updates(prev) : updates;
         const next = normalizeQuickCommandAppSettings({
           ...prev,
           ...nextUpdates,
@@ -627,7 +704,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         appSettingsRef.current = next;
         setLoggerLevel(next.diagnostics.level);
         if (appSettingsLoaded.current) {
-          if (appSettingsSaveTimerRef.current) clearTimeout(appSettingsSaveTimerRef.current);
+          if (appSettingsSaveTimerRef.current)
+            clearTimeout(appSettingsSaveTimerRef.current);
           appSettingsSaveTimerRef.current = setTimeout(() => {
             invoke("save_app_settings", { settings: next }).catch((e) =>
               logger.error({
@@ -665,7 +743,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const updateUi = useCallback(
     (updates: Partial<UiConfig> | ((prev: UiConfig) => Partial<UiConfig>)) => {
       setAppSettings((prev) => {
-        const nextUpdates = typeof updates === "function" ? updates(prev.ui) : updates;
+        const nextUpdates =
+          typeof updates === "function" ? updates(prev.ui) : updates;
         const nextUi = normalizeQuickCommandUiConfig({
           ...prev.ui,
           ...nextUpdates,
@@ -697,7 +776,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateUi((prev) => ({
         recent_connection_ids: [
           connectionId,
-          ...(prev.recent_connection_ids ?? []).filter((id) => id !== connectionId),
+          ...(prev.recent_connection_ids ?? []).filter(
+            (id) => id !== connectionId,
+          ),
         ].slice(0, RECENT_CONNECTION_LIMIT),
       }));
     },
@@ -735,7 +816,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const syncOpenTabs = useCallback(
     async (nextTabs: Tab[], options?: { immediatePersist?: boolean }) => {
-      if (!hasRestored.current || !appSettingsRef.current.general.startup_restore) return;
+      if (
+        !hasRestored.current ||
+        !appSettingsRef.current.general.startup_restore
+      )
+        return;
 
       const openTabs = serializeTabsForPersistence(nextTabs);
       updateUi({ open_tabs: openTabs });
@@ -762,7 +847,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setTabs(normalizedTabs);
 
       if (options?.syncPersisted === false) return;
-      await syncOpenTabs(normalizedTabs, { immediatePersist: options?.immediatePersist });
+      await syncOpenTabs(normalizedTabs, {
+        immediatePersist: options?.immediatePersist,
+      });
     },
     [syncOpenTabs],
   );
@@ -778,7 +865,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       options?: { afterTabId?: string },
     ) => {
       const pane = createSessionPane(name, type, connectionId, { sessionId });
-      const newTab = createWorkspaceTab(pane, getNextPersistOrder(tabsRef.current), extra);
+      const newTab = createWorkspaceTab(
+        pane,
+        getNextPersistOrder(tabsRef.current),
+        extra,
+      );
       const nextTabs = options?.afterTabId
         ? insertTabAfter(tabsRef.current, options.afterTabId, newTab)
         : [...tabsRef.current, newTab];
@@ -808,7 +899,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         connecting: true,
         createRequestId,
       });
-      const newTab = createWorkspaceTab(pane, getNextPersistOrder(tabsRef.current), extra);
+      const newTab = createWorkspaceTab(
+        pane,
+        getNextPersistOrder(tabsRef.current),
+        extra,
+      );
       const nextTabs = options?.afterTabId
         ? insertTabAfter(tabsRef.current, options.afterTabId, newTab)
         : [...tabsRef.current, newTab];
@@ -884,6 +979,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [commitTabs],
   );
 
+  const replaceSessionReferences = useCallback(
+    (oldSessionId: string, newSessionId: string) => {
+      const nextTabs = tabsRef.current.map((tab) => ({
+        ...tab,
+        root: replacePaneSessionReferences(
+          tab.root,
+          oldSessionId,
+          newSessionId,
+        ),
+      }));
+      void commitTabs(nextTabs);
+    },
+    [commitTabs],
+  );
+
   const markPaneConnectionFailed = useCallback(
     (tabId: string, paneId: string, error: string) => {
       const nextTabs = tabsRef.current.map((tab) =>
@@ -920,7 +1030,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           : tab,
       );
       void commitTabs(nextTabs);
-      return tabsRef.current.some((tab) => tab.id === tabId) ? createRequestId : null;
+      return tabsRef.current.some((tab) => tab.id === tabId)
+        ? createRequestId
+        : null;
     },
     [commitTabs],
   );
@@ -937,7 +1049,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const setActivePane = useCallback(
     (tabId: string, paneId: string) => {
       const nextTabs = tabsRef.current.map((tab) =>
-        tab.id === tabId ? ensureActivePane({ ...tab, activePaneId: paneId }) : tab,
+        tab.id === tabId
+          ? ensureActivePane({ ...tab, activePaneId: paneId })
+          : tab,
       );
       void commitTabs(nextTabs);
       setActiveTabId(tabId);
@@ -965,11 +1079,41 @@ export function AppProvider({ children }: { children: ReactNode }) {
             })
           : item,
       );
-      void commitTabs(nextTabs, { immediatePersist: options?.immediatePersist });
+      void commitTabs(nextTabs, {
+        immediatePersist: options?.immediatePersist,
+      });
       setActiveTabId(tabId);
       return pane.id;
     },
     [commitTabs, setActiveTabId],
+  );
+
+  const openFileDocument = useCallback(
+    (input: {
+      sessionId: string;
+      name: string;
+      type: SessionType;
+      connectionId?: string;
+      backend: FileDocumentBackend;
+      path: string;
+      file: FileDocumentSnapshot;
+    }) => {
+      const existing = findOpenFileDocument(tabsRef.current, input);
+      if (existing) {
+        setActivePane(existing.tabId, existing.paneId);
+        return { ...existing, created: false };
+      }
+
+      const pane = createFileDocumentPane(input);
+      const tab = createWorkspaceTab(
+        pane,
+        getNextPersistOrder(tabsRef.current),
+      );
+      void commitTabs([...tabsRef.current, tab]);
+      setActiveTabId(tab.id);
+      return { tabId: tab.id, paneId: pane.id, created: true };
+    },
+    [commitTabs, setActivePane, setActiveTabId],
   );
 
   const updateSplitRatio = useCallback(
@@ -988,7 +1132,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   const closePane = useCallback(
-    (tabId: string, paneId: string, options?: { immediatePersist?: boolean }) => {
+    (
+      tabId: string,
+      paneId: string,
+      options?: { immediatePersist?: boolean },
+    ) => {
       const currentTabs = tabsRef.current;
       const index = currentTabs.findIndex((item) => item.id === tabId);
       if (index === -1) return;
@@ -999,10 +1147,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (!nextRoot) {
         const nextTabs = currentTabs.filter((item) => item.id !== tabId);
         if (activeTabIdRef.current === tabId) {
-          const fallback = nextTabs[Math.max(0, index - 1)] ?? nextTabs[0] ?? null;
+          const fallback =
+            nextTabs[Math.max(0, index - 1)] ?? nextTabs[0] ?? null;
           setActiveTabId(fallback?.id ?? null);
         }
-        void commitTabs(nextTabs, { immediatePersist: options?.immediatePersist });
+        void commitTabs(nextTabs, {
+          immediatePersist: options?.immediatePersist,
+        });
         return;
       }
 
@@ -1020,7 +1171,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
             })
           : item,
       );
-      void commitTabs(nextTabs, { immediatePersist: options?.immediatePersist });
+      void commitTabs(nextTabs, {
+        immediatePersist: options?.immediatePersist,
+      });
     },
     [commitTabs, setActiveTabId],
   );
@@ -1034,7 +1187,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const nextTabs = tabsRef.current.map((tab) =>
         tab.id === tabId ? { ...tab, ...updates } : tab,
       );
-      await commitTabs(nextTabs, { immediatePersist: options?.immediatePersist });
+      await commitTabs(nextTabs, {
+        immediatePersist: options?.immediatePersist,
+      });
     },
     [commitTabs],
   );
@@ -1052,15 +1207,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const currentActiveTabId = activeTabIdRef.current;
 
       let nextActiveTabId =
-        options?.nextActiveTabId !== undefined ? options.nextActiveTabId : currentActiveTabId;
+        options?.nextActiveTabId !== undefined
+          ? options.nextActiveTabId
+          : currentActiveTabId;
 
-      if (nextActiveTabId && !nextTabs.some((tab) => tab.id === nextActiveTabId)) {
+      if (
+        nextActiveTabId &&
+        !nextTabs.some((tab) => tab.id === nextActiveTabId)
+      ) {
         nextActiveTabId = null;
       }
 
-      if (!nextActiveTabId && currentActiveTabId && idsToClose.has(currentActiveTabId)) {
-        const activeIndex = currentTabs.findIndex((tab) => tab.id === currentActiveTabId);
-        const fallbackTab = nextTabs[Math.max(0, activeIndex - 1)] ?? nextTabs[0] ?? null;
+      if (
+        !nextActiveTabId &&
+        currentActiveTabId &&
+        idsToClose.has(currentActiveTabId)
+      ) {
+        const activeIndex = currentTabs.findIndex(
+          (tab) => tab.id === currentActiveTabId,
+        );
+        const fallbackTab =
+          nextTabs[Math.max(0, activeIndex - 1)] ?? nextTabs[0] ?? null;
         nextActiveTabId = fallbackTab?.id ?? null;
       }
 
@@ -1072,7 +1239,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setActiveTabId(nextActiveTabId);
       }
 
-      void commitTabs(nextTabs, { immediatePersist: options?.immediatePersist });
+      void commitTabs(nextTabs, {
+        immediatePersist: options?.immediatePersist,
+      });
     },
     [commitTabs, setActiveTabId],
   );
@@ -1093,7 +1262,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   const persistTabsNow = useCallback(async (extraUi?: Partial<UiConfig>) => {
-    if (!hasRestored.current || !appSettingsRef.current.general.startup_restore) return;
+    if (!hasRestored.current || !appSettingsRef.current.general.startup_restore)
+      return;
     const nextUi = {
       ...appSettingsRef.current.ui,
       open_tabs: serializeTabsForPersistence(tabsRef.current),
@@ -1118,7 +1288,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const handleRestoredSessionCreated = useCallback(
-    async (tabId: string, paneId: string, sessionId: string, connectionId?: string) => {
+    async (
+      tabId: string,
+      paneId: string,
+      sessionId: string,
+      connectionId?: string,
+    ) => {
       if (!hasPane(tabId, paneId)) {
         await closeStaleCreatedSession(sessionId);
         return;
@@ -1128,7 +1303,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         void updateConnectionAutoIconAfterSessionStart({
           connectionId,
           sessionId,
-          remoteStatsEnabled: appSettingsRef.current.ui.show_remote_stats ?? true,
+          remoteStatsEnabled:
+            appSettingsRef.current.ui.show_remote_stats ?? true,
         });
       }
     },
@@ -1182,16 +1358,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
           switch (pane.type) {
             case "SSH":
               if (!cid) {
-                markPaneConnectionFailed(tab.id, pane.id, "Missing SSH connection id");
+                markPaneConnectionFailed(
+                  tab.id,
+                  pane.id,
+                  "Missing SSH connection id",
+                );
                 return;
               }
               invoke<string>("create_ssh_session", {
                 connectionId: cid,
                 createRequestId: pane.createRequestId,
               })
-                .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId, cid))
+                .then((sessionId) =>
+                  handleRestoredSessionCreated(tab.id, pane.id, sessionId, cid),
+                )
                 .catch((e) =>
-                  handleRestoredSessionFailed(tab.id, pane.id, "SSH", pane.connectionId, e),
+                  handleRestoredSessionFailed(
+                    tab.id,
+                    pane.id,
+                    "SSH",
+                    pane.connectionId,
+                    e,
+                  ),
                 );
               break;
             case "Local":
@@ -1199,37 +1387,69 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 connectionId: cid || null,
                 createRequestId: pane.createRequestId,
               })
-                .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId))
+                .then((sessionId) =>
+                  handleRestoredSessionCreated(tab.id, pane.id, sessionId),
+                )
                 .catch((e) =>
-                  handleRestoredSessionFailed(tab.id, pane.id, "Local", pane.connectionId, e),
+                  handleRestoredSessionFailed(
+                    tab.id,
+                    pane.id,
+                    "Local",
+                    pane.connectionId,
+                    e,
+                  ),
                 );
               break;
             case "Telnet":
               if (!cid) {
-                markPaneConnectionFailed(tab.id, pane.id, "Missing Telnet connection id");
+                markPaneConnectionFailed(
+                  tab.id,
+                  pane.id,
+                  "Missing Telnet connection id",
+                );
                 return;
               }
               invoke<string>("create_telnet_session", {
                 connectionId: cid,
                 createRequestId: pane.createRequestId,
               })
-                .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId))
+                .then((sessionId) =>
+                  handleRestoredSessionCreated(tab.id, pane.id, sessionId),
+                )
                 .catch((e) =>
-                  handleRestoredSessionFailed(tab.id, pane.id, "Telnet", pane.connectionId, e),
+                  handleRestoredSessionFailed(
+                    tab.id,
+                    pane.id,
+                    "Telnet",
+                    pane.connectionId,
+                    e,
+                  ),
                 );
               break;
             case "Serial":
               if (!cid) {
-                markPaneConnectionFailed(tab.id, pane.id, "Missing Serial connection id");
+                markPaneConnectionFailed(
+                  tab.id,
+                  pane.id,
+                  "Missing Serial connection id",
+                );
                 return;
               }
               invoke<string>("create_serial_session", {
                 connectionId: cid,
                 createRequestId: pane.createRequestId,
               })
-                .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId))
+                .then((sessionId) =>
+                  handleRestoredSessionCreated(tab.id, pane.id, sessionId),
+                )
                 .catch((e) =>
-                  handleRestoredSessionFailed(tab.id, pane.id, "Serial", pane.connectionId, e),
+                  handleRestoredSessionFailed(
+                    tab.id,
+                    pane.id,
+                    "Serial",
+                    pane.connectionId,
+                    e,
+                  ),
                 );
               break;
             case "VNC":
@@ -1248,27 +1468,45 @@ export function AppProvider({ children }: { children: ReactNode }) {
               break;
             case "RDP":
               if (!cid) {
-                markPaneConnectionFailed(tab.id, pane.id, "Missing RDP connection id");
+                markPaneConnectionFailed(
+                  tab.id,
+                  pane.id,
+                  "Missing RDP connection id",
+                );
                 return;
               }
               invoke<string>("create_rdp_session", {
                 connectionId: cid,
                 createRequestId: pane.createRequestId,
               })
-                .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId, cid))
+                .then((sessionId) =>
+                  handleRestoredSessionCreated(tab.id, pane.id, sessionId, cid),
+                )
                 .catch((e) =>
-                  handleRestoredSessionFailed(tab.id, pane.id, "RDP", pane.connectionId, e),
+                  handleRestoredSessionFailed(
+                    tab.id,
+                    pane.id,
+                    "RDP",
+                    pane.connectionId,
+                    e,
+                  ),
                 );
               break;
           }
         });
       });
     },
-    [handleRestoredSessionCreated, handleRestoredSessionFailed, hasPane, markPaneConnectionFailed],
+    [
+      handleRestoredSessionCreated,
+      handleRestoredSessionFailed,
+      hasPane,
+      markPaneConnectionFailed,
+    ],
   );
 
   useEffect(() => {
-    if (hasRestored.current || !appSettingsLoaded.current || !lockStateLoaded) return;
+    if (hasRestored.current || !appSettingsLoaded.current || !lockStateLoaded)
+      return;
 
     hasRestored.current = true;
     if (
@@ -1295,7 +1533,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
 
     setStartupRestoreComplete(true);
-  }, [appSettings, isLocked, lockStateLoaded, restoreSessionsForTabs, setActiveTabId]);
+  }, [
+    appSettings,
+    isLocked,
+    lockStateLoaded,
+    restoreSessionsForTabs,
+    setActiveTabId,
+  ]);
 
   useEffect(() => {
     if (isLocked) return;
@@ -1317,6 +1561,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateTabSession,
       markTabConnectionFailed,
       updatePaneSession,
+      replaceSessionReferences,
       markPaneConnectionFailed,
       markPaneConnecting,
       hasTab,
@@ -1324,6 +1569,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setActivePane,
       updateSplitRatio,
       splitPane,
+      openFileDocument,
       closePane,
       reorderTabs,
       updateTab,
@@ -1364,6 +1610,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateTabSession,
       markTabConnectionFailed,
       updatePaneSession,
+      replaceSessionReferences,
       markPaneConnectionFailed,
       markPaneConnecting,
       hasTab,
@@ -1371,6 +1618,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setActivePane,
       updateSplitRatio,
       splitPane,
+      openFileDocument,
       closePane,
       reorderTabs,
       updateTab,

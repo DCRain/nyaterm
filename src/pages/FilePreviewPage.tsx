@@ -19,7 +19,10 @@ import {
   type FilePreviewContentData,
   type FilePreviewLoadSummary,
 } from "@/components/panel/file-explorer/FilePreviewContent";
-import { getFilePreviewKind, getLocalPathName } from "@/components/panel/file-explorer/model";
+import {
+  getFilePreviewKind,
+  getLocalPathName,
+} from "@/components/panel/file-explorer/model";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -27,7 +30,11 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useApp } from "@/context/AppContext";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
@@ -54,7 +61,9 @@ function getPreviewDataPath(data: Pick<FilePreviewWindowData, "path">) {
   return data.path;
 }
 
-function tabId(data: Pick<FilePreviewWindowData, "backend" | "sessionId" | "path">) {
+function tabId(
+  data: Pick<FilePreviewWindowData, "backend" | "sessionId" | "path">,
+) {
   const backend = data.backend ?? "remote";
   return `${backend}\n${data.sessionId}\n${getPreviewDataPath(data)}`;
 }
@@ -81,10 +90,15 @@ function getTabBaseLabel(tab: PreviewTab) {
 
 function getParentDirectoryName(path: string) {
   const normalized = path.replace(/[\\/]+$/, "");
-  if (!normalized || normalized === "/" || /^[a-zA-Z]:$/.test(normalized)) return normalized || "/";
-  const index = Math.max(normalized.lastIndexOf("/"), normalized.lastIndexOf("\\"));
+  if (!normalized || normalized === "/" || /^[a-zA-Z]:$/.test(normalized))
+    return normalized || "/";
+  const index = Math.max(
+    normalized.lastIndexOf("/"),
+    normalized.lastIndexOf("\\"),
+  );
   const parent = index > 0 ? normalized.slice(0, index) : "";
-  if (!parent || parent === "/" || /^[a-zA-Z]:$/.test(parent)) return parent || "/";
+  if (!parent || parent === "/" || /^[a-zA-Z]:$/.test(parent))
+    return parent || "/";
   return getLocalPathName(parent, parent);
 }
 
@@ -109,7 +123,9 @@ export default function FilePreviewPage() {
     const params = new URLSearchParams(window.location.search);
     return parseJsonSearchParam<FilePreviewWindowData>(params.get("data"));
   }, []);
-  const tabsRef = useRef<PreviewTab[]>(initialData ? [createTab(initialData)] : []);
+  const tabsRef = useRef<PreviewTab[]>(
+    initialData ? [createTab(initialData)] : [],
+  );
   const activeTabIdRef = useRef(initialData ? tabId(initialData) : "");
   const [tabs, setTabs] = useState<PreviewTab[]>(tabsRef.current);
   const [activeTabId, setActiveTabId] = useState(activeTabIdRef.current);
@@ -127,15 +143,20 @@ export default function FilePreviewPage() {
     return counts;
   }, [tabs]);
 
-  const updateTabs = useCallback((updater: (tabs: PreviewTab[]) => PreviewTab[]) => {
+  const updateTabs = useCallback(
+    (updater: (tabs: PreviewTab[]) => PreviewTab[]) => {
     const next = updater(tabsRef.current);
     tabsRef.current = next;
     setTabs(next);
-  }, []);
+    },
+    [],
+  );
 
   const updateTab = useCallback(
     (id: string, updater: (tab: PreviewTab) => PreviewTab) => {
-      updateTabs((current) => current.map((tab) => (tab.id === id ? updater(tab) : tab)));
+      updateTabs((current) =>
+        current.map((tab) => (tab.id === id ? updater(tab) : tab)),
+      );
     },
     [updateTabs],
   );
@@ -162,7 +183,11 @@ export default function FilePreviewPage() {
     let unlisten: (() => void) | undefined;
 
     listen<FilePreviewOpenPayload>("file-preview-open", (event) => {
-      if (event.payload.targetLabel && event.payload.targetLabel !== currentWindow.label) return;
+      if (
+        event.payload.targetLabel &&
+        event.payload.targetLabel !== currentWindow.label
+      )
+        return;
       addOrFocusTab(event.payload.data);
     })
       .then((dispose) => {
@@ -177,7 +202,9 @@ export default function FilePreviewPage() {
 
   useEffect(() => {
     const currentWindow = getCurrentWindow();
-    const fileLabel = activeTab ? activeTab.name || activeTab.path : t("filePreview.title");
+    const fileLabel = activeTab
+      ? activeTab.name || activeTab.path
+      : t("filePreview.title");
     currentWindow.setTitle(fileLabel).catch(() => {});
   }, [activeTab, t]);
 
@@ -223,12 +250,17 @@ export default function FilePreviewPage() {
     (tab: PreviewTab) => {
       const run = async () => {
         if (tab.backend === "local") {
-          await openPath(tab.path, appSettings.transfer.default_editor || undefined);
+          await openPath(
+            tab.path,
+            appSettings.transfer.default_editor || undefined,
+          );
           return;
         }
 
         const root = await tempDir();
-        const safeName = await invoke<string>("sanitize_download_file_name", { name: tab.name });
+        const safeName = await invoke<string>("sanitize_download_file_name", {
+          name: tab.name,
+        });
         const localPath = await join(
           root,
           "nyaterm",
@@ -246,11 +278,16 @@ export default function FilePreviewPage() {
           localPath,
           remotePath: tab.path,
         });
-        await openPath(localPath, appSettings.transfer.default_editor || undefined);
+        await openPath(
+          localPath,
+          appSettings.transfer.default_editor || undefined,
+        );
       };
 
       run().catch((error) => {
-        toast.error(getErrorMessage(error) || t("filePreview.openExternalFailed"));
+        toast.error(
+          getErrorMessage(error) || t("filePreview.openExternalFailed"),
+        );
       });
     },
     [appSettings.transfer.default_editor, t],
@@ -269,7 +306,9 @@ export default function FilePreviewPage() {
 
   if (!initialData) return null;
 
-  const activeKind = activeTab ? getFilePreviewKind(activeTab.name) : "unsupported";
+  const activeKind = activeTab
+    ? getFilePreviewKind(activeTab.name)
+    : "unsupported";
   const activeMtimeText = formatPreviewMtime(activeTab?.mtime);
   const activeStatusText =
     activeTab?.loadStatus === "loading"
@@ -283,9 +322,14 @@ export default function FilePreviewPage() {
     (activeTab?.backend !== "local"
       ? activeTab?.sessionId || t("filePreview.remoteTarget")
       : "");
-  const activeTargetTitle = [activeTargetLabel, activeTarget?.detail].filter(Boolean).join(" - ");
-  const shouldShowTarget = activeTab?.backend !== "local" && !!activeTargetLabel;
-  const activeHeaderTitle = activeTab ? activeTab.name || activeTab.path : t("filePreview.title");
+  const activeTargetTitle = [activeTargetLabel, activeTarget?.detail]
+    .filter(Boolean)
+    .join(" - ");
+  const shouldShowTarget =
+    activeTab?.backend !== "local" && !!activeTargetLabel;
+  const activeHeaderTitle = activeTab
+    ? activeTab.name || activeTab.path
+    : t("filePreview.title");
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
@@ -298,10 +342,14 @@ export default function FilePreviewPage() {
 
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex h-10 shrink-0 overflow-hidden border-b bg-muted/15">
-          <div role="tablist" className="flex min-w-0 flex-1 items-stretch overflow-hidden">
+          <div
+            role="tablist"
+            className="flex min-w-0 flex-1 items-stretch overflow-hidden"
+          >
             {tabs.map((tab) => {
               const baseLabel = getTabBaseLabel(tab);
-              const hasDuplicateName = (duplicateTabNames.get(baseLabel) ?? 0) > 1;
+              const hasDuplicateName =
+                (duplicateTabNames.get(baseLabel) ?? 0) > 1;
               const tabLabel = hasDuplicateName
                 ? `${baseLabel} - ${getParentDirectoryName(tab.path)}`
                 : baseLabel;
@@ -327,12 +375,16 @@ export default function FilePreviewPage() {
                     activateTab(tab.id);
                   }}
                 >
-                  <span className="min-w-0 flex-1 truncate font-mono">{tabLabel}</span>
+                  <span className="min-w-0 flex-1 truncate font-mono">
+                    {tabLabel}
+                  </span>
                   <button
                     type="button"
                     className={cn(
                       "flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition hover:bg-muted hover:text-foreground",
-                      isActive ? "opacity-70" : "opacity-0 group-hover:opacity-70",
+                      isActive
+                        ? "opacity-70"
+                        : "opacity-0 group-hover:opacity-70",
                     )}
                     aria-label={t("common.close")}
                     onClick={(event) => {
@@ -361,7 +413,8 @@ export default function FilePreviewPage() {
               <DropdownMenuContent align="end" className="w-80">
                 {tabs.map((tab) => {
                   const baseLabel = getTabBaseLabel(tab);
-                  const hasDuplicateName = (duplicateTabNames.get(baseLabel) ?? 0) > 1;
+                  const hasDuplicateName =
+                    (duplicateTabNames.get(baseLabel) ?? 0) > 1;
                   const tabLabel = hasDuplicateName
                     ? `${baseLabel} - ${getParentDirectoryName(tab.path)}`
                     : baseLabel;
@@ -370,7 +423,10 @@ export default function FilePreviewPage() {
                   return (
                     <DropdownMenuItem
                       key={tab.id}
-                      className={cn("items-start gap-2 py-2", isActive && "bg-accent/60")}
+                      className={cn(
+                        "items-start gap-2 py-2",
+                        isActive && "bg-accent/60",
+                      )}
                       onClick={() => activateTab(tab.id)}
                     >
                       <span className="min-w-0 flex-1">
@@ -433,7 +489,9 @@ export default function FilePreviewPage() {
                   </Button>
                 </span>
               </TooltipTrigger>
-              <TooltipContent side="bottom">{t("fileEditor.openExternalTooltip")}</TooltipContent>
+              <TooltipContent side="bottom">
+                {t("fileEditor.openExternalTooltip")}
+              </TooltipContent>
             </Tooltip>
           </div>
         </div>
@@ -442,13 +500,19 @@ export default function FilePreviewPage() {
           {tabs.map((tab) => (
             <div
               key={tab.id}
-              className={cn("absolute inset-0 min-h-0", tab.id !== activeTabId && "hidden")}
+              className={cn(
+                "absolute inset-0 min-h-0",
+                tab.id !== activeTabId && "hidden",
+              )}
             >
               <FilePreviewContent
+                mode="preview"
                 data={tab}
                 reloadKey={tab.reloadKey}
                 active={tab.id === activeTabId}
-                onLoadStateChange={(summary) => handleLoadStateChange(tab.id, summary)}
+                onLoadStateChange={(summary) =>
+                  handleLoadStateChange(tab.id, summary)
+                }
               />
             </div>
           ))}
@@ -456,7 +520,9 @@ export default function FilePreviewPage() {
 
         <div className="flex h-6 shrink-0 items-center justify-between gap-3 border-t bg-muted/15 px-3 font-mono text-[11px] text-muted-foreground">
           <div className="flex min-w-0 items-center gap-2 overflow-hidden">
-            <span className="shrink-0">{t(`filePreview.type.${activeKind}`)}</span>
+            <span className="shrink-0">
+              {t(`filePreview.type.${activeKind}`)}
+            </span>
             <span aria-hidden="true" className="shrink-0">
               -
             </span>
@@ -466,7 +532,9 @@ export default function FilePreviewPage() {
                 <span aria-hidden="true" className="shrink-0">
                   -
                 </span>
-                <span className="truncate text-destructive">{activeTab.loadError}</span>
+                <span className="truncate text-destructive">
+                  {activeTab.loadError}
+                </span>
               </>
             ) : null}
           </div>
@@ -475,7 +543,9 @@ export default function FilePreviewPage() {
             {activeMtimeText ? (
               <>
                 <span aria-hidden="true">-</span>
-                <span>{t("filePreview.modifiedAt", { time: activeMtimeText })}</span>
+                <span>
+                  {t("filePreview.modifiedAt", { time: activeMtimeText })}
+                </span>
               </>
             ) : null}
           </div>

@@ -2,6 +2,7 @@ import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MdErrorOutline } from "react-icons/md";
 import ResizeHandle from "@/components/layout/ResizeHandle";
+import { FilePreviewContent } from "@/components/panel/file-explorer/FilePreviewContent";
 import RdpPaneHost from "@/components/rdp/RdpPaneHost";
 import { Button } from "@/components/ui/button";
 import VncPaneHost from "@/components/vnc/VncPaneHost";
@@ -87,7 +88,11 @@ function SplitView({
     >
       <div
         className="min-h-0 min-w-0 relative"
-        style={{ flexBasis: `${split.ratio * 100}%`, flexGrow: 0, flexShrink: 0 }}
+        style={{
+          flexBasis: `${split.ratio * 100}%`,
+          flexGrow: 0,
+          flexShrink: 0,
+        }}
       >
         <PaneNodeView
           node={split.first}
@@ -111,7 +116,11 @@ function SplitView({
       />
       <div
         className="min-h-0 min-w-0 flex-1 relative"
-        style={{ flexBasis: `${(1 - split.ratio) * 100}%`, flexGrow: 1, flexShrink: 1 }}
+        style={{
+          flexBasis: `${(1 - split.ratio) * 100}%`,
+          flexGrow: 1,
+          flexShrink: 1,
+        }}
       >
         <PaneNodeView
           node={split.second}
@@ -197,6 +206,7 @@ function PaneNodeView({
 
   const isActive = visible && tab.activePaneId === node.id;
   const showReconnectAction =
+    node.paneKind !== "file" &&
     !!(node.type === "Local" || node.connectionId || hasMatchingTemporaryConfig(node)) &&
     !!onReconnectPane;
   const statusTitle = isReconnectPending
@@ -217,7 +227,9 @@ function PaneNodeView({
       }}
       onMouseDown={() => onActivatePane(node.id)}
     >
-      {node.connecting ? (
+      {node.paneKind === "file" ? (
+        <FilePreviewContent mode="edit" pane={node} active={isActive} />
+      ) : node.connecting ? (
         <div
           className="flex h-full w-full flex-col items-center justify-center gap-3 text-sm"
           style={{ color: "var(--df-text-dimmed)" }}
@@ -244,7 +256,9 @@ function PaneNodeView({
               d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
             />
           </svg>
-          <span className="max-w-[16rem] truncate px-4 text-center">{node.name}</span>
+          <span className="max-w-[16rem] truncate px-4 text-center">
+            {node.name}
+          </span>
         </div>
       ) : node.connectError ? (
         <div
@@ -276,13 +290,20 @@ function PaneNodeView({
               />
             </svg>
           ) : (
-            <MdErrorOutline className="h-8 w-8" style={{ color: "var(--destructive, #ef4444)" }} />
+            <MdErrorOutline
+              className="h-8 w-8"
+              style={{ color: "var(--destructive, #ef4444)" }}
+            />
           )}
-          <div className={`space-y-1 ${isReconnectPending ? "animate-pulse" : ""}`}>
+          <div
+            className={`space-y-1 ${isReconnectPending ? "animate-pulse" : ""}`}
+          >
             <div className="font-medium" style={{ color: "var(--df-text)" }}>
               {statusTitle}
             </div>
-            <div className="max-w-[20rem] break-words text-xs">{statusMessage}</div>
+            <div className="max-w-[20rem] break-words text-xs">
+              {statusMessage}
+            </div>
           </div>
           {showReconnectAction ? (
             <Button
@@ -332,7 +353,9 @@ function PaneNodeView({
           connectionId={node.connectionId}
           temporaryConfig={node.temporaryConfig}
           onReconnected={onReconnected}
-          onDisconnectedCloseRequested={() => void onDisconnectedCloseRequested?.(tab.id, node.id)}
+          onDisconnectedCloseRequested={() =>
+            void onDisconnectedCloseRequested?.(tab.id, node.id)
+          }
           onConnectionError={(sessionId, error) =>
             onConnectionError?.(tab.id, node.id, sessionId, error)
           }
@@ -392,7 +415,8 @@ function PaneXTerminal({
   );
 
   const isPaused = useMemo(
-    () => (activeGroup ? isSessionPausedInGroup(activeGroup, sessionId) : false),
+    () =>
+      activeGroup ? isSessionPausedInGroup(activeGroup, sessionId) : false,
     [activeGroup, sessionId],
   );
 
@@ -412,7 +436,9 @@ function PaneXTerminal({
   const handleLeaveGroup = useCallback(() => {
     if (!activeGroup) return;
     setSyncGroups((prev) =>
-      prev.map((g) => (g.id === activeGroup.id ? removeSessionFromGroup(g, sessionId) : g)),
+      prev.map((g) =>
+        g.id === activeGroup.id ? removeSessionFromGroup(g, sessionId) : g,
+      ),
     );
   }, [activeGroup, sessionId, setSyncGroups]);
 
@@ -478,7 +504,10 @@ function PaneWorkspace({
   onSaveSessionTranscript,
 }: PaneWorkspaceProps) {
   return (
-    <div className="absolute inset-0" style={{ display: visible ? "block" : "none" }}>
+    <div
+      className="absolute inset-0"
+      style={{ display: visible ? "block" : "none" }}
+    >
       <PaneNodeView
         node={tab.root}
         tab={tab}

@@ -14,15 +14,15 @@ import { Button } from "@/components/ui/button";
 interface RemoteFileConflictDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onDiscardAndReload: () => void;
   onForceSave: () => void;
-  onReload: () => void;
 }
 
 export default function RemoteFileConflictDialog({
   open,
   onOpenChange,
+  onDiscardAndReload,
   onForceSave,
-  onReload,
 }: RemoteFileConflictDialogProps) {
   const { t } = useTranslation();
 
@@ -35,8 +35,8 @@ export default function RemoteFileConflictDialog({
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
-          <Button variant="outline" onClick={onReload}>
-            {t("fileEditor.reload")}
+          <Button variant="outline" onClick={onDiscardAndReload}>
+            {t("fileEditor.discardAndReload")}
           </Button>
           <AlertDialogAction onClick={onForceSave}>{t("fileEditor.forceSave")}</AlertDialogAction>
         </AlertDialogFooter>
