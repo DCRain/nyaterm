@@ -1,6 +1,6 @@
 import { Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Maximize2, Minimize2, Monitor, Power, RotateCcw, Send, ShieldAlert } from "lucide-react";
+import { ShieldAlert } from "lucide-react";
 import {
   memo,
   type FocusEvent as ReactFocusEvent,
@@ -12,12 +12,11 @@ import {
   useRef,
   useState,
 } from "react";
-import { useTranslation } from "react-i18next";
+import { FloatingSessionChrome } from "@/components/remote-desktop/FloatingSessionChrome";
 import {
   createRemoteDesktopRenderer,
   type RemoteDesktopRenderer,
 } from "@/components/remote-desktop/renderer";
-import { Button } from "@/components/ui/button";
 import { invoke } from "@/lib/invoke";
 import { decodeRdpFramePatch } from "@/lib/rdpFrame";
 import {
@@ -35,14 +34,14 @@ import {
   shouldDisableDynamicResizeAfterState,
 } from "@/lib/rdpResize";
 import {
+  getRemoteDesktopContentRect,
+  mapClientEventToRemoteDesktopPixel,
+} from "@/lib/remoteDesktopViewport";
+import {
   isTerminalWindowFullscreenActive,
   TERMINAL_FULLSCREEN_CHANGED_EVENT,
   toggleTerminalWindowFullscreen,
 } from "@/lib/terminalFullscreen";
-import {
-  getRemoteDesktopContentRect,
-  mapClientEventToRemoteDesktopPixel,
-} from "@/lib/remoteDesktopViewport";
 import type { RdpSessionPane, RemoteDesktopScaleMode } from "@/types/global";
 
 type RdpSessionState =
@@ -166,7 +165,6 @@ function RdpPaneHost({
   const cursorRafRef = useRef<number | null>(null);
   const pendingCursorRef = useRef<{ x: number; y: number } | null>(null);
   const remoteCursorBitmapRef = useRef<RemoteCursorBitmap | null>(null);
-  const { t } = useTranslation();
   const lastResizeRef = useRef<{ width: number; height: number } | null>(null);
   const lastResizeSentAtRef = useRef<number | null>(null);
   const dynamicResizeDisabledRef = useRef(false);
@@ -594,7 +592,7 @@ function RdpPaneHost({
   return (
     <div
       ref={containerRef}
-      className="group relative flex h-full w-full min-h-0 min-w-0 items-center justify-center overflow-hidden bg-black outline-none"
+      className="relative flex h-full w-full min-h-0 min-w-0 items-center justify-center overflow-hidden bg-black outline-none"
       data-rdp-input-root="true"
       data-remote-desktop-input-root="true"
       tabIndex={active ? 0 : -1}
@@ -689,64 +687,28 @@ function RdpPaneHost({
         className="pointer-events-none absolute left-0 top-0 z-10 hidden"
       />
 
-      <div className="absolute left-2 top-2 flex items-center gap-1 rounded border border-white/15 bg-black/65 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
-        <Monitor className="h-3.5 w-3.5" />
-        <span className="max-w-40 truncate">{pane.name}</span>
-        <span className="text-white/55">
-          {desktopSize.width}x{desktopSize.height}
-        </span>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          className="h-6 w-6 text-white"
-          onClick={() =>
-            sendShortcut([
-              { type: "key-down", scanCode: 0x1d, extended: false, repeat: false },
-              { type: "key-down", scanCode: 0x38, extended: false, repeat: false },
-              { type: "key-down", scanCode: 0x53, extended: true, repeat: false },
-              { type: "key-up", scanCode: 0x53, extended: true, repeat: false },
-              { type: "key-up", scanCode: 0x38, extended: false, repeat: false },
-              { type: "key-up", scanCode: 0x1d, extended: false, repeat: false },
-            ])
-          }
-        >
-          <Send className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          className="h-6 w-6 text-white"
-          onClick={() => void invoke("rdp_reconnect", { sessionId: pane.sessionId })}
-        >
-          <RotateCcw className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          className="h-6 w-6 text-white"
-          onClick={onDisconnectedCloseRequested}
-        >
-          <Power className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          className="h-6 w-6 text-white"
-          title={
-            isFullscreen ? t("dialog.rdpExitFullscreen") : t("dialog.rdpFullscreen")
-          }
-          aria-label={
-            isFullscreen ? t("dialog.rdpExitFullscreen") : t("dialog.rdpFullscreen")
-          }
-          onClick={() => void toggleFullscreen()}
-        >
-          {isFullscreen ? (
-            <Minimize2 className="h-3.5 w-3.5" />
-          ) : (
-            <Maximize2 className="h-3.5 w-3.5" />
-          )}
-        </Button>
-      </div>
+      <FloatingSessionChrome
+        sessionId={pane.sessionId}
+        title={pane.name}
+        subtitle={`${desktopSize.width}x${desktopSize.height}`}
+        boundsRef={containerRef}
+        enabled={state === "active"}
+        active={active}
+        onReconnect={() => void invoke("rdp_reconnect", { sessionId: pane.sessionId })}
+        onClose={() => onDisconnectedCloseRequested?.()}
+        onSendCtrlAltDel={() =>
+          sendShortcut([
+            { type: "key-down", scanCode: 0x1d, extended: false, repeat: false },
+            { type: "key-down", scanCode: 0x38, extended: false, repeat: false },
+            { type: "key-down", scanCode: 0x53, extended: true, repeat: false },
+            { type: "key-up", scanCode: 0x53, extended: true, repeat: false },
+            { type: "key-up", scanCode: 0x38, extended: false, repeat: false },
+            { type: "key-up", scanCode: 0x1d, extended: false, repeat: false },
+          ])
+        }
+        onToggleFullscreen={() => void toggleFullscreen()}
+        isFullscreen={isFullscreen}
+      />
 
       {state !== "active" && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/45 text-white">

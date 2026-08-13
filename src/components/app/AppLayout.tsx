@@ -19,10 +19,10 @@ import type { OtpRequest } from "@/components/dialog/connections/OtpDialog";
 import { OtpDialog } from "@/components/dialog/connections/OtpDialog";
 import type { RdpCertificateVerifyRequest } from "@/components/dialog/connections/RdpCertificateVerifyDialog";
 import { RdpCertificateVerifyDialog } from "@/components/dialog/connections/RdpCertificateVerifyDialog";
-import type { SshAuthRequest } from "@/components/dialog/connections/SshAuthDialog";
-import { SshAuthDialog } from "@/components/dialog/connections/SshAuthDialog";
 import type { SshAgentAuthRequest } from "@/components/dialog/connections/SshAgentAuthDialog";
 import { SshAgentAuthDialog } from "@/components/dialog/connections/SshAgentAuthDialog";
+import type { SshAuthRequest } from "@/components/dialog/connections/SshAuthDialog";
+import { SshAuthDialog } from "@/components/dialog/connections/SshAuthDialog";
 import DockerSudoPasswordDialog, {
   type DockerSudoPasswordRequest,
 } from "@/components/dialog/docker/DockerSudoPasswordDialog";
@@ -33,6 +33,7 @@ import Header from "@/components/layout/Header";
 import ResizeHandle from "@/components/layout/ResizeHandle";
 import QuickCommands from "@/components/panel/QuickCommands";
 import SerialSendPanel from "@/components/panel/SendCommandPanel";
+import { TOGGLE_REMOTE_DESKTOP_CHROME_EVENT } from "@/components/remote-desktop/FloatingSessionChrome";
 import TabWindowsWorkspace from "@/components/terminal/TabWindowsWorkspace";
 import { useTheme } from "@/context/ThemeContext";
 import { resolveShortcutKeys } from "@/hooks/useShortcutMap";
@@ -217,12 +218,13 @@ export default function AppLayout({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.repeat) return;
 
-      const isF11 =
-        event.code === "F11" || event.key === "F11" || event.key === "f11";
+      const isF11 = event.code === "F11" || event.key === "F11" || event.key === "f11";
       const keys = resolveShortcutKeys("view.toggleFullscreen", keybindings);
       const matchesConfigured = Boolean(keys) && matchesKeyEvent(keys, event);
       // Always accept bare F11 even if keybindings override is empty/broken.
-      const shouldToggle = matchesConfigured || (isF11 && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey);
+      const shouldToggle =
+        matchesConfigured ||
+        (isF11 && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey);
 
       if (event.key === "Escape" && terminalFullscreen) {
         event.preventDefault();
@@ -241,6 +243,19 @@ export default function AppLayout({
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
   }, [keybindings, terminalFullscreen, toggleTerminalFullscreen]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat) return;
+      const keys = resolveShortcutKeys("view.toggleRemoteDesktopToolbar", keybindings);
+      if (!keys || !matchesKeyEvent(keys, event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      window.dispatchEvent(new CustomEvent(TOGGLE_REMOTE_DESKTOP_CHROME_EVENT));
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [keybindings]);
 
   useEffect(() => {
     let cancelled = false;
@@ -289,8 +304,7 @@ export default function AppLayout({
     [appearance, backgroundEnabled],
   );
   const backgroundLayerStyle = useMemo(
-    () =>
-      buildBackgroundImageLayerStyle(effectiveAppearance, backgroundDataUrl),
+    () => buildBackgroundImageLayerStyle(effectiveAppearance, backgroundDataUrl),
     [effectiveAppearance, backgroundDataUrl],
   );
   const windowTransparencyEnabled = isWindowTransparencyEnabled(effectiveAppearance);
@@ -302,34 +316,28 @@ export default function AppLayout({
       ...buildSurfaceCssVariables(theme.colors, effectiveAppearance),
       // When native window transparency is on, the shell background must be
       // transparent so the native backdrop is visible through the webview.
-      backgroundColor: windowTransparencyEnabled
-        ? "transparent"
-        : theme.colors.bg,
+      backgroundColor: windowTransparencyEnabled ? "transparent" : theme.colors.bg,
       color: "var(--df-text)",
     }),
     [effectiveAppearance, theme.colors, windowTransparencyEnabled],
   );
   const hasLeftActivityItems =
-    leftActivityBar.items.length > 0 ||
-    (leftActivityBar.bottomItems?.length ?? 0) > 0;
+    leftActivityBar.items.length > 0 || (leftActivityBar.bottomItems?.length ?? 0) > 0;
   const hasRightActivityItems =
     rightActivityBar.items.length > 0 || (rightActivityBar.bottomItems?.length ?? 0) > 0;
   const leftActivityBarVisible = Boolean(leftActivityBar.visible);
   const rightActivityBarVisible = Boolean(rightActivityBar.visible);
   const leftPanelOpen =
-    hasLeftActivityItems &&
-    (leftPanelIds.length > 0 || Boolean(leftOverlayPanelId));
+    hasLeftActivityItems && (leftPanelIds.length > 0 || Boolean(leftOverlayPanelId));
   const rightPanelOpen =
     hasRightActivityItems && (rightPanelIds.length > 0 || Boolean(rightOverlayPanelId));
   const serialSendVisible = bottomPanel.activePanel === "serialSend";
   const serialSendMounted = serialSendVisible || serialSendRunning;
   // When side chrome is gone, round the terminal so it doesn't cover window corners.
   const leftEdgeOccupied =
-    !terminalFullscreen &&
-    ((hasLeftActivityItems && leftActivityBarVisible) || leftPanelOpen);
+    !terminalFullscreen && ((hasLeftActivityItems && leftActivityBarVisible) || leftPanelOpen);
   const rightEdgeOccupied =
-    !terminalFullscreen &&
-    ((hasRightActivityItems && rightActivityBarVisible) || rightPanelOpen);
+    !terminalFullscreen && ((hasRightActivityItems && rightActivityBarVisible) || rightPanelOpen);
 
   return (
     <div
@@ -380,13 +388,7 @@ export default function AppLayout({
                     sizes={panelStackSizes}
                     renderPanel={panelContent}
                     onResizePair={(aboveId, belowId, delta, containerHeight) =>
-                      onPanelStackResize(
-                        "left",
-                        aboveId,
-                        belowId,
-                        delta,
-                        containerHeight,
-                      )
+                      onPanelStackResize("left", aboveId, belowId, delta, containerHeight)
                     }
                   />
                 </div>
@@ -404,9 +406,7 @@ export default function AppLayout({
             )}
             style={{
               backgroundColor:
-                backgroundEnabled && !terminalFullscreen
-                  ? "transparent"
-                  : "var(--df-bg-terminal)",
+                backgroundEnabled && !terminalFullscreen ? "transparent" : "var(--df-bg-terminal)",
             }}
           >
             {!terminalFullscreen && hasLeftActivityItems && !leftActivityBarVisible && (
@@ -464,10 +464,7 @@ export default function AppLayout({
 
             {bottomPanel.activePanel === "quickCmdBar" && (
               <>
-                <ResizeHandle
-                  direction="vertical"
-                  onResize={bottomPanel.onQuickCmdResize}
-                />
+                <ResizeHandle direction="vertical" onResize={bottomPanel.onQuickCmdResize} />
                 <div
                   style={{
                     height: bottomPanel.quickCmdHeight,
@@ -484,10 +481,7 @@ export default function AppLayout({
             )}
 
             {serialSendVisible && (
-              <ResizeHandle
-                direction="vertical"
-                onResize={bottomPanel.onSerialSendResize}
-              />
+              <ResizeHandle direction="vertical" onResize={bottomPanel.onSerialSendResize} />
             )}
 
             {serialSendMounted && (
@@ -541,13 +535,7 @@ export default function AppLayout({
                     sizes={panelStackSizes}
                     renderPanel={panelContent}
                     onResizePair={(aboveId, belowId, delta, containerHeight) =>
-                      onPanelStackResize(
-                        "right",
-                        aboveId,
-                        belowId,
-                        delta,
-                        containerHeight,
-                      )
+                      onPanelStackResize("right", aboveId, belowId, delta, containerHeight)
                     }
                   />
                 </div>
@@ -565,10 +553,7 @@ export default function AppLayout({
           )}
         </main>
 
-        <AboutDialog
-          open={dialogs.aboutOpen}
-          onClose={() => dialogs.onAboutOpenChange(false)}
-        />
+        <AboutDialog open={dialogs.aboutOpen} onClose={() => dialogs.onAboutOpenChange(false)} />
 
         <SyncGroupDialog
           open={dialogs.syncGroupOpen}
@@ -588,10 +573,7 @@ export default function AppLayout({
         />
 
         <OtpDialog request={dialogs.otpRequest} onDone={dialogs.onOtpDone} />
-        <SshAuthDialog
-          request={dialogs.sshAuthRequest}
-          onDone={dialogs.onSshAuthDone}
-        />
+        <SshAuthDialog request={dialogs.sshAuthRequest} onDone={dialogs.onSshAuthDone} />
         <SshAgentAuthDialog
           request={dialogs.sshAgentAuthRequest}
           onDone={dialogs.onSshAgentAuthDone}

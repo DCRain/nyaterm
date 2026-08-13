@@ -1,6 +1,6 @@
 import { Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Eye, Monitor, Power, RotateCcw, ShieldAlert } from "lucide-react";
+import { Eye, ShieldAlert } from "lucide-react";
 import {
   memo,
   type FocusEvent as ReactFocusEvent,
@@ -10,11 +10,12 @@ import {
   useRef,
   useState,
 } from "react";
+import { useTranslation } from "react-i18next";
+import { FloatingSessionChrome } from "@/components/remote-desktop/FloatingSessionChrome";
 import {
   RemoteDesktopSurface,
   type RemoteDesktopSurfaceHandle,
 } from "@/components/remote-desktop/RemoteDesktopSurface";
-import { Button } from "@/components/ui/button";
 import { readClipboardText, writeClipboardText } from "@/lib/clipboard";
 import { invoke } from "@/lib/invoke";
 import { decodeRemoteDesktopFramePatch } from "@/lib/remoteDesktopFrame";
@@ -103,6 +104,8 @@ function VncPaneHost({
   onDisconnectedCloseRequested,
   onConnectionError,
 }: VncPaneHostProps) {
+  const { t } = useTranslation();
+  const boundsRef = useRef<HTMLDivElement | null>(null);
   const surfaceRef = useRef<RemoteDesktopSurfaceHandle | null>(null);
   const imeRef = useRef<HTMLTextAreaElement | null>(null);
   const pressedKeysRef = useRef(new Set<number>());
@@ -309,7 +312,8 @@ function VncPaneHost({
 
   return (
     <div
-      className="group relative h-full w-full min-h-0 min-w-0 bg-black"
+      ref={boundsRef}
+      className="relative h-full w-full min-h-0 min-w-0 bg-black"
       onKeyDownCapture={handleKeyDown}
       onKeyUpCapture={handleKeyUp}
     >
@@ -376,34 +380,25 @@ function VncPaneHost({
           ]);
         }}
       >
-        <div className="absolute left-2 top-2 flex items-center gap-1 rounded border border-white/15 bg-black/65 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
-          <Monitor className="h-3.5 w-3.5" />
-          <span className="max-w-40 truncate">{pane.name}</span>
-          {desktopSize.width > 0 && desktopSize.height > 0 ? (
-            <span className="text-white/55">
-              {desktopSize.width}x{desktopSize.height}
-            </span>
-          ) : null}
-          {viewOnly ? <Eye className="h-3.5 w-3.5 text-white/70" /> : null}
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Reconnect VNC session"
-            className="h-6 w-6 text-white"
-            onClick={() => void invoke("vnc_reconnect", { sessionId: pane.sessionId })}
-          >
-            <RotateCcw className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Close VNC session"
-            className="h-6 w-6 text-white"
-            onClick={onDisconnectedCloseRequested}
-          >
-            <Power className="h-3.5 w-3.5" />
-          </Button>
-        </div>
+        <FloatingSessionChrome
+          sessionId={pane.sessionId}
+          title={pane.name}
+          subtitle={
+            desktopSize.width > 0 && desktopSize.height > 0
+              ? `${desktopSize.width}x${desktopSize.height}`
+              : null
+          }
+          boundsRef={boundsRef}
+          enabled={state === "active"}
+          active={active}
+          onReconnect={() => void invoke("vnc_reconnect", { sessionId: pane.sessionId })}
+          onClose={() => onDisconnectedCloseRequested?.()}
+          extraCollapsedIcon={
+            viewOnly ? (
+              <Eye className="h-3.5 w-3.5 text-white/70" aria-label={t("dialog.vncViewOnly")} />
+            ) : null
+          }
+        />
 
         {state !== "active" ? (
           <div className="absolute inset-0 flex items-center justify-center bg-black/45 text-white">

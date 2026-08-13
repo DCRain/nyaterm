@@ -220,6 +220,12 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     labelKey: "settings.shortcutLabels.toggleFullscreen",
     defaultKeys: "f11",
   },
+  {
+    id: "view.toggleRemoteDesktopToolbar",
+    category: "view",
+    labelKey: "settings.shortcutLabels.toggleRemoteDesktopToolbar",
+    defaultKeys: "ctrl+shift+\\, meta+shift+\\",
+  },
 
   // --- File Explorer ---
   {
