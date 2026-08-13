@@ -3,6 +3,7 @@ export type SessionType = "SSH" | "Local" | "Telnet" | "Serial";
 export type WorkspaceSessionType = SessionType | "RDP" | "VNC";
 export type WorkspacePaneKind = "terminal" | "remote-desktop";
 export type PersistedWorkspacePaneKind = WorkspacePaneKind | "rdp";
+export type { TemporaryLinkConfig } from "@/types/temporaryConnection";
 
 export interface AppRuntimeInfo {
   portable: boolean;
@@ -71,6 +72,8 @@ export interface WorkspacePaneBase {
   name: string;
   type: WorkspaceSessionType;
   connectionId?: string;
+  /** Config for ad-hoc (temporary) sessions that have no saved connection. */
+  temporaryConfig?: import("@/types/temporaryConnection").TemporaryLinkConfig;
   /** True while the backend session is being established. XTerminal is not rendered yet. */
   connecting?: boolean;
   /** Backend creation request id used to cancel an in-flight session creation. */
