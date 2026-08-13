@@ -58,6 +58,7 @@ function upsertSecurityPrompt(current: SecurityPrompt[], prompt: SecurityPrompt)
 
 import { AI_OPEN_EVENT, type AIOpenIntent } from "./lib/aiEvents";
 import {
+  assertMatchingTemporaryConfig,
   buildPanelOpenUpdate,
   canCreateSessionFromPane,
   collectActiveNonSerialSessionIds,
@@ -278,12 +279,16 @@ async function createSessionForConnection(
       return invoke<string>("create_ssh_session", {
         connectionId: connection.id,
         createRequestId,
-        startupCommand: startupCommand ?? null,
+        startupCommand: buildStartupCommandPayload(startupCommand),
       });
   }
 }
 
-async function createTemporarySession(config: TemporaryLinkConfig, createRequestId?: string) {
+async function createTemporarySession(
+  config: TemporaryLinkConfig,
+  createRequestId?: string,
+  startupCommand?: StartupCommandRequest,
+) {
   switch (config.protocol) {
     case "telnet":
       return invoke<string>("create_telnet_session", {
@@ -292,7 +297,7 @@ async function createTemporarySession(config: TemporaryLinkConfig, createRequest
         port: config.port,
         name: config.name,
         createRequestId,
-        startupCommand: null,
+        startupCommand: buildStartupCommandPayload(startupCommand),
       });
     case "serial":
       return invoke<string>("create_serial_session", {
@@ -307,6 +312,7 @@ async function createTemporarySession(config: TemporaryLinkConfig, createRequest
       return invoke<string>("create_temporary_ssh_session", {
         config: sshConfig,
         createRequestId,
+        startupCommand: buildStartupCommandPayload(startupCommand),
       });
     }
   }
@@ -1621,14 +1627,15 @@ function App() {
               startupCommand: buildStartupCommandPayload(startupCommand),
             });
           }
-          if (pane.temporaryConfig) {
+          assertMatchingTemporaryConfig(pane);
+          if (pane.temporaryConfig?.protocol === "telnet") {
             return invoke<string>("create_telnet_session", {
               connectionId: null,
               host: pane.temporaryConfig.host,
               port: pane.temporaryConfig.port,
               name: pane.temporaryConfig.name,
               createRequestId,
-              startupCommand: null,
+              startupCommand: buildStartupCommandPayload(startupCommand),
             });
           }
           throw new Error("Missing Telnet connection id");
@@ -1639,7 +1646,8 @@ function App() {
               createRequestId,
             });
           }
-          if (pane.temporaryConfig) {
+          assertMatchingTemporaryConfig(pane);
+          if (pane.temporaryConfig?.protocol === "serial") {
             return invoke<string>("create_serial_session", {
               connectionId: null,
               portName: pane.temporaryConfig.portName,
@@ -1669,11 +1677,13 @@ function App() {
               startupCommand: buildStartupCommandPayload(startupCommand),
             });
           }
-          if (pane.temporaryConfig) {
+          assertMatchingTemporaryConfig(pane);
+          if (pane.temporaryConfig?.protocol === "ssh") {
             const { protocol: _protocol, ...sshConfig } = pane.temporaryConfig;
             return invoke<string>("create_temporary_ssh_session", {
               config: sshConfig,
               createRequestId,
+              startupCommand: buildStartupCommandPayload(startupCommand),
             });
           }
           throw new Error("Missing SSH connection id");
@@ -2302,6 +2312,7 @@ function App() {
           pane.connectionId,
           { customName: tab.customName, tabColor: tab.tabColor },
           { afterTabId: tab.id },
+          { temporaryConfig: pane.temporaryConfig },
         );
         tabId = pending.tabId;
         setTerminalWindows((current) =>

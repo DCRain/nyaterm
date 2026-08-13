@@ -23,6 +23,7 @@ import { TbArrowBarToRight, TbCircleDotFilled } from "react-icons/tb";
 import { toast } from "sonner";
 import { useApp } from "@/context/AppContext";
 import { openAIAssistant } from "@/lib/aiEvents";
+import { hasMatchingTemporaryConfig } from "@/lib/appWorkspace";
 import { getActivePane } from "@/lib/workspaceTabs";
 import type { PaneSplitDirection, Tab } from "@/types/global";
 import {
@@ -109,20 +110,28 @@ export default function TabContextMenu({
   const canSpawnSession =
     !!activePane &&
     isTerminalPane &&
-    (activePane.type === "Local" || !!activePane.connectionId || !!activePane.temporaryConfig);
+    (activePane.type === "Local" ||
+      !!activePane.connectionId ||
+      hasMatchingTemporaryConfig(activePane));
   const canReconnect =
     !!activePane &&
     !activePane.connecting &&
-    (activePane.type === "Local" || !!activePane.connectionId || !!activePane.temporaryConfig);
+    (activePane.type === "Local" ||
+      !!activePane.connectionId ||
+      hasMatchingTemporaryConfig(activePane));
   const canMultiplexSsh =
     !!activePane &&
     activePane.type === "SSH" &&
+    (!!activePane.connectionId || activePane.temporaryConfig?.protocol === "ssh") &&
     !activePane.connecting &&
     !activePane.connectError &&
     !!activePane.sessionId;
   const canDisconnect = !!activePane && !activePane.connecting && !activePane.connectError;
   const canSplit =
-    !!activePane && (activePane.type === "Local" || !!activePane.connectionId || !!activePane.temporaryConfig);
+    !!activePane &&
+    (activePane.type === "Local" ||
+      !!activePane.connectionId ||
+      hasMatchingTemporaryConfig(activePane));
   const canUseAI =
     !!activePane && isTerminalPane && !activePane.connecting && !activePane.connectError;
   const canCloseInactive = tabs.length > 1;

@@ -1,4 +1,5 @@
 import type { RecordingMode, RecordingStatus, SessionType } from "@/types/global";
+import type { TemporaryLinkConfig } from "@/types/temporaryConnection";
 
 export interface SyncOverlayState {
   peerCount: number;
@@ -17,15 +18,7 @@ export interface XTerminalProps {
   visible?: boolean;
   sessionType: SessionType;
   connectionId?: string;
-  temporaryConfig?: {
-    protocol: "ssh" | "telnet" | "serial";
-    name?: string;
-    host?: string;
-    port?: number;
-    username?: string;
-    portName?: string;
-    baudRate?: number;
-  };
+  temporaryConfig?: TemporaryLinkConfig;
   onReconnected?: (oldSessionId: string, newSessionId: string) => void;
   onDisconnectedCloseRequested?: () => void;
   onConnectionError?: (sessionId: string, error: string) => void;

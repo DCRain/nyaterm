@@ -1014,7 +1014,27 @@ export default function XTerminal({
     const canReconnectDisconnectedSession = () =>
       sessionTypeRef.current === "Local" ||
       !!connectionIdRef.current ||
-      !!temporaryConfigRef.current;
+      temporaryConfigMatchesSessionType();
+
+    const temporaryConfigMatchesSessionType = () => {
+      const temporaryConfig = temporaryConfigRef.current;
+      if (!temporaryConfig) return false;
+      switch (sessionTypeRef.current) {
+        case "SSH":
+          return temporaryConfig.protocol === "ssh";
+        case "Telnet":
+          return temporaryConfig.protocol === "telnet";
+        case "Serial":
+          return temporaryConfig.protocol === "serial";
+        default:
+          return false;
+      }
+    };
+
+    const assertTemporaryConfigMatchesSessionType = () => {
+      if (!temporaryConfigRef.current || temporaryConfigMatchesSessionType()) return;
+      throw new Error("Temporary session config protocol mismatch");
+    };
 
     const createReconnectedSession = () => {
       const connectionId = connectionIdRef.current;
@@ -1029,7 +1049,8 @@ export default function XTerminal({
           if (connectionId) {
             return invoke<string>("create_telnet_session", { connectionId });
           }
-          if (temporaryConfig) {
+          assertTemporaryConfigMatchesSessionType();
+          if (temporaryConfig?.protocol === "telnet") {
             return invoke<string>("create_telnet_session", {
               connectionId: null,
               host: temporaryConfig.host,
@@ -1043,7 +1064,8 @@ export default function XTerminal({
           if (connectionId) {
             return invoke<string>("create_serial_session", { connectionId });
           }
-          if (temporaryConfig) {
+          assertTemporaryConfigMatchesSessionType();
+          if (temporaryConfig?.protocol === "serial") {
             return invoke<string>("create_serial_session", {
               connectionId: null,
               portName: temporaryConfig.portName,
@@ -1056,7 +1078,8 @@ export default function XTerminal({
           if (connectionId) {
             return invoke<string>("create_ssh_session", { connectionId });
           }
-          if (temporaryConfig) {
+          assertTemporaryConfigMatchesSessionType();
+          if (temporaryConfig?.protocol === "ssh") {
             const { protocol: _protocol, ...sshConfig } = temporaryConfig;
             return invoke<string>("create_temporary_ssh_session", {
               config: sshConfig,

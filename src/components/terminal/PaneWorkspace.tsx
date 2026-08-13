@@ -6,6 +6,7 @@ import RdpPaneHost from "@/components/rdp/RdpPaneHost";
 import { Button } from "@/components/ui/button";
 import VncPaneHost from "@/components/vnc/VncPaneHost";
 import { useApp } from "@/context/AppContext";
+import { hasMatchingTemporaryConfig } from "@/lib/appWorkspace";
 import {
   getActiveGroupForSession,
   getSessionInputPeerIds,
@@ -195,7 +196,9 @@ function PaneNodeView({
   }
 
   const isActive = visible && tab.activePaneId === node.id;
-  const showReconnectAction = !!(node.type === "Local" || node.connectionId || node.temporaryConfig) && !!onReconnectPane;
+  const showReconnectAction =
+    !!(node.type === "Local" || node.connectionId || hasMatchingTemporaryConfig(node)) &&
+    !!onReconnectPane;
   const statusTitle = isReconnectPending
     ? t("tabCtx.reconnecting")
     : t("terminal.connectionFailed");

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RestorableTab } from "@/types/global";
+import type { TemporaryLinkConfig } from "@/types/temporaryConnection";
 import {
   collectSessionPanes,
   createSessionPane,
@@ -230,5 +231,29 @@ describe("workspaceTabs remote desktop persistence", () => {
     );
 
     expect(restored).toBeNull();
+  });
+});
+
+describe("workspaceTabs temporary session metadata", () => {
+  it("keeps temporaryConfig on runtime panes without persisting it", () => {
+    const temporaryConfig: TemporaryLinkConfig = {
+      protocol: "telnet",
+      name: "telnet://example.com:23",
+      host: "example.com",
+      port: 23,
+    };
+    const pane = createSessionPane("Temporary Telnet", "Telnet", undefined, {
+      temporaryConfig,
+    });
+
+    expect(pane.temporaryConfig).toBe(temporaryConfig);
+
+    const [serialized] = serializeTabsForPersistence([createWorkspaceTab(pane, 0)]);
+    expect(JSON.stringify(serialized)).not.toContain("temporaryConfig");
+    expect(serialized.root).toMatchObject({
+      kind: "leaf",
+      session_type: "Telnet",
+    });
+    expect(serialized.root?.kind === "leaf" && serialized.root.connection_id).toBeUndefined();
   });
 });
