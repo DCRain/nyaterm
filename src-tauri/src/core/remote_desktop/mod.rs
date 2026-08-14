@@ -64,6 +64,12 @@ mod tests {
             RemoteDesktopProtocol::try_from(&ConnectionType::Vnc {
                 host: "h".into(),
                 port: 5900,
+                security: Default::default(),
+                display: Default::default(),
+                clipboard: Default::default(),
+                reconnect: Default::default(),
+                shared: true,
+                view_only: false,
             })
             .unwrap(),
             RemoteDesktopProtocol::Vnc

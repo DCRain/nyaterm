@@ -154,15 +154,15 @@ function TransferRow({
       : item.totalSize > 0
         ? Math.min(100, Math.round((item.bytesTransferred / item.totalSize) * 100))
         : 0;
-  const isZmodemTransfer = item.source === "zmodem";
-  const canPause = !isZmodemTransfer && item.status === "transferring";
-  const canPauseQueued = !isZmodemTransfer && item.status === "queued";
-  const canResume = !isZmodemTransfer && item.status === "paused";
-  const canRetry = !isZmodemTransfer && (item.status === "error" || item.status === "cancelled");
+  const isExternalTransfer = item.source === "zmodem" || item.source === "rdp-clipboard";
+  const canPause = !isExternalTransfer && item.status === "transferring";
+  const canPauseQueued = !isExternalTransfer && item.status === "queued";
+  const canResume = !isExternalTransfer && item.status === "paused";
+  const canRetry = !isExternalTransfer && (item.status === "error" || item.status === "cancelled");
   const canCancel =
-    !isZmodemTransfer &&
+    !isExternalTransfer &&
     (item.status === "queued" || item.status === "transferring" || item.status === "paused");
-  const canDelete = isZmodemTransfer
+  const canDelete = isExternalTransfer
     ? item.status !== "transferring"
     : !canCancel || item.status === "queued" || item.queueState === "pending";
 
@@ -297,7 +297,7 @@ function TransferRow({
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="min-w-[180px]">
-        {!isZmodemTransfer && (
+        {!isExternalTransfer && (
           <>
             <ContextMenuItem
               onClick={() => onPause(item.id)}
@@ -404,7 +404,7 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
   );
 
   const canDeleteTransfer = useCallback((transfer: TransferItem) => {
-    if (transfer.source === "zmodem") {
+    if (transfer.source === "zmodem" || transfer.source === "rdp-clipboard") {
       return transfer.status !== "transferring";
     }
     const canCancel =
@@ -476,14 +476,19 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
   const hasRunning = visibleTransfers.some(
     (transfer) =>
       transfer.source !== "zmodem" &&
+      transfer.source !== "rdp-clipboard" &&
       (transfer.status === "transferring" || transfer.status === "queued"),
   );
   const hasPaused = visibleTransfers.some(
-    (transfer) => transfer.source !== "zmodem" && transfer.status === "paused",
+    (transfer) =>
+      transfer.source !== "zmodem" &&
+      transfer.source !== "rdp-clipboard" &&
+      transfer.status === "paused",
   );
   const hasActive = visibleTransfers.some(
     (transfer) =>
       transfer.source !== "zmodem" &&
+      transfer.source !== "rdp-clipboard" &&
       (transfer.status === "queued" ||
         transfer.status === "transferring" ||
         transfer.status === "paused"),
@@ -502,6 +507,7 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
         .filter(
           (transfer) =>
             transfer.source !== "zmodem" &&
+      transfer.source !== "rdp-clipboard" &&
             (transfer.status === "transferring" || transfer.status === "queued"),
         )
         .map((transfer) => pauseTransfer(transfer.id)),
@@ -524,7 +530,12 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
   const handleResumeAll = useCallback(() => {
     void Promise.all(
       visibleTransfers
-        .filter((transfer) => transfer.source !== "zmodem" && transfer.status === "paused")
+        .filter(
+          (transfer) =>
+            transfer.source !== "zmodem" &&
+            transfer.source !== "rdp-clipboard" &&
+            transfer.status === "paused",
+        )
         .map((transfer) => resumeTransfer(transfer.id)),
     );
   }, [resumeTransfer, visibleTransfers]);
@@ -535,6 +546,7 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
         .filter(
           (transfer) =>
             transfer.source !== "zmodem" &&
+      transfer.source !== "rdp-clipboard" &&
             (transfer.status === "queued" ||
               transfer.status === "transferring" ||
               transfer.status === "paused"),

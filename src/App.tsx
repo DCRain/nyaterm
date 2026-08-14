@@ -207,6 +207,7 @@ function getRemoteDesktopPaneDisplay(connection: SavedConnection | null | undefi
       remoteWidth: connection.display?.width ?? 1920,
       remoteHeight: connection.display?.height ?? 1080,
       scaleMode: connection.display?.mode === "fit-window" ? "fit" : "actual",
+      clipboardMode: connection.clipboard?.mode ?? "text-only",
     } as const;
   }
   if (connection?.type === "vnc") {
@@ -305,8 +306,6 @@ async function createSessionForConnection(
         connectionId: connection.id,
         createRequestId,
       });
-    case "vnc":
-      throw new Error("Remote desktop connections must be launched externally");
     default:
       return invoke<string>("create_ssh_session", {
         connectionId: connection.id,

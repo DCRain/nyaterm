@@ -42,13 +42,7 @@ export interface SyncGroup {
 export type PaneSplitDirection = "horizontal" | "vertical";
 
 /** Connection type discriminator matching Rust ConnectionType. */
-export type ConnectionTypeTag =
-  | "ssh"
-  | "local_terminal"
-  | "telnet"
-  | "serial"
-  | "rdp"
-  | "vnc";
+export type ConnectionTypeTag = "ssh" | "local_terminal" | "telnet" | "serial" | "rdp" | "vnc";
 
 /** Metadata for a connected or disconnected session. */
 export interface SessionInfo {
@@ -101,6 +95,7 @@ export interface TerminalSessionPane extends WorkspacePaneBase {
 }
 
 export type RemoteDesktopScaleMode = "fit" | "actual" | "stretch";
+export type RdpClipboardMode = "disabled" | "text-only" | "text-and-files";
 
 export interface RemoteDesktopDisplayMetadata {
   remoteWidth?: number;
@@ -108,6 +103,8 @@ export interface RemoteDesktopDisplayMetadata {
   scaleMode?: RemoteDesktopScaleMode;
   viewOnly?: boolean;
   clipboardEnabled?: boolean;
+  /** Builtin RDP CLIPRDR mode mirrored from connection settings. */
+  clipboardMode?: RdpClipboardMode;
 }
 
 /** Leaf node representing one graphical remote desktop session inside a workspace tab. */
@@ -500,7 +497,6 @@ export interface SavedConnection {
 
 export type RdpCertificatePolicy = "strict" | "prompt" | "accept-temporarily";
 export type RdpDisplayMode = "fit-window" | "fixed" | "native";
-export type RdpClipboardMode = "disabled" | "text-only";
 
 export interface RdpSecuritySettings {
   use_nla: boolean;

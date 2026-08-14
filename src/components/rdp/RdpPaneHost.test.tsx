@@ -27,6 +27,14 @@ vi.mock("@tauri-apps/api/core", () => ({
   },
 }));
 
+vi.mock("@/context/TransferContext", () => ({
+  useTransfer: () => ({
+    upsertExternalTransferProgress: vi.fn(),
+    completeExternalTransfer: vi.fn(),
+    failExternalTransfer: vi.fn(),
+  }),
+}));
+
 describe("RdpPaneHost", () => {
   beforeEach(() => {
     invokeMock.mockReset();
@@ -106,6 +114,36 @@ describe("RdpPaneHost", () => {
         {
           type: "key-up",
           scanCode: 0x1d,
+          extended: false,
+          repeat: false,
+        },
+      ],
+    });
+  });
+
+  it("ignores repeated keydown events while a key is held", async () => {
+    render(<RdpPaneHost pane={rdpPane()} active visible />);
+
+    await waitFor(() => expect(listeners.has("rdp-state-rdp-session")).toBe(true));
+    act(() => {
+      listeners.get("rdp-state-rdp-session")?.({
+        payload: { sessionId: "rdp-session", state: "active" },
+      });
+    });
+
+    invokeMock.mockClear();
+    const inputRoot = document.querySelector('[data-rdp-input-root="true"]');
+    if (!(inputRoot instanceof HTMLElement)) throw new Error("expected RDP input root");
+    fireEvent.keyDown(inputRoot, { code: "ShiftLeft", key: "Shift", repeat: false });
+    fireEvent.keyDown(inputRoot, { code: "ShiftLeft", key: "Shift", repeat: true });
+
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(invokeMock).toHaveBeenCalledWith("rdp_input_batch", {
+      sessionId: "rdp-session",
+      events: [
+        {
+          type: "key-down",
+          scanCode: 0x2a,
           extended: false,
           repeat: false,
         },

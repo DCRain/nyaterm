@@ -736,6 +736,9 @@ mod tests {
             terminal_type: SshTerminalType::default(),
             sftp: SftpSettings::default(),
             encoding: "UTF-8".to_string(),
+            allow_interactive_auth: true,
+            otp_id: None,
+            auto_fill_otp: false,
         }
     }
 

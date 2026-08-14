@@ -206,6 +206,7 @@ pub fn run() {
             cmd::rdp::rdp_set_keyboard_capture,
             cmd::rdp::rdp_resize,
             cmd::rdp::rdp_set_clipboard_text,
+            cmd::rdp::rdp_offer_local_files,
             cmd::rdp::rdp_reconnect,
             cmd::rdp::close_rdp_session,
             cmd::rdp::respond_rdp_certificate,

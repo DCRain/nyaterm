@@ -849,35 +849,39 @@ async fn active_session(
                     #[cfg(feature = "clipboard")]
                     RdpInputEvent::Clipboard(event) => {
                         if let Some(cliprdr_client) = active_stage.get_svc_processor_mut::<ironrdp_cliprdr::CliprdrClient>() {
-                            if let Some(svc_messages) = match event {
+                            // CLIPRDR errors (e.g. channel not Ready yet) must not tear down the
+                            // graphics session — log and skip the clipboard action instead.
+                            let cliprdr_result = match event {
                                 ClipboardMessage::SendInitiateCopy(formats) => {
-                                    Some(cliprdr_client.initiate_copy(&formats)
-                                        .map_err(|e| ironrdp_session::custom_err!("CLIPRDR", e))?)
+                                    Some(cliprdr_client.initiate_copy(&formats))
                                 }
                                 ClipboardMessage::SendInitiateFileCopy(files) => {
-                                    Some(cliprdr_client.initiate_file_copy(files)
-                                        .map_err(|e| ironrdp_session::custom_err!("CLIPRDR", e))?)
+                                    Some(cliprdr_client.initiate_file_copy(files))
                                 }
                                 ClipboardMessage::SendFormatData(response) => {
-                                    Some(cliprdr_client.submit_format_data(response)
-                                        .map_err(|e| ironrdp_session::custom_err!("CLIPRDR", e))?)
+                                    Some(cliprdr_client.submit_format_data(response))
                                 }
                                 ClipboardMessage::SendInitiatePaste(format) => {
-                                    Some(cliprdr_client.initiate_paste(format)
-                                        .map_err(|e| ironrdp_session::custom_err!("CLIPRDR", e))?)
+                                    Some(cliprdr_client.initiate_paste(format))
                                 }
                                 ClipboardMessage::SendFileContentsRequest(request) => {
-                                    Some(cliprdr_client.request_file_contents(request)
-                                        .map_err(|e| ironrdp_session::custom_err!("CLIPRDR", e))?)
+                                    Some(cliprdr_client.request_file_contents(request))
                                 }
                                 ClipboardMessage::SendFileContentsResponse(response) => {
-                                    Some(cliprdr_client.submit_file_contents(response)
-                                        .map_err(|e| ironrdp_session::custom_err!("CLIPRDR", e))?)
+                                    Some(cliprdr_client.submit_file_contents(response))
                                 }
                                 ClipboardMessage::Error(e) => {
                                     error!("Clipboard backend error: {}", e);
                                     None
                                 }
+                            };
+                            if let Some(svc_messages) = match cliprdr_result {
+                                Some(Ok(messages)) => Some(messages),
+                                Some(Err(e)) => {
+                                    warn!(error = %e, "CLIPRDR action failed; keeping RDP session alive");
+                                    None
+                                }
+                                None => None,
                             } {
                                 let frame = active_stage.process_svc_processor_messages(svc_messages)?;
                                 vec![ActiveStageOutput::ResponseFrame(frame)]

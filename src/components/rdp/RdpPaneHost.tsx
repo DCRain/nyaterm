@@ -12,11 +12,14 @@ import {
   useRef,
   useState,
 } from "react";
+import { useTranslation } from "react-i18next";
+import ExternalFileDropOverlay from "@/components/ExternalFileDropOverlay";
 import { FloatingSessionChrome } from "@/components/remote-desktop/FloatingSessionChrome";
 import {
   createRemoteDesktopRenderer,
   type RemoteDesktopRenderer,
 } from "@/components/remote-desktop/renderer";
+import { useRdpFileDrop } from "@/hooks/useRdpFileDrop";
 import { invoke } from "@/lib/invoke";
 import { decodeRdpFramePatch } from "@/lib/rdpFrame";
 import {
@@ -151,6 +154,7 @@ function RdpPaneHost({
   onDisconnectedCloseRequested,
   onConnectionError,
 }: RdpPaneHostProps) {
+  const { t } = useTranslation();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const imeRef = useRef<HTMLTextAreaElement | null>(null);
@@ -494,6 +498,8 @@ function RdpPaneHost({
 
   const handleKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLElement>) => {
+      if (event.repeat) return;
+      if (pressedKeysRef.current.has(event.code)) return;
       if (!shouldUsePhysicalRdpKey(event.nativeEvent)) return;
       const inputEvent = buildRdpKeyEvent(event.nativeEvent, "key-down");
       if (!inputEvent) return;
@@ -588,6 +594,19 @@ function RdpPaneHost({
   const sendShortcut = (events: RdpInputEvent[]) => {
     void sendInputBatch(events);
   };
+
+  const fileDropEnabled =
+    visible &&
+    state === "active" &&
+    !pane.connecting &&
+    !pane.connectError &&
+    pane.display?.clipboardMode === "text-and-files";
+
+  const { isExternalDropActive } = useRdpFileDrop({
+    sessionId: pane.sessionId,
+    enabled: fileDropEnabled,
+    containerRef,
+  });
 
   return (
     <div
@@ -709,6 +728,13 @@ function RdpPaneHost({
         onToggleFullscreen={() => void toggleFullscreen()}
         isFullscreen={isFullscreen}
       />
+
+      {isExternalDropActive && (
+        <ExternalFileDropOverlay
+          title={t("dialog.rdpFileDropOverlayTitle")}
+          hint={t("dialog.rdpFileDropOverlayHint")}
+        />
+      )}
 
       {state !== "active" && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/45 text-white">

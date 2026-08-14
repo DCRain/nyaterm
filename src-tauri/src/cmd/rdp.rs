@@ -71,6 +71,18 @@ pub async fn rdp_set_clipboard_text(
 }
 
 #[tauri::command]
+pub async fn rdp_offer_local_files(
+    state: tauri::State<'_, Arc<RdpSessionManager>>,
+    session_id: String,
+    paths: Vec<String>,
+    auto_paste: Option<bool>,
+) -> AppResult<usize> {
+    state
+        .offer_local_files(&session_id, paths, auto_paste.unwrap_or(true))
+        .await
+}
+
+#[tauri::command]
 pub async fn rdp_reconnect(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<RdpSessionManager>>,

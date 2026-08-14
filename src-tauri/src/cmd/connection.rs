@@ -372,7 +372,10 @@ fn validate_rdp_config(connection: &SavedConnection) -> AppResult<()> {
             "RDP external resolution is outside the supported range".to_string(),
         ));
     }
-    if !matches!(clipboard.mode.as_str(), "disabled" | "text-only") {
+    if !matches!(
+        clipboard.mode.as_str(),
+        "disabled" | "text-only" | "text-and-files"
+    ) {
         return Err(AppError::Config(
             "RDP clipboard mode is invalid".to_string(),
         ));
@@ -658,6 +661,7 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
             created_at_ms: None,
             updated_at_ms: None,
             last_used_at_ms: None,
+            open_on_startup: false,
         }
     }
 

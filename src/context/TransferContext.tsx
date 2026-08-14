@@ -17,7 +17,7 @@ import { filterEnqueueUploadRequests } from "@/lib/transferDuplicateResolution";
 
 export type TransferDirection = "upload" | "download" | "copy";
 export type TransferKind = "file" | "directory";
-export type TransferSource = "sftp" | "zmodem";
+export type TransferSource = "sftp" | "zmodem" | "rdp-clipboard";
 export type TransferStatus =
   | "queued"
   | "transferring"
@@ -78,6 +78,7 @@ export interface ExternalTransferProgress {
   totalSize: number;
   localPath?: string;
   remotePath?: string;
+  source?: TransferSource;
 }
 
 export interface TransferItem {
@@ -978,7 +979,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
         timestamp: existing?.timestamp ?? now,
         queueState: undefined,
         error: undefined,
-        source: "zmodem",
+        source: progress.source ?? existing?.source ?? "zmodem",
       });
       return next;
     });

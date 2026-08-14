@@ -1004,12 +1004,20 @@ export function RdpForm({
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
+                        <SelectItem value="text-and-files">
+                          {t("dialog.rdpClipboardTextAndFiles")}
+                        </SelectItem>
                         <SelectItem value="text-only">
                           {t("dialog.rdpClipboardTextOnly")}
                         </SelectItem>
                         <SelectItem value="disabled">{t("dialog.disabled")}</SelectItem>
                       </SelectContent>
                     </Select>
+                    {clipboardMode === "text-and-files" ? (
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        {t("dialog.rdpClipboardFilesHint")}
+                      </p>
+                    ) : null}
                   </div>
                 </div>
               </TabsContent>

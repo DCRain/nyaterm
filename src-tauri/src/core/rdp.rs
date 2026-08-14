@@ -1,4 +1,8 @@
 use crate::config::{self, ConnectionAuth, ConnectionType};
+use crate::core::rdp_clipboard_files::{
+    OfferedLocalFile, build_offered_local_files, cliprdr_range_request_size, read_offered_file_chunk,
+    sanitize_remote_file_name, MAX_CHUNK_BYTES, MAX_FILE_BYTES,
+};
 use crate::core::remote_desktop::frame::{
     RemoteDesktopFramePatch, RemoteDesktopPixelFormat, encode_frame_patch,
 };
@@ -18,8 +22,9 @@ use ironrdp::cliprdr::backend::{
     ClipboardMessage, ClipboardMessageProxy, CliprdrBackend, CliprdrBackendFactory,
 };
 use ironrdp::cliprdr::pdu::{
-    ClipboardFormat, ClipboardFormatId, ClipboardGeneralCapabilityFlags, FileContentsRequest,
-    FileContentsResponse, FormatDataRequest, FormatDataResponse, LockDataId,
+    ClipboardFileAttributes, ClipboardFormat, ClipboardFormatId, ClipboardFormatName,
+    ClipboardGeneralCapabilityFlags, FileContentsFlags, FileContentsRequest,
+    FileContentsResponse, FileDescriptor, FormatDataRequest, FormatDataResponse, LockDataId,
     OwnedFormatDataResponse,
 };
 use ironrdp::core::impl_as_any;
@@ -36,8 +41,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
+use std::fs::{self, File};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::thread::JoinHandle;
 use tauri::async_runtime::JoinHandle as TauriJoinHandle;
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -49,6 +57,9 @@ use x509_cert::der::Decode as _;
 const MAX_FRAME_QUEUE: usize = 2;
 const MAX_CLIPBOARD_TEXT_BYTES: usize = 16 * 1024 * 1024;
 const CLIPBOARD_POLL_INTERVAL: Duration = Duration::from_millis(750);
+const REMOTE_PASTE_AFTER_OFFER_DELAY: Duration = Duration::from_millis(450);
+const CLIPBOARD_OPEN_RETRIES: u32 = 12;
+const CLIPBOARD_OPEN_RETRY_DELAY: Duration = Duration::from_millis(50);
 const CLIPBOARD_TIMEOUT: Duration = Duration::from_millis(1000);
 const CERTIFICATE_PROMPT_TIMEOUT: Duration = Duration::from_secs(120);
 /// Match IronRDP / MS-RDPEDISP minima so fit-window can track small panes.
@@ -354,6 +365,31 @@ impl RdpSessionManager {
             ));
         }
         self.engine.set_clipboard_text(session, text).await
+    }
+
+    pub async fn offer_local_files(
+        &self,
+        session_id: &str,
+        paths: Vec<String>,
+        auto_paste: bool,
+    ) -> AppResult<usize> {
+        let session = self.get(session_id).await?;
+        if session.config.clipboard_mode != "text-and-files" {
+            return Err(AppError::Config(
+                "RDP file clipboard requires mode text-and-files".to_string(),
+            ));
+        }
+        let bridge = session
+            .clipboard_bridge
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| {
+                AppError::SessionNotFound("RDP clipboard bridge is not available".to_string())
+            })?;
+        bridge
+            .offer_local_files(paths, auto_paste)
+            .map_err(AppError::Channel)
     }
 
     pub async fn reconnect(&self, app: AppHandle, session_id: &str) -> AppResult<()> {
@@ -682,6 +718,9 @@ fn spawn_ironrdp_engine(app: AppHandle, session: Arc<RdpSession>, generation: u6
                 *session.input_sender.lock().await = Some(input_sender.clone());
                 *session.input_database.lock().await = IronRdpInputDatabase::new();
                 *session.frame_sequence.lock().await = 0;
+                if let Some(bridge) = session.clipboard_bridge.lock().await.clone() {
+                    bridge.set_paste_session(Arc::downgrade(&session));
+                }
             }
 
             let join_handle = std::thread::spawn(move || {
@@ -932,7 +971,12 @@ async fn build_ironrdp_config(
         *session.clipboard_bridge.lock().await = None;
         builder = builder.with_clipboard(IronRdpClipboardType::Disable);
     } else {
-        let bridge = Arc::new(RdpClipboardBridge::new(config.session_id.clone()));
+        let files_enabled = config.clipboard_mode == "text-and-files";
+        let bridge = Arc::new(RdpClipboardBridge::new(
+            app.clone(),
+            config.session_id.clone(),
+            files_enabled,
+        ));
         *session.clipboard_bridge.lock().await = Some(bridge.clone());
         builder = builder
             .with_clipboard(IronRdpClipboardType::Enable)
@@ -1113,18 +1157,66 @@ fn certificate_policy_allows_without_prompt(
     }
 }
 
+struct PendingFileOffer {
+    paths: Vec<String>,
+    auto_paste: bool,
+}
+
 struct RdpClipboardBridge {
+    app: Option<AppHandle>,
     session_id: String,
+    files_enabled: bool,
     shutdown: AtomicBool,
     watcher_started: AtomicBool,
+    cliprdr_ready: AtomicBool,
+    auto_paste_after_offer: AtomicBool,
+    paste_session: std::sync::Mutex<Option<std::sync::Weak<RdpSession>>>,
     proxy: std::sync::Mutex<Option<Arc<std::sync::Mutex<Box<dyn ClipboardMessageProxy>>>>>,
     last_text_hash: std::sync::Mutex<Option<u64>>,
+    last_files_hash: std::sync::Mutex<Option<u64>>,
+    offered_files: std::sync::Mutex<Vec<OfferedLocalFile>>,
+    pending_file_offer: std::sync::Mutex<Option<PendingFileOffer>>,
+    next_stream_id: AtomicU32,
+    remote_download: std::sync::Mutex<Option<RemoteFileDownload>>,
+    remote_files_clipboard_until: std::sync::Mutex<Option<std::time::Instant>>,
+    last_remote_clipboard_basenames: std::sync::Mutex<Vec<String>>,
+    local_upload: std::sync::Mutex<Option<LocalUploadProgress>>,
+}
+
+#[derive(Debug)]
+struct LocalUploadProgress {
+    transfer_id: String,
+    display_name: String,
+    total_bytes: u64,
+    bytes_transferred: u64,
+    last_progress_emit: Option<std::time::Instant>,
+}
+
+#[derive(Debug)]
+struct RemoteFileDownload {
+    transfer_id: String,
+    display_name: String,
+    total_bytes: u64,
+    bytes_transferred: u64,
+    last_progress_emit: Option<std::time::Instant>,
+    clip_data_id: Option<u32>,
+    files: Vec<FileDescriptor>,
+    index: usize,
+    position: u64,
+    expected_size: Option<u64>,
+    awaiting_size: bool,
+    stream_id: u32,
+    staging_dir: PathBuf,
+    current_path: Option<PathBuf>,
+    current_file: Option<File>,
+    written_paths: Vec<PathBuf>,
 }
 
 impl fmt::Debug for RdpClipboardBridge {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RdpClipboardBridge")
             .field("session_id", &self.session_id)
+            .field("files_enabled", &self.files_enabled)
             .field("shutdown", &self.shutdown.load(Ordering::SeqCst))
             .field(
                 "watcher_started",
@@ -1135,14 +1227,318 @@ impl fmt::Debug for RdpClipboardBridge {
 }
 
 impl RdpClipboardBridge {
-    fn new(session_id: String) -> Self {
+    fn new(app: AppHandle, session_id: String, files_enabled: bool) -> Self {
         Self {
+            app: Some(app),
             session_id,
+            files_enabled,
             shutdown: AtomicBool::new(false),
             watcher_started: AtomicBool::new(false),
+            cliprdr_ready: AtomicBool::new(false),
+            auto_paste_after_offer: AtomicBool::new(false),
+            paste_session: std::sync::Mutex::new(None),
             proxy: std::sync::Mutex::new(None),
             last_text_hash: std::sync::Mutex::new(None),
+            last_files_hash: std::sync::Mutex::new(None),
+            offered_files: std::sync::Mutex::new(Vec::new()),
+            pending_file_offer: std::sync::Mutex::new(None),
+            next_stream_id: AtomicU32::new(1),
+            remote_download: std::sync::Mutex::new(None),
+            remote_files_clipboard_until: std::sync::Mutex::new(None),
+            last_remote_clipboard_basenames: std::sync::Mutex::new(Vec::new()),
+            local_upload: std::sync::Mutex::new(None),
         }
+    }
+
+    #[cfg(test)]
+    fn new_for_test(session_id: String) -> Self {
+        Self {
+            app: None,
+            session_id,
+            files_enabled: false,
+            shutdown: AtomicBool::new(false),
+            watcher_started: AtomicBool::new(false),
+            cliprdr_ready: AtomicBool::new(false),
+            auto_paste_after_offer: AtomicBool::new(false),
+            paste_session: std::sync::Mutex::new(None),
+            proxy: std::sync::Mutex::new(None),
+            last_text_hash: std::sync::Mutex::new(None),
+            last_files_hash: std::sync::Mutex::new(None),
+            offered_files: std::sync::Mutex::new(Vec::new()),
+            pending_file_offer: std::sync::Mutex::new(None),
+            next_stream_id: AtomicU32::new(1),
+            remote_download: std::sync::Mutex::new(None),
+            remote_files_clipboard_until: std::sync::Mutex::new(None),
+            last_remote_clipboard_basenames: std::sync::Mutex::new(Vec::new()),
+            local_upload: std::sync::Mutex::new(None),
+        }
+    }
+
+    fn set_paste_session(&self, session: std::sync::Weak<RdpSession>) {
+        if let Ok(mut target) = self.paste_session.lock() {
+            *target = Some(session);
+        }
+    }
+
+    fn schedule_remote_paste_after_offer(&self) {
+        let Some(session) = self
+            .paste_session
+            .lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().and_then(std::sync::Weak::upgrade))
+        else {
+            tracing::debug!(
+                session_id = %self.session_id,
+                "Skipping remote paste because RDP session input is unavailable"
+            );
+            return;
+        };
+        let session_id = self.session_id.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(REMOTE_PASTE_AFTER_OFFER_DELAY);
+            tauri::async_runtime::spawn(async move {
+                if let Err(err) = send_remote_paste_keys(session).await {
+                    tracing::warn!(
+                        session_id = %session_id,
+                        error = %err,
+                        "Failed to send Ctrl+V after RDP file offer"
+                    );
+                }
+            });
+        });
+    }
+
+    fn mark_cliprdr_ready(&self) {
+        self.cliprdr_ready.store(true, Ordering::SeqCst);
+        let pending = self
+            .pending_file_offer
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take());
+        if let Some(pending) = pending {
+            if let Err(err) = self.offer_local_files(pending.paths, pending.auto_paste) {
+                tracing::warn!(
+                    session_id = %self.session_id,
+                    error = %err,
+                    "Failed to flush pending RDP file clipboard offer after CLIPRDR ready"
+                );
+            }
+        }
+    }
+
+    fn mark_local_files_hash(&self, paths: &[String]) {
+        if let Ok(mut last) = self.last_files_hash.lock() {
+            *last = Some(stable_paths_hash(paths));
+        }
+    }
+
+    fn remote_file_download_active(&self) -> bool {
+        self.remote_download
+            .lock()
+            .ok()
+            .is_some_and(|guard| guard.is_some())
+    }
+
+    fn remote_files_clipboard_protected(&self) -> bool {
+        if self.remote_file_download_active() {
+            return true;
+        }
+        let Ok(guard) = self.remote_files_clipboard_until.lock() else {
+            return false;
+        };
+        guard.is_some_and(|until| std::time::Instant::now() < until)
+    }
+
+    fn extend_remote_files_clipboard_protection(&self, duration: std::time::Duration) {
+        if let Ok(mut guard) = self.remote_files_clipboard_until.lock() {
+            *guard = Some(std::time::Instant::now() + duration);
+        }
+    }
+
+    fn remember_remote_clipboard_basenames(&self, paths: &[String]) {
+        let basenames: Vec<String> = paths
+            .iter()
+            .filter_map(|path| {
+                Path::new(path)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .collect();
+        if let Ok(mut guard) = self.last_remote_clipboard_basenames.lock() {
+            *guard = basenames;
+        }
+    }
+
+    fn should_ignore_remote_text_clipboard(&self, text: &str) -> bool {
+        if !self.files_enabled {
+            return false;
+        }
+        if self.remote_files_clipboard_protected() {
+            return true;
+        }
+        let Ok(guard) = self.last_remote_clipboard_basenames.lock() else {
+            return false;
+        };
+        if guard.is_empty() {
+            return false;
+        }
+        let lines: Vec<&str> = text
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect();
+        if lines.is_empty() {
+            return false;
+        }
+        lines.iter().all(|&line| {
+            guard
+                .iter()
+                .any(|name| line == name.as_str() || line.ends_with(name.as_str()))
+        })
+    }
+
+    fn start_local_upload_progress(&self, offered: &[OfferedLocalFile]) {
+        if offered.is_empty() {
+            return;
+        }
+        let descriptors: Vec<FileDescriptor> = offered
+            .iter()
+            .map(|entry| entry.descriptor.clone())
+            .collect();
+        let transfer_id = uuid::Uuid::new_v4().to_string();
+        let display_name = clipboard_transfer_display_name(&descriptors);
+        let total_bytes = total_clipboard_file_bytes(&descriptors);
+        if let Ok(mut guard) = self.local_upload.lock() {
+            *guard = Some(LocalUploadProgress {
+                transfer_id: transfer_id.clone(),
+                display_name: display_name.clone(),
+                total_bytes,
+                bytes_transferred: 0,
+                last_progress_emit: None,
+            });
+        }
+        self.emit_clipboard_transfer(
+            &transfer_id,
+            "started",
+            &display_name,
+            "upload",
+            0,
+            total_bytes,
+            None,
+            None,
+        );
+    }
+
+    fn record_local_upload_bytes(&self, bytes: u64) {
+        let mut snapshot = None;
+        if let Ok(mut guard) = self.local_upload.lock() {
+            let Some(progress) = guard.as_mut() else {
+                return;
+            };
+            progress.bytes_transferred = progress.bytes_transferred.saturating_add(bytes);
+            let force_emit = progress.bytes_transferred >= progress.total_bytes;
+            if force_emit || should_emit_clipboard_progress(&mut progress.last_progress_emit) {
+                snapshot = Some((
+                    progress.transfer_id.clone(),
+                    progress.display_name.clone(),
+                    progress.bytes_transferred,
+                    progress.total_bytes,
+                    force_emit,
+                ));
+            }
+        }
+        let Some((transfer_id, display_name, bytes_transferred, total_bytes, completed)) =
+            snapshot
+        else {
+            return;
+        };
+        self.emit_clipboard_transfer(
+            &transfer_id,
+            if completed { "completed" } else { "progress" },
+            &display_name,
+            "upload",
+            bytes_transferred,
+            total_bytes,
+            None,
+            None,
+        );
+        if completed && let Ok(mut guard) = self.local_upload.lock() {
+            *guard = None;
+        }
+    }
+
+    fn fail_active_clipboard_transfer(&self, message: &str) {
+        if let Ok(mut guard) = self.remote_download.lock() {
+            if let Some(download) = guard.take() {
+                self.emit_clipboard_transfer(
+                    &download.transfer_id,
+                    "failed",
+                    &download.display_name,
+                    "download",
+                    download.bytes_transferred,
+                    download.total_bytes,
+                    None,
+                    Some(message),
+                );
+            }
+        }
+        if let Ok(mut guard) = self.local_upload.lock() {
+            if let Some(upload) = guard.take() {
+                self.emit_clipboard_transfer(
+                    &upload.transfer_id,
+                    "failed",
+                    &upload.display_name,
+                    "upload",
+                    upload.bytes_transferred,
+                    upload.total_bytes,
+                    None,
+                    Some(message),
+                );
+            }
+        }
+    }
+
+    fn emit_clipboard_transfer(
+        &self,
+        id: &str,
+        status: &str,
+        file_name: &str,
+        direction: &str,
+        bytes_transferred: u64,
+        total_size: u64,
+        local_path: Option<&str>,
+        error: Option<&str>,
+    ) {
+        let Some(app) = &self.app else {
+            return;
+        };
+        let payload = serde_json::json!({
+            "id": id,
+            "sessionId": self.session_id,
+            "status": status,
+            "fileName": file_name,
+            "direction": direction,
+            "bytesTransferred": bytes_transferred,
+            "totalSize": total_size,
+            "localPath": local_path,
+            "error": error,
+        });
+        let event = format!("rdp-clipboard-transfer-{}", self.session_id);
+        let _ = app.emit(event.as_str(), payload);
+    }
+
+    fn complete_download_transfer(&self, download: &RemoteFileDownload) {
+        let bytes = download.total_bytes.max(download.bytes_transferred);
+        self.emit_clipboard_transfer(
+            &download.transfer_id,
+            "completed",
+            &download.display_name,
+            "download",
+            bytes,
+            download.total_bytes,
+            None,
+            None,
+        );
     }
 
     fn set_proxy(&self, proxy: Arc<std::sync::Mutex<Box<dyn ClipboardMessageProxy>>>) {
@@ -1151,7 +1547,10 @@ impl RdpClipboardBridge {
         }
     }
 
-    fn notify_text_available(&self) -> Result<(), String> {
+    fn with_proxy<F>(&self, f: F) -> Result<(), String>
+    where
+        F: FnOnce(&dyn ClipboardMessageProxy),
+    {
         let proxy = self
             .proxy
             .lock()
@@ -1161,10 +1560,57 @@ impl RdpClipboardBridge {
         let proxy = proxy
             .lock()
             .map_err(|_| "RDP clipboard proxy lock is poisoned".to_string())?;
-        proxy.send_clipboard_message(ClipboardMessage::SendInitiateCopy(vec![
-            ClipboardFormat::new(ClipboardFormatId::CF_UNICODETEXT),
-        ]));
+        f(&**proxy);
         Ok(())
+    }
+
+    fn notify_text_available(&self) -> Result<(), String> {
+        self.with_proxy(|proxy| {
+            proxy.send_clipboard_message(ClipboardMessage::SendInitiateCopy(vec![
+                ClipboardFormat::new(ClipboardFormatId::CF_UNICODETEXT),
+            ]));
+        })
+    }
+
+    fn offer_local_files(&self, paths: Vec<String>, auto_paste: bool) -> Result<usize, String> {
+        if !self.files_enabled {
+            return Err("RDP file clipboard is disabled".to_string());
+        }
+        if !self.cliprdr_ready.load(Ordering::SeqCst) {
+            let count = paths.len();
+            if let Ok(mut pending) = self.pending_file_offer.lock() {
+                *pending = Some(PendingFileOffer { paths, auto_paste });
+            }
+            tracing::debug!(
+                session_id = %self.session_id,
+                path_count = count,
+                auto_paste,
+                "Queued RDP file clipboard offer until CLIPRDR is Ready"
+            );
+            return Ok(count);
+        }
+        let offered = build_offered_local_files(&paths).map_err(|err| err.to_string())?;
+        let descriptors: Vec<FileDescriptor> = offered
+            .iter()
+            .map(|entry| entry.descriptor.clone())
+            .collect();
+        let count = offered.len();
+        {
+            let mut guard = self
+                .offered_files
+                .lock()
+                .map_err(|_| "RDP offered files lock is poisoned".to_string())?;
+            *guard = offered.clone();
+        }
+        self.start_local_upload_progress(&offered);
+        self.auto_paste_after_offer
+            .store(auto_paste, Ordering::SeqCst);
+        // Hash the caller-supplied paths so CF_HDROP polling does not re-offer the same drop.
+        self.mark_local_files_hash(&paths);
+        self.with_proxy(|proxy| {
+            proxy.send_clipboard_message(ClipboardMessage::SendInitiateFileCopy(descriptors));
+        })?;
+        Ok(count)
     }
 
     fn start_watcher(
@@ -1197,6 +1643,33 @@ impl RdpClipboardBridge {
                         }
                     }
                 }
+
+                if bridge.files_enabled {
+                    #[cfg(windows)]
+                    if let Some(paths) = read_windows_clipboard_file_paths() {
+                        if !paths.is_empty() {
+                            let hash = stable_paths_hash(&paths);
+                            let already_seen = bridge
+                                .last_files_hash
+                                .lock()
+                                .ok()
+                                .is_some_and(|last| *last == Some(hash));
+                            if !already_seen {
+                                match bridge.offer_local_files(paths, false) {
+                                    Ok(_) => {}
+                                    Err(err) => {
+                                        tracing::debug!(
+                                            session_id = %bridge.session_id,
+                                            error = %err,
+                                            "Skipped local CF_HDROP offer for RDP"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 std::thread::sleep(CLIPBOARD_POLL_INTERVAL);
             }
         });
@@ -1204,11 +1677,147 @@ impl RdpClipboardBridge {
 
     fn stop(&self) {
         self.shutdown.store(true, Ordering::SeqCst);
+        self.cliprdr_ready.store(false, Ordering::SeqCst);
+        if let Ok(mut pending) = self.pending_file_offer.lock() {
+            *pending = None;
+        }
     }
 
     fn mark_text_written_from_remote(&self, text: &str) {
         if let Ok(mut last) = self.last_text_hash.lock() {
             *last = Some(stable_text_hash(text));
+        }
+    }
+
+    fn alloc_stream_id(&self) -> u32 {
+        self.next_stream_id.fetch_add(1, Ordering::SeqCst)
+    }
+
+    fn begin_remote_download(
+        &self,
+        files: &[FileDescriptor],
+        clip_data_id: Option<u32>,
+    ) -> Result<(), String> {
+        if files.is_empty() {
+            return Ok(());
+        }
+        let staging_dir = std::env::temp_dir()
+            .join("nyaterm")
+            .join("rdp-clip")
+            .join(&self.session_id)
+            .join(uuid::Uuid::new_v4().to_string());
+        fs::create_dir_all(&staging_dir)
+            .map_err(|err| format!("failed to create RDP clip staging dir: {err}"))?;
+        self.extend_remote_files_clipboard_protection(std::time::Duration::from_secs(30));
+        if let Ok(mut guard) = self.last_remote_clipboard_basenames.lock() {
+            guard.clear();
+        }
+
+        let stream_id = self.alloc_stream_id();
+        let first = &files[0];
+        let transfer_id = uuid::Uuid::new_v4().to_string();
+        let display_name = clipboard_transfer_display_name(files);
+        let total_bytes = total_clipboard_file_bytes(files);
+        let request = FileContentsRequest {
+            stream_id,
+            index: 0,
+            flags: FileContentsFlags::SIZE,
+            position: 0,
+            requested_size: 8,
+            data_id: clip_data_id,
+        };
+
+        {
+            let mut guard = self
+                .remote_download
+                .lock()
+                .map_err(|_| "RDP remote download lock is poisoned".to_string())?;
+            *guard = Some(RemoteFileDownload {
+                transfer_id: transfer_id.clone(),
+                display_name: display_name.clone(),
+                total_bytes,
+                bytes_transferred: 0,
+                last_progress_emit: None,
+                clip_data_id,
+                files: files.to_vec(),
+                index: 0,
+                position: 0,
+                expected_size: first.file_size,
+                awaiting_size: true,
+                stream_id,
+                staging_dir,
+                current_path: None,
+                current_file: None,
+                written_paths: Vec::new(),
+            });
+        }
+
+        self.emit_clipboard_transfer(
+            &transfer_id,
+            "started",
+            &display_name,
+            "download",
+            0,
+            total_bytes,
+            None,
+            None,
+        );
+
+        self.with_proxy(|proxy| {
+            proxy.send_clipboard_message(ClipboardMessage::SendFileContentsRequest(request));
+        })
+    }
+
+    fn finish_remote_download_success(&self, paths: Vec<PathBuf>) {
+        let path_strings = normalize_local_clipboard_paths(&paths);
+        if path_strings.is_empty() {
+            self.emit_remote_files_failed("No local files were saved from the remote clipboard");
+            return;
+        }
+        #[cfg(windows)]
+        {
+            match write_windows_clipboard_hdrop(&path_strings) {
+                Ok(()) => {
+                    self.mark_local_files_hash(&path_strings);
+                    self.remember_remote_clipboard_basenames(&path_strings);
+                    self.extend_remote_files_clipboard_protection(std::time::Duration::from_secs(
+                        10,
+                    ));
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        session_id = %self.session_id,
+                        error = %err,
+                        "Failed to place remote RDP files on local clipboard"
+                    );
+                    self.emit_remote_files_failed(&err);
+                    return;
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            self.mark_local_files_hash(&path_strings);
+        }
+        if let Some(app) = &self.app {
+            let payload = serde_json::json!({
+                "sessionId": self.session_id,
+                "paths": path_strings,
+            });
+            let event = format!("rdp-clipboard-files-{}", self.session_id);
+            let _ = app.emit(event.as_str(), payload);
+        }
+    }
+
+    fn emit_remote_files_failed(&self, message: &str) {
+        self.fail_active_clipboard_transfer(message);
+        if let Some(app) = &self.app {
+            let payload = serde_json::json!({
+                "sessionId": self.session_id,
+                "error": message,
+            });
+            let event = format!("rdp-clipboard-files-failed-{}", self.session_id);
+            let _ = app.emit(event.as_str(), payload);
         }
     }
 }
@@ -1262,6 +1871,320 @@ impl RdpClipboardBackend {
             ]));
         }
     }
+
+    /// Always send a FormatList so CLIPRDR can leave Initialization and become Ready.
+    /// An empty list is valid when the local clipboard has no shareable text yet.
+    fn advertise_formats_for_channel_init(&self) {
+        let formats = if read_clipboard_text_blocking()
+            .filter(|text| !text.is_empty() && clipboard_text_within_limit(text))
+            .is_some()
+        {
+            vec![ClipboardFormat::new(ClipboardFormatId::CF_UNICODETEXT)]
+        } else {
+            Vec::new()
+        };
+        self.send(ClipboardMessage::SendInitiateCopy(formats));
+    }
+
+    fn serve_file_contents_request(&self, request: FileContentsRequest) {
+        let offered = match self.bridge.offered_files.lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                self.send(ClipboardMessage::SendFileContentsResponse(
+                    FileContentsResponse::new_error(request.stream_id),
+                ));
+                return;
+            }
+        };
+        let index = request.index;
+        if index < 0 || index as usize >= offered.len() {
+            self.send(ClipboardMessage::SendFileContentsResponse(
+                FileContentsResponse::new_error(request.stream_id),
+            ));
+            return;
+        }
+        let entry = &offered[index as usize];
+        if request.flags.contains(FileContentsFlags::SIZE) {
+            let size = entry.descriptor.file_size.unwrap_or_else(|| {
+                fs::metadata(&entry.path).map(|meta| meta.len()).unwrap_or(0)
+            });
+            self.send(ClipboardMessage::SendFileContentsResponse(
+                FileContentsResponse::new_size_response(request.stream_id, size),
+            ));
+            return;
+        }
+        if request.flags.contains(FileContentsFlags::RANGE) {
+            match read_offered_file_chunk(&entry.path, request.position, request.requested_size) {
+                Ok(data) => {
+                    let chunk_len = data.len() as u64;
+                    self.send(ClipboardMessage::SendFileContentsResponse(
+                        FileContentsResponse::new_data_response(request.stream_id, data),
+                    ));
+                    self.bridge.record_local_upload_bytes(chunk_len);
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        session_id = %self.bridge.session_id,
+                        error = %err,
+                        "Failed to read offered RDP clipboard file"
+                    );
+                    self.bridge
+                        .emit_remote_files_failed("Failed to read local file for RDP clipboard");
+                    self.send(ClipboardMessage::SendFileContentsResponse(
+                        FileContentsResponse::new_error(request.stream_id),
+                    ));
+                }
+            }
+            return;
+        }
+        self.send(ClipboardMessage::SendFileContentsResponse(
+            FileContentsResponse::new_error(request.stream_id),
+        ));
+    }
+
+    fn handle_remote_file_contents_response(&mut self, response: FileContentsResponse<'_>) {
+        if response.is_error() {
+            tracing::warn!(
+                session_id = %self.bridge.session_id,
+                "Remote RDP file contents response failed"
+            );
+            self.bridge
+                .emit_remote_files_failed("Remote file transfer failed");
+            return;
+        }
+
+        let mut guard = match self.bridge.remote_download.lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+        let Some(download) = guard.as_mut() else {
+            return;
+        };
+        if response.stream_id() != download.stream_id {
+            return;
+        }
+
+        if download.awaiting_size {
+            let Ok(size) = response.data_as_size() else {
+                drop(guard);
+                self.bridge
+                    .emit_remote_files_failed("Remote file transfer failed");
+                return;
+            };
+            if size > MAX_FILE_BYTES {
+                tracing::warn!(
+                    session_id = %self.bridge.session_id,
+                    size,
+                    "Rejecting oversized remote RDP clipboard file"
+                );
+                drop(guard);
+                self.bridge
+                    .emit_remote_files_failed("Remote file is too large");
+                return;
+            }
+            download.expected_size = Some(size);
+            download.awaiting_size = false;
+            download.position = 0;
+
+            let file_desc = download.files[download.index].clone();
+            let Some(safe_name) = sanitize_remote_file_name(&file_desc.name) else {
+                drop(guard);
+                self.bridge
+                    .emit_remote_files_failed("Remote file name was rejected");
+                return;
+            };
+            let mut target = remote_clipboard_target_path(&download.staging_dir, &file_desc, safe_name);
+            if is_directory_descriptor(&file_desc) {
+                if let Err(err) = fs::create_dir_all(&target) {
+                    tracing::warn!(error = %err, "Failed to create remote RDP clip directory");
+                    drop(guard);
+                    self.bridge
+                        .emit_remote_files_failed("Failed to create local folder for remote files");
+                    return;
+                }
+                download.written_paths.push(target);
+                download.current_path = None;
+                download.current_file = None;
+                download.index += 1;
+                if download.index >= download.files.len() {
+                    let paths = download.written_paths.clone();
+                    self.bridge.complete_download_transfer(download);
+                    *guard = None;
+                    drop(guard);
+                    self.bridge.finish_remote_download_success(paths);
+                    return;
+                }
+                download.awaiting_size = true;
+                download.position = 0;
+                download.expected_size = download.files[download.index].file_size;
+                let stream_id = self.bridge.alloc_stream_id();
+                download.stream_id = stream_id;
+                let request = FileContentsRequest {
+                    stream_id,
+                    index: download.index as i32,
+                    flags: FileContentsFlags::SIZE,
+                    position: 0,
+                    requested_size: 8,
+                    data_id: download.clip_data_id,
+                };
+                drop(guard);
+                self.send(ClipboardMessage::SendFileContentsRequest(request));
+                return;
+            }
+            let file = match File::create(&target) {
+                Ok(file) => file,
+                Err(err) => {
+                    tracing::warn!(error = %err, "Failed to create local RDP clip file");
+                    drop(guard);
+                    self.bridge
+                        .emit_remote_files_failed("Failed to create local file for remote clipboard");
+                    return;
+                }
+            };
+            download.current_path = Some(target);
+            download.current_file = Some(file);
+
+            if size == 0 {
+                if let Some(mut file) = download.current_file.take() {
+                    let _ = file.sync_all();
+                }
+                if let Some(path) = download.current_path.take() {
+                    download.written_paths.push(path);
+                }
+                download.index += 1;
+                if download.index >= download.files.len() {
+                    let paths = download.written_paths.clone();
+                    self.bridge.complete_download_transfer(download);
+                    *guard = None;
+                    drop(guard);
+                    self.bridge.finish_remote_download_success(paths);
+                    return;
+                }
+                download.awaiting_size = true;
+                download.position = 0;
+                download.expected_size = download.files[download.index].file_size;
+                let stream_id = self.bridge.alloc_stream_id();
+                download.stream_id = stream_id;
+                let request = FileContentsRequest {
+                    stream_id,
+                    index: download.index as i32,
+                    flags: FileContentsFlags::SIZE,
+                    position: 0,
+                    requested_size: 8,
+                    data_id: download.clip_data_id,
+                };
+                drop(guard);
+                self.send(ClipboardMessage::SendFileContentsRequest(request));
+                return;
+            }
+
+            let stream_id = self.bridge.alloc_stream_id();
+            download.stream_id = stream_id;
+            let request = FileContentsRequest {
+                stream_id,
+                index: download.index as i32,
+                flags: FileContentsFlags::RANGE,
+                position: 0,
+                requested_size: cliprdr_range_request_size(0, Some(size)),
+                data_id: download.clip_data_id,
+            };
+            drop(guard);
+            self.send(ClipboardMessage::SendFileContentsRequest(request));
+            return;
+        }
+
+        let data = response.data();
+        if let Some(file) = download.current_file.as_mut() {
+            if let Err(err) = file.write_all(data) {
+                tracing::warn!(error = %err, "Failed to write remote RDP clip chunk");
+                drop(guard);
+                self.bridge
+                    .emit_remote_files_failed("Failed to write remote file locally");
+                return;
+            }
+        }
+        download.position = download.position.saturating_add(data.len() as u64);
+        download.bytes_transferred = download
+            .bytes_transferred
+            .saturating_add(data.len() as u64);
+        let force_progress_emit = download.bytes_transferred >= download.total_bytes;
+        if force_progress_emit
+            || should_emit_clipboard_progress(&mut download.last_progress_emit)
+        {
+            self.bridge.emit_clipboard_transfer(
+                &download.transfer_id,
+                "progress",
+                &download.display_name,
+                "download",
+                download.bytes_transferred,
+                download.total_bytes,
+                None,
+                None,
+            );
+        }
+        let done = download
+            .expected_size
+            .is_some_and(|size| download.position >= size)
+            || data.is_empty();
+
+        if !done {
+            let stream_id = self.bridge.alloc_stream_id();
+            download.stream_id = stream_id;
+            let request = FileContentsRequest {
+                stream_id,
+                index: download.index as i32,
+                flags: FileContentsFlags::RANGE,
+                position: download.position,
+                requested_size: cliprdr_range_request_size(
+                    download.position,
+                    download.expected_size,
+                ),
+                data_id: download.clip_data_id,
+            };
+            drop(guard);
+            self.send(ClipboardMessage::SendFileContentsRequest(request));
+            return;
+        }
+
+        if let Some(mut file) = download.current_file.take() {
+            if let Err(err) = file.sync_all() {
+                tracing::warn!(error = %err, "Failed to flush remote RDP clip file");
+                drop(guard);
+                self.bridge
+                    .emit_remote_files_failed("Failed to save remote file locally");
+                return;
+            }
+        }
+        if let Some(path) = download.current_path.take() {
+            download.written_paths.push(path);
+        }
+        download.index += 1;
+
+        if download.index >= download.files.len() {
+            let paths = download.written_paths.clone();
+            self.bridge.complete_download_transfer(download);
+            *guard = None;
+            drop(guard);
+            self.bridge.finish_remote_download_success(paths);
+            return;
+        }
+
+        download.awaiting_size = true;
+        download.position = 0;
+        download.expected_size = download.files[download.index].file_size;
+        let stream_id = self.bridge.alloc_stream_id();
+        download.stream_id = stream_id;
+        let request = FileContentsRequest {
+            stream_id,
+            index: download.index as i32,
+            flags: FileContentsFlags::SIZE,
+            position: 0,
+            requested_size: 8,
+            data_id: download.clip_data_id,
+        };
+        drop(guard);
+        self.send(ClipboardMessage::SendFileContentsRequest(request));
+    }
 }
 
 impl CliprdrBackend for RdpClipboardBackend {
@@ -1270,16 +2193,26 @@ impl CliprdrBackend for RdpClipboardBackend {
     }
 
     fn client_capabilities(&self) -> ClipboardGeneralCapabilityFlags {
-        ClipboardGeneralCapabilityFlags::USE_LONG_FORMAT_NAMES
+        let mut flags = ClipboardGeneralCapabilityFlags::USE_LONG_FORMAT_NAMES;
+        if self.bridge.files_enabled {
+            flags |= ClipboardGeneralCapabilityFlags::STREAM_FILECLIP_ENABLED
+                | ClipboardGeneralCapabilityFlags::FILECLIP_NO_FILE_PATHS
+                | ClipboardGeneralCapabilityFlags::CAN_LOCK_CLIPDATA
+                | ClipboardGeneralCapabilityFlags::HUGE_FILE_SUPPORT_ENABLED;
+        }
+        flags
     }
 
     fn on_ready(&mut self) {
+        self.bridge.mark_cliprdr_ready();
         self.bridge.start_watcher(self.proxy.clone());
         self.advertise_text_if_available();
     }
 
     fn on_request_format_list(&mut self) {
-        self.advertise_text_if_available();
+        // Must always advertise during Initialization, otherwise CLIPRDR never becomes Ready
+        // and subsequent initiate_file_copy / paste calls fail.
+        self.advertise_formats_for_channel_init();
     }
 
     fn on_process_negotiated_capabilities(
@@ -1289,7 +2222,35 @@ impl CliprdrBackend for RdpClipboardBackend {
         self.negotiated_capabilities = capabilities;
     }
 
+    fn on_format_list_response(&mut self, ok: bool) {
+        if !ok {
+            self.bridge.auto_paste_after_offer.store(false, Ordering::SeqCst);
+            return;
+        }
+        if self
+            .bridge
+            .auto_paste_after_offer
+            .swap(false, Ordering::SeqCst)
+        {
+            self.bridge.schedule_remote_paste_after_offer();
+        }
+    }
+
     fn on_remote_copy(&mut self, available_formats: &[ClipboardFormat]) {
+        if self.bridge.files_enabled {
+            if let Some(format) = available_formats.iter().find(|format| {
+                format
+                    .name
+                    .as_ref()
+                    .is_some_and(|name| name.value() == ClipboardFormatName::FILE_LIST.value())
+            }) {
+                self.send(ClipboardMessage::SendInitiatePaste(format.id));
+                return;
+            }
+            if self.bridge.remote_files_clipboard_protected() {
+                return;
+            }
+        }
         if available_formats
             .iter()
             .any(|format| format.id == ClipboardFormatId::CF_UNICODETEXT)
@@ -1302,6 +2263,8 @@ impl CliprdrBackend for RdpClipboardBackend {
 
     fn on_format_data_request(&mut self, request: FormatDataRequest) {
         if request.format != ClipboardFormatId::CF_UNICODETEXT {
+            // File list FormatDataRequest is answered inline by ironrdp-cliprdr when we used
+            // SendInitiateFileCopy; unknown formats get an error.
             self.send(ClipboardMessage::SendFormatData(
                 OwnedFormatDataResponse::new_error(),
             ));
@@ -1330,19 +2293,50 @@ impl CliprdrBackend for RdpClipboardBackend {
             );
             return;
         }
-        self.bridge.mark_text_written_from_remote(&text);
+        let bridge = self.bridge.clone();
         std::thread::spawn(move || {
+            if bridge.should_ignore_remote_text_clipboard(&text) {
+                tracing::debug!(
+                    session_id = %bridge.session_id,
+                    "Skipping remote RDP clipboard text to preserve local CF_HDROP"
+                );
+                return;
+            }
+            bridge.mark_text_written_from_remote(&text);
             let _ = write_clipboard_text_blocking(text);
         });
     }
 
     fn on_file_contents_request(&mut self, request: FileContentsRequest) {
-        self.send(ClipboardMessage::SendFileContentsResponse(
-            FileContentsResponse::new_error(request.stream_id),
-        ));
+        if !self.bridge.files_enabled {
+            self.send(ClipboardMessage::SendFileContentsResponse(
+                FileContentsResponse::new_error(request.stream_id),
+            ));
+            return;
+        }
+        self.serve_file_contents_request(request);
     }
 
-    fn on_file_contents_response(&mut self, _response: FileContentsResponse<'_>) {}
+    fn on_file_contents_response(&mut self, response: FileContentsResponse<'_>) {
+        if !self.bridge.files_enabled {
+            return;
+        }
+        self.handle_remote_file_contents_response(response);
+    }
+
+    fn on_remote_file_list(&mut self, files: &[FileDescriptor], clip_data_id: Option<u32>) {
+        if !self.bridge.files_enabled || files.is_empty() {
+            return;
+        }
+        if let Err(err) = self.bridge.begin_remote_download(files, clip_data_id) {
+            tracing::warn!(
+                session_id = %self.bridge.session_id,
+                error = %err,
+                "Failed to start remote RDP file download"
+            );
+            self.bridge.emit_remote_files_failed(&err);
+        }
+    }
 
     fn on_lock(&mut self, _data_id: LockDataId) {}
 
@@ -1370,6 +2364,245 @@ fn write_clipboard_text_blocking(text: String) -> Result<(), String> {
         .map_err(|error| format!("failed to write clipboard text: {error}"))
 }
 
+fn is_directory_descriptor(file_desc: &FileDescriptor) -> bool {
+    file_desc
+        .attributes
+        .is_some_and(|attrs| attrs.contains(ClipboardFileAttributes::DIRECTORY))
+}
+
+fn remote_clipboard_target_path(
+    staging_dir: &Path,
+    file_desc: &FileDescriptor,
+    safe_name: String,
+) -> PathBuf {
+    let mut target = staging_dir.to_path_buf();
+    if let Some(rel) = file_desc
+        .relative_path
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        for part in rel.split(['\\', '/']) {
+            if let Some(safe_part) = sanitize_remote_file_name(part) {
+                target.push(safe_part);
+            }
+        }
+        let _ = fs::create_dir_all(&target);
+    }
+    target.push(safe_name);
+    target
+}
+
+fn total_clipboard_file_bytes(files: &[FileDescriptor]) -> u64 {
+    files.iter().map(|file| file.file_size.unwrap_or(0)).sum()
+}
+
+fn clipboard_transfer_display_name(files: &[FileDescriptor]) -> String {
+    if files.len() == 1 {
+        files
+            .first()
+            .map(|file| file.name.clone())
+            .unwrap_or_else(|| "file".to_string())
+    } else {
+        format!("{} files", files.len())
+    }
+}
+
+fn should_emit_clipboard_progress(last_emit: &mut Option<std::time::Instant>) -> bool {
+    const PROGRESS_EMIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+    let now = std::time::Instant::now();
+    if last_emit.is_some_and(|instant| now.duration_since(instant) < PROGRESS_EMIT_INTERVAL) {
+        return false;
+    }
+    *last_emit = Some(now);
+    true
+}
+
+fn normalize_local_clipboard_paths(paths: &[PathBuf]) -> Vec<String> {
+    paths
+        .iter()
+        .filter_map(|path| {
+            let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+            if !canonical.exists() {
+                return None;
+            }
+            let mut normalized = canonical.to_string_lossy().replace('/', "\\");
+            if let Some(stripped) = normalized.strip_prefix(r"\\?\") {
+                normalized = stripped.to_string();
+            }
+            Some(normalized)
+        })
+        .collect()
+}
+
+async fn send_remote_paste_keys(session: Arc<RdpSession>) -> AppResult<()> {
+    let events = vec![
+        RdpInputEvent::KeyDown {
+            scan_code: 0x1d,
+            extended: false,
+            repeat: false,
+        },
+        RdpInputEvent::KeyDown {
+            scan_code: 0x2f,
+            extended: false,
+            repeat: false,
+        },
+        RdpInputEvent::KeyUp {
+            scan_code: 0x2f,
+            extended: false,
+            repeat: false,
+        },
+        RdpInputEvent::KeyUp {
+            scan_code: 0x1d,
+            extended: false,
+            repeat: false,
+        },
+    ];
+    let input_events = {
+        let mut database = session.input_database.lock().await;
+        let mut output = Vec::new();
+        for event in events {
+            let fast_path = match rdp_input_to_fast_path_input(event) {
+                Some(RdpInputAction::Operations(operations)) => database.apply(operations),
+                Some(RdpInputAction::FastPath(event)) => smallvec::smallvec![event],
+                None => database.release_all(),
+            };
+            if !fast_path.is_empty() {
+                output.push(IronRdpInputEvent::FastPath(fast_path));
+            }
+        }
+        output
+    };
+    let sender = session.input_sender.lock().await.clone().ok_or_else(|| {
+        AppError::SessionNotFound("RDP session is not connected yet".to_string())
+    })?;
+    for event in input_events {
+        sender
+            .send(event)
+            .map_err(|_| AppError::Channel("RDP input channel is closed".to_string()))?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn write_windows_clipboard_hdrop(paths: &[String]) -> Result<(), String> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::{
+        Foundation::HANDLE,
+        System::{
+            DataExchange::{
+                CloseClipboard, EmptyClipboard, OpenClipboard, RegisterClipboardFormatW,
+                SetClipboardData,
+            },
+            Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE},
+            Ole::CF_HDROP,
+        },
+        UI::Shell::DROPFILES,
+    };
+
+    let existing: Vec<String> = paths
+        .iter()
+        .map(|path| path.trim())
+        .filter(|path| !path.is_empty() && std::path::Path::new(path).exists())
+        .map(|path| (*path).to_string())
+        .collect();
+    if existing.is_empty() {
+        return Err("no existing local paths for CF_HDROP".to_string());
+    }
+
+    let mut wide: Vec<u16> = Vec::new();
+    for path in &existing {
+        wide.extend(path.encode_utf16());
+        wide.push(0);
+    }
+    wide.push(0);
+
+    let header_size = std::mem::size_of::<DROPFILES>();
+    let bytes_len = header_size + wide.len() * 2;
+    let hdrop_handle = unsafe {
+        let handle = GlobalAlloc(GMEM_MOVEABLE, bytes_len)
+            .map_err(|err| format!("GlobalAlloc failed: {err}"))?;
+        let ptr = GlobalLock(handle) as *mut u8;
+        if ptr.is_null() {
+            return Err("GlobalLock failed for CF_HDROP".to_string());
+        }
+        let dropfiles = DROPFILES {
+            pFiles: header_size as u32,
+            pt: windows::Win32::Foundation::POINT { x: 0, y: 0 },
+            fNC: false.into(),
+            fWide: true.into(),
+        };
+        std::ptr::write(ptr as *mut DROPFILES, dropfiles);
+        std::ptr::copy_nonoverlapping(
+            wide.as_ptr() as *const u8,
+            ptr.add(header_size),
+            wide.len() * 2,
+        );
+        let _ = GlobalUnlock(handle);
+        handle
+    };
+
+    let drop_effect_handle = unsafe {
+        let handle = GlobalAlloc(GMEM_MOVEABLE, 4)
+            .map_err(|err| format!("GlobalAlloc failed for drop effect: {err}"))?;
+        let ptr = GlobalLock(handle) as *mut u8;
+        if ptr.is_null() {
+            return Err("GlobalLock failed for drop effect".to_string());
+        }
+        // DROPEFFECT_COPY
+        std::ptr::copy_nonoverlapping(1u32.to_le_bytes().as_ptr(), ptr, 4);
+        let _ = GlobalUnlock(handle);
+        handle
+    };
+
+    let preferred_drop_effect = {
+        let name: Vec<u16> = OsStr::new("Preferred DropEffect")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let format_id = unsafe { RegisterClipboardFormatW(PCWSTR(name.as_ptr())) };
+        if format_id == 0 {
+            return Err("RegisterClipboardFormatW returned 0".to_string());
+        }
+        format_id
+    };
+
+    for attempt in 0..CLIPBOARD_OPEN_RETRIES {
+        let opened = unsafe { OpenClipboard(None) };
+        if opened.is_ok() {
+            struct ClipboardGuard;
+            impl Drop for ClipboardGuard {
+                fn drop(&mut self) {
+                    unsafe {
+                        let _ = CloseClipboard();
+                    }
+                }
+            }
+            let _guard = ClipboardGuard;
+            unsafe {
+                EmptyClipboard().map_err(|err| format!("EmptyClipboard failed: {err}"))?;
+                SetClipboardData(CF_HDROP.0 as u32, Some(HANDLE(hdrop_handle.0)))
+                    .map_err(|err| format!("SetClipboardData(CF_HDROP) failed: {err}"))?;
+                SetClipboardData(preferred_drop_effect, Some(HANDLE(drop_effect_handle.0)))
+                    .map_err(|err| format!("SetClipboardData(DropEffect) failed: {err}"))?;
+            }
+            return Ok(());
+        }
+        if attempt + 1 < CLIPBOARD_OPEN_RETRIES {
+            std::thread::sleep(CLIPBOARD_OPEN_RETRY_DELAY);
+        }
+    }
+
+    Err("OpenClipboard failed after retries".to_string())
+}
+
+#[cfg(not(windows))]
+fn write_windows_clipboard_hdrop(_paths: &[String]) -> Result<(), String> {
+    Err("CF_HDROP clipboard is only supported on Windows".to_string())
+}
+
+
 fn clipboard_text_within_limit(text: &str) -> bool {
     text.len() <= MAX_CLIPBOARD_TEXT_BYTES
 }
@@ -1379,6 +2612,64 @@ fn stable_text_hash(text: &str) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     text.hash(&mut hasher);
     hasher.finish()
+}
+
+fn stable_paths_hash(paths: &[String]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for path in paths {
+        path.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+#[cfg(windows)]
+fn read_windows_clipboard_file_paths() -> Option<Vec<String>> {
+    use windows::Win32::{
+        System::{
+            DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard},
+            Ole::CF_HDROP,
+        },
+        UI::Shell::{DragQueryFileW, HDROP},
+    };
+
+    struct ClipboardGuard;
+    impl Drop for ClipboardGuard {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = CloseClipboard();
+            }
+        }
+    }
+
+    unsafe {
+        OpenClipboard(None).ok()?;
+        let _guard = ClipboardGuard;
+        let handle = GetClipboardData(CF_HDROP.0 as u32).ok()?;
+        let hdrop = HDROP(handle.0);
+        let count = DragQueryFileW(hdrop, u32::MAX, None);
+        if count == 0 {
+            return Some(Vec::new());
+        }
+
+        let mut paths = Vec::new();
+        for index in 0..count {
+            let char_count = DragQueryFileW(hdrop, index, None);
+            if char_count == 0 {
+                continue;
+            }
+            let mut buffer = vec![0u16; char_count as usize + 1];
+            let written = DragQueryFileW(hdrop, index, Some(&mut buffer));
+            if written == 0 {
+                continue;
+            }
+            let path = String::from_utf16_lossy(&buffer[..written as usize]);
+            if !path.trim().is_empty() {
+                paths.push(path);
+            }
+        }
+        Some(paths)
+    }
 }
 
 enum RdpInputAction {
@@ -2046,7 +3337,7 @@ mod tests {
 
     #[test]
     fn clipboard_hash_supports_loop_prevention_tokens() {
-        let bridge = RdpClipboardBridge::new("s".to_string());
+        let bridge = RdpClipboardBridge::new_for_test("s".to_string());
         bridge.mark_text_written_from_remote("same");
 
         let current = bridge.last_text_hash.lock().unwrap();
