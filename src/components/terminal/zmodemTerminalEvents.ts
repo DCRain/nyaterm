@@ -55,6 +55,8 @@ export interface ZmodemTransferProgressSink {
   fail: (id: string, reason: string) => void;
 }
 
+type TerminalStatusWriter = (data: string) => void;
+
 interface CurrentZmodemTransferFile {
   id: string;
   fileName: string;
@@ -91,6 +93,7 @@ export function createZmodemEventHandler(
   getT: () => Translate,
   getDuplicateStrategy: () => string = () => "ask",
   progressSink?: ZmodemTransferProgressSink,
+  writeTerminalStatus: TerminalStatusWriter = (data) => terminal.write(data),
 ): ZmodemEventHandler {
   let pendingProgress: Extract<ZmodemEventPayload, { type: "progress" }> | null = null;
   let progressRaf: number | null = null;
@@ -146,7 +149,7 @@ export function createZmodemEventHandler(
     const totalSize = payload.totalSize ?? payload.total_size ?? 0;
     const percent = totalSize > 0 ? Math.round((bytesTransferred / totalSize) * 100) : 0;
     const t = getT();
-    terminal.write(`\r\x1b[36m[ZMODEM] ${t("zmodem.downloading", { fileName, percent })}\x1b[K`);
+    writeTerminalStatus(`\r\x1b[36m[ZMODEM] ${t("zmodem.downloading", { fileName, percent })}\x1b[K`);
   };
 
   const scheduleProgressRender = () => {
@@ -272,7 +275,7 @@ export function createZmodemEventHandler(
     if (disposed) return;
 
     if (payload.direction === "download") {
-      terminal.write(`\r\n\x1b[36m[ZMODEM] ${t("zmodem.selectSaveDir")}\x1b[0m\r\n`);
+      writeTerminalStatus(`\r\n\x1b[36m[ZMODEM] ${t("zmodem.selectSaveDir")}\x1b[0m\r\n`);
       const dir = await openDialog({ directory: true, multiple: false });
       if (disposed) return;
       if (dir) {
@@ -282,7 +285,7 @@ export function createZmodemEventHandler(
         });
       } else {
         await invoke("zmodem_cancel", { sessionId });
-        terminal.write(`\r\n\x1b[33m[ZMODEM] ${t("zmodem.cancelled")}\x1b[0m\r\n`);
+        writeTerminalStatus(`\r\n\x1b[33m[ZMODEM] ${t("zmodem.cancelled")}\x1b[0m\r\n`);
       }
       return;
     }
@@ -324,7 +327,7 @@ export function createZmodemEventHandler(
 
       if (resolvedPaths.length === 0) {
         await invoke("zmodem_cancel", { sessionId });
-        terminal.write(`\r\n\x1b[33m[ZMODEM] ${t("zmodem.cancelled")}\x1b[0m\r\n`);
+        writeTerminalStatus(`\r\n\x1b[33m[ZMODEM] ${t("zmodem.cancelled")}\x1b[0m\r\n`);
         return;
       }
 
@@ -340,7 +343,7 @@ export function createZmodemEventHandler(
       });
     } else {
       await invoke("zmodem_cancel", { sessionId });
-      terminal.write(`\r\n\x1b[33m[ZMODEM] ${t("zmodem.cancelled")}\x1b[0m\r\n`);
+      writeTerminalStatus(`\r\n\x1b[33m[ZMODEM] ${t("zmodem.cancelled")}\x1b[0m\r\n`);
     }
   };
 
@@ -375,7 +378,7 @@ export function createZmodemEventHandler(
             showUploadCompletedToast();
             completePendingZmodemUpload(sessionId);
           } else {
-            terminal.write(`\r\n\x1b[32m[ZMODEM] ${getT()("zmodem.complete")}\x1b[0m\r\n`);
+            writeTerminalStatus(`\r\n\x1b[32m[ZMODEM] ${getT()("zmodem.complete")}\x1b[0m\r\n`);
             if (lastDownloadLocalPath) {
               void revealDownloadedFile(lastDownloadLocalPath);
             }
@@ -404,7 +407,7 @@ export function createZmodemEventHandler(
             }
             failPendingZmodemUpload(sessionId, normalizedPayload.reason);
           } else {
-            terminal.write(
+            writeTerminalStatus(
               `\r\n\x1b[31m[ZMODEM] ${getT()("zmodem.failed", {
                 reason: normalizedPayload.reason,
               })}\x1b[0m\r\n`,
