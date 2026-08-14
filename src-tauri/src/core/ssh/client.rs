@@ -1,7 +1,8 @@
 use super::agent::connect_agent_stream;
+use super::agent_broker::{AgentBrokerFactory, try_acquire_agent_channel_permit};
 use crate::config::{
-    SftpSettings, SshAgentEndpoint, SshAlgorithmMode, SshAlgorithmPreferences, SshProfile,
-    SshTerminalType,
+    SftpSettings, SshAgentEndpoint, SshAgentForwardingConfig, SshAlgorithmMode,
+    SshAlgorithmPreferences, SshProfile, SshTerminalType,
 };
 use crate::error::{AppError, AppResult};
 use russh::client;
@@ -38,9 +39,9 @@ pub struct SshConfig {
     #[serde(default)]
     pub x11_display: String,
     #[serde(default)]
-    pub agent_endpoint: SshAgentEndpoint,
+    pub auth_agent_endpoint: Option<SshAgentEndpoint>,
     #[serde(default)]
-    pub agent_forwarding: bool,
+    pub agent_forwarding_config: SshAgentForwardingConfig,
     #[serde(default)]
     pub proxy: Option<crate::config::ProxySettings>,
     #[serde(default)]
@@ -315,6 +316,7 @@ pub struct SshHandler {
     disconnect_tx: Option<mpsc::UnboundedSender<String>>,
     remote_forward_tx: Option<mpsc::UnboundedSender<RemoteForwardOpen>>,
     agent_forwarding_endpoint: Option<SshAgentEndpoint>,
+    agent_broker: Option<Arc<AgentBrokerFactory>>,
     diagnostics: Option<SshDiagnosticContext>,
 }
 
@@ -334,6 +336,7 @@ impl SshHandler {
             disconnect_tx: None,
             remote_forward_tx: None,
             agent_forwarding_endpoint: None,
+            agent_broker: None,
             diagnostics: None,
         }
     }
@@ -359,7 +362,13 @@ impl SshHandler {
         self
     }
 
-    /// Configure the local endpoint used by remote Agent forwarding.
+    /// Attaches the Agent forwarding broker for the final target session.
+    pub fn with_agent_broker(mut self, broker: Arc<AgentBrokerFactory>) -> Self {
+        self.agent_broker = Some(broker);
+        self
+    }
+
+    /// Preserves raw protocol relay for external-Agent-only forwarding with the all policy.
     pub fn with_agent_forwarding_endpoint(mut self, endpoint: SshAgentEndpoint) -> Self {
         self.agent_forwarding_endpoint = Some(endpoint);
         self
@@ -1004,6 +1013,12 @@ impl client::Handler for SshHandler {
         reply: client::ChannelOpenHandle,
         _session: &mut client::Session,
     ) -> Result<(), Self::Error> {
+        if let Some(broker) = self.agent_broker.clone() {
+            // Run the broker outside the SSH event loop and apply policy after merging identities.
+            broker.spawn(channel, reply);
+            return Ok(());
+        }
+
         let Some(endpoint) = self.agent_forwarding_endpoint.clone() else {
             reply
                 .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
@@ -1011,22 +1026,29 @@ impl client::Handler for SshHandler {
             return Ok(());
         };
 
-        // The handler callback must not block on Agent I/O because that would
-        // stall the SSH event loop. Acceptance/rejection and bidirectional
-        // forwarding are performed in a separate task.
+        // Keep the raw Agent protocol for external-Agent-only all mode to preserve unknown
+        // extensions. This relay intentionally has no broker idle timeout: its lifetime follows
+        // the SSH channel, while the global channel permit still bounds resource consumption.
+        let Some(permit) = try_acquire_agent_channel_permit() else {
+            reply
+                .reject(russh::ChannelOpenFailure::ResourceShortage)
+                .await;
+            let _ = channel.close().await;
+            return Ok(());
+        };
         tokio::spawn(async move {
+            let _permit = permit;
             let Ok(mut agent_stream) = connect_agent_stream(&endpoint).await else {
                 reply.reject(russh::ChannelOpenFailure::ConnectFailed).await;
                 let _ = channel.close().await;
                 return;
             };
-
             reply.accept().await;
             let mut channel_stream = channel.into_stream();
             if let Err(error) =
                 tokio::io::copy_bidirectional(&mut agent_stream, &mut channel_stream).await
             {
-                tracing::debug!(%error, "SSH Agent forwarding channel closed");
+                tracing::debug!(%error, "SSH Agent raw forwarding channel closed");
             }
         });
         Ok(())

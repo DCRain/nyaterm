@@ -39,7 +39,7 @@ jobs:
         run: cargo build --verbose
       - name: Build Linux (all features enabled)
         run: cargo build --verbose --all-features
-  
+
   build-wasm32:
     name: Build check for wasm32
     runs-on: ubuntu-latest

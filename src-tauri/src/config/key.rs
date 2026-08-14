@@ -3,7 +3,12 @@ use crate::error::{AppError, AppResult};
 use crate::storage;
 use crate::utils::crypto;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{RwLock, RwLockReadGuard};
 use tauri::AppHandle;
+
+static SSH_KEY_CHANGE_EPOCH: AtomicU64 = AtomicU64::new(0);
+static SSH_KEY_ACCESS: RwLock<()> = RwLock::new(());
 
 /// Managed SSH private key. Key material, certificates, and passphrases are encrypted on disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,7 +70,32 @@ pub fn load_keys(app: &AppHandle) -> AppResult<KeysConfig> {
 
 pub fn save_keys(app: &AppHandle, config: &KeysConfig) -> AppResult<()> {
     let _ = app;
-    storage::replace_ssh_keys(config)
+    let _write_guard = SSH_KEY_ACCESS
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    storage::replace_ssh_keys(config)?;
+    SSH_KEY_CHANGE_EPOCH.fetch_add(1, Ordering::SeqCst);
+    Ok(())
+}
+
+/// Returns the process-local epoch of the last successful saved-key update.
+///
+/// Forwarding brokers may cache parsed signing identities for one epoch. Signing must still
+/// acquire [`ssh_key_read_guard`] and verify the epoch before using cached private
+/// material, so a successful save or deletion invalidates every stale signer.
+pub(crate) fn ssh_key_change_epoch() -> u64 {
+    SSH_KEY_CHANGE_EPOCH.load(Ordering::SeqCst)
+}
+
+/// Serializes saved-key snapshots and signing with successful key-store replacements.
+///
+/// Keep this guard only while reading the persistent snapshot or producing a
+/// signature. PEM decryption and parsing deliberately happen after snapshot reads
+/// release the guard, preventing slow key formats from blocking saves.
+pub(crate) fn ssh_key_read_guard() -> RwLockReadGuard<'static, ()> {
+    SSH_KEY_ACCESS
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 pub fn load_key_by_id(app: &AppHandle, id: &str) -> AppResult<SshKey> {

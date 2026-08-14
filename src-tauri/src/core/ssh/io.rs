@@ -1,6 +1,5 @@
 use super::client::{
-    SshDiagnosticContext, SshDiagnosticStage, SshHandle, SshHandler, SshPostLoginConfig,
-    SshStartupCommand,
+    SshDiagnosticContext, SshDiagnosticStage, SshHandle, SshPostLoginConfig, SshStartupCommand,
 };
 use crate::config::SftpCwdFollowMode;
 use crate::core::capture::OutputCaptureProcessor;
@@ -39,8 +38,8 @@ enum ShellDetectionResult {
 ///
 /// Produces the same runtime outcome as the previous `Option<ShellKind>`
 /// contract: only `Detected` enables integration, all other outcomes skip it.
-async fn detect_shell_type(
-    handle: &mut client::Handle<SshHandler>,
+async fn detect_shell_type<H: client::Handler>(
+    handle: &mut client::Handle<H>,
     session_id: &str,
     timeout_ms: u64,
 ) -> ShellDetectionResult {
@@ -148,8 +147,8 @@ async fn detect_shell_type(
     }
 }
 
-async fn exec_remote_command(
-    handle: &mut client::Handle<SshHandler>,
+async fn exec_remote_command<H: client::Handler>(
+    handle: &mut client::Handle<H>,
     command: &str,
     timeout_ms: u64,
 ) -> AppResult<String> {
@@ -270,8 +269,8 @@ rm -f "$block_tmp"
     ))
 }
 
-async fn install_remote_shell_integration(
-    handle: &mut client::Handle<SshHandler>,
+async fn install_remote_shell_integration<H: client::Handler>(
+    handle: &mut client::Handle<H>,
     shell: ShellKind,
 ) -> AppResult<()> {
     let Some(command) = remote_install_command(shell) else {
@@ -290,8 +289,8 @@ async fn install_remote_shell_integration(
 /// The injection script is **not** sent here — the IO loop defers it until
 /// the shell has produced its initial output (banner / MOTD) so that the
 /// welcome text is not swallowed.
-pub(super) async fn open_shell_channel(
-    handle: &mut client::Handle<SshHandler>,
+pub(super) async fn open_shell_channel<H: client::Handler>(
+    handle: &mut client::Handle<H>,
     session_id: &str,
     x11_fake_cookie_hex: Option<&str>,
     agent_forwarding: bool,
@@ -1333,11 +1332,145 @@ mod tests {
         INITIAL_INJECT_DELAY_MS, INJECT_TIMEOUT_SECS, InjectionEvent, InjectionTimeoutEvent,
         IoPhase, PendingStartupCommand, SUPPRESSED_VISIBLE_FALLBACK_MAX_BYTES,
         append_suppressed_visible, build_startup_command_input, discard_suppressed_output,
-        handle_injection_result, handle_injection_timeout, should_send_initial_injection,
+        handle_injection_result, handle_injection_timeout, open_shell_channel,
+        should_send_initial_injection,
     };
+    use crate::config::SftpCwdFollowMode;
     use crate::core::ssh::osc::OscResult;
+    use russh::{Channel, ChannelId, Disconnect, client, server};
     use std::pin::Pin;
-    use tokio::time::Sleep;
+    use std::sync::Arc;
+    use tokio::sync::mpsc;
+    use tokio::time::{Duration, Sleep, timeout};
+
+    struct TestClient;
+
+    impl client::Handler for TestClient {
+        type Error = russh::Error;
+
+        async fn check_server_key(
+            &mut self,
+            _server_public_key: &russh::keys::PublicKey,
+        ) -> Result<bool, Self::Error> {
+            Ok(true)
+        }
+    }
+
+    struct TestServer {
+        agent_request_tx: mpsc::UnboundedSender<()>,
+    }
+
+    impl server::Handler for TestServer {
+        type Error = russh::Error;
+
+        async fn auth_none(&mut self, _user: &str) -> Result<server::Auth, Self::Error> {
+            Ok(server::Auth::Accept)
+        }
+
+        async fn channel_open_session(
+            &mut self,
+            _channel: Channel<server::Msg>,
+            reply: server::ChannelOpenHandle,
+            _session: &mut server::Session,
+        ) -> Result<(), Self::Error> {
+            reply.accept().await;
+            Ok(())
+        }
+
+        async fn agent_request(
+            &mut self,
+            _channel: ChannelId,
+            _session: &mut server::Session,
+        ) -> Result<bool, Self::Error> {
+            let _ = self.agent_request_tx.send(());
+            Ok(true)
+        }
+    }
+
+    async fn assert_agent_forwarding_request(enabled: bool) {
+        let (client_stream, server_stream) = tokio::io::duplex(1024 * 1024);
+        let (agent_request_tx, mut agent_request_rx) = mpsc::unbounded_channel();
+        let mut rng = russh::keys::key::safe_rng();
+        let server_config = Arc::new(server::Config {
+            auth_rejection_time: Duration::ZERO,
+            auth_rejection_time_initial: Some(Duration::ZERO),
+            keys: vec![
+                russh::keys::PrivateKey::random(&mut rng, russh::keys::Algorithm::Ed25519)
+                    .expect("test server key"),
+            ],
+            ..server::Config::default()
+        });
+        let server_task = tokio::spawn(async move {
+            let session = server::run_stream(
+                server_config,
+                server_stream,
+                TestServer { agent_request_tx },
+            )
+            .await
+            .expect("fake SSH server handshake");
+            session.await.expect("fake SSH server session");
+        });
+
+        let mut handle = client::connect_stream(
+            Arc::new(client::Config::default()),
+            client_stream,
+            TestClient,
+        )
+        .await
+        .expect("fake SSH client handshake");
+        assert!(
+            handle
+                .authenticate_none("test")
+                .await
+                .expect("none authentication")
+                .success()
+        );
+
+        let (channel, ..) = open_shell_channel(
+            &mut handle,
+            "agent-forwarding-test",
+            None,
+            enabled,
+            "xterm-256color",
+            false,
+            false,
+            SftpCwdFollowMode::Off,
+            100,
+            None,
+        )
+        .await
+        .expect("interactive shell channel");
+
+        if enabled {
+            timeout(Duration::from_secs(1), agent_request_rx.recv())
+                .await
+                .expect("fake server should receive Agent forwarding request")
+                .expect("Agent forwarding request channel");
+        } else {
+            assert!(
+                timeout(Duration::from_millis(100), agent_request_rx.recv())
+                    .await
+                    .is_err(),
+                "disabled forwarding must not send auth-agent-req@openssh.com"
+            );
+        }
+
+        drop(channel);
+        handle
+            .disconnect(Disconnect::ByApplication, "test complete", "")
+            .await
+            .expect("disconnect fake SSH session");
+        timeout(Duration::from_secs(1), server_task)
+            .await
+            .expect("fake SSH server should stop")
+            .expect("fake SSH server task");
+    }
+
+    #[tokio::test]
+    async fn interactive_shell_requests_agent_forwarding_only_when_enabled() {
+        assert_agent_forwarding_request(false).await;
+        assert_agent_forwarding_request(true).await;
+    }
 
     #[test]
     fn post_login_input_normalizes_line_endings_and_adds_enter() {
