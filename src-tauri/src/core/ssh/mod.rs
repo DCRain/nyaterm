@@ -4,6 +4,7 @@
 //! independently maintainable as the SSH feature set grows.
 
 mod agent;
+mod agent_broker;
 mod auth;
 mod client;
 mod io;
@@ -12,6 +13,7 @@ mod session;
 mod tunnel;
 pub(crate) mod x11_forwarding;
 
+pub(crate) use agent_broker::{AgentForwardingIdentityResponse, list_forwarding_identities};
 pub(crate) use auth::{DraftSshTestInput, build_test_ssh_config, load_saved_ssh_config};
 pub use auth::{
     PendingAuthManager, PendingSshAgentAuthManager, PendingSshAuthManager, SshAgentAuthAction,

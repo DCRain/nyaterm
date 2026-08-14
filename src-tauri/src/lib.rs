@@ -293,6 +293,7 @@ pub fn run() {
             cmd::remote_desktop::launch_remote_desktop,
             cmd::connection::get_saved_connections,
             cmd::connection::get_supported_ssh_algorithms,
+            cmd::connection::get_ssh_agent_forwarding_identities,
             cmd::connection::save_connection,
             cmd::connection_test::test_connection_endpoint,
             cmd::connection::update_connection_icon,

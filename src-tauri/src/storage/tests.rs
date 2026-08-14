@@ -1,7 +1,6 @@
 use super::*;
 use crate::config::{
     ConnectionAuth, ConnectionType, Group, SavedConnection, SessionsConfig, SftpSettings,
-    SshAgentEndpoint,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -40,8 +39,9 @@ fn sample_connection(id: &str, group_id: Option<&str>, sort_order: i32) -> Saved
             username: "root".to_string(),
             backspace_mode: "del".to_string(),
             x11_forwarding: false,
-            agent_endpoint: SshAgentEndpoint::Auto,
-            agent_forwarding: false,
+            auth_agent_endpoint: None,
+            legacy_agent_forwarding: None,
+            agent_forwarding_config: None,
             encoding: String::new(),
         },
         group_id: group_id.map(str::to_string),

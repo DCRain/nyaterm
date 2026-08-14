@@ -470,7 +470,7 @@ mod tests {
     use crate::core::SessionCommand;
     use std::sync::{Arc, Mutex};
     use tokio::sync::mpsc;
-    use tokio::time::{Duration, sleep};
+    use tokio::time::{Duration, Instant, advance, sleep};
 
     fn collect_sink() -> (
         Arc<Mutex<Vec<TerminalOutputPayload>>>,
@@ -522,6 +522,51 @@ mod tests {
         assert_eq!(emitted.len(), 1);
         assert_eq!(emitted[0].data, "hello world");
         assert_eq!(emitted[0].bytes, "hello world".len());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn one_millisecond_tiny_bursts_are_coalesced_without_delaying_first_flush() {
+        let emitted = Arc::new(Mutex::new(Vec::<TerminalOutputPayload>::new()));
+        let first_emit_at = Arc::new(Mutex::new(None::<Duration>));
+        let started_at = Instant::now();
+        let emitted_sink = emitted.clone();
+        let first_emit_sink = first_emit_at.clone();
+        let output = SessionOutputCoalescer::with_sink(move |payload| {
+            let mut first = first_emit_sink.lock().unwrap();
+            if first.is_none() {
+                *first = Some(Instant::now().duration_since(started_at));
+            }
+            emitted_sink.lock().unwrap().push(payload);
+        });
+
+        output.attach();
+
+        let mut expected = String::new();
+        for index in 0..1000 {
+            let chunk = format!("{index:04};");
+            expected.push_str(&chunk);
+            output.push_owned(chunk);
+            advance(Duration::from_millis(1)).await;
+        }
+        advance(Duration::from_millis(20)).await;
+
+        let emitted = emitted.lock().unwrap();
+        let actual = emitted
+            .iter()
+            .map(|payload| payload.data.as_str())
+            .collect::<String>();
+        let first_emit_at = first_emit_at.lock().unwrap().expect("first emit");
+
+        assert_eq!(actual, expected);
+        assert!(
+            emitted.len() < 350,
+            "expected coalesced events, got {} events",
+            emitted.len()
+        );
+        assert!(
+            first_emit_at <= Duration::from_millis(8),
+            "first emit took {first_emit_at:?}"
+        );
     }
 
     #[tokio::test]

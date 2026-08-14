@@ -103,6 +103,7 @@ export class TerminalOutputDrain<TWriteContext = unknown> {
   private backgroundTimer: number | null = null;
   private ackTimer: number | null = null;
   private microtaskPending = false;
+  private foregroundTurnStartedAt: number | null = null;
   private disposed = false;
 
   constructor(private readonly options: TerminalOutputDrainOptions<TWriteContext>) {
@@ -223,6 +224,7 @@ export class TerminalOutputDrain<TWriteContext = unknown> {
   private schedule() {
     if (this.disposed) return;
     if (!hasOutputQueueItems(this.queue)) {
+      this.foregroundTurnStartedAt = null;
       this.flushPendingAck(true);
       this.notifyPressure();
       return;
@@ -253,12 +255,13 @@ export class TerminalOutputDrain<TWriteContext = unknown> {
     if (delayMs > 0) {
       this.foregroundTimer = this.timers.setTimeout(() => {
         this.foregroundTimer = null;
+        this.foregroundTurnStartedAt = null;
         this.flushForeground();
       }, delayMs);
       return;
     }
 
-    if (this.options.shouldUseLowLatencyFlush?.()) {
+    if (this.options.shouldUseLowLatencyFlush?.() && this.hasForegroundTurnBudgetRemaining()) {
       this.microtaskPending = true;
       this.timers.queueMicrotask(() => {
         this.microtaskPending = false;
@@ -269,6 +272,7 @@ export class TerminalOutputDrain<TWriteContext = unknown> {
 
     this.foregroundFrame = this.timers.requestAnimationFrame(() => {
       this.foregroundFrame = null;
+      this.foregroundTurnStartedAt = null;
       this.flushForeground();
     });
   }
@@ -286,6 +290,7 @@ export class TerminalOutputDrain<TWriteContext = unknown> {
       this.schedule();
       return;
     }
+    this.beginForegroundTurn();
     this.flushOne(this.options.getWriteChunkBytes());
   }
 
@@ -402,6 +407,7 @@ export class TerminalOutputDrain<TWriteContext = unknown> {
       this.foregroundTimer = null;
     }
     this.microtaskPending = false;
+    this.foregroundTurnStartedAt = null;
   }
 
   private cancelBackground() {
@@ -420,5 +426,19 @@ export class TerminalOutputDrain<TWriteContext = unknown> {
 
   private notifyPressure() {
     this.options.onPressureChange?.(this.getPendingBytes());
+  }
+
+  private beginForegroundTurn() {
+    if (this.foregroundTurnStartedAt === null) {
+      this.foregroundTurnStartedAt = this.timers.now();
+    }
+  }
+
+  private hasForegroundTurnBudgetRemaining() {
+    if (this.foregroundTurnStartedAt === null) return true;
+    return (
+      this.timers.now() - this.foregroundTurnStartedAt <
+      XTERM_PERFORMANCE_CONFIG.output.maxForegroundDrainTurnMs
+    );
   }
 }

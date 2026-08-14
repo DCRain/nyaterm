@@ -10,6 +10,21 @@ import { XTERM_PERFORMANCE_CONFIG } from "@/lib/xtermPerformance";
 import type { TerminalFitScheduler } from "@/components/terminal/terminalFitScheduler";
 import type { AppSettings } from "@/types/global";
 
+type TerminalRendererPreference = "dom" | "webgl" | "auto";
+type ResolvedTerminalRendererMode = "dom" | "webgl";
+
+function resolveTerminalRendererMode(options: {
+  preference: TerminalRendererPreference;
+  transparencyEnabled: boolean;
+  webglCircuitBroken: boolean;
+}): ResolvedTerminalRendererMode {
+  if (options.preference === "dom") return "dom";
+  if (options.transparencyEnabled || options.webglCircuitBroken) return "dom";
+  if (options.preference === "webgl") return "webgl";
+
+  return "dom";
+}
+
 export function useTerminalSettings(
   terminalRef: RefObject<Terminal | null>,
   fitSchedulerRef: RefObject<TerminalFitScheduler | null>,
@@ -132,8 +147,12 @@ export function useTerminalSettings(
       disposeWebgl();
     }
 
-    const shouldUseWebgl =
-      terminalSettings.hardware_acceleration && !webglCircuitBrokenRef.current;
+    const rendererMode = resolveTerminalRendererMode({
+      preference: terminalSettings.hardware_acceleration ? "webgl" : "dom",
+      transparencyEnabled: terminalTransparencyEnabled,
+      webglCircuitBroken: webglCircuitBrokenRef.current,
+    });
+    const shouldUseWebgl = rendererMode === "webgl";
 
     if (!shouldUseWebgl) {
       clearHiddenWebglDisposeTimer();
