@@ -1,5 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { centerWindowRectInWorkArea, rectOverlapsWorkArea } from "./windowManager";
+import {
+  centerWindowRectInWorkArea,
+  childWindowCommandForUrl,
+  rectOverlapsWorkArea,
+} from "./windowManager";
+
+describe("child window command mapping", () => {
+  it.each([
+    ["index.html?window=settings", "settings-open-tab"],
+    ["index.html?window=file-editor", "remote-file-editor-open"],
+    ["index.html?window=file-preview", "file-preview-open"],
+    ["index.html?window=new-session", undefined],
+  ])("maps %s to %s", (url, expected) => {
+    expect(childWindowCommandForUrl(url)).toBe(expected);
+  });
+});
 
 describe("child window work-area helpers", () => {
   const primaryWorkArea = {

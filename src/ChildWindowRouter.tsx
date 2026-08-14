@@ -43,14 +43,7 @@ function ChildWindowLoadingShell() {
 }
 
 function ReadyContent({ children }: { children: ReactNode }) {
-  return (
-    <div className="relative h-screen w-full bg-background">
-      <div className="absolute inset-0 z-0">
-        <ChildWindowLoadingShell />
-      </div>
-      <div className="relative z-10 h-full w-full">{children}</div>
-    </div>
-  );
+  return <div className="relative h-screen w-full bg-background">{children}</div>;
 }
 
 export default function ChildWindowRouter({ windowType }: { windowType: string }) {

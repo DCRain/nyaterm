@@ -9,6 +9,14 @@ import {
   UserAttentionType,
 } from "@tauri-apps/api/window";
 import i18n from "../i18n";
+import { ChildWindowCommandQueue } from "./childWindowCommandQueue";
+import {
+  CHILD_WINDOW_COMMANDS,
+  CHILD_WINDOW_LIFECYCLE_EVENT,
+  CHILD_WINDOW_READY_TOKEN_PARAM,
+  type ChildWindowCommandName,
+  type ChildWindowLifecyclePayload,
+} from "./childWindowProtocol";
 import { invoke } from "./invoke";
 import { logger } from "./logger";
 import { isMacOS } from "./platform";
@@ -51,12 +59,14 @@ const MODAL_CHILD_BASE_LABELS = new Set([
 ]);
 const MODAL_GROUP_RAISE_SUPPRESS_MS = 250;
 const MODAL_TOPMOST_PULSE_MS = 120;
-const CHILD_WINDOW_READY_EVENT = "child-window-ready";
-const CHILD_WINDOW_READY_TOKEN_PARAM = "readyToken";
 const CHILD_WINDOW_READY_TIMEOUT_MS = 5_000;
 const INIT_URL_ONLY_WINDOW_TYPES = new Set(["new-session", "quick-command"]);
-const registeredDestroyedHandlers = new Set<string>();
+const registeredDestroyedHandlers = new Map<string, string>();
 const pendingChildWindowOpens = new Map<string, PendingChildWindowOpen>();
+const childWindowCommands = new ChildWindowCommandQueue();
+const childWindowTokens = new Map<string, string>();
+const childWindowShellWaiters = new Map<string, ChildWindowLifecycleWaiter>();
+let childWindowLifecycleListenerPromise: Promise<void> | undefined;
 let ownerMainWindowLabel = MAIN_WINDOW_LABEL;
 let modalGroupRaiseInFlight = false;
 let suppressChildFocusSyncUntil = 0;
@@ -71,15 +81,12 @@ interface ModalGroupRaiseOptions {
   reason?: ModalGroupRaiseReason;
 }
 
-interface ChildWindowReadyPayload {
-  label: string;
-  /** Bind the ready event to the WebView created for this request. */
-  token?: string;
-}
-
-interface ChildWindowReadyWaiter {
+interface ChildWindowLifecycleWaiter {
+  token: string;
   promise: Promise<void>;
+  resolve: () => void;
   cancel: () => void;
+  fail: () => void;
   failed: () => boolean;
 }
 
@@ -116,99 +123,6 @@ export function getOwnerMainWindowLabel() {
 
 export function isPrimaryMainWindow() {
   return ownerMainWindowLabel === MAIN_WINDOW_LABEL;
-}
-
-export function signalChildWindowReady() {
-  const token = new URLSearchParams(window.location.search).get(CHILD_WINDOW_READY_TOKEN_PARAM);
-  return emit(CHILD_WINDOW_READY_EVENT, {
-    label: getCurrentWindow().label,
-    token: token ?? undefined,
-  });
-}
-
-/**
- * Wait for at least two WebView layout frames before asking the parent to reveal the window;
- * use a timer fallback when the hidden WebView pauses animation frames. Font loading is not a
- * ready prerequisite because font swapping does not create a blank window but would delay it.
- */
-export function scheduleChildWindowReady() {
-  let settled = false;
-  let firstFrameId: number | undefined;
-  let secondFrameId: number | undefined;
-  let contentPollTimeoutId: number | undefined;
-  let fallbackTimeoutId: number | undefined;
-
-  const cleanup = () => {
-    settled = true;
-    if (firstFrameId !== undefined) window.cancelAnimationFrame(firstFrameId);
-    if (secondFrameId !== undefined) window.cancelAnimationFrame(secondFrameId);
-    if (contentPollTimeoutId !== undefined) window.clearTimeout(contentPollTimeoutId);
-    if (fallbackTimeoutId !== undefined) window.clearTimeout(fallbackTimeoutId);
-  };
-
-  // requestAnimationFrame only means JavaScript had a chance to run; it does not prove that the
-  // WebView has mounted page content. This is especially important for hidden macOS windows:
-  // confirm that root has a layoutable child before allowing reveal.
-  const hasMountedContent = () => {
-    const root = document.getElementById("root");
-    if (!root?.firstElementChild) return false;
-    const rect = root.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
-  };
-
-  const waitForMountedContent = () => {
-    if (settled) return;
-    if (hasMountedContent()) {
-      waitForPaint();
-      return;
-    }
-    contentPollTimeoutId = window.setTimeout(waitForMountedContent, 16);
-  };
-
-  const signalReady = () => {
-    cleanup();
-    void signalChildWindowReady();
-  };
-
-  function emitReady() {
-    if (settled) return;
-    if (!hasMountedContent()) {
-      waitForMountedContent();
-      return;
-    }
-    signalReady();
-  }
-
-  // A hidden WebView may pause requestAnimationFrame. Once the loading shell exists, the
-  // fallback can complete the handshake without waiting for two more frames; otherwise the
-  // first open could approach the parent timeout.
-  const emitReadyFromFallback = () => {
-    if (settled) return;
-    if (hasMountedContent()) {
-      signalReady();
-      return;
-    }
-    fallbackTimeoutId = window.setTimeout(emitReadyFromFallback, 16);
-  };
-
-  const waitForPaint = () => {
-    if (settled) return;
-    if (typeof window.requestAnimationFrame !== "function") {
-      emitReady();
-      return;
-    }
-
-    firstFrameId = window.requestAnimationFrame(() => {
-      secondFrameId = window.requestAnimationFrame(emitReady);
-    });
-  };
-
-  // The first hidden WebView frame does not need to wait for custom fonts; confirming that the
-  // page shell is mounted is sufficient.
-  waitForMountedContent();
-  fallbackTimeoutId = window.setTimeout(emitReadyFromFallback, 250);
-
-  return cleanup;
 }
 
 function scopedModalLabel(baseLabel: string, ownerLabel = ownerMainWindowLabel) {
@@ -268,6 +182,19 @@ function childWindowTypeFromUrl(url: string) {
     return new URLSearchParams(query).get("window") ?? undefined;
   } catch {
     return undefined;
+  }
+}
+
+export function childWindowCommandForUrl(url: string): ChildWindowCommandName | undefined {
+  switch (childWindowTypeFromUrl(url)) {
+    case "settings":
+      return CHILD_WINDOW_COMMANDS.settingsOpenTab;
+    case "file-editor":
+      return CHILD_WINDOW_COMMANDS.remoteFileEditorOpen;
+    case "file-preview":
+      return CHILD_WINDOW_COMMANDS.filePreviewOpen;
+    default:
+      return undefined;
   }
 }
 
@@ -503,17 +430,33 @@ export async function raiseModalChildWindowGroup(options: ModalGroupRaiseOptions
   }
 }
 
-function attachChildWindowDestroyedHandler(label: string, win: WebviewWindow) {
-  if (registeredDestroyedHandlers.has(label)) return;
-  registeredDestroyedHandlers.add(label);
+async function attachChildWindowDestroyedHandler(label: string, win: WebviewWindow) {
+  const lifecycleToken = childWindowTokens.get(label);
+  // 回调绑定注册时的窗口代际；旧实例迟到的 destroyed 不得清理同 label 新实例。
+  const registrationId =
+    lifecycleToken ?? registeredDestroyedHandlers.get(label) ?? createChildWindowReadyToken();
+  if (registeredDestroyedHandlers.get(label) === registrationId) return;
+  registeredDestroyedHandlers.set(label, registrationId);
 
-  win.once("tauri://destroyed", () => {
-    registeredDestroyedHandlers.delete(label);
-    emit("child-window-closed", { label });
-    if (isModalChildLabel(label)) {
-      void prepareForModalChildClose(label);
+  try {
+    await win.once("tauri://destroyed", () => {
+      if (registeredDestroyedHandlers.get(label) !== registrationId) return;
+      const currentToken = childWindowTokens.get(label);
+      if (currentToken && currentToken !== lifecycleToken) return;
+
+      registeredDestroyedHandlers.delete(label);
+      clearChildWindowLifecycle(label, lifecycleToken, true);
+      void emit("child-window-closed", { label }).catch(() => {});
+      if (isModalChildLabel(label)) {
+        void prepareForModalChildClose(label).catch(() => {});
+      }
+    });
+  } catch (error) {
+    if (registeredDestroyedHandlers.get(label) === registrationId) {
+      registeredDestroyedHandlers.delete(label);
     }
-  });
+    throw error;
+  }
 }
 
 export async function syncMainWindowModalState() {
@@ -528,58 +471,145 @@ export async function bounceTopModalWindow() {
   await raiseModalChildWindowGroup({ requestAttention: true, reason: "backdrop" });
 }
 
-async function createChildWindowReadyWaiter(
+function emitChildWindowCommands(commands: ReturnType<ChildWindowCommandQueue["dispatch"]>) {
+  for (const command of commands) {
+    void emit(command.event, command.payload).catch((error) => {
+      logger.warn({
+        domain: "window.lifecycle",
+        event: "child_command_emit_failed",
+        message: "Failed to emit a command to a child window",
+        data: { command: command.event },
+        error,
+      });
+    });
+  }
+}
+
+function dispatchChildWindowCommand(
+  label: string,
+  event: ChildWindowCommandName,
+  payload: unknown,
+) {
+  emitChildWindowCommands(childWindowCommands.dispatch(label, event, payload));
+}
+
+function handleChildWindowLifecycle(payload: ChildWindowLifecyclePayload) {
+  if (!payload.token || childWindowTokens.get(payload.label) !== payload.token) return;
+
+  if (payload.phase === "load-started") {
+    childWindowCommands.markLoading(payload.label, payload.token);
+    return;
+  }
+
+  switch (payload.phase) {
+    case "shell-ready": {
+      const waiter = childWindowShellWaiters.get(payload.label);
+      if (waiter?.token === payload.token) waiter.resolve();
+      break;
+    }
+    case "command-ready":
+      emitChildWindowCommands(
+        childWindowCommands.markReady(payload.label, payload.token, payload.command),
+      );
+      break;
+    case "load-failed":
+      childWindowCommands.markFailed(payload.label, payload.token);
+      logger.warn({
+        domain: "window.lifecycle",
+        event: "child_load_failed",
+        message: "Child window failed to finish loading",
+        data: { label: payload.label, stage: payload.stage },
+      });
+      break;
+  }
+}
+
+async function ensureChildWindowLifecycleListener() {
+  if (!childWindowLifecycleListenerPromise) {
+    childWindowLifecycleListenerPromise = listen<ChildWindowLifecyclePayload>(
+      CHILD_WINDOW_LIFECYCLE_EVENT,
+      ({ payload }) => handleChildWindowLifecycle(payload),
+    )
+      .then(() => undefined)
+      .catch((error) => {
+        childWindowLifecycleListenerPromise = undefined;
+        logger.warn({
+          domain: "window.lifecycle",
+          event: "child_lifecycle_listener_failed",
+          message: "Failed to listen for child window lifecycle events",
+          error,
+        });
+        throw error;
+      });
+  }
+  await childWindowLifecycleListenerPromise;
+}
+
+function clearChildWindowLifecycle(label: string, token?: string, failWaiter = false) {
+  if (token && childWindowTokens.get(label) !== token) return;
+
+  childWindowTokens.delete(label);
+  childWindowCommands.clear(label);
+  const waiter = childWindowShellWaiters.get(label);
+  if (failWaiter) waiter?.fail();
+  else waiter?.cancel();
+}
+
+async function createChildWindowLifecycleWaiter(
   label: string,
   token: string,
-): Promise<ChildWindowReadyWaiter> {
+  expectedCommand: ChildWindowCommandName | undefined,
+): Promise<ChildWindowLifecycleWaiter> {
+  await ensureChildWindowLifecycleListener();
+
+  childWindowShellWaiters.get(label)?.cancel();
+  childWindowTokens.set(label, token);
+  if (expectedCommand) {
+    childWindowCommands.register(label, token, expectedCommand);
+  }
+
   let settled = false;
   let timeoutId: number | undefined;
-  let unlisten: (() => void) | undefined;
   let failed = false;
   let resolveReady: () => void = () => {};
   const promise = new Promise<void>((resolve) => {
     resolveReady = resolve;
   });
 
-  const settle = () => {
+  const settle = (didFail: boolean) => {
     if (settled) return;
     settled = true;
+    failed = didFail;
     if (timeoutId !== undefined) {
       window.clearTimeout(timeoutId);
     }
-    unlisten?.();
+    if (childWindowShellWaiters.get(label)?.token === token) {
+      childWindowShellWaiters.delete(label);
+    }
     resolveReady();
   };
 
-  try {
-    unlisten = await listen<ChildWindowReadyPayload>(CHILD_WINDOW_READY_EVENT, ({ payload }) => {
-      if (payload.label === label && payload.token === token) {
-        settle();
-      }
-    });
-    timeoutId = window.setTimeout(() => {
-      failed = true;
-      logger.warn({
-        domain: "window.lifecycle",
-        event: "child_ready_timeout",
-        message: "Child window did not signal ready before timeout",
-        data: { label },
-      });
-      settle();
-    }, CHILD_WINDOW_READY_TIMEOUT_MS);
-  } catch (error) {
-    failed = true;
+  const waiter: ChildWindowLifecycleWaiter = {
+    token,
+    promise,
+    resolve: () => settle(false),
+    cancel: () => settle(false),
+    fail: () => settle(true),
+    failed: () => failed,
+  };
+  childWindowShellWaiters.set(label, waiter);
+
+  timeoutId = window.setTimeout(() => {
     logger.warn({
       domain: "window.lifecycle",
-      event: "child_ready_listener_failed",
-      message: "Failed to listen for child window ready event",
+      event: "child_ready_timeout",
+      message: "Child window did not signal shell ready before timeout",
       data: { label },
-      error,
     });
-    settle();
-  }
+    settle(true);
+  }, CHILD_WINDOW_READY_TIMEOUT_MS);
 
-  return { promise, cancel: settle, failed: () => failed };
+  return waiter;
 }
 
 async function revealChildWindow(
@@ -595,13 +625,13 @@ async function revealChildWindow(
     await win.setTitle(opts.title).catch(() => {});
     await win.setAlwaysOnTop(needsAlwaysOnTop(opts.label)).catch(() => {});
   }
-  attachChildWindowDestroyedHandler(opts.label, win);
+  await attachChildWindowDestroyedHandler(opts.label, win);
   if (!isNewWindow) {
     await ensureChildWindowVisible(win, opts);
   }
   // Keep the child hidden until the ready handshake, then restore interactivity before showing.
   await win.setFocusable(true).catch(() => {});
-  await win.show().catch(() => {});
+  await win.show();
   onShown?.();
   await win.setFocus().catch(() => {});
   emit("child-window-opened", { label: opts.label });
@@ -638,7 +668,11 @@ async function openChildWindowInternal(opts: ChildWindowOptions) {
   }
 
   const readyToken = createChildWindowReadyToken();
-  const readyWaiter = await createChildWindowReadyWaiter(opts.label, readyToken);
+  const lifecycleWaiter = await createChildWindowLifecycleWaiter(
+    opts.label,
+    readyToken,
+    childWindowCommandForUrl(opts.url),
+  );
   const listenerReadyMs = Math.round(performance.now() - startedAt);
   try {
     await invoke("open_child_window", {
@@ -663,9 +697,9 @@ async function openChildWindowInternal(opts: ChildWindowOptions) {
     }
     const handleMs = Math.round(performance.now() - startedAt);
 
-    attachChildWindowDestroyedHandler(opts.label, win);
-    await readyWaiter.promise;
-    if (readyWaiter.failed()) {
+    const destroyedListenerPromise = attachChildWindowDestroyedHandler(opts.label, win);
+    await Promise.all([lifecycleWaiter.promise, destroyedListenerPromise]);
+    if (lifecycleWaiter.failed()) {
       throw new Error(`Child window did not finish rendering: ${opts.label}`);
     }
     const readyMs = Math.round(performance.now() - startedAt);
@@ -683,7 +717,8 @@ async function openChildWindowInternal(opts: ChildWindowOptions) {
     });
     return revealed;
   } catch (error) {
-    readyWaiter.cancel();
+    lifecycleWaiter.cancel();
+    clearChildWindowLifecycle(opts.label, readyToken);
     // Destroy a failed first-open window promptly so it cannot remain as a background orphan.
     const orphan = await WebviewWindow.getByLabel(opts.label).catch(() => null);
     await orphan?.close().catch(() => {});
@@ -727,11 +762,12 @@ export function openChildWindow(opts: ChildWindowOptions): Promise<WebviewWindow
 }
 
 export async function openSettings(tab?: string) {
+  const label = scopedModalLabel("settings");
   const url = tab
     ? `index.html?window=settings&owner=${encodeURIComponent(ownerMainWindowLabel)}&tab=${encodeURIComponent(tab)}`
     : `index.html?window=settings&owner=${encodeURIComponent(ownerMainWindowLabel)}`;
   const win = await openChildWindow({
-    label: scopedModalLabel("settings"),
+    label,
     title: i18n.t("settings.title"),
     url,
     parentLabel: ownerMainWindowLabel,
@@ -741,7 +777,7 @@ export async function openSettings(tab?: string) {
   });
   if (tab) {
     const payload = { tab, targetWindowLabel: ownerMainWindowLabel };
-    emit("settings-open-tab", payload);
+    dispatchChildWindowCommand(label, CHILD_WINDOW_COMMANDS.settingsOpenTab, payload);
   }
   return win;
 }
@@ -793,10 +829,7 @@ export function openNewSessionWithTarget(
   });
 }
 
-export function openQuickCommand(
-  editJson?: string,
-  options?: { categoryId?: string | null },
-) {
+export function openQuickCommand(editJson?: string, options?: { categoryId?: string | null }) {
   const params = new URLSearchParams({
     window: "quick-command",
     owner: ownerMainWindowLabel,
@@ -896,7 +929,7 @@ export function openRemoteFileEditor(data: RemoteFileEditorWindowData) {
     stateKey: "file-editor",
   }).then((win) => {
     const payload = { targetLabel: label, data };
-    emit("remote-file-editor-open", payload);
+    dispatchChildWindowCommand(label, CHILD_WINDOW_COMMANDS.remoteFileEditorOpen, payload);
     return win;
   });
 }
@@ -925,7 +958,7 @@ export function openFilePreview(data: FilePreviewWindowData) {
     stateKey: "file-preview",
   }).then((win) => {
     const payload = { targetLabel: label, data };
-    emit("file-preview-open", payload);
+    dispatchChildWindowCommand(label, CHILD_WINDOW_COMMANDS.filePreviewOpen, payload);
     return win;
   });
 }
