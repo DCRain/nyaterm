@@ -31,6 +31,7 @@ import { useApp } from "@/context/AppContext";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import { isValidSerialBaudRate, MAX_SERIAL_BAUD_RATE, MIN_SERIAL_BAUD_RATE } from "@/lib/serial";
+import { validateSshAgentForwardingEndpoints } from "@/lib/sshAgent";
 import type {
   Group,
   OtpEntry,
@@ -42,6 +43,7 @@ import type {
   SavedConnection,
   SftpSettings,
   SshAgentEndpoint,
+  SshAgentForwardingConfig,
   SshAlgorithmPreferences,
   SshProfile,
   SshTerminalType,
@@ -67,6 +69,11 @@ const DEFAULT_SFTP_SETTINGS: SftpSettings = {
   cwd_follow_mode: "shell_integration",
   shell_detection_timeout_ms: DEFAULT_SFTP_SHELL_DETECTION_TIMEOUT_MS,
   filename_encoding: "",
+};
+const DEFAULT_SSH_AGENT_FORWARDING_CONFIG: SshAgentForwardingConfig = {
+  enabled: false,
+  sources: { external_agent: false, external_agent_endpoints: [], stored_keys: true },
+  policy: { mode: "allowlist", fingerprints: [] },
 };
 type SshTerminalTypeSelection = SshTerminalType | "default";
 
@@ -94,6 +101,27 @@ function normalizeSftpSettings(value: SavedConnection["sftp"] | undefined): Sftp
       value?.shell_detection_timeout_ms ?? DEFAULT_SFTP_SHELL_DETECTION_TIMEOUT_MS,
     filename_encoding: value?.filename_encoding || "",
   };
+}
+
+function normalizeSshAgentForwardingConfig(
+  value: SavedConnection["agent_forwarding_config"] | undefined,
+): SshAgentForwardingConfig {
+  if (value) {
+    return {
+      enabled: value.enabled ?? false,
+      sources: {
+        external_agent: value.sources?.external_agent ?? false,
+        external_agent_endpoints: value.sources?.external_agent_endpoints ?? [],
+        stored_keys: value.sources?.stored_keys ?? true,
+      },
+      policy:
+        value.policy?.mode === "all"
+          ? { mode: "all" }
+          : { mode: "allowlist", fingerprints: value.policy?.fingerprints ?? [] },
+    };
+  }
+
+  return { ...DEFAULT_SSH_AGENT_FORWARDING_CONFIG };
 }
 
 const isValidPostLoginDelay = (value: number) =>
@@ -178,8 +206,10 @@ export default function NewSessionPage() {
   const [postLoginDelayMs, setPostLoginDelayMs] = useState(DEFAULT_POST_LOGIN_DELAY_MS);
   const [sshBackspaceMode, setSshBackspaceMode] = useState("del");
   const [x11Forwarding, setX11Forwarding] = useState(false);
-  const [agentEndpoint, setAgentEndpoint] = useState<SshAgentEndpoint>({ type: "auto" });
-  const [agentForwarding, setAgentForwarding] = useState(false);
+  const [authAgentEndpoint, setAuthAgentEndpoint] = useState<SshAgentEndpoint>({ type: "auto" });
+  const [agentForwardingConfig, setAgentForwardingConfig] = useState<SshAgentForwardingConfig>(
+    DEFAULT_SSH_AGENT_FORWARDING_CONFIG,
+  );
   const [sshAlgorithms, setSshAlgorithms] =
     useState<SshAlgorithmPreferences>(DEFAULT_SSH_ALGORITHMS);
   const [sshProfile, setSshProfile] = useState<SshProfile>("standard");
@@ -277,8 +307,10 @@ export default function NewSessionPage() {
           setPostLoginDelayMs(found.post_login?.delay_ms ?? DEFAULT_POST_LOGIN_DELAY_MS);
           setSshBackspaceMode(found.backspace_mode || "del");
           setX11Forwarding(found.x11_forwarding ?? false);
-          setAgentEndpoint(found.agent_endpoint ?? { type: "auto" });
-          setAgentForwarding(found.agent_forwarding ?? false);
+          setAuthAgentEndpoint(found.auth_agent_endpoint ?? { type: "auto" });
+          setAgentForwardingConfig(
+            normalizeSshAgentForwardingConfig(found.agent_forwarding_config),
+          );
           setSshAlgorithms(normalizeSshAlgorithms(found.ssh_algorithms));
           setSshProfile(found.ssh_profile || "standard");
           setSshTerminalType(found.terminal_type || "default");
@@ -569,6 +601,47 @@ export default function NewSessionPage() {
     getCurrentWindow().close();
   };
 
+  const authAgentEndpointError = useMemo(() => {
+    if (authType !== "agent") return "";
+    const code = validateSshAgentForwardingEndpoints([authAgentEndpoint]);
+    if (code === "empty") {
+      return t("dialog.sshAgentEndpointRequired", "Agent endpoint values must not be empty.");
+    }
+    if (code === "invalid") {
+      return t(
+        "dialog.sshAgentEndpointInvalid",
+        "Agent endpoint values must not contain NUL; environment variable names must not contain '='.",
+      );
+    }
+    if (code === "too_long") {
+      return t("dialog.sshAgentEndpointTooLong", "Agent endpoint value is too long.");
+    }
+    return "";
+  }, [authAgentEndpoint, authType, t]);
+
+  const agentForwardingEndpointError = useMemo(() => {
+    const code = validateSshAgentForwardingEndpoints(
+      agentForwardingConfig.sources.external_agent_endpoints,
+    );
+    switch (code) {
+      case "empty":
+        return t("dialog.sshAgentEndpointRequired", "Agent endpoint values must not be empty.");
+      case "invalid":
+        return t(
+          "dialog.sshAgentEndpointInvalid",
+          "Agent endpoint values must not contain NUL; environment variable names must not contain '='.",
+        );
+      case "too_long":
+        return t("dialog.sshAgentEndpointTooLong", "Agent endpoint value is too long.");
+      case "duplicate":
+        return t("dialog.sshAgentEndpointDuplicate", "Agent forwarding endpoints must be unique.");
+      case "too_many":
+        return t("dialog.sshAgentEndpointLimit", "A maximum of 16 custom endpoints is supported.");
+      default:
+        return "";
+    }
+  }, [agentForwardingConfig.sources.external_agent_endpoints, t]);
+
   const getValidationError = useCallback(() => {
     if (currentTab === "ssh") {
       if (!host.trim()) {
@@ -579,6 +652,9 @@ export default function NewSessionPage() {
       }
       if (!username.trim()) {
         return t("dialog.usernameRequired", "Username is required");
+      }
+      if (authAgentEndpointError) {
+        return authAgentEndpointError;
       }
       if (postLoginEnabled && !postLoginCommand.trim()) {
         return t("dialog.postLoginCommandRequired");
@@ -596,6 +672,9 @@ export default function NewSessionPage() {
           max: MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS,
           defaultValue: "Shell detection timeout must be between {{min}} and {{max}} ms",
         });
+      }
+      if (agentForwardingEndpointError) {
+        return agentForwardingEndpointError;
       }
     }
 
@@ -666,6 +745,8 @@ export default function NewSessionPage() {
     return "";
   }, [
     baudRate,
+    agentForwardingEndpointError,
+    authAgentEndpointError,
     currentTab,
     host,
     postLoginCommand,
@@ -864,8 +945,8 @@ export default function NewSessionPage() {
               sftp: sftpSettings,
               backspace_mode: sshBackspaceMode,
               x11_forwarding: x11Forwarding,
-              agent_endpoint: agentEndpoint,
-              agent_forwarding: agentForwarding,
+              auth_agent_endpoint: authType === "agent" ? authAgentEndpoint : undefined,
+              agent_forwarding_config: agentForwardingConfig,
             }
           : {}),
         ...(currentTab === "telnet"
@@ -1297,10 +1378,12 @@ export default function NewSessionPage() {
               setBackspaceMode={setSshBackspaceMode}
               x11Forwarding={x11Forwarding}
               setX11Forwarding={setX11Forwarding}
-              agentEndpoint={agentEndpoint}
-              setAgentEndpoint={setAgentEndpoint}
-              agentForwarding={agentForwarding}
-              setAgentForwarding={setAgentForwarding}
+              authAgentEndpoint={authAgentEndpoint}
+              setAuthAgentEndpoint={setAuthAgentEndpoint}
+              authAgentEndpointError={authAgentEndpointError}
+              agentForwardingConfig={agentForwardingConfig}
+              setAgentForwardingConfig={setAgentForwardingConfig}
+              agentForwardingEndpointError={agentForwardingEndpointError}
               sshAlgorithms={sshAlgorithms}
               setSshAlgorithms={setSshAlgorithms}
               sshProfile={sshProfile}

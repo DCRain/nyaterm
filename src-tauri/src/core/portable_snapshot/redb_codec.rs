@@ -66,5 +66,5 @@ fn storage_error(error: impl std::fmt::Display) -> AppError {
 }
 
 fn zip_error(error: impl std::fmt::Display) -> AppError {
-    AppError::Config(format!("portable snapshot zip error: {error}"))
+    AppError::Storage(format!("portable snapshot zip error: {error}"))
 }
