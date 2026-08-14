@@ -24,6 +24,8 @@ export const XTERM_PERFORMANCE_CONFIG = {
     strainedBacklogBytes: 128 * 1024,
     /** Backlog threshold for using microtask low-latency writes on normal shell output. */
     lowLatencyFlushBacklogBytes: 64 * 1024,
+    /** Main-thread time budget for one continuous foreground drain turn. */
+    maxForegroundDrainTurnMs: 10,
     /** Max UTF-8 bytes to write into xterm in a single call. */
     writeChunkBytes: 32 * 1024,
     /** Max UTF-8 bytes to write into xterm during one hidden background drain. */
@@ -36,12 +38,6 @@ export const XTERM_PERFORMANCE_CONFIG = {
     alternateScreenMaxWriteFps: 20,
     /** Backlog threshold before alternate-screen foreground writes are throttled. */
     alternateScreenThrottleBacklogBytes: 32 * 1024,
-    /** Queue cap while the terminal is visible. */
-    visibleBacklogCapBytes: 1_000_000,
-    /** Queue cap while an alternate-screen TUI is repainting; older frames are stale. */
-    alternateScreenBacklogCapBytes: 128 * 1024,
-    /** Queue cap while the terminal is hidden; backend flow control normally stops at 1 MiB. */
-    hiddenBacklogCapBytes: 2_000_000,
     /** Recovery threshold after overload while visible. */
     visibleRecoveryThresholdBytes: 200_000,
     /** Recovery threshold after overload while hidden. */
