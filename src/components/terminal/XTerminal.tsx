@@ -112,6 +112,8 @@ import {
   TerminalOutputDrain,
   type TerminalOutputDrainMode,
 } from "./terminalOutputDrain";
+import { AlternateScreenStateTracker } from "./alternateScreenStateTracker";
+import { TerminalOutputScheduler } from "./terminalOutputScheduling";
 import { useTerminalExternalDrop } from "./useTerminalExternalDrop";
 import { useTerminalRefreshEffects } from "./useTerminalRefreshEffects";
 import {
@@ -361,7 +363,7 @@ export default function XTerminal({
   const visibleRef = useRef(visible);
   const activeRef = useRef(active);
   const performanceModeRef = useRef<PerformanceMode>("normal");
-  const lastAlternateScreenWriteAtRef = useRef(0);
+  const alternateScreenTrackerRef = useRef(new AlternateScreenStateTracker());
   const handleVisibilityChangeRef = useRef<(() => void) | null>(null);
   const replaceInputCommandRef = useRef<((command: string) => void) | null>(
     null,
@@ -801,7 +803,7 @@ export default function XTerminal({
     gutterLineOffsetRef.current = 0;
     outputDrainRef.current?.dispose({ ackRemaining: true });
     outputDrainRef.current = null;
-    lastAlternateScreenWriteAtRef.current = 0;
+    alternateScreenTrackerRef.current.reset();
     disconnectedRef.current = false;
     disconnectedNoticeShownRef.current = false;
     disconnectedCloseRequestedRef.current = false;
@@ -1969,6 +1971,9 @@ export default function XTerminal({
     );
 
     const writeParsedDisposable = terminal.onWriteParsed(() => {
+      alternateScreenTrackerRef.current.setXtermBufferType(
+        terminal.buffer.active.type,
+      );
       if (terminal.buffer.active.type === "alternate") {
         dismissSuggestions();
       }
@@ -2145,20 +2150,15 @@ export default function XTerminal({
     };
 
     const isAlternateScreenActive = () =>
-      terminal.buffer.active.type === "alternate";
+      terminal.buffer.active.type === "alternate" ||
+      alternateScreenTrackerRef.current.isAlternateScreenActive();
 
-    const getWriteChunkBytes = () =>
-      isAlternateScreenActive()
-        ? XTERM_PERFORMANCE_CONFIG.output.alternateScreenWriteChunkBytes
-        : XTERM_PERFORMANCE_CONFIG.output.writeChunkBytes;
+    const outputScheduler = new TerminalOutputScheduler({
+      getQueueBytes: () => outputDrainRef.current?.getQueueBytes() ?? 0,
+      isAlternateScreenActive,
+    });
 
-    const getAlternateScreenWriteIntervalMs = () =>
-      1000 / XTERM_PERFORMANCE_CONFIG.output.alternateScreenMaxWriteFps;
-
-    const shouldThrottleAlternateScreenWrite = () =>
-      isAlternateScreenActive() &&
-      (outputDrainRef.current?.getQueueBytes() ?? 0) >
-        XTERM_PERFORMANCE_CONFIG.output.alternateScreenThrottleBacklogBytes;
+    const getWriteChunkBytes = () => outputScheduler.getWriteChunkBytes();
 
     const getRecoveryThresholdBytes = () =>
       visibleRef.current
@@ -2215,13 +2215,7 @@ export default function XTerminal({
     };
 
     const getForegroundDelayMs = () => {
-      if (!shouldThrottleAlternateScreenWrite()) return 0;
-      const now = Date.now();
-      const intervalMs = getAlternateScreenWriteIntervalMs();
-      const elapsedMs = now - lastAlternateScreenWriteAtRef.current;
-      return lastAlternateScreenWriteAtRef.current > 0 && elapsedMs < intervalMs
-        ? Math.max(1, intervalMs - elapsedMs)
-        : 0;
+      return outputScheduler.getForegroundDelayMs();
     };
 
     const updateOutputDrainMode = () => {
@@ -2239,9 +2233,7 @@ export default function XTerminal({
       shouldUseLowLatencyFlush,
       onAck: sendOutputAck,
       onWriteStart: () => {
-        if (visibleRef.current && isAlternateScreenActive()) {
-          lastAlternateScreenWriteAtRef.current = Date.now();
-        }
+        outputScheduler.noteWriteStart();
         return { beforeLine: getCurrentAbsoluteLine(), ts: Date.now() };
       },
       onWriteComplete: (_payload, context) => {
@@ -2683,6 +2675,7 @@ export default function XTerminal({
             return;
           }
 
+          alternateScreenTrackerRef.current.ingest(payload.data);
           outputDrain.enqueue({
             data: payload.data,
             bytes: payload.bytes,
@@ -3398,7 +3391,7 @@ export default function XTerminal({
       if (outputDrainRef.current === outputDrain) {
         outputDrainRef.current = null;
       }
-      lastAlternateScreenWriteAtRef.current = 0;
+      outputScheduler.reset();
       const latestLifecycleState = terminalLifecycleStateRef.current;
       if (
         !hibernationCleanupRef.current &&

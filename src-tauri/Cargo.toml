@@ -80,6 +80,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
+
 [dependencies]
 nyaterm-otp = { path = "crates/otp" }
 tauri = { version = "2", features = ["tray-icon", "protocol-asset"] }
