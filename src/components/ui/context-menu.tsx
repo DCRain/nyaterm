@@ -2,6 +2,7 @@ import { CheckIcon, ChevronRightIcon, CircleIcon } from "lucide-react";
 import { ContextMenu as ContextMenuPrimitive } from "radix-ui";
 import type * as React from "react";
 
+import { isMacOS } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 function ContextMenu({ ...props }: React.ComponentProps<typeof ContextMenuPrimitive.Root>) {
@@ -74,8 +75,19 @@ function ContextMenuSubContent({
 
 function ContextMenuContent({
   className,
+  onPointerUpCapture,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Content>) {
+  const handlePointerUpCapture = (event: React.PointerEvent<HTMLDivElement>) => {
+    // Prevent Radix from converting a secondary pointerup into a click when the menu covers the cursor before right-button release.
+    if (event.button !== 0 || (isMacOS && event.ctrlKey)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    onPointerUpCapture?.(event);
+  };
+
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content
@@ -85,6 +97,7 @@ function ContextMenuContent({
           className,
         )}
         {...props}
+        onPointerUpCapture={handlePointerUpCapture}
       />
     </ContextMenuPrimitive.Portal>
   );
