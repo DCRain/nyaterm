@@ -52,6 +52,7 @@ const MODAL_CHILD_BASE_LABELS = new Set([
 const MODAL_GROUP_RAISE_SUPPRESS_MS = 250;
 const MODAL_TOPMOST_PULSE_MS = 120;
 const CHILD_WINDOW_READY_EVENT = "child-window-ready";
+const CHILD_WINDOW_READY_TOKEN_PARAM = "readyToken";
 const CHILD_WINDOW_READY_TIMEOUT_MS = 5_000;
 const INIT_URL_ONLY_WINDOW_TYPES = new Set(["new-session", "quick-command"]);
 const registeredDestroyedHandlers = new Set<string>();
@@ -72,11 +73,14 @@ interface ModalGroupRaiseOptions {
 
 interface ChildWindowReadyPayload {
   label: string;
+  /** Bind the ready event to the WebView created for this request. */
+  token?: string;
 }
 
 interface ChildWindowReadyWaiter {
   promise: Promise<void>;
   cancel: () => void;
+  failed: () => boolean;
 }
 
 interface PendingChildWindowOpen {
@@ -115,7 +119,96 @@ export function isPrimaryMainWindow() {
 }
 
 export function signalChildWindowReady() {
-  return emit(CHILD_WINDOW_READY_EVENT, { label: getCurrentWindow().label });
+  const token = new URLSearchParams(window.location.search).get(CHILD_WINDOW_READY_TOKEN_PARAM);
+  return emit(CHILD_WINDOW_READY_EVENT, {
+    label: getCurrentWindow().label,
+    token: token ?? undefined,
+  });
+}
+
+/**
+ * Wait for at least two WebView layout frames before asking the parent to reveal the window;
+ * use a timer fallback when the hidden WebView pauses animation frames. Font loading is not a
+ * ready prerequisite because font swapping does not create a blank window but would delay it.
+ */
+export function scheduleChildWindowReady() {
+  let settled = false;
+  let firstFrameId: number | undefined;
+  let secondFrameId: number | undefined;
+  let contentPollTimeoutId: number | undefined;
+  let fallbackTimeoutId: number | undefined;
+
+  const cleanup = () => {
+    settled = true;
+    if (firstFrameId !== undefined) window.cancelAnimationFrame(firstFrameId);
+    if (secondFrameId !== undefined) window.cancelAnimationFrame(secondFrameId);
+    if (contentPollTimeoutId !== undefined) window.clearTimeout(contentPollTimeoutId);
+    if (fallbackTimeoutId !== undefined) window.clearTimeout(fallbackTimeoutId);
+  };
+
+  // requestAnimationFrame only means JavaScript had a chance to run; it does not prove that the
+  // WebView has mounted page content. This is especially important for hidden macOS windows:
+  // confirm that root has a layoutable child before allowing reveal.
+  const hasMountedContent = () => {
+    const root = document.getElementById("root");
+    if (!root?.firstElementChild) return false;
+    const rect = root.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+
+  const waitForMountedContent = () => {
+    if (settled) return;
+    if (hasMountedContent()) {
+      waitForPaint();
+      return;
+    }
+    contentPollTimeoutId = window.setTimeout(waitForMountedContent, 16);
+  };
+
+  const signalReady = () => {
+    cleanup();
+    void signalChildWindowReady();
+  };
+
+  function emitReady() {
+    if (settled) return;
+    if (!hasMountedContent()) {
+      waitForMountedContent();
+      return;
+    }
+    signalReady();
+  }
+
+  // A hidden WebView may pause requestAnimationFrame. Once the loading shell exists, the
+  // fallback can complete the handshake without waiting for two more frames; otherwise the
+  // first open could approach the parent timeout.
+  const emitReadyFromFallback = () => {
+    if (settled) return;
+    if (hasMountedContent()) {
+      signalReady();
+      return;
+    }
+    fallbackTimeoutId = window.setTimeout(emitReadyFromFallback, 16);
+  };
+
+  const waitForPaint = () => {
+    if (settled) return;
+    if (typeof window.requestAnimationFrame !== "function") {
+      emitReady();
+      return;
+    }
+
+    firstFrameId = window.requestAnimationFrame(() => {
+      secondFrameId = window.requestAnimationFrame(emitReady);
+    });
+  };
+
+  // The first hidden WebView frame does not need to wait for custom fonts; confirming that the
+  // page shell is mounted is sufficient.
+  waitForMountedContent();
+  fallbackTimeoutId = window.setTimeout(emitReadyFromFallback, 250);
+
+  return cleanup;
 }
 
 function scopedModalLabel(baseLabel: string, ownerLabel = ownerMainWindowLabel) {
@@ -176,6 +269,17 @@ function childWindowTypeFromUrl(url: string) {
   } catch {
     return undefined;
   }
+}
+
+function appendChildWindowReadyToken(url: string, token: string) {
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}${CHILD_WINDOW_READY_TOKEN_PARAM}=${encodeURIComponent(token)}`;
+}
+
+function createChildWindowReadyToken() {
+  return typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 function shouldWarnPendingOpenConflict(existingUrl: string, requestedUrl: string) {
@@ -424,10 +528,14 @@ export async function bounceTopModalWindow() {
   await raiseModalChildWindowGroup({ requestAttention: true, reason: "backdrop" });
 }
 
-async function createChildWindowReadyWaiter(label: string): Promise<ChildWindowReadyWaiter> {
+async function createChildWindowReadyWaiter(
+  label: string,
+  token: string,
+): Promise<ChildWindowReadyWaiter> {
   let settled = false;
   let timeoutId: number | undefined;
   let unlisten: (() => void) | undefined;
+  let failed = false;
   let resolveReady: () => void = () => {};
   const promise = new Promise<void>((resolve) => {
     resolveReady = resolve;
@@ -445,11 +553,12 @@ async function createChildWindowReadyWaiter(label: string): Promise<ChildWindowR
 
   try {
     unlisten = await listen<ChildWindowReadyPayload>(CHILD_WINDOW_READY_EVENT, ({ payload }) => {
-      if (payload.label === label) {
+      if (payload.label === label && payload.token === token) {
         settle();
       }
     });
     timeoutId = window.setTimeout(() => {
+      failed = true;
       logger.warn({
         domain: "window.lifecycle",
         event: "child_ready_timeout",
@@ -459,6 +568,7 @@ async function createChildWindowReadyWaiter(label: string): Promise<ChildWindowR
       settle();
     }, CHILD_WINDOW_READY_TIMEOUT_MS);
   } catch (error) {
+    failed = true;
     logger.warn({
       domain: "window.lifecycle",
       event: "child_ready_listener_failed",
@@ -469,15 +579,30 @@ async function createChildWindowReadyWaiter(label: string): Promise<ChildWindowR
     settle();
   }
 
-  return { promise, cancel: settle };
+  return { promise, cancel: settle, failed: () => failed };
 }
 
-async function revealChildWindow(win: WebviewWindow, opts: ChildWindowOptions, isModal: boolean) {
-  await win.setTitle(opts.title).catch(() => {});
-  await win.setAlwaysOnTop(needsAlwaysOnTop(opts.label)).catch(() => {});
+async function revealChildWindow(
+  win: WebviewWindow,
+  opts: ChildWindowOptions,
+  isModal: boolean,
+  isNewWindow = false,
+  onShown?: () => void,
+) {
+  // The Rust builder already sets the title, always-on-top state, and position for a new window.
+  // Repeating those IPC calls would delay show(), especially during the first macOS open.
+  if (!isNewWindow) {
+    await win.setTitle(opts.title).catch(() => {});
+    await win.setAlwaysOnTop(needsAlwaysOnTop(opts.label)).catch(() => {});
+  }
   attachChildWindowDestroyedHandler(opts.label, win);
-  await ensureChildWindowVisible(win, opts);
+  if (!isNewWindow) {
+    await ensureChildWindowVisible(win, opts);
+  }
+  // Keep the child hidden until the ready handshake, then restore interactivity before showing.
+  await win.setFocusable(true).catch(() => {});
   await win.show().catch(() => {});
+  onShown?.();
   await win.setFocus().catch(() => {});
   emit("child-window-opened", { label: opts.label });
   if (isModal) {
@@ -487,20 +612,40 @@ async function revealChildWindow(win: WebviewWindow, opts: ChildWindowOptions, i
 }
 
 async function openChildWindowInternal(opts: ChildWindowOptions) {
+  const startedAt = performance.now();
+  const logTiming = (data: Record<string, unknown>) => {
+    logger.info({
+      domain: "window.lifecycle",
+      event: "child_window_open_timing",
+      message: "Child window open timing",
+      data: {
+        label: opts.label,
+        total_ms: Math.round(performance.now() - startedAt),
+        ...data,
+      },
+    });
+  };
   const kind = childWindowKind(opts);
   const isModal = kind === "modal";
   const existing = await WebviewWindow.getByLabel(opts.label);
   if (existing) {
-    return revealChildWindow(existing, opts, isModal);
+    let shownMs: number | undefined;
+    const revealed = await revealChildWindow(existing, opts, isModal, false, () => {
+      shownMs = Math.round(performance.now() - startedAt);
+    });
+    logTiming({ existing: true, shown_ms: shownMs });
+    return revealed;
   }
 
-  const readyWaiter = await createChildWindowReadyWaiter(opts.label);
+  const readyToken = createChildWindowReadyToken();
+  const readyWaiter = await createChildWindowReadyWaiter(opts.label, readyToken);
+  const listenerReadyMs = Math.round(performance.now() - startedAt);
   try {
     await invoke("open_child_window", {
       options: {
         label: opts.label,
         title: opts.title,
-        url: opts.url,
+        url: appendChildWindowReadyToken(opts.url, readyToken),
         kind,
         parentLabel: opts.parentLabel ?? ownerMainWindowLabel,
         width: opts.width ?? 720,
@@ -510,17 +655,38 @@ async function openChildWindowInternal(opts: ChildWindowOptions) {
         stateKey: opts.stateKey,
       },
     });
+    const invokeMs = Math.round(performance.now() - startedAt);
 
     const win = await WebviewWindow.getByLabel(opts.label);
     if (!win) {
       throw new Error(`Failed to create child window: ${opts.label}`);
     }
+    const handleMs = Math.round(performance.now() - startedAt);
 
     attachChildWindowDestroyedHandler(opts.label, win);
     await readyWaiter.promise;
-    return revealChildWindow(win, opts, isModal);
+    if (readyWaiter.failed()) {
+      throw new Error(`Child window did not finish rendering: ${opts.label}`);
+    }
+    const readyMs = Math.round(performance.now() - startedAt);
+    let shownMs: number | undefined;
+    const revealed = await revealChildWindow(win, opts, isModal, true, () => {
+      shownMs = Math.round(performance.now() - startedAt);
+    });
+    logTiming({
+      existing: false,
+      listener_ready_ms: listenerReadyMs,
+      invoke_ms: invokeMs,
+      handle_ms: handleMs,
+      ready_ms: readyMs,
+      shown_ms: shownMs,
+    });
+    return revealed;
   } catch (error) {
     readyWaiter.cancel();
+    // Destroy a failed first-open window promptly so it cannot remain as a background orphan.
+    const orphan = await WebviewWindow.getByLabel(opts.label).catch(() => null);
+    await orphan?.close().catch(() => {});
     throw error;
   }
 }
@@ -576,11 +742,6 @@ export async function openSettings(tab?: string) {
   if (tab) {
     const payload = { tab, targetWindowLabel: ownerMainWindowLabel };
     emit("settings-open-tab", payload);
-    window.setTimeout(() => {
-      void win.show().catch(() => {});
-      void win.setFocus().catch(() => {});
-      emit("settings-open-tab", payload);
-    }, 120);
   }
   return win;
 }
@@ -736,11 +897,6 @@ export function openRemoteFileEditor(data: RemoteFileEditorWindowData) {
   }).then((win) => {
     const payload = { targetLabel: label, data };
     emit("remote-file-editor-open", payload);
-    window.setTimeout(() => {
-      void win.show().catch(() => {});
-      void win.setFocus().catch(() => {});
-      emit("remote-file-editor-open", payload);
-    }, 120);
     return win;
   });
 }
@@ -770,11 +926,6 @@ export function openFilePreview(data: FilePreviewWindowData) {
   }).then((win) => {
     const payload = { targetLabel: label, data };
     emit("file-preview-open", payload);
-    window.setTimeout(() => {
-      void win.show().catch(() => {});
-      void win.setFocus().catch(() => {});
-      emit("file-preview-open", payload);
-    }, 120);
     return win;
   });
 }

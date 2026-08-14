@@ -19,6 +19,7 @@ import {
 } from "./context/ThemeContext";
 import { DEFAULT_THEME_ID, themes } from "./lib/themes";
 import { installWebviewReloadGuard } from "./lib/webviewReloadGuard";
+import { scheduleChildWindowReady } from "./lib/windowManager";
 
 // Apply cached theme synchronously before React renders to avoid flash
 try {
@@ -45,10 +46,28 @@ const windowType = params.get("window");
 
 if (windowType) {
   // Child window: lightweight provider stack, no full App
-  const { ChildAppProvider } = await import("./context/ChildAppProvider");
-  const { default: ChildWindowRouter } = await import("./ChildWindowRouter");
+  // These entry points are independent and should load in parallel; serial awaits would add an
+  // unnecessary chunk round trip to every child-window open.
+  const childRoot = ReactDOM.createRoot(document.getElementById("root") as HTMLElement);
+  // Commit an inline-background loading shell before loading provider and page chunks. This lets
+  // the parent reveal a stable surface without reintroducing the macOS white or empty window.
+  childRoot.render(
+    <div
+      className="flex h-screen w-full items-center justify-center bg-background"
+      style={{ backgroundColor: "var(--df-bg, #0d1117)" }}
+      aria-busy="true"
+    >
+      <span className="size-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+    </div>,
+  );
+  scheduleChildWindowReady();
 
-  ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+  const [{ ChildAppProvider }, { default: ChildWindowRouter }] = await Promise.all([
+    import("./context/ChildAppProvider"),
+    import("./ChildWindowRouter"),
+  ]);
+
+  childRoot.render(
     <React.StrictMode>
       <ErrorBoundary>
         <ChildAppProvider>
