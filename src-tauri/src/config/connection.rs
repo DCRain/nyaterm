@@ -6,6 +6,7 @@ use crate::core::{RecordingMode, RotationPolicy};
 use crate::error::{AppError, AppResult};
 use crate::storage;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use tauri::AppHandle;
 
 // ── Connection type discriminator ───────────────────────────────────────────
@@ -50,7 +51,7 @@ pub struct SshAlgorithmPreferences {
 ///
 /// `Auto` selects the platform default: Unix uses `SSH_AUTH_SOCK`, while
 /// Windows tries the OpenSSH Agent named pipe followed by Pageant.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SshAgentEndpoint {
     #[default]
@@ -65,8 +66,304 @@ pub enum SshAgentEndpoint {
     WindowsOpenSsh,
 }
 
-fn is_default_ssh_agent_endpoint(value: &SshAgentEndpoint) -> bool {
-    matches!(value, SshAgentEndpoint::Auto)
+/// Maximum number of custom forwarding Agent endpoints stored in one connection.
+pub const MAX_SSH_AGENT_FORWARDING_ENDPOINTS: usize = 16;
+pub const MAX_SSH_AGENT_FORWARDING_IDENTITIES: usize = 1024;
+const MAX_SSH_AGENT_ENVIRONMENT_VARIABLE_LEN: usize = 255;
+const MAX_SSH_AGENT_UNIX_SOCKET_PATH_LEN: usize = 4096;
+
+/// Validates a single SSH Agent endpoint before it reaches persistent storage.
+pub fn validate_ssh_agent_endpoint(endpoint: &SshAgentEndpoint) -> AppResult<()> {
+    validate_ssh_agent_endpoint_shape(endpoint)?;
+    match endpoint {
+        SshAgentEndpoint::Auto => {
+            if !cfg!(unix) && !cfg!(windows) {
+                return Err(AppError::Config(
+                    "Automatic SSH Agent endpoints are not supported on this platform".to_string(),
+                ));
+            }
+        }
+        SshAgentEndpoint::Environment { .. } => {
+            if !cfg!(unix) {
+                return Err(AppError::Config(
+                    "Environment variable SSH Agent endpoints are only supported on Unix"
+                        .to_string(),
+                ));
+            }
+        }
+        SshAgentEndpoint::UnixSocket { .. } => {
+            if !cfg!(unix) {
+                return Err(AppError::Config(
+                    "Unix socket SSH Agent endpoints are only supported on Unix".to_string(),
+                ));
+            }
+        }
+        SshAgentEndpoint::Pageant => {
+            if !cfg!(windows) {
+                return Err(AppError::Config(
+                    "Pageant SSH Agent endpoints are only supported on Windows".to_string(),
+                ));
+            }
+        }
+        SshAgentEndpoint::WindowsOpenSsh => {
+            if !cfg!(windows) {
+                return Err(AppError::Config(
+                    "Windows OpenSSH Agent endpoints are only supported on Windows".to_string(),
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Validates endpoint values without applying the current platform restriction.
+pub fn validate_ssh_agent_endpoint_shape(endpoint: &SshAgentEndpoint) -> AppResult<()> {
+    match endpoint {
+        SshAgentEndpoint::Environment { variable } => {
+            let Some(variable) = normalize_ssh_agent_environment_variable(variable) else {
+                return Err(AppError::Config(
+                    "SSH Agent environment variable must not be empty or contain '=' or NUL"
+                        .to_string(),
+                ));
+            };
+            if variable.len() > MAX_SSH_AGENT_ENVIRONMENT_VARIABLE_LEN {
+                return Err(AppError::Config(format!(
+                    "SSH Agent environment variable must not exceed {MAX_SSH_AGENT_ENVIRONMENT_VARIABLE_LEN} bytes"
+                )));
+            }
+        }
+        SshAgentEndpoint::UnixSocket { path } => {
+            if path.contains('\0') {
+                return Err(AppError::Config(
+                    "SSH Agent Unix socket path must not contain NUL".to_string(),
+                ));
+            }
+            if path.trim().is_empty() {
+                return Err(AppError::Config(
+                    "SSH Agent Unix socket path must not be empty".to_string(),
+                ));
+            }
+            if path.len() > MAX_SSH_AGENT_UNIX_SOCKET_PATH_LEN {
+                return Err(AppError::Config(format!(
+                    "SSH Agent Unix socket path must not exceed {MAX_SSH_AGENT_UNIX_SOCKET_PATH_LEN} bytes"
+                )));
+            }
+        }
+        SshAgentEndpoint::Auto | SshAgentEndpoint::Pageant | SshAgentEndpoint::WindowsOpenSsh => {}
+    }
+    Ok(())
+}
+
+fn normalize_ssh_agent_environment_variable(value: &str) -> Option<String> {
+    let variable = value.trim().trim_start_matches('$').trim();
+    if variable.is_empty() || variable.contains('=') || variable.contains('\0') {
+        return None;
+    }
+    Some(variable.to_string())
+}
+
+/// Returns a normalized, non-secret key for comparing Agent endpoints.
+pub fn ssh_agent_endpoint_key(endpoint: &SshAgentEndpoint) -> String {
+    match endpoint {
+        SshAgentEndpoint::Auto if cfg!(unix) => "environment:SSH_AUTH_SOCK".to_string(),
+        SshAgentEndpoint::Auto => "auto".to_string(),
+        SshAgentEndpoint::Environment { variable } => format!(
+            "environment:{}",
+            normalize_ssh_agent_environment_variable(variable)
+                .unwrap_or_else(|| variable.trim().to_string())
+        ),
+        SshAgentEndpoint::UnixSocket { path } => format!("unix_socket:{path}"),
+        SshAgentEndpoint::Pageant => "pageant".to_string(),
+        SshAgentEndpoint::WindowsOpenSsh => "windows_open_ssh".to_string(),
+    }
+}
+
+/// Validates SSH Agent fields at the connection save boundary.
+pub fn validate_ssh_agent_settings(connection: &ConnectionType) -> AppResult<()> {
+    let ConnectionType::Ssh {
+        auth_agent_endpoint,
+        agent_forwarding_config,
+        ..
+    } = connection
+    else {
+        return Ok(());
+    };
+
+    if let Some(endpoint) = auth_agent_endpoint {
+        validate_ssh_agent_endpoint(endpoint)?;
+    }
+
+    if let Some(config) = agent_forwarding_config {
+        validate_ssh_agent_forwarding_config(config)?;
+    }
+
+    Ok(())
+}
+
+/// Validates the forwarding configuration used by persistence, runtime, and IPC paths.
+pub fn validate_ssh_agent_forwarding_config(config: &SshAgentForwardingConfig) -> AppResult<()> {
+    validate_ssh_agent_forwarding_shape(config)?;
+
+    for endpoint in &config.sources.external_agent_endpoints {
+        validate_ssh_agent_endpoint(endpoint)?;
+    }
+
+    Ok(())
+}
+
+/// Validates forwarding values without applying the current platform restriction.
+pub fn validate_ssh_agent_forwarding_shape(config: &SshAgentForwardingConfig) -> AppResult<()> {
+    let endpoints = &config.sources.external_agent_endpoints;
+    if endpoints.len() > MAX_SSH_AGENT_FORWARDING_ENDPOINTS {
+        return Err(AppError::Config(format!(
+            "SSH Agent forwarding supports at most {MAX_SSH_AGENT_FORWARDING_ENDPOINTS} custom endpoints"
+        )));
+    }
+
+    let mut seen = HashSet::with_capacity(endpoints.len());
+    for endpoint in endpoints {
+        validate_ssh_agent_endpoint_shape(endpoint)?;
+        let key = ssh_agent_endpoint_key(endpoint);
+        if !seen.insert(key) {
+            return Err(AppError::Config(
+                "SSH Agent forwarding endpoints must be unique".to_string(),
+            ));
+        }
+    }
+
+    if let SshAgentForwardingPolicy::Allowlist { fingerprints } = &config.policy {
+        if fingerprints.len() > MAX_SSH_AGENT_FORWARDING_IDENTITIES {
+            return Err(AppError::Config(format!(
+                "SSH Agent forwarding allowlists support at most {MAX_SSH_AGENT_FORWARDING_IDENTITIES} identities"
+            )));
+        }
+        let mut seen = HashSet::with_capacity(fingerprints.len());
+        for fingerprint in fingerprints {
+            if fingerprint.is_empty() || fingerprint.len() > 255 {
+                return Err(AppError::Config(
+                    "SSH Agent forwarding fingerprints must be between 1 and 255 bytes".to_string(),
+                ));
+            }
+            if !seen.insert(fingerprint) {
+                return Err(AppError::Config(
+                    "SSH Agent forwarding fingerprints must be unique".to_string(),
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Policy applied to identities merged from the external Agent and stored keys.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum SshAgentForwardingPolicy {
+    Allowlist {
+        #[serde(default)]
+        fingerprints: Vec<String>,
+    },
+    All,
+}
+
+impl Default for SshAgentForwardingPolicy {
+    fn default() -> Self {
+        Self::Allowlist {
+            fingerprints: Vec::new(),
+        }
+    }
+}
+
+/// External Agent sources and stored-key sources used by Agent forwarding.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SshAgentForwardingSources {
+    #[serde(default)]
+    pub external_agent: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub external_agent_endpoints: Vec<SshAgentEndpoint>,
+    #[serde(default = "default_true")]
+    pub stored_keys: bool,
+}
+
+impl Default for SshAgentForwardingSources {
+    fn default() -> Self {
+        Self {
+            external_agent: false,
+            external_agent_endpoints: Vec::new(),
+            stored_keys: true,
+        }
+    }
+}
+
+/// Agent forwarding configuration stored independently from the authentication Agent endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SshAgentForwardingConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub sources: SshAgentForwardingSources,
+    #[serde(default)]
+    pub policy: SshAgentForwardingPolicy,
+}
+
+impl Default for SshAgentForwardingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            sources: SshAgentForwardingSources::default(),
+            policy: SshAgentForwardingPolicy::default(),
+        }
+    }
+}
+
+/// Migrates legacy Agent fields and normalizes authentication-dependent settings.
+///
+/// The migration is intentionally one-way: legacy fields are accepted on input but are never
+/// serialized again. Existing forwarding behavior is preserved without exposing stored keys.
+#[allow(deprecated)]
+pub fn migrate_legacy_ssh_agent_settings(connection: &mut SavedConnection) -> bool {
+    let auth_mode = connection.auth.as_ref().map(|auth| auth.mode.as_str());
+
+    let ConnectionType::Ssh {
+        auth_agent_endpoint,
+        legacy_agent_forwarding,
+        agent_forwarding_config,
+        ..
+    } = &mut connection.config
+    else {
+        return false;
+    };
+
+    let mut changed = false;
+    if agent_forwarding_config.is_none() && *legacy_agent_forwarding == Some(true) {
+        let endpoint = auth_agent_endpoint.clone().unwrap_or_default();
+        *agent_forwarding_config = Some(SshAgentForwardingConfig {
+            enabled: true,
+            sources: SshAgentForwardingSources {
+                external_agent: true,
+                external_agent_endpoints: vec![endpoint],
+                stored_keys: false,
+            },
+            policy: SshAgentForwardingPolicy::All,
+        });
+        changed = true;
+    }
+
+    if legacy_agent_forwarding.take().is_some() {
+        changed = true;
+    }
+
+    if auth_mode == Some("agent") {
+        if auth_agent_endpoint.is_none() {
+            *auth_agent_endpoint = Some(SshAgentEndpoint::Auto);
+            changed = true;
+        }
+    } else if auth_agent_endpoint.take().is_some() {
+        changed = true;
+    }
+
+    changed
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -210,10 +507,17 @@ pub enum ConnectionType {
         backspace_mode: String,
         #[serde(default, skip_serializing_if = "is_false")]
         x11_forwarding: bool,
-        #[serde(default, skip_serializing_if = "is_default_ssh_agent_endpoint")]
-        agent_endpoint: SshAgentEndpoint,
-        #[serde(default, skip_serializing_if = "is_false")]
-        agent_forwarding: bool,
+        #[serde(
+            default,
+            alias = "agent_endpoint",
+            skip_serializing_if = "Option::is_none"
+        )]
+        auth_agent_endpoint: Option<SshAgentEndpoint>,
+        #[deprecated(note = "legacy read-only compatibility field; use agent_forwarding_config")]
+        #[serde(default, rename = "agent_forwarding", skip_serializing)]
+        legacy_agent_forwarding: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_forwarding_config: Option<SshAgentForwardingConfig>,
         #[serde(default)]
         encoding: String,
     },
@@ -827,8 +1131,15 @@ pub type AppConfig = SessionsConfig;
 // ── Loading / saving ────────────────────────────────────────────────────────
 
 pub fn load_sessions(app: &AppHandle) -> AppResult<SessionsConfig> {
-    let _ = app;
-    storage::load_sessions()
+    let mut config = storage::load_sessions()?;
+    let mut migrated = false;
+    for connection in &mut config.connections {
+        migrated |= migrate_legacy_ssh_agent_settings(connection);
+    }
+    if migrated {
+        save_sessions(app, &config)?;
+    }
+    Ok(config)
 }
 
 /// Saves sessions config to disk.
@@ -851,10 +1162,12 @@ pub fn save_sessions(app: &AppHandle, config: &SessionsConfig) -> AppResult<()> 
             } => {
                 *ai_execution_profile = AiExecutionProfile::Auto;
             }
-            ConnectionType::Ssh { .. }
-            | ConnectionType::Rdp { .. }
-            | ConnectionType::Vnc { .. } => {}
+            ConnectionType::Ssh { .. } => {
+                migrate_legacy_ssh_agent_settings(conn);
+            }
+            ConnectionType::Rdp { .. } | ConnectionType::Vnc { .. } => {}
         }
+        validate_ssh_agent_settings(&conn.config)?;
         if let Some(auth) = &mut conn.auth {
             auth.has_password = false;
         }
@@ -950,9 +1263,15 @@ pub fn resolve_connection_encoding(app: &AppHandle, conn: &SavedConnection) -> S
 ///
 /// Returns `AppError::SessionNotFound` if no connection with that ID exists.
 pub fn load_connection_by_id(app: &AppHandle, id: &str) -> AppResult<SavedConnection> {
-    let _ = app;
-    let conn = storage::get_connection(id)?
+    let mut conn = storage::get_connection(id)?
         .ok_or_else(|| AppError::SessionNotFound(format!("Connection '{}' not found", id)))?;
+    if migrate_legacy_ssh_agent_settings(&mut conn) {
+        let mut config = storage::load_sessions()?;
+        if let Some(stored) = config.connections.iter_mut().find(|stored| stored.id == id) {
+            *stored = conn.clone();
+            save_sessions(app, &config)?;
+        }
+    }
     Ok(conn)
 }
 
@@ -962,12 +1281,17 @@ pub fn save_config(app: &AppHandle, config: &AppConfig) -> AppResult<()> {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::{
         AssetAcceleratorType, AssetDeviceType, AssetDiskKind, AssetDiskPurpose, ConnectionType,
-        SavedConnection, SftpCwdFollowMode, SftpSettings, SshAgentEndpoint, SshAlgorithmMode,
-        SshProfile, SshTerminalType, effective_cwd_follow_mode,
-        effective_cwd_follow_mode_for_profile, resolve_ssh_terminal_type,
+        MAX_SSH_AGENT_ENVIRONMENT_VARIABLE_LEN, MAX_SSH_AGENT_FORWARDING_ENDPOINTS,
+        MAX_SSH_AGENT_FORWARDING_IDENTITIES, MAX_SSH_AGENT_UNIX_SOCKET_PATH_LEN, SavedConnection,
+        SftpCwdFollowMode, SftpSettings, SshAgentEndpoint, SshAgentForwardingConfig,
+        SshAgentForwardingPolicy, SshAgentForwardingSources, SshAlgorithmMode, SshProfile,
+        SshTerminalType, effective_cwd_follow_mode, effective_cwd_follow_mode_for_profile,
+        migrate_legacy_ssh_agent_settings, resolve_ssh_terminal_type, validate_ssh_agent_endpoint,
+        validate_ssh_agent_settings,
     };
 
     #[test]
@@ -1004,7 +1328,7 @@ mod tests {
     }
 
     #[test]
-    fn ssh_agent_forwarding_is_opt_in_and_endpoint_is_preserved() {
+    fn legacy_agent_endpoint_deserializes_into_auth_endpoint() {
         let connection: SavedConnection = serde_json::from_value(serde_json::json!({
             "id": "conn-1",
             "name": "Agent",
@@ -1018,8 +1342,7 @@ mod tests {
         .expect("connection");
 
         let ConnectionType::Ssh {
-            agent_endpoint,
-            agent_forwarding,
+            auth_agent_endpoint,
             ..
         } = connection.config
         else {
@@ -1027,12 +1350,412 @@ mod tests {
         };
 
         assert_eq!(
-            agent_endpoint,
-            SshAgentEndpoint::UnixSocket {
+            auth_agent_endpoint,
+            Some(SshAgentEndpoint::UnixSocket {
                 path: "/tmp/agent.sock".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn missing_or_false_legacy_forwarding_stays_disabled() {
+        for legacy_value in [None, Some(false)] {
+            let mut value = serde_json::json!({
+                "id": "conn-1",
+                "name": "Agent",
+                "type": "ssh",
+                "host": "example.com"
+            });
+            if let Some(enabled) = legacy_value {
+                value["agent_forwarding"] = serde_json::json!(enabled);
+            }
+            let mut connection: SavedConnection =
+                serde_json::from_value(value).expect("connection");
+
+            migrate_legacy_ssh_agent_settings(&mut connection);
+
+            let ConnectionType::Ssh {
+                auth_agent_endpoint,
+                agent_forwarding_config,
+                ..
+            } = connection.config
+            else {
+                panic!("expected SSH connection");
+            };
+            assert!(auth_agent_endpoint.is_none());
+            assert!(agent_forwarding_config.is_none());
+        }
+    }
+
+    #[test]
+    fn agent_authentication_defaults_missing_endpoint_to_auto() {
+        let mut connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "conn-1",
+            "name": "Agent",
+            "type": "ssh",
+            "host": "example.com",
+            "auth": { "mode": "agent" }
+        }))
+        .expect("connection");
+
+        migrate_legacy_ssh_agent_settings(&mut connection);
+
+        let ConnectionType::Ssh {
+            auth_agent_endpoint,
+            ..
+        } = connection.config
+        else {
+            panic!("expected SSH connection");
+        };
+        assert_eq!(auth_agent_endpoint, Some(SshAgentEndpoint::Auto));
+    }
+
+    #[test]
+    fn removed_inheritance_field_is_ignored_and_not_serialized() {
+        let mut connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "conn-1",
+            "name": "Agent",
+            "type": "ssh",
+            "host": "example.com",
+            "agent_forwarding_config": {
+                "enabled": true,
+                "inherit_auth_source": true,
+                "sources": { "stored_keys": true }
+            }
+        }))
+        .expect("connection");
+
+        migrate_legacy_ssh_agent_settings(&mut connection);
+        let value = serde_json::to_value(connection).expect("serialized connection");
+        let forwarding = value
+            .get("agent_forwarding_config")
+            .expect("forwarding config");
+        assert!(forwarding.get("inherit_auth_source").is_none());
+        assert_eq!(forwarding.get("enabled"), Some(&serde_json::json!(true)));
+    }
+
+    #[test]
+    fn legacy_agent_forwarding_migrates_once_without_exposing_stored_keys() {
+        let mut connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "conn-1",
+            "name": "Agent",
+            "type": "ssh",
+            "host": "example.com",
+            "agent_endpoint": {
+                "type": "unix_socket",
+                "path": "/tmp/legacy-agent.sock"
+            },
+            "agent_forwarding": true
+        }))
+        .expect("connection");
+
+        assert!(migrate_legacy_ssh_agent_settings(&mut connection));
+
+        let ConnectionType::Ssh {
+            auth_agent_endpoint,
+            legacy_agent_forwarding,
+            agent_forwarding_config: Some(forwarding),
+            ..
+        } = &connection.config
+        else {
+            panic!("expected forwarding config");
+        };
+        assert!(auth_agent_endpoint.is_none());
+        assert!(legacy_agent_forwarding.is_none());
+        assert!(forwarding.enabled);
+        assert!(forwarding.sources.external_agent);
+        assert_eq!(
+            forwarding.sources.external_agent_endpoints,
+            vec![SshAgentEndpoint::UnixSocket {
+                path: "/tmp/legacy-agent.sock".to_string()
+            }]
+        );
+        assert!(!forwarding.sources.stored_keys);
+        assert_eq!(forwarding.policy, SshAgentForwardingPolicy::All);
+        assert!(!migrate_legacy_ssh_agent_settings(&mut connection));
+    }
+
+    #[test]
+    fn current_forwarding_config_takes_priority_over_legacy_flag() {
+        let mut connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "conn-1",
+            "name": "Agent",
+            "type": "ssh",
+            "host": "example.com",
+            "agent_forwarding": true,
+            "agent_forwarding_config": {
+                "enabled": true,
+                "sources": {
+                    "external_agent": true,
+                    "stored_keys": true
+                },
+                "policy": {
+                    "mode": "allowlist",
+                    "fingerprints": ["SHA256:test"]
+                }
+            }
+        }))
+        .expect("connection");
+
+        migrate_legacy_ssh_agent_settings(&mut connection);
+
+        let ConnectionType::Ssh {
+            legacy_agent_forwarding,
+            agent_forwarding_config: Some(forwarding),
+            ..
+        } = &connection.config
+        else {
+            panic!("expected forwarding config");
+        };
+        assert!(legacy_agent_forwarding.is_none());
+        assert!(forwarding.sources.stored_keys);
+        assert_eq!(
+            forwarding.policy,
+            SshAgentForwardingPolicy::Allowlist {
+                fingerprints: vec!["SHA256:test".to_string()]
             }
         );
-        assert!(!agent_forwarding);
+    }
+
+    #[test]
+    fn migration_serializes_only_current_agent_fields() {
+        let mut connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "conn-1",
+            "name": "Agent",
+            "type": "ssh",
+            "host": "example.com",
+            "agent_endpoint": { "type": "auto" },
+            "agent_forwarding": true,
+            "auth": { "mode": "agent" }
+        }))
+        .expect("connection");
+
+        migrate_legacy_ssh_agent_settings(&mut connection);
+        let value = serde_json::to_value(connection).expect("serialized connection");
+
+        assert!(value.get("auth_agent_endpoint").is_some());
+        assert!(value.get("agent_forwarding_config").is_some());
+        assert!(value.get("agent_endpoint").is_none());
+        assert!(value.get("agent_forwarding").is_none());
+    }
+
+    #[test]
+    fn forwarding_endpoint_limit_is_checked_before_duplicate_detection() {
+        let endpoints = vec![SshAgentEndpoint::Auto; MAX_SSH_AGENT_FORWARDING_ENDPOINTS + 1];
+        let config = ConnectionType::Ssh {
+            host: "example.com".to_string(),
+            port: 22,
+            username: "root".to_string(),
+            backspace_mode: "del".to_string(),
+            x11_forwarding: false,
+            auth_agent_endpoint: Some(SshAgentEndpoint::Auto),
+            legacy_agent_forwarding: None,
+            agent_forwarding_config: Some(SshAgentForwardingConfig {
+                enabled: false,
+                sources: SshAgentForwardingSources {
+                    external_agent: true,
+                    external_agent_endpoints: endpoints,
+                    stored_keys: false,
+                },
+                policy: SshAgentForwardingPolicy::default(),
+            }),
+            encoding: String::new(),
+        };
+
+        let error = validate_ssh_agent_settings(&config).expect_err("endpoint limit");
+        assert!(error.to_string().contains("at most 16"));
+    }
+
+    #[test]
+    fn forwarding_endpoint_validation_rejects_empty_values_even_when_disabled() {
+        let environment = SshAgentEndpoint::Environment {
+            variable: " $ ".to_string(),
+        };
+        assert!(validate_ssh_agent_endpoint(&environment).is_err());
+
+        let socket = SshAgentEndpoint::UnixSocket {
+            path: "  ".to_string(),
+        };
+        assert!(validate_ssh_agent_endpoint(&socket).is_err());
+        let nul_socket = SshAgentEndpoint::UnixSocket {
+            path: "agent\0.sock".to_string(),
+        };
+        assert!(validate_ssh_agent_endpoint(&nul_socket).is_err());
+
+        let long_environment = SshAgentEndpoint::Environment {
+            variable: "A".repeat(MAX_SSH_AGENT_ENVIRONMENT_VARIABLE_LEN + 1),
+        };
+        assert!(validate_ssh_agent_endpoint(&long_environment).is_err());
+
+        let long_socket = SshAgentEndpoint::UnixSocket {
+            path: "a".repeat(MAX_SSH_AGENT_UNIX_SOCKET_PATH_LEN + 1),
+        };
+        assert!(validate_ssh_agent_endpoint(&long_socket).is_err());
+
+        let config = ConnectionType::Ssh {
+            host: "example.com".to_string(),
+            port: 22,
+            username: "root".to_string(),
+            backspace_mode: "del".to_string(),
+            x11_forwarding: false,
+            auth_agent_endpoint: Some(SshAgentEndpoint::Auto),
+            legacy_agent_forwarding: None,
+            agent_forwarding_config: Some(SshAgentForwardingConfig {
+                enabled: false,
+                sources: SshAgentForwardingSources {
+                    external_agent: false,
+                    external_agent_endpoints: vec![environment],
+                    stored_keys: false,
+                },
+                policy: SshAgentForwardingPolicy::default(),
+            }),
+            encoding: String::new(),
+        };
+        assert!(validate_ssh_agent_settings(&config).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn forwarding_endpoint_validation_rejects_invalid_environment_variable_names() {
+        for variable in ["SSH=AUTH_SOCK", "SSH\0AUTH_SOCK"] {
+            assert!(
+                validate_ssh_agent_endpoint(&SshAgentEndpoint::Environment {
+                    variable: variable.to_string(),
+                })
+                .is_err()
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn forwarding_endpoint_validation_normalizes_environment_duplicates() {
+        let config = ConnectionType::Ssh {
+            host: "example.com".to_string(),
+            port: 22,
+            username: "root".to_string(),
+            backspace_mode: "del".to_string(),
+            x11_forwarding: false,
+            auth_agent_endpoint: Some(SshAgentEndpoint::Auto),
+            legacy_agent_forwarding: None,
+            agent_forwarding_config: Some(SshAgentForwardingConfig {
+                enabled: true,
+                sources: SshAgentForwardingSources {
+                    external_agent: true,
+                    external_agent_endpoints: vec![
+                        SshAgentEndpoint::Environment {
+                            variable: "SSH_AUTH_SOCK".to_string(),
+                        },
+                        SshAgentEndpoint::Environment {
+                            variable: "$SSH_AUTH_SOCK".to_string(),
+                        },
+                    ],
+                    stored_keys: false,
+                },
+                policy: SshAgentForwardingPolicy::default(),
+            }),
+            encoding: String::new(),
+        };
+
+        let error = validate_ssh_agent_settings(&config).expect_err("duplicate endpoint");
+        assert!(error.to_string().contains("must be unique"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn forwarding_endpoint_validation_treats_auto_as_default_environment() {
+        let config = ConnectionType::Ssh {
+            host: "example.com".to_string(),
+            port: 22,
+            username: "root".to_string(),
+            backspace_mode: "del".to_string(),
+            x11_forwarding: false,
+            auth_agent_endpoint: Some(SshAgentEndpoint::Auto),
+            legacy_agent_forwarding: None,
+            agent_forwarding_config: Some(SshAgentForwardingConfig {
+                enabled: true,
+                sources: SshAgentForwardingSources {
+                    external_agent: true,
+                    external_agent_endpoints: vec![
+                        SshAgentEndpoint::Auto,
+                        SshAgentEndpoint::Environment {
+                            variable: "SSH_AUTH_SOCK".to_string(),
+                        },
+                    ],
+                    stored_keys: false,
+                },
+                policy: SshAgentForwardingPolicy::default(),
+            }),
+            encoding: String::new(),
+        };
+
+        let error = validate_ssh_agent_settings(&config).expect_err("duplicate endpoint");
+        assert!(error.to_string().contains("must be unique"));
+    }
+
+    #[test]
+    fn forwarding_allowlist_validation_rejects_duplicates_and_excessive_values() {
+        let base = |fingerprints| ConnectionType::Ssh {
+            host: "example.com".to_string(),
+            port: 22,
+            username: "root".to_string(),
+            backspace_mode: "del".to_string(),
+            x11_forwarding: false,
+            auth_agent_endpoint: None,
+            legacy_agent_forwarding: None,
+            agent_forwarding_config: Some(SshAgentForwardingConfig {
+                enabled: true,
+                sources: SshAgentForwardingSources::default(),
+                policy: SshAgentForwardingPolicy::Allowlist { fingerprints },
+            }),
+            encoding: String::new(),
+        };
+
+        let duplicate = base(vec!["SHA256:test".to_string(), "SHA256:test".to_string()]);
+        assert!(validate_ssh_agent_settings(&duplicate).is_err());
+
+        let excessive = base(vec![
+            "SHA256:test".to_string();
+            MAX_SSH_AGENT_FORWARDING_IDENTITIES + 1
+        ]);
+        assert!(validate_ssh_agent_settings(&excessive).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn forwarding_endpoint_validation_rejects_windows_only_endpoints() {
+        assert!(validate_ssh_agent_endpoint(&SshAgentEndpoint::Pageant).is_err());
+        assert!(validate_ssh_agent_endpoint(&SshAgentEndpoint::WindowsOpenSsh).is_err());
+
+        let config: ConnectionType = serde_json::from_value(serde_json::json!({
+            "type": "ssh",
+            "host": "example.com",
+            "agent_forwarding_config": {
+                "sources": {
+                    "external_agent": true,
+                    "external_agent_endpoints": [{ "type": "pageant" }]
+                }
+            }
+        }))
+        .expect("ssh config");
+        assert!(validate_ssh_agent_settings(&config).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn forwarding_endpoint_validation_rejects_unix_only_endpoints() {
+        assert!(
+            validate_ssh_agent_endpoint(&SshAgentEndpoint::Environment {
+                variable: "SSH_AUTH_SOCK".to_string(),
+            })
+            .is_err()
+        );
+        assert!(
+            validate_ssh_agent_endpoint(&SshAgentEndpoint::UnixSocket {
+                path: "agent.sock".to_string(),
+            })
+            .is_err()
+        );
     }
 
     #[test]

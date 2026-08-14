@@ -1,17 +1,145 @@
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::{
         PORTABLE_SNAPSHOT_SCHEMA_VERSION, PortableAppSettings, PortableSnapshot,
-        PortableSnapshotKind, PortableSnapshotMeta, PortableUiSettings, SNAPSHOT_ENTITIES_TABLE,
-        SNAPSHOT_META_KEY, SNAPSHOT_META_TABLE, SNAPSHOT_ZIP_PAYLOAD_NAME, calculate_payload_hash,
-        calculate_v3_raw_payload_hash, encode_portable_snapshot, encode_portable_snapshot_redb,
-        preserve_device_local_sessions, strip_device_local_sessions,
+        PortableSnapshotKind, PortableUiSettings, SNAPSHOT_ZIP_PAYLOAD_NAME,
+        calculate_payload_hash, calculate_v3_raw_payload_hash, encode_portable_snapshot,
+        encode_portable_snapshot_redb, encode_v3_raw_snapshot_redb_for_test,
+        normalize_backup_sessions_for_platform, preserve_device_local_sessions,
+        strip_device_local_sessions, AgentEndpointTargetPlatform,
     };
     use crate::config::{self, ActivityBarLayout, AppSettings};
     use crate::error::AppError;
-    use redb::Database;
     use std::collections::BTreeMap;
     use std::io::Write;
+
+    #[test]
+    fn backup_sessions_drop_incompatible_agent_endpoints_for_unix() {
+        let mut sessions: config::SessionsConfig = serde_json::from_value(serde_json::json!({
+            "connections": [{
+                "id": "agent-1",
+                "name": "Agent",
+                "type": "ssh",
+                "host": "example.com",
+                "auth": { "mode": "agent" },
+                "auth_agent_endpoint": { "type": "pageant" },
+                "agent_forwarding_config": {
+                    "enabled": true,
+                    "sources": {
+                        "external_agent": true,
+                        "external_agent_endpoints": [
+                            { "type": "pageant" },
+                            { "type": "unix_socket", "path": "/tmp/agent.sock" }
+                        ],
+                        "stored_keys": false
+                    },
+                    "policy": { "mode": "all" }
+                }
+            }]
+        }))
+        .expect("sessions");
+
+        assert!(normalize_backup_sessions_for_platform(
+            &mut sessions,
+            AgentEndpointTargetPlatform::Unix
+        )
+        .expect("normalize backup sessions"));
+
+        let config::ConnectionType::Ssh {
+            auth_agent_endpoint,
+            agent_forwarding_config,
+            ..
+        } = &sessions.connections[0].config
+        else {
+            panic!("expected SSH connection");
+        };
+        assert_eq!(auth_agent_endpoint, &Some(config::SshAgentEndpoint::Auto));
+        let forwarding = agent_forwarding_config.as_ref().expect("forwarding config");
+        assert_eq!(forwarding.sources.external_agent_endpoints.len(), 1);
+        assert!(matches!(
+            forwarding.sources.external_agent_endpoints[0],
+            config::SshAgentEndpoint::UnixSocket { .. }
+        ));
+        assert!(forwarding.enabled);
+    }
+
+    #[test]
+    fn backup_sessions_drop_incompatible_agent_endpoints_for_windows() {
+        let mut sessions: config::SessionsConfig = serde_json::from_value(serde_json::json!({
+            "connections": [{
+                "id": "agent-1",
+                "name": "Agent",
+                "type": "ssh",
+                "host": "example.com",
+                "auth": { "mode": "password" },
+                "auth_agent_endpoint": { "type": "unix_socket", "path": "/tmp/agent.sock" },
+                "agent_forwarding_config": {
+                    "enabled": true,
+                    "sources": {
+                        "external_agent": true,
+                        "external_agent_endpoints": [
+                            { "type": "unix_socket", "path": "/tmp/agent.sock" },
+                            { "type": "pageant" }
+                        ],
+                        "stored_keys": false
+                    },
+                    "policy": { "mode": "all" }
+                }
+            }]
+        }))
+        .expect("sessions");
+
+        assert!(normalize_backup_sessions_for_platform(
+            &mut sessions,
+            AgentEndpointTargetPlatform::Windows
+        )
+        .expect("normalize backup sessions"));
+
+        let config::ConnectionType::Ssh {
+            auth_agent_endpoint,
+            agent_forwarding_config,
+            ..
+        } = &sessions.connections[0].config
+        else {
+            panic!("expected SSH connection");
+        };
+        assert!(auth_agent_endpoint.is_none());
+        let forwarding = agent_forwarding_config.as_ref().expect("forwarding config");
+        assert_eq!(forwarding.sources.external_agent_endpoints, vec![config::SshAgentEndpoint::Pageant]);
+        assert!(forwarding.enabled);
+    }
+
+    #[test]
+    fn backup_rejects_malformed_endpoint_before_cross_platform_filtering() {
+        let mut sessions: config::SessionsConfig = serde_json::from_value(serde_json::json!({
+            "connections": [{
+                "id": "agent-1",
+                "name": "Agent",
+                "type": "ssh",
+                "host": "example.com",
+                "agent_forwarding_config": {
+                    "enabled": true,
+                    "sources": {
+                        "external_agent": true,
+                        "external_agent_endpoints": [
+                            { "type": "unix_socket", "path": "bad\u{0000}.sock" },
+                            { "type": "pageant" }
+                        ],
+                        "stored_keys": false
+                    },
+                    "policy": { "mode": "all" }
+                }
+            }]
+        }))
+        .expect("sessions");
+
+        assert!(normalize_backup_sessions_for_platform(
+            &mut sessions,
+            AgentEndpointTargetPlatform::Windows
+        )
+        .is_err());
+    }
 
     #[test]
     fn portable_settings_strip_master_password_and_preserve_device_ui_state_on_apply() {
@@ -216,52 +344,79 @@ mod tests {
         let mut incoming = sample_sessions_with_asset_metadata();
 
         let config::ConnectionType::Ssh {
-            agent_endpoint,
-            agent_forwarding,
+            auth_agent_endpoint,
+            legacy_agent_forwarding,
+            agent_forwarding_config,
             ..
         } = &mut current.connections[0].config
         else {
             panic!("expected SSH connection");
         };
-        *agent_endpoint = config::SshAgentEndpoint::Pageant;
-        *agent_forwarding = true;
+        *auth_agent_endpoint = Some(config::SshAgentEndpoint::Pageant);
+        *legacy_agent_forwarding = None;
+        *agent_forwarding_config = Some(config::SshAgentForwardingConfig {
+            enabled: true,
+            sources: config::SshAgentForwardingSources {
+                external_agent: true,
+                external_agent_endpoints: vec![config::SshAgentEndpoint::Pageant],
+                stored_keys: false,
+            },
+            policy: config::SshAgentForwardingPolicy::All,
+        });
 
         let config::ConnectionType::Ssh {
-            agent_endpoint,
-            agent_forwarding,
+            auth_agent_endpoint,
+            legacy_agent_forwarding,
+            agent_forwarding_config,
             ..
         } = &mut incoming.connections[0].config
         else {
             panic!("expected SSH connection");
         };
-        *agent_endpoint = config::SshAgentEndpoint::UnixSocket {
+        *auth_agent_endpoint = Some(config::SshAgentEndpoint::UnixSocket {
             path: "/Users/me/.ssh/agent.sock".to_string(),
-        };
-        *agent_forwarding = true;
+        });
+        *legacy_agent_forwarding = None;
+        *agent_forwarding_config = Some(config::SshAgentForwardingConfig::default());
 
         strip_device_local_sessions(&mut incoming);
         let config::ConnectionType::Ssh {
-            agent_endpoint,
-            agent_forwarding,
+            auth_agent_endpoint,
+            legacy_agent_forwarding,
+            agent_forwarding_config,
             ..
         } = &incoming.connections[0].config
         else {
             panic!("expected SSH connection");
         };
-        assert_eq!(agent_endpoint, &config::SshAgentEndpoint::Auto);
-        assert!(!agent_forwarding);
+        assert!(auth_agent_endpoint.is_none());
+        assert!(legacy_agent_forwarding.is_none());
+        assert!(agent_forwarding_config.is_none());
 
         preserve_device_local_sessions(&mut incoming, &current);
         let config::ConnectionType::Ssh {
-            agent_endpoint,
-            agent_forwarding,
+            auth_agent_endpoint,
+            legacy_agent_forwarding,
+            agent_forwarding_config,
             ..
         } = &incoming.connections[0].config
         else {
             panic!("expected SSH connection");
         };
-        assert_eq!(agent_endpoint, &config::SshAgentEndpoint::Pageant);
-        assert!(*agent_forwarding);
+        assert_eq!(auth_agent_endpoint, &Some(config::SshAgentEndpoint::Pageant));
+        assert!(legacy_agent_forwarding.is_none());
+        assert_eq!(
+            agent_forwarding_config,
+            &Some(config::SshAgentForwardingConfig {
+                enabled: true,
+                sources: config::SshAgentForwardingSources {
+                    external_agent: true,
+                    external_agent_endpoints: vec![config::SshAgentEndpoint::Pageant],
+                    stored_keys: false,
+                },
+                policy: config::SshAgentForwardingPolicy::All,
+            })
+        );
     }
 
     fn sample_portable_settings() -> PortableAppSettings {
@@ -408,8 +563,9 @@ mod tests {
                     username: "root".to_string(),
                     backspace_mode: "del".to_string(),
                     x11_forwarding: false,
-                    agent_endpoint: config::SshAgentEndpoint::Auto,
-                    agent_forwarding: false,
+                    auth_agent_endpoint: None,
+                    legacy_agent_forwarding: None,
+                    agent_forwarding_config: None,
                     encoding: String::new(),
                 },
                 group_id: None,
@@ -558,45 +714,50 @@ mod tests {
         assert!(matches!(error, AppError::Storage(_)));
     }
 
-    #[test]
-    fn portable_snapshot_legacy_redb_roundtrip() {
-        let snapshot = sample_snapshot();
-
-        let encoded = encode_portable_snapshot_redb(&snapshot).expect("encode legacy snapshot");
-        let decoded = super::decode_portable_snapshot(&encoded).expect("decode legacy snapshot");
-
-        assert_eq!(decoded.revision_id, snapshot.revision_id);
-        assert_eq!(decoded.payload_hash, snapshot.payload_hash);
-        assert_eq!(decoded.master_key_token, snapshot.master_key_token);
-        assert_eq!(decoded.known_hosts, snapshot.known_hosts);
-    }
-
-    #[test]
-    fn portable_sync_snapshot_redb_preserves_asset_metadata() {
+    fn sample_snapshot_with_quick_command() -> PortableSnapshot {
         let mut snapshot = sample_snapshot();
-        snapshot.snapshot_kind = PortableSnapshotKind::Sync;
-        snapshot.sessions = sample_sessions_with_asset_metadata();
+        snapshot.quick_commands.commands.push(config::QuickCommand {
+            id: "cmd-1".to_string(),
+            label: "List".to_string(),
+            command: "ls".to_string(),
+            category_id: None,
+            description: None,
+            color_tag: None,
+            icon_tag: None,
+            pinned: false,
+            execution_mode: "execute".to_string(),
+            source: None,
+            risk_level: None,
+            updated_at: None,
+            created_at: None,
+            use_count: None,
+            sort_order: None,
+        });
         snapshot.payload_hash = calculate_payload_hash(&snapshot).expect("hash snapshot");
-
-        let encoded = encode_portable_snapshot_redb(&snapshot).expect("encode legacy snapshot");
-        let decoded = super::decode_portable_snapshot(&encoded).expect("decode snapshot");
-
-        assert_asset_metadata_preserved(&decoded.sessions);
+        snapshot
     }
 
-    #[test]
-    fn portable_snapshot_v3_accepts_older_entity_shape_before_normalizing_hash() {
-        let snapshot = sample_snapshot();
-        let mut settings = serde_json::to_value(&snapshot.settings).expect("settings json");
-        settings["appearance"]
+    fn v121_quick_command_entities(snapshot: &PortableSnapshot) -> BTreeMap<String, String> {
+        let mut quick_commands =
+            serde_json::to_value(&snapshot.quick_commands).expect("quick commands json");
+        quick_commands["commands"][0]
             .as_object_mut()
-            .expect("appearance object")
-            .remove("panel_multi_open");
+            .expect("quick command object")
+            .remove("sort_order");
 
+        let mut entities = snapshot_entities(snapshot);
+        entities.insert(
+            "quick_commands".to_string(),
+            serde_json::to_string(&quick_commands).expect("quick commands raw"),
+        );
+        entities
+    }
+
+    fn snapshot_entities(snapshot: &PortableSnapshot) -> BTreeMap<String, String> {
         let mut entities = BTreeMap::new();
         entities.insert(
             "settings".to_string(),
-            serde_json::to_string(&settings).expect("settings raw"),
+            serde_json::to_string(&snapshot.settings).expect("settings raw"),
         );
         entities.insert(
             "sessions".to_string(),
@@ -623,8 +784,16 @@ mod tests {
             serde_json::to_string(&snapshot.proxies).expect("proxies raw"),
         );
         entities.insert(
+            "proxy_groups".to_string(),
+            serde_json::to_string(&snapshot.proxy_groups).expect("proxy groups raw"),
+        );
+        entities.insert(
             "tunnels".to_string(),
             serde_json::to_string(&snapshot.tunnels).expect("tunnels raw"),
+        );
+        entities.insert(
+            "tunnel_groups".to_string(),
+            serde_json::to_string(&snapshot.tunnel_groups).expect("tunnel groups raw"),
         );
         entities.insert(
             "quick_commands".to_string(),
@@ -642,19 +811,110 @@ mod tests {
             "known_hosts".to_string(),
             serde_json::to_string(&snapshot.known_hosts).expect("known hosts raw"),
         );
+        entities.insert(
+            "notes".to_string(),
+            serde_json::to_string(&snapshot.notes).expect("notes raw"),
+        );
+        entities
+    }
+
+    #[test]
+    fn truncated_zip_portable_snapshot_returns_error() {
+        let error = super::decode_portable_snapshot(b"PK\x03\x04truncated")
+            .expect_err("truncated zip snapshot should fail");
+
+        assert!(matches!(error, AppError::Storage(_)));
+    }
+
+    #[test]
+    fn portable_snapshot_legacy_redb_roundtrip() {
+        let snapshot = sample_snapshot();
+
+        let encoded = encode_portable_snapshot_redb(&snapshot).expect("encode legacy snapshot");
+        let decoded = super::decode_portable_snapshot(&encoded).expect("decode legacy snapshot");
+
+        assert_eq!(decoded.revision_id, snapshot.revision_id);
+        assert_eq!(decoded.payload_hash, snapshot.payload_hash);
+        assert_eq!(decoded.master_key_token, snapshot.master_key_token);
+        assert_eq!(decoded.known_hosts, snapshot.known_hosts);
+    }
+
+    #[test]
+    fn portable_snapshot_decode_result_preserves_v121_quick_command_source_hash() {
+        let snapshot = sample_snapshot_with_quick_command();
+        let entities = v121_quick_command_entities(&snapshot);
+        let source_hash = calculate_v3_raw_payload_hash(&entities).expect("source hash");
+        assert_ne!(source_hash, snapshot.payload_hash);
+        let encoded =
+            encode_v3_raw_snapshot_redb_for_test(&snapshot, &entities, source_hash.clone());
+
+        let decoded = super::decode_portable_snapshot_with_source_hash(&encoded)
+            .expect("decode v1.2.1 quick command shape");
+
+        assert_eq!(decoded.source_payload_hash, source_hash);
+        assert_eq!(decoded.snapshot.payload_hash, snapshot.payload_hash);
+        assert_ne!(decoded.snapshot.payload_hash, decoded.source_payload_hash);
+        assert_eq!(decoded.snapshot.quick_commands.commands[0].sort_order, None);
+    }
+
+    #[test]
+    fn portable_snapshot_decode_result_source_hash_matches_current_snapshot_hash() {
+        let snapshot = sample_snapshot_with_quick_command();
+        let encoded = encode_portable_snapshot(&snapshot).expect("encode snapshot");
+
+        let decoded =
+            super::decode_portable_snapshot_with_source_hash(&encoded).expect("decode snapshot");
+
+        assert_eq!(decoded.source_payload_hash, snapshot.payload_hash);
+        assert_eq!(decoded.snapshot.payload_hash, snapshot.payload_hash);
+    }
+
+    #[test]
+    fn portable_sync_snapshot_redb_preserves_asset_metadata() {
+        let mut snapshot = sample_snapshot();
+        snapshot.snapshot_kind = PortableSnapshotKind::Sync;
+        snapshot.sessions = sample_sessions_with_asset_metadata();
+        snapshot.payload_hash = calculate_payload_hash(&snapshot).expect("hash snapshot");
+
+        let encoded = encode_portable_snapshot_redb(&snapshot).expect("encode legacy snapshot");
+        let decoded = super::decode_portable_snapshot(&encoded).expect("decode snapshot");
+
+        assert_asset_metadata_preserved(&decoded.sessions);
+    }
+
+    #[test]
+    fn portable_snapshot_v3_accepts_older_entity_shape_before_normalizing_hash() {
+        let snapshot = sample_snapshot();
+        let mut settings = serde_json::to_value(&snapshot.settings).expect("settings json");
+        settings["appearance"]
+            .as_object_mut()
+            .expect("appearance object")
+            .remove("panel_multi_open");
+
+        let mut entities = snapshot_entities(&snapshot);
+        entities.remove("proxy_groups");
+        entities.remove("tunnel_groups");
+        entities.remove("notes");
+        entities.insert(
+            "settings".to_string(),
+            serde_json::to_string(&settings).expect("settings raw"),
+        );
 
         let legacy_hash = calculate_v3_raw_payload_hash(&entities).expect("legacy hash");
         assert_ne!(legacy_hash, snapshot.payload_hash);
 
-        let encoded = encode_v3_raw_snapshot_redb(&snapshot, &entities, legacy_hash.clone());
-        let decoded = super::decode_portable_snapshot(&encoded).expect("decode legacy v3 shape");
+        let encoded =
+            encode_v3_raw_snapshot_redb_for_test(&snapshot, &entities, legacy_hash.clone());
+        let decoded = super::decode_portable_snapshot_with_source_hash(&encoded)
+            .expect("decode legacy v3 shape");
 
-        assert_eq!(decoded.revision_id, snapshot.revision_id);
-        assert!(!decoded.settings.appearance.panel_multi_open);
-        assert!(decoded.notes.folders.is_empty());
-        assert!(decoded.notes.notes.is_empty());
-        assert_eq!(decoded.payload_hash, snapshot.payload_hash);
-        assert_ne!(decoded.payload_hash, legacy_hash);
+        assert_eq!(decoded.source_payload_hash, legacy_hash);
+        assert_eq!(decoded.snapshot.revision_id, snapshot.revision_id);
+        assert!(!decoded.snapshot.settings.appearance.panel_multi_open);
+        assert!(decoded.snapshot.notes.folders.is_empty());
+        assert!(decoded.snapshot.notes.notes.is_empty());
+        assert_eq!(decoded.snapshot.payload_hash, snapshot.payload_hash);
+        assert_ne!(decoded.snapshot.payload_hash, legacy_hash);
     }
 
     #[test]
@@ -710,34 +970,4 @@ mod tests {
         );
     }
 
-    fn encode_v3_raw_snapshot_redb(
-        snapshot: &PortableSnapshot,
-        entities: &BTreeMap<String, String>,
-        payload_hash: String,
-    ) -> Vec<u8> {
-        let temp = super::TempRedbFile::new("portable-snapshot-legacy-test");
-        {
-            let db = Database::create(temp.path()).expect("create db");
-            let txn = db.begin_write().expect("begin write");
-            {
-                let mut meta = txn.open_table(SNAPSHOT_META_TABLE).expect("open meta");
-                let mut meta_value = PortableSnapshotMeta::from(snapshot);
-                meta_value.payload_hash = payload_hash;
-                let meta_content = serde_json::to_string(&meta_value).expect("meta json");
-                meta.insert(SNAPSHOT_META_KEY, meta_content.as_str())
-                    .expect("insert meta");
-            }
-            let mut table = txn
-                .open_table(SNAPSHOT_ENTITIES_TABLE)
-                .expect("open entities");
-            for (key, value) in entities {
-                table
-                    .insert(key.as_str(), value.as_str())
-                    .expect("insert entity");
-            }
-            drop(table);
-            txn.commit().expect("commit");
-        }
-        std::fs::read(temp.path()).expect("read redb")
-    }
 }

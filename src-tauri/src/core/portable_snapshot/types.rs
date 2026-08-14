@@ -5,6 +5,100 @@ pub enum PortableSnapshotKind {
     Backup,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AgentEndpointTargetPlatform {
+    Unix,
+    Windows,
+}
+
+impl AgentEndpointTargetPlatform {
+    pub(crate) fn current() -> Self {
+        if cfg!(windows) {
+            Self::Windows
+        } else {
+            Self::Unix
+        }
+    }
+}
+
+fn agent_endpoint_supported_on_platform(
+    endpoint: &config::SshAgentEndpoint,
+    platform: AgentEndpointTargetPlatform,
+) -> bool {
+    match (platform, endpoint) {
+        (_, config::SshAgentEndpoint::Auto) => true,
+        (AgentEndpointTargetPlatform::Unix, config::SshAgentEndpoint::Environment { .. }) => true,
+        (AgentEndpointTargetPlatform::Unix, config::SshAgentEndpoint::UnixSocket { .. }) => true,
+        (AgentEndpointTargetPlatform::Windows, config::SshAgentEndpoint::Pageant) => true,
+        (AgentEndpointTargetPlatform::Windows, config::SshAgentEndpoint::WindowsOpenSsh) => true,
+        _ => false,
+    }
+}
+
+/// Removes device-specific Agent endpoints that cannot work on the restore target.
+pub(crate) fn normalize_backup_sessions_for_platform(
+    sessions: &mut config::SessionsConfig,
+    platform: AgentEndpointTargetPlatform,
+) -> crate::error::AppResult<bool> {
+    let mut changed = false;
+    for connection in &mut sessions.connections {
+        #[allow(deprecated)]
+        {
+            changed |= config::migrate_legacy_ssh_agent_settings(connection);
+        }
+        let config::ConnectionType::Ssh {
+            auth_agent_endpoint,
+            agent_forwarding_config,
+            ..
+        } = &mut connection.config
+        else {
+            continue;
+        };
+
+        if let Some(endpoint) = auth_agent_endpoint {
+            config::validate_ssh_agent_endpoint_shape(endpoint)?;
+        }
+        if let Some(forwarding) = agent_forwarding_config {
+            config::validate_ssh_agent_forwarding_shape(forwarding)?;
+        }
+
+        let auth_uses_agent = connection
+            .auth
+            .as_ref()
+            .is_some_and(|auth| auth.mode == "agent");
+        if auth_agent_endpoint
+            .as_ref()
+            .is_some_and(|endpoint| !agent_endpoint_supported_on_platform(endpoint, platform))
+        {
+            *auth_agent_endpoint = auth_uses_agent.then_some(config::SshAgentEndpoint::Auto);
+            changed = true;
+        }
+
+        if let Some(forwarding) = agent_forwarding_config {
+            let original_len = forwarding.sources.external_agent_endpoints.len();
+            forwarding
+                .sources
+                .external_agent_endpoints
+                .retain(|endpoint| agent_endpoint_supported_on_platform(endpoint, platform));
+            changed |= original_len != forwarding.sources.external_agent_endpoints.len();
+
+            if forwarding.sources.external_agent_endpoints.is_empty()
+                && forwarding.sources.external_agent
+            {
+                forwarding.sources.external_agent = false;
+                changed = true;
+            }
+            if !forwarding.sources.external_agent && !forwarding.sources.stored_keys {
+                if forwarding.enabled {
+                    forwarding.enabled = false;
+                    changed = true;
+                }
+            }
+        }
+    }
+    Ok(changed)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PortableSnapshot {
     pub schema_version: u32,
@@ -43,6 +137,12 @@ pub struct PortableSnapshot {
     pub known_hosts: String,
     #[serde(default)]
     pub notes: config::NotesSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DecodedPortableSnapshot {
+    pub snapshot: PortableSnapshot,
+    pub source_payload_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -347,6 +447,7 @@ fn preserve_device_local_settings(
     transfer.recording_path = device_transfer.recording_path.clone();
 }
 
+#[allow(deprecated)]
 pub fn strip_device_local_sessions(sessions: &mut config::SessionsConfig) {
     for connection in &mut sessions.connections {
         match &mut connection.config {
@@ -364,12 +465,14 @@ pub fn strip_device_local_sessions(sessions: &mut config::SessionsConfig) {
                 port_name.clear();
             }
             config::ConnectionType::Ssh {
-                agent_endpoint,
-                agent_forwarding,
+                auth_agent_endpoint,
+                legacy_agent_forwarding,
+                agent_forwarding_config,
                 ..
             } => {
-                *agent_endpoint = config::SshAgentEndpoint::Auto;
-                *agent_forwarding = false;
+                *auth_agent_endpoint = None;
+                *legacy_agent_forwarding = None;
+                *agent_forwarding_config = None;
             }
             config::ConnectionType::Telnet { .. }
             | config::ConnectionType::Rdp { .. }
@@ -378,6 +481,7 @@ pub fn strip_device_local_sessions(sessions: &mut config::SessionsConfig) {
     }
 }
 
+#[allow(deprecated)]
 pub fn preserve_device_local_sessions(
     incoming: &mut config::SessionsConfig,
     current: &config::SessionsConfig,
@@ -421,18 +525,21 @@ pub fn preserve_device_local_sessions(
             }
             (
                 config::ConnectionType::Ssh {
-                    agent_endpoint,
-                    agent_forwarding,
+                    auth_agent_endpoint,
+                    legacy_agent_forwarding,
+                    agent_forwarding_config,
                     ..
                 },
                 config::ConnectionType::Ssh {
-                    agent_endpoint: device_agent_endpoint,
-                    agent_forwarding: device_agent_forwarding,
+                    auth_agent_endpoint: device_auth_agent_endpoint,
+                    legacy_agent_forwarding: device_legacy_agent_forwarding,
+                    agent_forwarding_config: device_agent_forwarding_config,
                     ..
                 },
             ) => {
-                *agent_endpoint = device_agent_endpoint.clone();
-                *agent_forwarding = *device_agent_forwarding;
+                *auth_agent_endpoint = device_auth_agent_endpoint.clone();
+                *legacy_agent_forwarding = *device_legacy_agent_forwarding;
+                *agent_forwarding_config = device_agent_forwarding_config.clone();
             }
             _ => {}
         }

@@ -734,7 +734,8 @@ mod tests {
     use crate::config::AiExecutionProfile;
 
     use super::{
-        SessionCommand, SessionHandle, SessionInfo, SessionManager, SessionType, normalize_cwd_path,
+        SessionCommand, SessionHandle, SessionInfo, SessionManager, SessionType,
+        normalize_cwd_path, now_session_started_at,
     };
     use std::fs;
     use std::sync::Arc;

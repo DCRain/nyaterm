@@ -194,6 +194,11 @@ fn get_master_key() -> AppResult<Key<Aes256Gcm>> {
     }
 }
 
+pub fn verify_master_key_token() -> AppResult<()> {
+    let _ = get_master_key()?;
+    Ok(())
+}
+
 /// Re-wraps the existing master key when the master password changes.
 ///
 /// `old_password` is the previous master password (`None` = home-path-based).

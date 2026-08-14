@@ -1,20 +1,35 @@
 pub fn decode_portable_snapshot(bytes: &[u8]) -> AppResult<PortableSnapshot> {
-    let payload = if is_zip_snapshot_payload(bytes) {
-        decode_compressed_snapshot_payload(bytes)?
-    } else {
-        bytes.to_vec()
-    };
-    decode_portable_snapshot_redb(&payload)
+    Ok(decode_portable_snapshot_with_source_hash(bytes)?.snapshot)
 }
 
-fn decode_portable_snapshot_redb(bytes: &[u8]) -> AppResult<PortableSnapshot> {
-    let snapshot = read_portable_snapshot_redb(bytes)?;
-    validate_portable_snapshot(&snapshot)?;
-    Ok(snapshot)
+pub(crate) fn decode_portable_snapshot_with_source_hash(
+    bytes: &[u8],
+) -> AppResult<DecodedPortableSnapshot> {
+    let payload = catch_unwind(AssertUnwindSafe(|| -> AppResult<Vec<u8>> {
+        if is_zip_snapshot_payload(bytes) {
+            decode_compressed_snapshot_payload(bytes)
+        } else {
+            Ok(bytes.to_vec())
+        }
+    }))
+    .unwrap_or_else(|_| {
+        Err(AppError::Storage(
+            "Portable snapshot compressed payload is corrupt or incomplete".to_string(),
+        ))
+    })?;
+    decode_portable_snapshot_redb_with_source_hash(&payload)
 }
 
-fn read_portable_snapshot_redb(bytes: &[u8]) -> AppResult<PortableSnapshot> {
-    catch_unwind(AssertUnwindSafe(|| -> AppResult<PortableSnapshot> {
+fn decode_portable_snapshot_redb_with_source_hash(
+    bytes: &[u8],
+) -> AppResult<DecodedPortableSnapshot> {
+    let decoded = read_portable_snapshot_redb(bytes)?;
+    validate_portable_snapshot(&decoded.snapshot)?;
+    Ok(decoded)
+}
+
+fn read_portable_snapshot_redb(bytes: &[u8]) -> AppResult<DecodedPortableSnapshot> {
+    catch_unwind(AssertUnwindSafe(|| -> AppResult<DecodedPortableSnapshot> {
         let temp = TempRedbFile::new("portable-snapshot-decode");
         fs::write(temp.path(), bytes)?;
         let db = Database::open(temp.path()).map_err(storage_error)?;
@@ -96,6 +111,38 @@ fn encode_portable_snapshot_redb(snapshot: &PortableSnapshot) -> AppResult<Vec<u
     }
 
     fs::read(temp.path()).map_err(Into::into)
+}
+
+#[cfg(test)]
+pub(crate) fn encode_v3_raw_snapshot_redb_for_test(
+    snapshot: &PortableSnapshot,
+    entities: &BTreeMap<String, String>,
+    payload_hash: String,
+) -> Vec<u8> {
+    let temp = TempRedbFile::new("portable-snapshot-raw-test");
+    {
+        let db = Database::create(temp.path()).expect("create db");
+        let txn = db.begin_write().expect("begin write");
+        {
+            let mut meta = txn.open_table(SNAPSHOT_META_TABLE).expect("open meta");
+            let mut meta_value = PortableSnapshotMeta::from(snapshot);
+            meta_value.payload_hash = payload_hash;
+            let meta_content = serde_json::to_string(&meta_value).expect("meta json");
+            meta.insert(SNAPSHOT_META_KEY, meta_content.as_str())
+                .expect("insert meta");
+        }
+        let mut table = txn
+            .open_table(SNAPSHOT_ENTITIES_TABLE)
+            .expect("open entities");
+        for (key, value) in entities {
+            table
+                .insert(key.as_str(), value.as_str())
+                .expect("insert entity");
+        }
+        drop(table);
+        txn.commit().expect("commit");
+    }
+    fs::read(temp.path()).expect("read redb")
 }
 
 fn encode_compressed_snapshot_payload(redb_payload: &[u8]) -> AppResult<Vec<u8>> {

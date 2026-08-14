@@ -1,9 +1,9 @@
 //! SSH Agent connection adapters.
 //!
 //! Authentication and forwarding each create an independent Agent stream so
-//! SSH channels never share a stateful AgentClient. Hardware keys remain
-//! managed by the external Agent; NyaTerm only speaks the SSH Agent protocol
-//! and never accesses USB or PKCS#11 devices directly.
+//! SSH channels never share a stateful `AgentClient`. Hardware keys remain
+//! managed by the external provider; `NyaTerm` only speaks the SSH Agent protocol
+//! and never accesses `USB` or `PKCS#11` devices directly.
 
 use crate::config::SshAgentEndpoint;
 use crate::error::{AppError, AppResult};
@@ -26,12 +26,16 @@ const WINDOWS_OPENSSH_AGENT_PIPE: &str = r"\\.\pipe\openssh-ssh-agent";
 
 /// Connect to the selected local SSH Agent and return its raw bidirectional stream.
 ///
-/// This function is called only after the remote side opens an Agent channel,
-/// so disabled forwarding never creates a local socket, named pipe, or Pageant
+/// The forwarding path calls this after the remote side opens an Agent channel,
+/// while SSH Agent authentication calls it directly. This keeps forwarding
+/// disabled from creating a local forwarding stream, socket, named pipe, or Pageant
 /// connection.
 pub(crate) async fn connect_agent_stream(
     endpoint: &SshAgentEndpoint,
 ) -> AppResult<DynamicAgentStream> {
+    // Re-validate at the runtime boundary so stale or externally imported configuration
+    // cannot bypass the save-time endpoint checks.
+    crate::config::validate_ssh_agent_endpoint(endpoint)?;
     match endpoint {
         SshAgentEndpoint::Auto => connect_auto().await,
         SshAgentEndpoint::Environment { variable } => {
@@ -39,10 +43,7 @@ pub(crate) async fn connect_agent_stream(
             {
                 let variable = normalize_environment_variable(variable)?;
                 let path = std::env::var_os(variable).ok_or_else(|| {
-                    AppError::Auth(format!(
-                        "SSH Agent environment variable '{}' is not set",
-                        variable
-                    ))
+                    AppError::Auth("SSH Agent environment variable is not set".to_string())
                 })?;
                 connect_unix_path(Path::new(&path)).await
             }
@@ -178,6 +179,11 @@ fn normalize_environment_variable(value: &str) -> AppResult<&str> {
     if variable.is_empty() {
         return Err(AppError::Config(
             "SSH Agent environment variable must not be empty".to_string(),
+        ));
+    }
+    if variable.contains('=') || variable.contains('\0') {
+        return Err(AppError::Config(
+            "SSH Agent environment variable must not contain '=' or NUL".to_string(),
         ));
     }
     Ok(variable)
@@ -367,5 +373,60 @@ mod tests {
     fn rejects_empty_agent_environment_variable() {
         assert!(normalize_environment_variable("$").is_err());
         assert!(normalize_environment_variable(" ").is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_agent_environment_variable_names() {
+        assert!(normalize_environment_variable("SSH=AUTH_SOCK").is_err());
+        assert!(normalize_environment_variable("SSH\0AUTH_SOCK").is_err());
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_integration_tests {
+    use super::{SshAgentEndpoint, connect_agent_client};
+
+    async fn assert_agent_lists_and_signs(endpoint: SshAgentEndpoint, label: &str) {
+        let mut client = connect_agent_client(&endpoint)
+            .await
+            .unwrap_or_else(|error| panic!("connect to {label}: {error}"));
+        let identity = client
+            .request_identities()
+            .await
+            .unwrap_or_else(|error| panic!("enumerate {label} identities: {error}"))
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("Windows CI should load one {label} identity"));
+        let signature = client
+            .sign_request(&identity, None, b"nyaterm-windows-agent-ci".to_vec())
+            .await
+            .unwrap_or_else(|error| panic!("sign through {label}: {error}"));
+
+        assert!(!signature.is_empty());
+    }
+
+    /// Exercises the real Windows OpenSSH Agent service prepared by the Windows CI job.
+    #[tokio::test]
+    #[ignore = "requires NYATERM_TEST_WINDOWS_OPENSSH_AGENT and a running ssh-agent service"]
+    async fn windows_openssh_agent_lists_and_signs_identity() {
+        assert_eq!(
+            std::env::var("NYATERM_TEST_WINDOWS_OPENSSH_AGENT").as_deref(),
+            Ok("1"),
+            "run this test through the SSH Agent Windows workflow"
+        );
+        assert_agent_lists_and_signs(SshAgentEndpoint::WindowsOpenSsh, "Windows OpenSSH Agent")
+            .await;
+    }
+
+    /// Exercises the real Pageant process prepared by the Windows CI job.
+    #[tokio::test]
+    #[ignore = "requires NYATERM_TEST_WINDOWS_PAGEANT and a running Pageant process"]
+    async fn windows_pageant_lists_and_signs_identity() {
+        assert_eq!(
+            std::env::var("NYATERM_TEST_WINDOWS_PAGEANT").as_deref(),
+            Ok("1"),
+            "run this test through the SSH Agent Windows workflow"
+        );
+        assert_agent_lists_and_signs(SshAgentEndpoint::Pageant, "Pageant").await;
     }
 }

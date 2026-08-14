@@ -1,4 +1,5 @@
 import type { TFunction } from "i18next";
+import type { CSSProperties } from "react";
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useApp } from "@/context/AppContext";
 import { buildGroupPath, getConnectionsForAssetGroup, getGroupPathLabel } from "@/lib/assetGroups";
@@ -33,11 +34,17 @@ import type {
 
 interface AssetViewProps {
   t: TFunction;
+  transparentBackground?: boolean;
   onConnectConnection: (connection: SavedConnection) => Promise<void> | void;
   onEditConnection: (connection: SavedConnection) => void;
 }
 
-export default function AssetView({ t, onConnectConnection, onEditConnection }: AssetViewProps) {
+export default function AssetView({
+  t,
+  transparentBackground = false,
+  onConnectConnection,
+  onEditConnection,
+}: AssetViewProps) {
   const { appSettings, savedConnections, savedGroups, refreshConnections, updateUi } = useApp();
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
@@ -109,6 +116,16 @@ export default function AssetView({ t, onConnectConnection, onEditConnection }: 
     () => sortAssetRecords(filteredRecords, sortState, labels),
     [filteredRecords, labels, sortState],
   );
+  const surfaceStyle = useMemo(
+    () =>
+      ({
+        backgroundColor: transparentBackground ? "transparent" : "var(--df-bg-terminal)",
+        "--nyaterm-asset-sticky-bg": transparentBackground
+          ? "transparent"
+          : "var(--df-bg-terminal)",
+      }) as CSSProperties,
+    [transparentBackground],
+  );
 
   const toggleFilter = useCallback((filter: AssetFilterKey) => {
     setFilters((current) => {
@@ -147,7 +164,7 @@ export default function AssetView({ t, onConnectConnection, onEditConnection }: 
   return (
     <div
       className="@container relative flex h-full min-h-0 flex-col overflow-hidden"
-      style={{ backgroundColor: "var(--df-bg-terminal)" }}
+      style={surfaceStyle}
       data-asset-view
     >
       <AssetToolbar

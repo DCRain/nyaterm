@@ -193,8 +193,8 @@ export interface SshConfig {
   backspace_mode?: string;
   x11_forwarding?: boolean;
   x11_display?: string;
-  agent_endpoint?: SshAgentEndpoint;
-  agent_forwarding?: boolean;
+  auth_agent_endpoint?: SshAgentEndpoint;
+  agent_forwarding_config?: SshAgentForwardingConfig;
   proxy?: ProxySettings | null;
   proxy_jump?: SshConfig | null;
   post_login?: { command: string; delay_ms: number } | null;
@@ -212,6 +212,43 @@ export type SshAgentEndpoint =
   | { type: "unix_socket"; path: string }
   | { type: "pageant" }
   | { type: "windows_open_ssh" };
+
+export interface SshAgentForwardingSources {
+  external_agent: boolean;
+  external_agent_endpoints: SshAgentEndpoint[];
+  stored_keys: boolean;
+}
+
+export type SshAgentForwardingPolicy =
+  | { mode: "allowlist"; fingerprints: string[] }
+  | { mode: "all" };
+
+export interface SshAgentForwardingConfig {
+  enabled: boolean;
+  sources: SshAgentForwardingSources;
+  policy: SshAgentForwardingPolicy;
+}
+
+export interface SshAgentForwardingIdentity {
+  fingerprint: string;
+  comment: string;
+  source: "external_agent" | "stored_key";
+  custom_endpoint_index?: number;
+}
+
+export type SshAgentForwardingEndpointErrorCode = "connect_failed" | "identity_enumeration_failed";
+
+export interface SshAgentForwardingEndpointError {
+  custom_endpoint_index: number;
+  endpoint_type: SshAgentEndpoint["type"];
+  code: SshAgentForwardingEndpointErrorCode;
+}
+
+export interface SshAgentForwardingIdentityResponse {
+  identities: SshAgentForwardingIdentity[];
+  endpoint_errors: SshAgentForwardingEndpointError[];
+  truncated: boolean;
+}
 
 export type SshAuth =
   | { type: "none" }
@@ -468,10 +505,10 @@ export interface SavedConnection {
   auto_login?: TelnetAutoLoginConfig;
   /** SSH-only: enables X11 forwarding for remote graphical applications. */
   x11_forwarding?: boolean;
-  /** SSH-only: local Agent endpoint used for authentication and forwarding. */
-  agent_endpoint?: SshAgentEndpoint;
-  /** SSH-only: request server-side SSH Agent forwarding for the interactive shell. */
-  agent_forwarding?: boolean;
+  /** SSH-only: local Agent endpoint used for authentication. Forwarding endpoints are configured separately. */
+  auth_agent_endpoint?: SshAgentEndpoint;
+  /** SSH-only: forwarding sources and fingerprint policy. */
+  agent_forwarding_config?: SshAgentForwardingConfig;
   /** Per-connection encoding override. Empty string means follow global setting. */
   encoding?: string;
   /** RDP-only: optional Windows/domain part for authentication. */
