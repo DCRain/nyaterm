@@ -81,8 +81,9 @@ mod tests {
                 username: "u".into(),
                 backspace_mode: "del".into(),
                 x11_forwarding: false,
-                agent_endpoint: Default::default(),
-                agent_forwarding: false,
+                auth_agent_endpoint: None,
+                legacy_agent_forwarding: None,
+                agent_forwarding_config: None,
                 encoding: String::new(),
             })
             .is_err()

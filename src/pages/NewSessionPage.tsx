@@ -550,8 +550,8 @@ export default function NewSessionPage() {
     setPostLoginDelayMs(DEFAULT_POST_LOGIN_DELAY_MS);
     setSshBackspaceMode("del");
     setX11Forwarding(false);
-    setAgentEndpoint({ type: "auto" });
-    setAgentForwarding(false);
+    setAuthAgentEndpoint({ type: "auto" });
+    setAgentForwardingConfig({ ...DEFAULT_SSH_AGENT_FORWARDING_CONFIG });
     setSshAlgorithms({ ...DEFAULT_SSH_ALGORITHMS });
     setSshProfile("standard");
     setSshTerminalType("default");

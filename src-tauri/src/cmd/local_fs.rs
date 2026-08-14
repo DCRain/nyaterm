@@ -2,7 +2,7 @@ use crate::core::sftp::{
     DirectoryChild, FileEntry, FileProperties, RemoteBinaryFile, RemoteTextFile,
     WriteRemoteTextResult,
 };
-use crate::core::{SessionManager, SessionType};
+use crate::core::{SessionManager};
 use crate::error::{AppError, AppResult};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

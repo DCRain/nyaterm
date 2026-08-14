@@ -1,7 +1,7 @@
 use crate::config::{self, ConnectionAuth, ConnectionType};
 use crate::core::rdp_clipboard_files::{
     OfferedLocalFile, build_offered_local_files, cliprdr_range_request_size, read_offered_file_chunk,
-    sanitize_remote_file_name, MAX_CHUNK_BYTES, MAX_FILE_BYTES,
+    sanitize_remote_file_name, MAX_FILE_BYTES,
 };
 use crate::core::remote_desktop::frame::{
     RemoteDesktopFramePatch, RemoteDesktopPixelFormat, encode_frame_patch,
@@ -1993,7 +1993,7 @@ impl RdpClipboardBackend {
                     .emit_remote_files_failed("Remote file name was rejected");
                 return;
             };
-            let mut target = remote_clipboard_target_path(&download.staging_dir, &file_desc, safe_name);
+            let target = remote_clipboard_target_path(&download.staging_dir, &file_desc, safe_name);
             if is_directory_descriptor(&file_desc) {
                 if let Err(err) = fs::create_dir_all(&target) {
                     tracing::warn!(error = %err, "Failed to create remote RDP clip directory");
@@ -2045,7 +2045,7 @@ impl RdpClipboardBackend {
             download.current_file = Some(file);
 
             if size == 0 {
-                if let Some(mut file) = download.current_file.take() {
+                if let Some(file) = download.current_file.take() {
                     let _ = file.sync_all();
                 }
                 if let Some(path) = download.current_path.take() {
@@ -2146,7 +2146,7 @@ impl RdpClipboardBackend {
             return;
         }
 
-        if let Some(mut file) = download.current_file.take() {
+        if let Some(file) = download.current_file.take() {
             if let Err(err) = file.sync_all() {
                 tracing::warn!(error = %err, "Failed to flush remote RDP clip file");
                 drop(guard);

@@ -772,6 +772,7 @@ fn respond_to_connect_time_autodetect(
     }
 }
 
+#[allow(single_use_lifetimes)]
 fn create_gcc_blocks<'a>(
     config: &Config,
     selected_protocol: nego::SecurityProtocol,
