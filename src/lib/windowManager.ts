@@ -66,6 +66,7 @@ const pendingChildWindowOpens = new Map<string, PendingChildWindowOpen>();
 const childWindowCommands = new ChildWindowCommandQueue();
 const childWindowTokens = new Map<string, string>();
 const childWindowShellWaiters = new Map<string, ChildWindowLifecycleWaiter>();
+const failedChildWindowClosures = new Map<string, string>();
 let childWindowLifecycleListenerPromise: Promise<void> | undefined;
 let ownerMainWindowLabel = MAIN_WINDOW_LABEL;
 let modalGroupRaiseInFlight = false;
@@ -493,6 +494,27 @@ function dispatchChildWindowCommand(
   emitChildWindowCommands(childWindowCommands.dispatch(label, event, payload));
 }
 
+async function closeFailedChildWindow(label: string, token: string) {
+  failedChildWindowClosures.set(label, token);
+  try {
+    const win = await WebviewWindow.getByLabel(label).catch(() => null);
+    await win?.close().catch((error) => {
+      logger.warn({
+        domain: "window.lifecycle",
+        event: "child_failed_window_close_failed",
+        message: "Failed to close a child window after load failure",
+        data: { label },
+        error,
+      });
+    });
+  } finally {
+    if (failedChildWindowClosures.get(label) === token) {
+      failedChildWindowClosures.delete(label);
+    }
+    clearChildWindowLifecycle(label, token, true);
+  }
+}
+
 function handleChildWindowLifecycle(payload: ChildWindowLifecyclePayload) {
   if (!payload.token || childWindowTokens.get(payload.label) !== payload.token) return;
 
@@ -514,12 +536,17 @@ function handleChildWindowLifecycle(payload: ChildWindowLifecyclePayload) {
       break;
     case "load-failed":
       childWindowCommands.markFailed(payload.label, payload.token);
+      {
+        const waiter = childWindowShellWaiters.get(payload.label);
+        if (waiter?.token === payload.token) waiter.fail();
+      }
       logger.warn({
         domain: "window.lifecycle",
         event: "child_load_failed",
         message: "Child window failed to finish loading",
         data: { label: payload.label, stage: payload.stage },
       });
+      void closeFailedChildWindow(payload.label, payload.token);
       break;
   }
 }
@@ -659,12 +686,21 @@ async function openChildWindowInternal(opts: ChildWindowOptions) {
   const isModal = kind === "modal";
   const existing = await WebviewWindow.getByLabel(opts.label);
   if (existing) {
-    let shownMs: number | undefined;
-    const revealed = await revealChildWindow(existing, opts, isModal, false, () => {
-      shownMs = Math.round(performance.now() - startedAt);
-    });
-    logTiming({ existing: true, shown_ms: shownMs });
-    return revealed;
+    const existingToken = childWindowTokens.get(opts.label);
+    const existingFailed =
+      existingToken !== undefined &&
+      (childWindowCommands.isFailed(opts.label, existingToken) ||
+        failedChildWindowClosures.get(opts.label) === existingToken);
+    if (existingFailed) {
+      await closeFailedChildWindow(opts.label, existingToken);
+    } else {
+      let shownMs: number | undefined;
+      const revealed = await revealChildWindow(existing, opts, isModal, false, () => {
+        shownMs = Math.round(performance.now() - startedAt);
+      });
+      logTiming({ existing: true, shown_ms: shownMs });
+      return revealed;
+    }
   }
 
   const readyToken = createChildWindowReadyToken();

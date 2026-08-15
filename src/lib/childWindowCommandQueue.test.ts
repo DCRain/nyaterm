@@ -75,4 +75,45 @@ describe("ChildWindowCommandQueue", () => {
       queue.dispatch("settings", CHILD_WINDOW_COMMANDS.settingsOpenTab, { tab: "general" }),
     ).toEqual([{ event: CHILD_WINDOW_COMMANDS.settingsOpenTab, payload: { tab: "general" } }]);
   });
+
+  it("marks a matching token as failed and drops queued commands", () => {
+    const queue = new ChildWindowCommandQueue();
+    queue.register("settings", "token", CHILD_WINDOW_COMMANDS.settingsOpenTab);
+    queue.dispatch("settings", CHILD_WINDOW_COMMANDS.settingsOpenTab, { tab: "appearance" });
+
+    expect(queue.markFailed("settings", "token")).toBe(true);
+    expect(queue.isFailed("settings", "token")).toBe(true);
+    expect(
+      queue.dispatch("settings", CHILD_WINDOW_COMMANDS.settingsOpenTab, { tab: "general" }),
+    ).toEqual([]);
+    expect(queue.markReady("settings", "token", CHILD_WINDOW_COMMANDS.settingsOpenTab)).toEqual([]);
+  });
+
+  it("recovers from a failed state when a new token is registered", () => {
+    const queue = new ChildWindowCommandQueue();
+    queue.register("settings", "token-old", CHILD_WINDOW_COMMANDS.settingsOpenTab);
+    queue.dispatch("settings", CHILD_WINDOW_COMMANDS.settingsOpenTab, { tab: "appearance" });
+    queue.markFailed("settings", "token-old");
+
+    queue.register("settings", "token-new", CHILD_WINDOW_COMMANDS.settingsOpenTab);
+    expect(queue.isFailed("settings", "token-new")).toBe(false);
+    expect(
+      queue.dispatch("settings", CHILD_WINDOW_COMMANDS.settingsOpenTab, { tab: "general" }),
+    ).toEqual([]);
+    expect(queue.markReady("settings", "token-new", CHILD_WINDOW_COMMANDS.settingsOpenTab)).toEqual([
+      { event: CHILD_WINDOW_COMMANDS.settingsOpenTab, payload: { tab: "general" } },
+    ]);
+  });
+
+  it("ignores a failed event from a stale WebView token", () => {
+    const queue = new ChildWindowCommandQueue();
+    queue.register("settings", "token-new", CHILD_WINDOW_COMMANDS.settingsOpenTab);
+    queue.dispatch("settings", CHILD_WINDOW_COMMANDS.settingsOpenTab, { tab: "appearance" });
+
+    expect(queue.markFailed("settings", "token-old")).toBe(false);
+    expect(queue.isFailed("settings")).toBe(false);
+    expect(queue.markReady("settings", "token-new", CHILD_WINDOW_COMMANDS.settingsOpenTab)).toEqual([
+      { event: CHILD_WINDOW_COMMANDS.settingsOpenTab, payload: { tab: "appearance" } },
+    ]);
+  });
 });

@@ -8,7 +8,7 @@ export interface ChildWindowCommandEnvelope {
 interface ChildWindowCommandState {
   token: string;
   expectedEvent: ChildWindowCommandName;
-  ready: boolean;
+  status: "loading" | "ready" | "failed";
   pending: ChildWindowCommandEnvelope[];
 }
 
@@ -26,7 +26,7 @@ export class ChildWindowCommandQueue {
     this.states.set(label, {
       token,
       expectedEvent,
-      ready: false,
+      status: "loading",
       pending: [],
     });
   }
@@ -38,9 +38,10 @@ export class ChildWindowCommandQueue {
   ): ChildWindowCommandEnvelope[] {
     const command = { event, payload };
     const state = this.states.get(label);
-    if (!state || state.expectedEvent !== event || state.ready) {
+    if (!state || state.expectedEvent !== event || state.status === "ready") {
       return [command];
     }
+    if (state.status === "failed") return [];
 
     state.pending.push(command);
     return [];
@@ -53,20 +54,32 @@ export class ChildWindowCommandQueue {
   ): ChildWindowCommandEnvelope[] {
     const state = this.states.get(label);
     if (!state || state.token !== token || state.expectedEvent !== event) return [];
-    state.ready = true;
+    state.status = "ready";
     return state.pending.splice(0);
   }
 
   markLoading(label: string, token: string) {
     const state = this.states.get(label);
     if (!state || state.token !== token) return false;
+    if (state.status === "failed") return false;
 
-    state.ready = false;
+    state.status = "loading";
     return true;
   }
 
   markFailed(label: string, token: string) {
-    return this.markLoading(label, token);
+    const state = this.states.get(label);
+    if (!state || state.token !== token) return false;
+
+    state.status = "failed";
+    state.pending = [];
+    return true;
+  }
+
+  isFailed(label: string, token?: string) {
+    const state = this.states.get(label);
+    if (!state || state.status !== "failed") return false;
+    return token === undefined || state.token === token;
   }
 
   clear(label: string) {
