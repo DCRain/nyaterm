@@ -452,6 +452,7 @@ export default function SettingsPage() {
       <ChildWindowHeader
         title={t("settings.title")}
         icon={<MdSettings className="text-base" />}
+        macOSDragOnly
         onClose={requestClose}
       />
 
