@@ -418,6 +418,7 @@ function App() {
     setActivePane,
     addTab,
     addPendingTab,
+    openWorkbenchTab,
     updateTabSession,
     markTabConnectionFailed,
     updatePaneSession,
@@ -901,6 +902,7 @@ function App() {
               name: connName,
               type: sessionType,
               connectionId,
+              view: undefined,
               display: getRemoteDesktopPaneDisplay(conn),
             });
           } else {
@@ -1140,6 +1142,60 @@ function App() {
     tabsRef.current = tabs;
   }, [tabs]);
 
+  const getActiveWorkbenchTarget = useCallback(() => {
+    if (!activeTabId) return null;
+    const tab = tabsRef.current.find((item) => item.id === activeTabId);
+    if (!tab) return null;
+    const pane = getActivePane(tab);
+    if (!pane || pane.view !== "workbench") return null;
+    return { tabId: tab.id, paneId: pane.id };
+  }, [activeTabId]);
+
+  const beginPendingSession = useCallback(
+    (
+      name: string,
+      type: WorkspaceSessionType,
+      connectionId?: string,
+      options?: { view?: SessionPane["view"] },
+      paneOverrides?: Partial<SessionPane> & {
+        display?: Extract<SessionPane, { paneKind: "remote-desktop" }>["display"];
+      },
+    ): { tabId: string; paneId?: string; createRequestId: string } => {
+      const workbench = getActiveWorkbenchTarget();
+      if (workbench) {
+        const createRequestId = markPaneConnecting(workbench.tabId, workbench.paneId, {
+          name,
+          type,
+          connectionId,
+          view: options?.view,
+          temporaryConfig: paneOverrides?.temporaryConfig,
+          display: paneOverrides?.display,
+        });
+        if (createRequestId) {
+          return {
+            tabId: workbench.tabId,
+            paneId: workbench.paneId,
+            createRequestId,
+          };
+        }
+      }
+
+      const pending = addPendingTab(
+        name,
+        type,
+        connectionId,
+        undefined,
+        options?.view ? { view: options.view } : undefined,
+        paneOverrides,
+      );
+      return {
+        tabId: pending.tabId,
+        createRequestId: pending.createRequestId,
+      };
+    },
+    [addPendingTab, getActiveWorkbenchTarget, markPaneConnecting],
+  );
+
   useEffect(() => {
     terminalWindowsRef.current = terminalWindows;
   }, [terminalWindows]);
@@ -1167,18 +1223,31 @@ function App() {
   }, [windowTitle]);
 
   const handleNewSession = useCallback((parentGroupId?: string) => {
-    openNewSession(
-      undefined,
-      undefined,
-      parentGroupId ? { initialGroupId: parentGroupId } : undefined,
-    );
-  }, []);
+    const workbench = getActiveWorkbenchTarget();
+    openNewSession(undefined, undefined, {
+      ...(parentGroupId ? { initialGroupId: parentGroupId } : {}),
+      ...(workbench
+        ? { sourceTabId: workbench.tabId, sourcePaneId: workbench.paneId }
+        : {}),
+    });
+  }, [getActiveWorkbenchTarget]);
+
+  const handleOpenWorkbench = useCallback(() => {
+    updateUi({ start_workspace_mode: "workbench" });
+    openWorkbenchTab(t("terminal.openWorkbench"));
+  }, [openWorkbenchTab, t, updateUi]);
 
   const handleEditConnection = useCallback(
     (conn: SavedConnection, autoConnect?: boolean, target?: NewSessionTarget) => {
-      openNewSession(conn.id, autoConnect, target);
+      const workbench = getActiveWorkbenchTarget();
+      openNewSession(conn.id, autoConnect, {
+        ...target,
+        ...(workbench && !target?.sourceTabId
+          ? { sourceTabId: workbench.tabId, sourcePaneId: workbench.paneId }
+          : {}),
+      });
     },
-    [],
+    [getActiveWorkbenchTarget],
   );
 
   const maybePromptConnectionEdit = useCallback(
@@ -1234,28 +1303,34 @@ function App() {
         return;
       }
 
-      const pending = addPendingTab(
+      const pending = beginPendingSession(
         connection.name,
         getConnectionSessionType(connection),
         connection.id,
         undefined,
-        undefined,
         { display: getRemoteDesktopPaneDisplay(connection) },
       );
-      const { tabId, createRequestId } = pending;
+      const { tabId, paneId, createRequestId } = pending;
 
       try {
         const sessionId = await createSessionForConnection(connection, createRequestId);
-        if (!hasTab(tabId)) {
+        if (paneId ? !hasPane(tabId, paneId) : !hasTab(tabId)) {
           await closeStaleCreatedSession(sessionId);
           return;
         }
-        updateTabSession(tabId, sessionId);
+        if (paneId) {
+          updatePaneSession(tabId, paneId, sessionId);
+        } else {
+          updateTabSession(tabId, sessionId);
+        }
         focusTerminalSession(sessionId);
         recordRecentConnection(connection.id);
         updateAutoIconForSessionStart(connection.id, sessionId);
       } catch (error) {
-        if (isSessionCreationCancelled(error) || !hasTab(tabId)) {
+        if (
+          isSessionCreationCancelled(error) ||
+          (paneId ? !hasPane(tabId, paneId) : !hasTab(tabId))
+        ) {
           return;
         }
         const errorMessage = getErrorMessage(error);
@@ -1266,21 +1341,29 @@ function App() {
           ids: { connection_id: connection.id },
           error,
         });
-        markTabConnectionFailed(tabId, errorMessage);
+        if (paneId) {
+          markPaneConnectionFailed(tabId, paneId, errorMessage);
+        } else {
+          markTabConnectionFailed(tabId, errorMessage);
+        }
         maybePromptConnectionEdit(connection.id, errorMessage, {
           sourceTabId: tabId,
+          sourcePaneId: paneId,
         });
         toast.error(t("savedConnections.connectionFailed", { error: errorMessage }));
       }
     },
     [
-      addPendingTab,
+      beginPendingSession,
+      hasPane,
       hasTab,
+      markPaneConnectionFailed,
       markTabConnectionFailed,
       maybePromptConnectionEdit,
       recordRecentConnection,
       t,
       updateAutoIconForSessionStart,
+      updatePaneSession,
       updateTabSession,
       updateUi,
     ],
@@ -1298,23 +1381,28 @@ function App() {
       }
 
       const tabName = t("sftpWorkspace.tabTitle", { name: connection.name });
-      const pending = addPendingTab(tabName, "SSH", connection.id, undefined, {
-        view: "sftp",
-      });
-      const { tabId, createRequestId } = pending;
+      const pending = beginPendingSession(tabName, "SSH", connection.id, { view: "sftp" });
+      const { tabId, paneId, createRequestId } = pending;
 
       try {
         const sessionId = await createSessionForConnection(connection, createRequestId);
-        if (!hasTab(tabId)) {
+        if (paneId ? !hasPane(tabId, paneId) : !hasTab(tabId)) {
           await closeStaleCreatedSession(sessionId);
           return;
         }
-        updateTabSession(tabId, sessionId);
+        if (paneId) {
+          updatePaneSession(tabId, paneId, sessionId);
+        } else {
+          updateTabSession(tabId, sessionId);
+        }
         recordRecentConnection(connection.id);
         updateUi({ saved_connections_last_opened_connection_id: connection.id });
         updateAutoIconForSessionStart(connection.id, sessionId);
       } catch (error) {
-        if (isSessionCreationCancelled(error) || !hasTab(tabId)) {
+        if (
+          isSessionCreationCancelled(error) ||
+          (paneId ? !hasPane(tabId, paneId) : !hasTab(tabId))
+        ) {
           return;
         }
         const errorMessage = getErrorMessage(error);
@@ -1325,19 +1413,29 @@ function App() {
           ids: { connection_id: connection.id },
           error,
         });
-        markTabConnectionFailed(tabId, errorMessage);
-        maybePromptConnectionEdit(connection.id, errorMessage, { sourceTabId: tabId });
+        if (paneId) {
+          markPaneConnectionFailed(tabId, paneId, errorMessage);
+        } else {
+          markTabConnectionFailed(tabId, errorMessage);
+        }
+        maybePromptConnectionEdit(connection.id, errorMessage, {
+          sourceTabId: tabId,
+          sourcePaneId: paneId,
+        });
         toast.error(t("savedConnections.connectionFailed", { error: errorMessage }));
       }
     },
     [
-      addPendingTab,
+      beginPendingSession,
+      hasPane,
       hasTab,
+      markPaneConnectionFailed,
       markTabConnectionFailed,
       maybePromptConnectionEdit,
       recordRecentConnection,
       t,
       updateAutoIconForSessionStart,
+      updatePaneSession,
       updateTabSession,
       updateUi,
     ],
@@ -1413,26 +1511,32 @@ function App() {
 
   const connectTemporaryConnection = useCallback(
     async (config: TemporaryLinkConfig) => {
-      const pending = addPendingTab(
+      const pending = beginPendingSession(
         config.name,
         getTemporaryLinkSessionType(config),
         undefined,
         undefined,
-        undefined,
         { temporaryConfig: config },
       );
-      const { tabId, createRequestId } = pending;
+      const { tabId, paneId, createRequestId } = pending;
 
       try {
         const sessionId = await createTemporarySession(config, createRequestId);
-        if (!hasTab(tabId)) {
+        if (paneId ? !hasPane(tabId, paneId) : !hasTab(tabId)) {
           await closeStaleCreatedSession(sessionId);
           return;
         }
-        updateTabSession(tabId, sessionId);
+        if (paneId) {
+          updatePaneSession(tabId, paneId, sessionId);
+        } else {
+          updateTabSession(tabId, sessionId);
+        }
         focusTerminalSession(sessionId);
       } catch (error) {
-        if (isSessionCreationCancelled(error) || !hasTab(tabId)) {
+        if (
+          isSessionCreationCancelled(error) ||
+          (paneId ? !hasPane(tabId, paneId) : !hasTab(tabId))
+        ) {
           return;
         }
         const errorMessage = getErrorMessage(error);
@@ -1442,11 +1546,24 @@ function App() {
           message: "Temporary connection failed",
           error,
         });
-        markTabConnectionFailed(tabId, errorMessage);
+        if (paneId) {
+          markPaneConnectionFailed(tabId, paneId, errorMessage);
+        } else {
+          markTabConnectionFailed(tabId, errorMessage);
+        }
         toast.error(t("savedConnections.connectionFailed", { error: errorMessage }));
       }
     },
-    [addPendingTab, hasTab, markTabConnectionFailed, t, updateTabSession],
+    [
+      beginPendingSession,
+      hasPane,
+      hasTab,
+      markPaneConnectionFailed,
+      markTabConnectionFailed,
+      t,
+      updatePaneSession,
+      updateTabSession,
+    ],
   );
 
   const chooseExternalConnection = useCallback(
@@ -2062,10 +2179,13 @@ function App() {
     async (
       pane: Pick<
         SessionPane,
-        "connecting" | "connectError" | "sessionId" | "createRequestId" | "type"
+        "connecting" | "connectError" | "sessionId" | "createRequestId" | "type" | "view"
       >,
     ) => {
       if (pane.connecting) {
+        if (pane.view === "workbench") {
+          return true;
+        }
         if (pane.type === "RDP") {
           await invoke("close_rdp_session", {
             sessionId: pane.sessionId,
@@ -2097,6 +2217,10 @@ function App() {
       }
 
       if (pane.connectError) {
+        return true;
+      }
+
+      if (pane.view === "workbench") {
         return true;
       }
 
@@ -3767,16 +3891,35 @@ function App() {
       const tabName = shell.elevated
         ? `${shell.name} (${t("localShellPicker.admin")})`
         : shell.name || t("menu.newLocalTerminal");
+      const pending = beginPendingSession(tabName, "Local");
+      const { tabId, paneId, createRequestId } = pending;
+
       invoke<string>("create_local_session", {
         shellPath: shell.shellPath,
         shellArgs: shell.shellArgs,
         name: tabName,
         elevated: shell.elevated,
+        createRequestId,
       })
-        .then((sessionId) => {
-          addTab(sessionId, tabName, "Local");
+        .then(async (sessionId) => {
+          if (paneId ? !hasPane(tabId, paneId) : !hasTab(tabId)) {
+            await closeStaleCreatedSession(sessionId);
+            return;
+          }
+          if (paneId) {
+            updatePaneSession(tabId, paneId, sessionId);
+          } else {
+            updateTabSession(tabId, sessionId);
+          }
+          focusTerminalSession(sessionId);
         })
-        .catch((e) =>
+        .catch((e) => {
+          if (isSessionCreationCancelled(e)) return;
+          if (paneId) {
+            markPaneConnectionFailed(tabId, paneId, getErrorMessage(e));
+          } else if (hasTab(tabId)) {
+            markTabConnectionFailed(tabId, getErrorMessage(e));
+          }
           logger.error({
             domain: "session.lifecycle",
             event: "session.create_failed",
@@ -3787,10 +3930,19 @@ function App() {
               elevated: shell.elevated,
             },
             error: e,
-          }),
-        );
+          });
+        });
     },
-    [addTab, t],
+    [
+      beginPendingSession,
+      hasPane,
+      hasTab,
+      markPaneConnectionFailed,
+      markTabConnectionFailed,
+      t,
+      updatePaneSession,
+      updateTabSession,
+    ],
   );
 
   const handleQuickSwitchSession = useCallback(
@@ -4048,6 +4200,7 @@ function App() {
                   onTabChange: handleSelectHeaderTab,
                   onTabClose: handleCloseWorkspaceTab,
                   onAddTab: handleAddHeaderTab,
+                  onOpenWorkbench: handleOpenWorkbench,
                   onConnectConnection: handleConnectConnectionFromHeader,
                   onSelectLocalShell: handleSelectLocalShell,
                   onDuplicateSession: handleDuplicateSession,

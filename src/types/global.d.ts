@@ -65,7 +65,7 @@ export interface SessionInfo {
 }
 
 /** Workspace leaf content mode. Default / omitted is the terminal. */
-export type SessionPaneView = "terminal" | "sftp";
+export type SessionPaneView = "terminal" | "sftp" | "workbench";
 
 /** Shared fields for one session-like leaf inside a workspace tab. */
 export interface WorkspacePaneBase {

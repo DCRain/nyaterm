@@ -22,6 +22,7 @@ import {
   MdDns,
   MdErrorOutline,
   MdExpandMore,
+  MdApps,
   MdFolder,
   MdHistory,
   MdLock,
@@ -70,6 +71,7 @@ interface TabBarProps {
   onTabChange: (tabId: string) => void;
   onTabClose: (tab: Tab) => void | Promise<void>;
   onAddTab: () => void;
+  onOpenWorkbench: () => void;
   onConnectConnection: (connection: SavedConnection) => void | Promise<void>;
   onSelectLocalShell: (shell: LocalShellSelection) => void;
   onDuplicateSession: (tab: Tab) => void | Promise<void>;
@@ -173,6 +175,7 @@ function canSpawnSessionFromTab(tab: Tab): boolean {
   return (
     !!pane &&
     pane.paneKind === "terminal" &&
+    pane.view !== "workbench" &&
     (pane.type === "Local" || !!pane.connectionId || hasMatchingTemporaryConfig(pane))
   );
 }
@@ -270,6 +273,7 @@ function TabBar({
   onTabChange,
   onTabClose,
   onAddTab,
+  onOpenWorkbench,
   onConnectConnection,
   onSelectLocalShell,
   onDuplicateSession,
@@ -650,6 +654,10 @@ function TabBar({
     }
   }, [closingAllSessions, onCloseAll]);
 
+  const handleOpenWorkbench = useCallback(() => {
+    onOpenWorkbench();
+  }, [onOpenWorkbench]);
+
   useLayoutEffect(() => {
     const listener = (event: Event) => {
       const detail = (
@@ -995,6 +1003,10 @@ function TabBar({
 
     if (pane?.view === "sftp") {
       return <MdFolder className="text-sm shrink-0" style={{ color: "var(--df-primary)" }} />;
+    }
+
+    if (pane?.view === "workbench") {
+      return <MdApps className="text-sm shrink-0" style={{ color: "var(--df-primary)" }} />;
     }
 
     const conn = pane?.connectionId
@@ -1521,6 +1533,10 @@ function TabBar({
           </Tooltip>
           <DropdownMenuContent align="start" className="min-w-[260px] max-w-[360px]">
             <DropdownMenuGroup>
+              <DropdownMenuItem onSelect={() => handleOpenWorkbench()}>
+                <MdApps className="text-sm text-muted-foreground" />
+                {t("terminal.openWorkbench")}
+              </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => onAddTab()}>
                 <MdAdd className="text-sm text-muted-foreground" />
                 {t("terminal.newSession")}

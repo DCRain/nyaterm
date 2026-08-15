@@ -8,7 +8,9 @@ import {
   useRef,
   useState,
 } from "react";
+import type { ComponentProps } from "react";
 import ResizeHandle from "@/components/layout/ResizeHandle";
+import type StartWorkspace from "@/components/app/start-workspace/StartWorkspace";
 import {
   isTerminalWindowSplit,
   type SplitEdgeDirection,
@@ -23,6 +25,8 @@ import type {
 } from "@/types/global";
 import PaneWorkspace from "./PaneWorkspace";
 import DropZoneOverlay, { type DropZone } from "./TabDockDropOverlay";
+
+type WorkbenchRenderProps = ComponentProps<typeof StartWorkspace>;
 
 interface LeafContentRect {
   left: number;
@@ -62,6 +66,7 @@ interface TabWindowsWorkspaceProps {
   recordingStatuses?: RecordingStatus[];
   onToggleSessionRecording?: (sessionId: string, mode?: RecordingMode) => Promise<void> | void;
   onSaveSessionTranscript?: (sessionId: string, sessionName?: string) => Promise<void> | void;
+  workbench?: WorkbenchRenderProps;
 }
 
 type LeafContentRectChange = (leafId: string, rect: LeafContentRect | null) => void;
@@ -333,6 +338,7 @@ function TerminalContentHost({
   recordingStatuses,
   onToggleSessionRecording,
   onSaveSessionTranscript,
+  workbench,
   onLeafDragOver,
   onLeafDragLeave,
   onLeafDrop,
@@ -350,6 +356,7 @@ function TerminalContentHost({
   recordingStatuses?: TabWindowsWorkspaceProps["recordingStatuses"];
   onToggleSessionRecording?: TabWindowsWorkspaceProps["onToggleSessionRecording"];
   onSaveSessionTranscript?: TabWindowsWorkspaceProps["onSaveSessionTranscript"];
+  workbench?: WorkbenchRenderProps;
   onLeafDragOver: LeafDragHandler;
   onLeafDragLeave: LeafDragHandler;
   onLeafDrop: LeafDragHandler;
@@ -379,6 +386,7 @@ function TerminalContentHost({
             <PaneWorkspace
               tab={tab}
               visible={visible}
+              workbench={workbench}
               onActivatePane={(paneId) => {
                 onSelectTab(leafId, tab.id);
                 onActivatePane(tab.id, paneId);
@@ -418,6 +426,7 @@ function TabWindowsWorkspace({
   recordingStatuses,
   onToggleSessionRecording,
   onSaveSessionTranscript,
+  workbench,
 }: TabWindowsWorkspaceProps) {
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const [leafRects, setLeafRects] = useState<Map<string, LeafContentRect>>(() => new Map());
@@ -611,6 +620,7 @@ function TabWindowsWorkspace({
         recordingStatuses={recordingStatuses}
         onToggleSessionRecording={onToggleSessionRecording}
         onSaveSessionTranscript={onSaveSessionTranscript}
+        workbench={workbench}
         onLeafDragOver={handleLeafDragOver}
         onLeafDragLeave={handleLeafDragLeave}
         onLeafDrop={handleLeafDrop}

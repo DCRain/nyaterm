@@ -32,6 +32,7 @@ import {
   createWorkspaceTab,
   ensureActivePane,
   findSessionPaneById,
+  getActivePane,
   getFirstSessionPane,
   getNextPersistOrder,
   insertTabAfter,
@@ -61,7 +62,9 @@ import { logger, setLoggerLevel } from "../lib/logger";
 import { DEFAULT_TERMINAL_FONT_SIZE } from "../lib/terminalFontSize";
 import { isPrimaryMainWindow } from "../lib/windowManager";
 
-type PaneConnectingUpdates = Partial<Pick<SessionPane, "name" | "type" | "connectionId">> & {
+type PaneConnectingUpdates = Partial<
+  Pick<SessionPane, "name" | "type" | "connectionId" | "view" | "temporaryConfig">
+> & {
   display?: RemoteDesktopSessionPane["display"];
 };
 
@@ -87,6 +90,8 @@ interface AppContextType {
     options?: { afterTabId?: string; view?: SessionPane["view"] },
     paneOverrides?: Partial<SessionPane>,
   ) => PendingTabCreation;
+  /** Open or focus a workbench tab that does not bind a backend session. */
+  openWorkbenchTab: (name: string) => string;
   /** Swap the active pane's temporary sessionId for the real one and clear the connecting flag. */
   updateTabSession: (tabId: string, sessionId: string) => void;
   /** Mark the active pane in a tab as failed while keeping the tab visible. */
@@ -881,6 +886,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [commitTabs, setActiveTabId],
   );
 
+  const openWorkbenchTab = useCallback(
+    (name: string) => {
+      const existing = tabsRef.current.find((tab) => {
+        const pane = getActivePane(tab);
+        return pane?.view === "workbench";
+      });
+      if (existing) {
+        setActiveTabId(existing.id);
+        return existing.id;
+      }
+
+      const pane = createSessionPane(name, "Local", undefined, {
+        view: "workbench",
+        connecting: false,
+      });
+      const newTab = createWorkspaceTab(pane, getNextPersistOrder(tabsRef.current));
+      void commitTabs([...tabsRef.current, newTab]);
+      setActiveTabId(newTab.id);
+      return newTab.id;
+    },
+    [commitTabs, setActiveTabId],
+  );
+
   const updateTabSession = useCallback(
     (tabId: string, sessionId: string) => {
       const tab = tabsRef.current.find((item) => item.id === tabId);
@@ -1239,6 +1267,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         panes.forEach((pane) => {
           if (!hasPane(tab.id, pane.id)) return;
+          if (pane.view === "workbench") return;
 
           const cid = pane.connectionId;
           switch (pane.type) {
@@ -1376,6 +1405,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setActiveTabId,
       addTab,
       addPendingTab,
+      openWorkbenchTab,
       updateTabSession,
       markTabConnectionFailed,
       updatePaneSession,
@@ -1424,6 +1454,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setActiveTabId,
       addTab,
       addPendingTab,
+      openWorkbenchTab,
       updateTabSession,
       markTabConnectionFailed,
       updatePaneSession,

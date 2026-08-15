@@ -1,6 +1,8 @@
 import { memo, useCallback, useMemo, useRef, useState } from "react";
+import type { ComponentProps } from "react";
 import { useTranslation } from "react-i18next";
 import { MdErrorOutline } from "react-icons/md";
+import StartWorkspace from "@/components/app/start-workspace/StartWorkspace";
 import ResizeHandle from "@/components/layout/ResizeHandle";
 import SftpWorkspace from "@/components/panel/file-explorer/SftpWorkspace";
 import RdpPaneHost from "@/components/rdp/RdpPaneHost";
@@ -27,9 +29,12 @@ import type {
 } from "@/types/global";
 import XTerminal from "./XTerminal";
 
+type WorkbenchRenderProps = ComponentProps<typeof StartWorkspace>;
+
 interface PaneWorkspaceProps {
   tab: Tab;
   visible: boolean;
+  workbench?: WorkbenchRenderProps;
   onActivatePane: (paneId: string) => void;
   onUpdateSplitRatio: (splitId: string, ratio: number) => void;
   onReconnectPane?: (tabId: string, paneId: string) => void | Promise<void>;
@@ -45,6 +50,7 @@ function SplitView({
   split,
   tab,
   visible,
+  workbench,
   onActivatePane,
   onUpdateSplitRatio,
   onReconnectPane,
@@ -58,6 +64,7 @@ function SplitView({
   split: SplitPane;
   tab: Tab;
   visible: boolean;
+  workbench?: WorkbenchRenderProps;
   onActivatePane: (paneId: string) => void;
   onUpdateSplitRatio: (splitId: string, ratio: number) => void;
   onReconnectPane?: (tabId: string, paneId: string) => void | Promise<void>;
@@ -95,6 +102,7 @@ function SplitView({
           tab={tab}
           visible={visible}
           showChrome
+          workbench={workbench}
           onActivatePane={onActivatePane}
           onUpdateSplitRatio={onUpdateSplitRatio}
           onReconnectPane={onReconnectPane}
@@ -119,6 +127,7 @@ function SplitView({
           tab={tab}
           visible={visible}
           showChrome
+          workbench={workbench}
           onActivatePane={onActivatePane}
           onUpdateSplitRatio={onUpdateSplitRatio}
           onReconnectPane={onReconnectPane}
@@ -139,6 +148,7 @@ function PaneNodeView({
   tab,
   visible,
   showChrome,
+  workbench,
   onActivatePane,
   onUpdateSplitRatio,
   onReconnectPane,
@@ -153,6 +163,7 @@ function PaneNodeView({
   tab: Tab;
   visible: boolean;
   showChrome: boolean;
+  workbench?: WorkbenchRenderProps;
   onActivatePane: (paneId: string) => void;
   onUpdateSplitRatio: (splitId: string, ratio: number) => void;
   onReconnectPane?: (tabId: string, paneId: string) => void | Promise<void>;
@@ -183,6 +194,7 @@ function PaneNodeView({
         split={node}
         tab={tab}
         visible={visible}
+        workbench={workbench}
         onActivatePane={onActivatePane}
         onUpdateSplitRatio={onUpdateSplitRatio}
         onReconnectPane={onReconnectPane}
@@ -198,6 +210,7 @@ function PaneNodeView({
 
   const isActive = visible && tab.activePaneId === node.id;
   const showReconnectAction =
+    node.view !== "workbench" &&
     !!(node.type === "Local" || node.connectionId || hasMatchingTemporaryConfig(node)) &&
     !!onReconnectPane;
   const statusTitle = isReconnectPending
@@ -206,6 +219,23 @@ function PaneNodeView({
   const statusMessage = isReconnectPending
     ? t("savedConnections.connecting", { name: node.name })
     : node.connectError;
+
+  if (node.view === "workbench") {
+    return (
+      <div
+        className={`relative h-full w-full overflow-hidden ${
+          showChrome ? "rounded-sm border" : ""
+        } ${showChrome && isActive ? "ring-1 ring-primary/60" : ""}`}
+        style={{
+          borderColor: showChrome ? "var(--df-border)" : undefined,
+          backgroundColor: "var(--df-bg-terminal)",
+        }}
+        onMouseDown={() => onActivatePane(node.id)}
+      >
+        {workbench ? <StartWorkspace {...workbench} /> : null}
+      </div>
+    );
+  }
 
   if (node.view === "sftp") {
     return (
@@ -485,6 +515,7 @@ function PaneXTerminal({
 function PaneWorkspace({
   tab,
   visible,
+  workbench,
   onActivatePane,
   onUpdateSplitRatio,
   onReconnectPane,
@@ -502,6 +533,7 @@ function PaneWorkspace({
         tab={tab}
         visible={visible}
         showChrome={isSplitPane(tab.root)}
+        workbench={workbench}
         onActivatePane={onActivatePane}
         onUpdateSplitRatio={onUpdateSplitRatio}
         onReconnectPane={onReconnectPane}

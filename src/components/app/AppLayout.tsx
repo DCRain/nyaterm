@@ -64,6 +64,9 @@ import type {
 } from "@/types/global";
 import StartWorkspace from "./start-workspace/StartWorkspace";
 
+type StartWorkspaceProps = ComponentProps<typeof StartWorkspace>;
+export type WorkbenchPaneProps = Omit<StartWorkspaceProps, "t" | "backgroundEnabled">;
+
 type HeaderProps = ComponentProps<typeof Header>;
 type ActivityBarProps = ComponentProps<typeof ActivityBar>;
 type WorkspaceProps = ComponentProps<typeof TabWindowsWorkspace>;
@@ -451,7 +454,14 @@ export default function AppLayout({
                   onEditConnection={emptyWorkspace.onEditConnection}
                 />
               ) : workspace.layout ? (
-                <TabWindowsWorkspace {...workspace} />
+                <TabWindowsWorkspace
+                  {...workspace}
+                  workbench={{
+                    t,
+                    backgroundEnabled,
+                    ...emptyWorkspace,
+                  }}
+                />
               ) : (
                 <div className="flex items-center justify-center h-full text-slate-500">
                   <div className="text-center space-y-3">

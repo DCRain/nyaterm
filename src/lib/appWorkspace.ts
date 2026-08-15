@@ -36,10 +36,12 @@ export type TrayAction =
   | { type: "request_quit"; targetWindowLabel?: string | null };
 
 export function canCreateSessionFromPane(
-  pane: Pick<SessionPane, "type" | "connectionId" | "temporaryConfig"> | null | undefined,
-): pane is Pick<SessionPane, "type" | "connectionId" | "temporaryConfig"> {
+  pane: Pick<SessionPane, "type" | "connectionId" | "temporaryConfig" | "view"> | null | undefined,
+): pane is Pick<SessionPane, "type" | "connectionId" | "temporaryConfig" | "view"> {
   return (
-    !!pane && (pane.type === "Local" || !!pane.connectionId || hasMatchingTemporaryConfig(pane))
+    !!pane &&
+    pane.view !== "workbench" &&
+    (pane.type === "Local" || !!pane.connectionId || hasMatchingTemporaryConfig(pane))
   );
 }
 
