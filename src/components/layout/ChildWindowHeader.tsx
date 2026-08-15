@@ -89,7 +89,7 @@ export default function ChildWindowHeader({
       style={{ backgroundColor: "var(--df-bg-panel)", borderColor: "var(--df-border)" }}
     >
       <div
-        className={`flex-1 min-w-0 h-full flex items-center gap-2 px-3${isMacOS ? " pl-[70px]" : ""}`}
+        className={`flex-1 min-w-0 h-full flex items-center gap-2 px-3${isMacOS ? " pl-[84px]" : ""}`}
         data-tauri-drag-region
       >
         {icon ? <span className="text-primary pointer-events-none shrink-0">{icon}</span> : null}
