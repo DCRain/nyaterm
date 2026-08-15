@@ -357,10 +357,9 @@ pub async fn open_child_window(
     {
         builder = builder
             .title_bar_style(tauri::TitleBarStyle::Overlay)
-            // Position the traffic light controls in logical points so they align with the
-            // 40px custom header centerline; macOS applies the backing scale factor, so do not
-            // hard-code coordinates based on the current display's physical resolution.
-            .traffic_light_position(tauri::LogicalPosition::new(12.0, 22.0))
+            // Position the traffic light controls in logical points so the 12px native buttons
+            // sit visually centered in the 40px custom header.
+            .traffic_light_position(tauri::LogicalPosition::new(12.0, 14.0))
             .hidden_title(true);
     }
 
