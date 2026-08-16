@@ -417,7 +417,7 @@ const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function NoteEd
         </div>
       ) : (
         <div
-          className="nyaterm-note-editor-shell nyaterm-solid-surface relative min-h-0 flex-1 overflow-hidden"
+          className="nyaterm-note-editor-shell nyaterm-solid-surface relative min-h-0 flex-1 overflow-hidden border-0 shadow-none"
           onBlur={() => void flushSave()}
         >
           <NoteMarkdownEditor
@@ -425,7 +425,7 @@ const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function NoteEd
             initialMarkdown={note.markdown}
             onChange={handleMarkdownChange}
             onReady={() => setEditorReadyToken((token) => token + 1)}
-            className="nyaterm-solid-surface absolute inset-0 min-h-0 min-w-0 overflow-hidden"
+            className="nyaterm-solid-surface absolute inset-0 min-h-0 min-w-0 overflow-hidden border-0 shadow-none outline-none"
           />
         </div>
       )}

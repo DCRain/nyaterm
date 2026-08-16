@@ -65,6 +65,11 @@ function sourceLineAttr(node: ExtraProps["node"]): Record<string, number> {
   return typeof line === "number" ? { "data-source-line": line } : {};
 }
 
+/** Table stroke — keep the same token as other note chrome. */
+function noteStrokeFromColors(colors: NoteColors): string {
+  return colors.border;
+}
+
 /** Resolve task index from live DOM order (avoids Strict Mode render counters). */
 function resolveTaskIndex(el: Element): number {
   const root = el.closest(".nyaterm-note-preview");
@@ -283,25 +288,38 @@ function createMarkdownComponents(
       );
     },
     table: ({ children, node }) => (
-      <div className="terminal-scroll my-3 overflow-auto" {...sourceLineAttr(node)}>
-        <table className="w-full border-collapse text-left text-sm" style={{ color: colors.text }}>
+      <div className="terminal-scroll my-3 max-w-full overflow-x-auto" {...sourceLineAttr(node)}>
+        <table
+          className="w-full text-left text-sm"
+          style={{
+            color: colors.text,
+            borderCollapse: "separate",
+            borderSpacing: 0,
+            border: `1px solid ${noteStrokeFromColors(colors)}`,
+          }}
+        >
           {children}
         </table>
       </div>
     ),
     th: ({ children }) => (
       <th
-        className="border px-2 py-1.5 font-medium"
+        className="px-2 py-1.5 font-medium"
         style={{
-          borderColor: colors.border,
-          backgroundColor: `${colors.bgHover}8c`,
+          boxShadow: `inset 0 0 0 1px ${noteStrokeFromColors(colors)}`,
+          backgroundColor: colors.bgHover,
         }}
       >
         {children}
       </th>
     ),
     td: ({ children }) => (
-      <td className="border px-2 py-1.5" style={{ borderColor: colors.border }}>
+      <td
+        className="px-2 py-1.5"
+        style={{
+          boxShadow: `inset 0 0 0 1px ${noteStrokeFromColors(colors)}`,
+        }}
+      >
         {children}
       </td>
     ),

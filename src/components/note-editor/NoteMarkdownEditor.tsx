@@ -35,6 +35,55 @@ interface NoteMarkdownEditorProps {
 const MIN_HOST_WIDTH = 120;
 const MIN_HOST_HEIGHT = 48;
 const GUTTER_WIDTH_PX = 44;
+const GUTTER_DIVIDER_CLASS = "nyaterm-gutter-divider";
+const LINE_NUMBER_FONT_PX = 11;
+/** Content inset — forced via theme + iframe CSS + inline (release WebView2). */
+const EDITOR_CONTENT_PADDING = "16px 20px";
+
+/** Stroke aligned with the rest of note chrome (`--df-border`). */
+function noteStrokeColor(colors: NoteColors): string {
+  return colors.border;
+}
+
+function ensureGutterDivider(gutters: HTMLElement, color: string) {
+  gutters.style.setProperty("position", "sticky", "important");
+  gutters.style.setProperty("overflow", "visible", "important");
+  let divider = gutters.querySelector(`:scope > .${GUTTER_DIVIDER_CLASS}`) as HTMLElement | null;
+  if (!divider) {
+    divider = gutters.ownerDocument.createElement("div");
+    divider.className = GUTTER_DIVIDER_CLASS;
+    divider.setAttribute("aria-hidden", "true");
+    gutters.appendChild(divider);
+  }
+  divider.style.cssText = [
+    "position:absolute",
+    "top:0",
+    "right:0",
+    "bottom:0",
+    "width:1px",
+    "min-width:1px",
+    `background:${color}`,
+    "pointer-events:none",
+    "z-index:5",
+  ].join(";");
+}
+
+/** Force line-number chrome — CM/WebView2 often overwrites theme CSS after layout. */
+function styleLineNumberElements(root: ParentNode) {
+  const nodes = root.querySelectorAll(".cm-lineNumbers .cm-gutterElement");
+  for (const node of nodes) {
+    const el = node as HTMLElement;
+    el.style.setProperty("display", "flex", "important");
+    el.style.setProperty("align-items", "center", "important");
+    el.style.setProperty("justify-content", "flex-end", "important");
+    el.style.setProperty("box-sizing", "border-box", "important");
+    el.style.setProperty("padding", "0 10px 0 4px", "important");
+    el.style.setProperty("min-width", "1.25rem", "important");
+    el.style.setProperty("text-align", "right", "important");
+    el.style.setProperty("font-size", `${LINE_NUMBER_FONT_PX}px`, "important");
+    el.style.setProperty("line-height", "1", "important");
+  }
+}
 
 function isDarkColor(color: string) {
   const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim());
@@ -148,6 +197,9 @@ function noteEditorTheme(colors: NoteColors) {
           backgroundColor: surface,
           color: text,
           caretColor: caret,
+          border: "none",
+          outline: "none",
+          boxShadow: "none",
         },
         "&.cm-focused": {
           outline: "none",
@@ -164,7 +216,8 @@ function noteEditorTheme(colors: NoteColors) {
           boxSizing: "border-box",
           display: "flex",
           flexDirection: "row",
-          alignItems: "stretch",
+          /* flex-start is required for CM scroll; stretch collapses scrollHeight. */
+          alignItems: "flex-start",
           border: "none",
           outline: "none",
         },
@@ -176,13 +229,14 @@ function noteEditorTheme(colors: NoteColors) {
           boxSizing: "border-box",
           backgroundColor: surface,
           color: colors.textMuted,
-          /* Keep the divider inside the gutter box — outer shadows are covered by .cm-content. */
-          borderRight: `1px solid ${colors.border}`,
+          /* Real divider DOM is injected — CSS borders vanish in release WebView2. */
+          borderRight: "none",
           boxShadow: "none",
           position: "sticky",
           left: "0",
           zIndex: "200",
-          fontSize: "11px",
+          overflow: "visible",
+          fontSize: `${LINE_NUMBER_FONT_PX}px`,
         },
         ".cm-gutter.cm-lineNumbers": {
           width: `${GUTTER_WIDTH_PX}px`,
@@ -196,14 +250,14 @@ function noteEditorTheme(colors: NoteColors) {
           padding: "0 10px 0 4px",
           minWidth: "1.25rem",
           textAlign: "right",
-          fontSize: "11px",
+          fontSize: `${LINE_NUMBER_FONT_PX}px`,
           lineHeight: "1",
         },
         ".cm-activeLineGutter": {
           backgroundColor: colors.bgHover,
         },
         ".cm-content": {
-          padding: "12px 16px",
+          padding: EDITOR_CONTENT_PADDING,
           lineHeight: "1.65",
           caretColor: caret,
           color: text,
@@ -238,17 +292,34 @@ const gutterDividerColorRef = { current: "transparent" };
 
 const clampNativeGutters = ViewPlugin.fromClass(
   class {
+    view: EditorView;
+    scheduled = false;
+
     constructor(view: EditorView) {
+      this.view = view;
       this.apply(view);
+      this.schedule();
     }
 
     update(update: ViewUpdate) {
+      this.view = update.view;
       if (update.geometryChanged || update.viewportChanged || update.docChanged) {
-        this.apply(update.view);
+        this.schedule();
       }
     }
 
+    schedule() {
+      if (this.scheduled) return;
+      this.scheduled = true;
+      // Run after CM writes gutter heights/fonts so our !important styles stick.
+      requestAnimationFrame(() => {
+        this.scheduled = false;
+        this.apply(this.view);
+      });
+    }
+
     apply(view: EditorView) {
+      const stroke = gutterDividerColorRef.current;
       const nodes = view.scrollDOM.querySelectorAll(".cm-gutters");
       for (const node of nodes) {
         const el = node as HTMLElement;
@@ -257,21 +328,29 @@ const clampNativeGutters = ViewPlugin.fromClass(
         el.style.setProperty("min-width", `${GUTTER_WIDTH_PX}px`, "important");
         el.style.setProperty("max-width", `${GUTTER_WIDTH_PX}px`, "important");
         el.style.setProperty("box-sizing", "border-box", "important");
-        el.style.setProperty(
-          "border-right",
-          `1px solid ${gutterDividerColorRef.current}`,
-          "important",
-        );
+        el.style.setProperty("border-right", "none", "important");
         el.style.setProperty("box-shadow", "none", "important");
         el.style.setProperty("z-index", "200", "important");
+        el.style.setProperty("overflow", "visible", "important");
+        el.style.setProperty("font-size", `${LINE_NUMBER_FONT_PX}px`, "important");
+        ensureGutterDivider(el, stroke);
       }
+      styleLineNumberElements(view.scrollDOM);
       const scroller = view.scrollDOM;
       scroller.style.setProperty("display", "flex", "important");
       scroller.style.setProperty("flex-direction", "row", "important");
-      scroller.style.setProperty("align-items", "stretch", "important");
+      scroller.style.setProperty("align-items", "flex-start", "important");
+      scroller.style.setProperty("overflow", "auto", "important");
+      scroller.style.setProperty("height", "100%", "important");
+      scroller.style.setProperty("max-height", "100%", "important");
       const content = view.contentDOM;
       content.style.setProperty("flex", "1 1 auto", "important");
       content.style.setProperty("min-width", "0", "important");
+      content.style.setProperty("padding", EDITOR_CONTENT_PADDING, "important");
+      content.style.setProperty("box-sizing", "border-box", "important");
+      content.style.setProperty("outline", "none", "important");
+      content.style.setProperty("box-shadow", "none", "important");
+      content.style.setProperty("border", "none", "important");
     }
   },
 );
@@ -327,7 +406,7 @@ const NoteMarkdownEditor = forwardRef<NoteMarkdownEditorHandle, NoteMarkdownEdit
     const colors = noteTheme.colors.notes;
     const colorsRef = useRef(colors);
     colorsRef.current = colors;
-    gutterDividerColorRef.current = colors.border;
+    gutterDividerColorRef.current = noteStrokeColor(colors);
 
     useEffect(() => {
       onChangeRef.current = onChange;
@@ -420,14 +499,20 @@ const NoteMarkdownEditor = forwardRef<NoteMarkdownEditorHandle, NoteMarkdownEdit
         const surface = palette.bgPanel;
         const text = palette.text;
         const muted = palette.textMuted;
-        const border = palette.border;
+        const border = noteStrokeColor(palette);
+        gutterDividerColorRef.current = border;
         const scheme = isDarkColor(surface) ? "dark" : "light";
 
         iframe = document.createElement("iframe");
         iframe.title = "Note editor";
         iframe.setAttribute("aria-label", "Note editor");
+        iframe.setAttribute("frameborder", "0");
+        iframe.setAttribute("scrolling", "no");
+        iframe.tabIndex = -1;
         iframe.style.cssText = [
           "border:0",
+          "outline:0",
+          "box-shadow:none",
           "display:block",
           "margin:0",
           "padding:0",
@@ -462,6 +547,9 @@ const NoteMarkdownEditor = forwardRef<NoteMarkdownEditorHandle, NoteMarkdownEdit
     background: ${surface};
     color: ${text};
     color-scheme: ${scheme};
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
   }
   #cm-root {
     position: absolute;
@@ -469,23 +557,35 @@ const NoteMarkdownEditor = forwardRef<NoteMarkdownEditorHandle, NoteMarkdownEdit
     overflow: hidden;
     background: ${surface};
     color: ${text};
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
   }
   .cm-editor {
     height: 100% !important;
     width: 100% !important;
     max-height: 100% !important;
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+    background: ${surface} !important;
   }
   .cm-editor,
   .cm-editor.cm-focused,
-  .cm-content:focus {
+  .cm-content:focus,
+  .cm-scroller:focus,
+  [contenteditable="true"]:focus {
     outline: none !important;
     border: none !important;
     box-shadow: none !important;
   }
+  [contenteditable="true"] {
+    outline: none !important;
+  }
   .cm-scroller {
     display: flex !important;
     flex-direction: row !important;
-    align-items: stretch !important;
+    align-items: flex-start !important;
     box-sizing: border-box !important;
     height: 100% !important;
     max-height: 100% !important;
@@ -501,22 +601,24 @@ const NoteMarkdownEditor = forwardRef<NoteMarkdownEditorHandle, NoteMarkdownEdit
     box-sizing: border-box !important;
     background: ${surface} !important;
     color: ${muted} !important;
-    border-right: 1px solid ${border} !important;
+    border-right: none !important;
     box-shadow: none !important;
     position: sticky !important;
     left: 0 !important;
     z-index: 200 !important;
-    font-size: 11px !important;
+    overflow: visible !important;
+    font-size: ${LINE_NUMBER_FONT_PX}px !important;
   }
-  .cm-gutters::after {
-    content: "" !important;
+  .${GUTTER_DIVIDER_CLASS} {
     position: absolute !important;
     top: 0 !important;
     right: 0 !important;
     bottom: 0 !important;
     width: 1px !important;
+    min-width: 1px !important;
     background: ${border} !important;
     pointer-events: none !important;
+    z-index: 5 !important;
   }
   .cm-gutter.cm-lineNumbers {
     width: ${GUTTER_WIDTH_PX}px !important;
@@ -527,15 +629,18 @@ const NoteMarkdownEditor = forwardRef<NoteMarkdownEditorHandle, NoteMarkdownEdit
     display: flex !important;
     align-items: center !important;
     justify-content: flex-end !important;
+    box-sizing: border-box !important;
     padding: 0 10px 0 4px !important;
     min-width: 1.25rem !important;
     text-align: right !important;
-    font-size: 11px !important;
+    font-size: ${LINE_NUMBER_FONT_PX}px !important;
     line-height: 1 !important;
   }
   .cm-content {
     flex: 1 1 auto !important;
     min-width: 0 !important;
+    padding: ${EDITOR_CONTENT_PADDING} !important;
+    box-sizing: border-box !important;
     outline: none !important;
     border: none !important;
   }
@@ -576,6 +681,14 @@ const NoteMarkdownEditor = forwardRef<NoteMarkdownEditorHandle, NoteMarkdownEdit
             suppressChangeRef,
           ),
         });
+        view.dom.style.setProperty("border", "none", "important");
+        view.dom.style.setProperty("outline", "none", "important");
+        view.dom.style.setProperty("box-shadow", "none", "important");
+        view.scrollDOM.style.setProperty("border", "none", "important");
+        view.scrollDOM.style.setProperty("outline", "none", "important");
+        view.scrollDOM.style.setProperty("box-shadow", "none", "important");
+        view.contentDOM.style.setProperty("padding", EDITOR_CONTENT_PADDING, "important");
+        view.contentDOM.style.setProperty("box-sizing", "border-box", "important");
         viewRef.current = view;
         syncIframeBox();
         view.requestMeasure();
@@ -640,7 +753,7 @@ const NoteMarkdownEditor = forwardRef<NoteMarkdownEditorHandle, NoteMarkdownEdit
       const iframe = iframeRef.current;
       if (!view) return;
 
-      gutterDividerColorRef.current = colors.border;
+      gutterDividerColorRef.current = noteStrokeColor(colors);
       view.dispatch({
         effects: [
           themeCompartmentRef.current.reconfigure(noteEditorTheme(colors)),
@@ -650,14 +763,9 @@ const NoteMarkdownEditor = forwardRef<NoteMarkdownEditorHandle, NoteMarkdownEdit
         ],
       });
       for (const node of view.scrollDOM.querySelectorAll(".cm-gutters")) {
-        const el = node as HTMLElement;
-        el.style.setProperty(
-          "border-right",
-          `1px solid ${colors.border}`,
-          "important",
-        );
-        el.style.setProperty("box-shadow", "none", "important");
+        ensureGutterDivider(node as HTMLElement, gutterDividerColorRef.current);
       }
+      styleLineNumberElements(view.scrollDOM);
 
       const surface = colors.bgPanel;
       const text = colors.text;

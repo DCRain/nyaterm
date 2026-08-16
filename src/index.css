@@ -306,6 +306,11 @@ textarea,
   user-select: text;
 }
 
+[contenteditable="true"]:focus {
+  outline: none;
+  box-shadow: none;
+}
+
 /*
  * xterm.js 6 DomRenderer injects `white-space: pre` without a trailing semicolon
  * (`white-space: pre}`), so the declaration is discarded and consecutive spaces
@@ -632,22 +637,36 @@ html.nyaterm-explorer-path-dragging * {
   /* Note editor writing surface: kill focus ring / black chrome around CM + iframe. */
   .nyaterm-note-editor-shell,
   .nyaterm-note-editor-shell *:focus,
-  .nyaterm-note-editor-shell *:focus-visible {
+  .nyaterm-note-editor-shell *:focus-visible,
+  .nyaterm-note-editor-shell iframe:focus,
+  .nyaterm-note-editor-shell iframe:focus-visible,
+  .nyaterm-note-editor-shell [contenteditable="true"]:focus {
     outline: none !important;
+    outline-width: 0 !important;
+    box-shadow: none !important;
   }
 }
 
-.nyaterm-note-editor-shell {
+.nyaterm-note-editor-shell,
+.nyaterm-note-editor-shell .nyaterm-solid-surface {
   /* Opaque writing surface: translucent --df-bg-panel under acrylic breaks CM text paint. */
   background: var(--df-bg-panel-solid, var(--df-bg-panel));
   color: var(--df-text-solid, var(--df-text));
   min-height: 0;
-  /* solid-surface adds a drop shadow under acrylic; that reads as a divider halo. */
+  border: none !important;
+  outline: none !important;
+  /* solid-surface adds a drop shadow under acrylic; that reads as a black frame. */
   box-shadow: none !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+  --tw-shadow: 0 0 #0000 !important;
 }
 
+html[data-window-transparency="true"] .nyaterm-note-editor-shell,
 html[data-window-transparency="true"] .nyaterm-note-editor-shell.nyaterm-solid-surface,
 html[data-window-transparency="true"] .nyaterm-note-editor-shell .nyaterm-solid-surface {
+  border: none !important;
+  outline: none !important;
   box-shadow: none !important;
 }
 
@@ -655,13 +674,14 @@ html[data-window-transparency="true"] .nyaterm-note-editor-shell .nyaterm-solid-
   background: var(--df-bg-panel-solid, var(--df-bg-panel));
   vertical-align: top;
   border: 0 !important;
-  outline: none !important;
+  outline: 0 !important;
   box-shadow: none !important;
+  border-radius: 0 !important;
 }
 
 .nyaterm-note-editor-shell iframe:focus,
 .nyaterm-note-editor-shell iframe:focus-visible {
-  outline: none !important;
+  outline: 0 !important;
   border: 0 !important;
   box-shadow: none !important;
 }
@@ -881,17 +901,22 @@ html[data-window-transparency="true"] .nyaterm-note-editor-shell .nyaterm-solid-
 
 .nyaterm-note-preview table,
 .nyaterm-note-content table {
-  display: block;
+  /* Keep real table layout — display:block breaks cell borders in WebView2. */
+  display: table;
+  width: 100%;
   max-width: 100%;
-  overflow-x: auto;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--df-border);
 }
 
 .nyaterm-note-preview th,
 .nyaterm-note-preview td,
 .nyaterm-note-content th,
 .nyaterm-note-content td {
-  border: 1px solid var(--df-border);
+  /* Inset stroke survives acrylic better than collapsed borders. */
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--df-border);
   padding: 0.4rem 0.55rem;
 }
 
