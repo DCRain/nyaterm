@@ -24,7 +24,12 @@ describe("workspaceTabs file documents", () => {
       connectionId: "ssh-1",
       backend: "remote",
       path,
-      file: { content: `content:${path}`, size: 12, mtime: 42 },
+      file: {
+        content: `content:${path}`,
+        size: 12,
+        mtime: 42,
+        contentHash: `hash:${path}`,
+      },
     });
 
   it("finds an already open file by backend, session and exact path", () => {

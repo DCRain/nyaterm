@@ -133,6 +133,8 @@ export interface FileDocumentSnapshot {
   content: string;
   size: number;
   mtime: number;
+  mtimeNanos?: string;
+  contentHash: string;
 }
 
 /** Runtime-only editable document backed by an existing terminal session. */

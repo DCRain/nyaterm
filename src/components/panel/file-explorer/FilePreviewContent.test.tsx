@@ -32,7 +32,7 @@ describe("FilePreviewContent modes", () => {
       file: {
         backend: "remote",
         path: `/tmp/${name}`,
-        initial: { content, size: content.length, mtime: 1 },
+        initial: { content, size: content.length, mtime: 1, contentHash: `hash:${name}` },
       },
     };
 
@@ -48,6 +48,7 @@ describe("FilePreviewContent modes", () => {
       content: "# Preview heading",
       size: 17,
       mtime: 1,
+      contentHash: "hash-preview",
     });
 
     render(

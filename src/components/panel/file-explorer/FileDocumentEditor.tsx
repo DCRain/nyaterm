@@ -9,6 +9,7 @@ import RemoteFileConflictDialog from "@/components/dialog/remote-file-editor/Rem
 import { Button } from "@/components/ui/button";
 import { codeMirrorFileViewExtensions } from "@/lib/codeMirrorFileView";
 import { getErrorMessage } from "@/lib/errors";
+import { MAX_EDITOR_FILE_BYTES } from "@/lib/fileEditorLimits";
 import {
   type FileDocumentSaveResult,
   registerFileDocument,
@@ -19,12 +20,12 @@ import { formatSize } from "@/lib/utils";
 import type { FileDocumentPane } from "@/types/global";
 import { languageFromFilename, type TextFileOpenResult } from "./model";
 
-const MAX_EDITOR_FILE_BYTES = 5 * 1024 * 1024;
-
 interface WriteFileTextResult {
   status: "saved" | "conflict";
   mtime?: number;
+  mtimeNanos?: string;
   size?: number;
+  contentHash?: string;
 }
 
 interface FileDocumentEditorProps {
@@ -38,11 +39,14 @@ export default function FileDocumentEditor({ pane, active }: FileDocumentEditorP
   const viewRef = useRef<EditorView | null>(null);
   const suppressUpdateRef = useRef(false);
   const savingRef = useRef(false);
+  const savePromiseRef = useRef<Promise<FileDocumentSaveResult> | null>(null);
   const contentRef = useRef(pane.file.initial.content);
   const baseRef = useRef({
     content: pane.file.initial.content,
     size: pane.file.initial.size,
     mtime: pane.file.initial.mtime,
+    mtimeNanos: pane.file.initial.mtimeNanos,
+    contentHash: pane.file.initial.contentHash,
   });
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -75,47 +79,59 @@ export default function FileDocumentEditor({ pane, active }: FileDocumentEditorP
 
   const save = useCallback(
     async (force = false): Promise<FileDocumentSaveResult> => {
-      if (savingRef.current) return "conflict";
-      savingRef.current = true;
-      setSaving(true);
-      setError("");
-      try {
-        const result = await invoke<WriteFileTextResult>(
-          pane.file.backend === "local" ? "write_local_file_text" : "write_remote_file_text",
-          {
-            sessionId: pane.sessionId,
-            path: pane.file.path,
-            content: contentRef.current,
-            expectedMtime: baseRef.current.mtime,
-            expectedSize: baseRef.current.size,
-            force,
-          },
-        );
-        if (result.status === "conflict") {
-          setConflictOpen(true);
-          return "conflict";
-        }
+      if (savingRef.current) return savePromiseRef.current ?? "saved";
+      const runSave = async (): Promise<FileDocumentSaveResult> => {
+        savingRef.current = true;
+        setSaving(true);
+        setError("");
+        try {
+          const result = await invoke<WriteFileTextResult>(
+            pane.file.backend === "local" ? "write_local_file_text" : "write_remote_file_text",
+            {
+              sessionId: pane.sessionId,
+              path: pane.file.path,
+              content: contentRef.current,
+              expectedMtime: baseRef.current.mtime,
+              expectedSize: baseRef.current.size,
+              expectedMtimeNanos: baseRef.current.mtimeNanos,
+              expectedHash: baseRef.current.contentHash,
+              force,
+            },
+          );
+          if (result.status === "conflict") {
+            setConflictOpen(true);
+            return "conflict";
+          }
 
-        const nextSize = result.size ?? new Blob([contentRef.current]).size;
-        const nextMtime = result.mtime ?? baseRef.current.mtime;
-        baseRef.current = {
-          content: contentRef.current,
-          size: nextSize,
-          mtime: nextMtime,
-        };
-        setSize(nextSize);
-        setMtime(nextMtime);
-        setDirty(false);
-        setLastSavedAt(Date.now());
-        toast.success(t("fileEditor.saved"));
-        return "saved";
-      } catch (saveError) {
-        setError(getErrorMessage(saveError) || t("fileEditor.saveFailed"));
-        return "conflict";
-      } finally {
-        savingRef.current = false;
-        setSaving(false);
-      }
+          const nextSize = result.size ?? new Blob([contentRef.current]).size;
+          const nextMtime = result.mtime ?? baseRef.current.mtime;
+          const nextMtimeNanos = result.mtimeNanos ?? baseRef.current.mtimeNanos;
+          const nextContentHash = result.contentHash ?? baseRef.current.contentHash;
+          baseRef.current = {
+            content: contentRef.current,
+            size: nextSize,
+            mtime: nextMtime,
+            mtimeNanos: nextMtimeNanos,
+            contentHash: nextContentHash,
+          };
+          setSize(nextSize);
+          setMtime(nextMtime);
+          setDirty(false);
+          setLastSavedAt(Date.now());
+          toast.success(t("fileEditor.saved"));
+          return "saved";
+        } catch (saveError) {
+          setError(getErrorMessage(saveError) || t("fileEditor.saveFailed"));
+          return "conflict";
+        } finally {
+          savingRef.current = false;
+          savePromiseRef.current = null;
+          setSaving(false);
+        }
+      };
+      const promise = runSave();
+      savePromiseRef.current = promise;
+      return promise;
     },
     [pane.file.backend, pane.file.path, pane.sessionId, t],
   );
@@ -146,6 +162,8 @@ export default function FileDocumentEditor({ pane, active }: FileDocumentEditorP
         content: result.file.content,
         size: result.file.size,
         mtime: result.file.mtime ?? baseRef.current.mtime,
+        mtimeNanos: result.file.mtimeNanos,
+        contentHash: result.file.contentHash,
       };
       replaceEditorContent(result.file.content);
       setSize(result.file.size);

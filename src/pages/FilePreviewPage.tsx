@@ -1,4 +1,3 @@
-import { listen } from "@tauri-apps/api/event";
 import { join, tempDir } from "@tauri-apps/api/path";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openPath } from "@tauri-apps/plugin-opener";
@@ -36,6 +35,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useApp } from "@/context/AppContext";
+import { useChildWindowCommand } from "@/hooks/useChildWindowCommand";
+import { CHILD_WINDOW_COMMANDS } from "@/lib/childWindowProtocol";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import { cn, formatSize, parseJsonSearchParam } from "@/lib/utils";
@@ -145,9 +146,9 @@ export default function FilePreviewPage() {
 
   const updateTabs = useCallback(
     (updater: (tabs: PreviewTab[]) => PreviewTab[]) => {
-    const next = updater(tabsRef.current);
-    tabsRef.current = next;
-    setTabs(next);
+      const next = updater(tabsRef.current);
+      tabsRef.current = next;
+      setTabs(next);
     },
     [],
   );
@@ -178,27 +179,14 @@ export default function FilePreviewPage() {
     [activateTab, updateTabs],
   );
 
-  useEffect(() => {
-    const currentWindow = getCurrentWindow();
-    let unlisten: (() => void) | undefined;
-
-    listen<FilePreviewOpenPayload>("file-preview-open", (event) => {
-      if (
-        event.payload.targetLabel &&
-        event.payload.targetLabel !== currentWindow.label
-      )
-        return;
-      addOrFocusTab(event.payload.data);
-    })
-      .then((dispose) => {
-        unlisten = dispose;
-      })
-      .catch(() => {});
-
-    return () => {
-      unlisten?.();
-    };
-  }, [addOrFocusTab]);
+  useChildWindowCommand<FilePreviewOpenPayload>(
+    CHILD_WINDOW_COMMANDS.filePreviewOpen,
+    (payload) => {
+      const currentWindow = getCurrentWindow();
+      if (payload.targetLabel && payload.targetLabel !== currentWindow.label) return;
+      addOrFocusTab(payload.data);
+    },
+  );
 
   useEffect(() => {
     const currentWindow = getCurrentWindow();

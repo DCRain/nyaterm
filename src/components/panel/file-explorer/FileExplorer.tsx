@@ -76,6 +76,7 @@ import { useTransfer } from "@/context/TransferContext";
 import { resolveShortcutKeys } from "@/hooks/useShortcutMap";
 import { openAIAssistant } from "@/lib/aiEvents";
 import { getErrorMessage } from "@/lib/errors";
+import { MAX_EDITOR_FILE_BYTES } from "@/lib/fileEditorLimits";
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
 import { sendSessionInput, sendSessionInputWithSync } from "@/lib/sessionInput";
@@ -135,8 +136,6 @@ import {
   type TextFileOpenResult,
 } from "./model";
 import { useExternalFileDrop } from "./useExternalFileDrop";
-
-const MAX_EDITOR_FILE_BYTES = 5 * 1024 * 1024;
 
 const MemoizedFileExplorer = memo(FileExplorer);
 
@@ -2778,6 +2777,8 @@ function FileExplorerPane({
           content: result.file.content,
           size: result.file.size,
           mtime: result.file.mtime ?? entry.mtime,
+          mtimeNanos: result.file.mtimeNanos,
+          contentHash: result.file.contentHash,
         },
       });
     } catch (error) {

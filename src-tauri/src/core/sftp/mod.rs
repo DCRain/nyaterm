@@ -2230,13 +2230,21 @@ pub async fn write_remote_file_text(
     content: &str,
     expected_mtime: Option<u64>,
     expected_size: Option<u64>,
+    expected_hash: Option<&str>,
     force: bool,
 ) -> AppResult<WriteRemoteTextResult> {
     let auto_fs = get_or_create_auto_fs(&manager, session_id).await?;
     let guard = auto_fs.backend().await?;
     let fs = guard.as_ref().unwrap();
-    fs.write_file_text(path, content, expected_mtime, expected_size, force)
-        .await
+    fs.write_file_text(
+        path,
+        content,
+        expected_mtime,
+        expected_size,
+        expected_hash,
+        force,
+    )
+    .await
 }
 
 pub async fn create_remote_file(

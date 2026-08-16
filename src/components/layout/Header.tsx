@@ -1799,7 +1799,7 @@ export default function Header({
       className="h-10 border-b flex items-center gap-2 px-2 select-none shrink-0"
       style={{ backgroundColor: "var(--df-bg-panel)", borderColor: "var(--df-border)" }}
     >
-      <div className={`flex items-center gap-2 shrink-0${isMacOS ? " pl-[70px]" : ""}`}>
+      <div className={`flex items-center gap-2 shrink-0${isMacOS ? " pl-[84px]" : ""}`}>
         {!isMacOS && (
           <NyaTermLogo className="h-5 w-5 shrink-0" onDoubleClick={handleToggleMaximizeWindow} />
         )}

@@ -8,7 +8,15 @@ export interface QueuedOutputChunk {
 }
 
 export interface OutputQueue {
-  chunks: QueuedOutputChunk[];
+  chunks: Array<QueuedOutputChunk | undefined>;
+  headIndex: number;
+  bytes: number;
+}
+
+export interface OutputQueueDebugSnapshot {
+  totalSlots: number;
+  liveSlots: number;
+  consumedSlots: number;
   headIndex: number;
   bytes: number;
 }
@@ -147,6 +155,7 @@ export function pushOutputQueue(queue: OutputQueue, chunk: QueuedOutputChunk) {
 export function shiftOutputQueue(queue: OutputQueue): QueuedOutputChunk | null {
   const chunk = queue.chunks[queue.headIndex];
   if (!chunk) return null;
+  queue.chunks[queue.headIndex] = undefined;
   queue.headIndex += 1;
   queue.bytes = Math.max(0, queue.bytes - chunk.bytes);
   compactOutputQueue(queue);
@@ -165,6 +174,26 @@ export function replaceOutputQueueHead(queue: OutputQueue, chunk: QueuedOutputCh
 
 export function hasOutputQueueItems(queue: OutputQueue) {
   return queue.headIndex < queue.chunks.length;
+}
+
+export function getOutputQueueDebugSnapshot(queue: OutputQueue): OutputQueueDebugSnapshot {
+  let liveSlots = 0;
+  let consumedSlots = 0;
+  for (let i = 0; i < queue.chunks.length; i += 1) {
+    if (queue.chunks[i]) {
+      liveSlots += 1;
+    } else if (i < queue.headIndex) {
+      consumedSlots += 1;
+    }
+  }
+
+  return {
+    totalSlots: queue.chunks.length,
+    liveSlots,
+    consumedSlots,
+    headIndex: queue.headIndex,
+    bytes: queue.bytes,
+  };
 }
 
 export function outputQueueToBoundedString(queue: OutputQueue) {

@@ -1029,6 +1029,7 @@ impl RemoteFs for ScpNormalBackend {
         let bytes = result.stdout;
         ensure_text_bytes(&bytes, max_bytes)?;
 
+        let file_hash = content_hash(&bytes);
         let content = String::from_utf8(bytes)
             .map_err(|_| AppError::Config("Only UTF-8 text files are supported".to_string()))?;
 
@@ -1037,6 +1038,8 @@ impl RemoteFs for ScpNormalBackend {
             content,
             size: props.size,
             mtime: props.mtime,
+            mtime_nanos: None,
+            content_hash: file_hash,
         })
     }
 
@@ -1074,6 +1077,7 @@ impl RemoteFs for ScpNormalBackend {
             content_bytes: result.stdout,
             size: props.size,
             mtime: props.mtime,
+            mtime_nanos: None,
         })
     }
 
@@ -1083,6 +1087,7 @@ impl RemoteFs for ScpNormalBackend {
         content: &str,
         expected_mtime: Option<u64>,
         expected_size: Option<u64>,
+        expected_hash: Option<&str>,
         force: bool,
     ) -> AppResult<WriteRemoteTextResult> {
         let props = self.stat(path).await?;
@@ -1090,7 +1095,35 @@ impl RemoteFs for ScpNormalBackend {
             && (expected_mtime.is_some_and(|mtime| props.mtime != 0 && mtime != props.mtime)
                 || expected_size.is_some_and(|size| size != props.size))
         {
-            return Ok(WriteRemoteTextResult::conflict(props.mtime, props.size));
+            return Ok(WriteRemoteTextResult::conflict(
+                props.mtime,
+                props.size,
+                None,
+            ));
+        }
+        if !force {
+            if let Some(expected_hash) = expected_hash {
+                let cmd = format!(
+                    "dd bs=1 count={} if={} 2>/dev/null",
+                    props.size,
+                    sh_quote(path)
+                );
+                let result = self.exec(&cmd).await?;
+                if result.exit_code != Some(0) && result.stdout.is_empty() {
+                    let stderr_text = String::from_utf8_lossy(&result.stderr);
+                    return Err(AppError::Channel(format!(
+                        "Failed to read file: {}",
+                        stderr_text.trim()
+                    )));
+                }
+                if content_hash(&result.stdout) != expected_hash {
+                    return Ok(WriteRemoteTextResult::conflict(
+                        props.mtime,
+                        props.size,
+                        None,
+                    ));
+                }
+            }
         }
 
         let tmp = format!(
@@ -1114,7 +1147,12 @@ impl RemoteFs for ScpNormalBackend {
             )));
         }
         let props = self.stat(path).await?;
-        Ok(WriteRemoteTextResult::saved(props.mtime, props.size))
+        Ok(WriteRemoteTextResult::saved(
+            props.mtime,
+            props.size,
+            None,
+            content_hash(content.as_bytes()),
+        ))
     }
 
     async fn download_file(

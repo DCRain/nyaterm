@@ -10,6 +10,8 @@ export interface RemoteTextFile {
   content: string;
   size: number;
   mtime?: number;
+  mtimeNanos?: string;
+  contentHash: string;
 }
 
 export type TextFileOpenResult =
@@ -21,6 +23,7 @@ export interface RemoteBinaryFile {
   contentBytes: number[] | Uint8Array | ArrayBuffer;
   size: number;
   mtime?: number;
+  mtimeNanos?: string;
 }
 
 export type FileExplorerSessionCache = {

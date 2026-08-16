@@ -1,7 +1,6 @@
 import { closeSearchPanel } from "@codemirror/search";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { listen } from "@tauri-apps/api/event";
 import { join, tempDir } from "@tauri-apps/api/path";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openPath } from "@tauri-apps/plugin-opener";
@@ -36,6 +35,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useApp } from "@/context/AppContext";
+import { useChildWindowCommand } from "@/hooks/useChildWindowCommand";
+import { CHILD_WINDOW_COMMANDS } from "@/lib/childWindowProtocol";
 import {
   type CursorPosition,
   codeMirrorFileViewExtensions,
@@ -43,11 +44,10 @@ import {
   getDisplayLanguage,
 } from "@/lib/codeMirrorFileView";
 import { getErrorMessage } from "@/lib/errors";
+import { MAX_EDITOR_FILE_BYTES } from "@/lib/fileEditorLimits";
 import { invoke } from "@/lib/invoke";
 import { cn, formatSize, parseJsonSearchParam } from "@/lib/utils";
 import type { FileWindowTarget } from "@/lib/windowManager";
-
-const MAX_EDITOR_FILE_BYTES = 5 * 1024 * 1024;
 
 type FileEditorBackendKind = "remote" | "local";
 
@@ -80,6 +80,8 @@ interface EditorTab {
   content: string;
   baseSize: number;
   baseMtime: number;
+  baseMtimeNanos?: string;
+  baseContentHash: string;
   loading: boolean;
   saving: boolean;
   dirty: boolean;
@@ -91,7 +93,9 @@ interface EditorTab {
 interface WriteRemoteFileTextResult {
   status: "saved" | "conflict";
   mtime?: number;
+  mtimeNanos?: string;
   size?: number;
+  contentHash?: string;
 }
 
 function getEditorDataPath(data: Pick<RemoteFileEditorData, "path" | "remotePath">) {
@@ -140,6 +144,8 @@ function createTab(data: RemoteFileEditorData): EditorTab {
     content: "",
     baseSize: data.size,
     baseMtime: data.mtime,
+    baseMtimeNanos: undefined,
+    baseContentHash: "",
     loading: true,
     saving: false,
     dirty: false,
@@ -275,6 +281,8 @@ export default function RemoteFileEditorPage() {
           content: result.content,
           baseSize: result.size,
           baseMtime: result.mtime ?? current.mtime ?? 0,
+          baseMtimeNanos: result.mtimeNanos,
+          baseContentHash: result.contentHash,
           size: result.size,
           mtime: result.mtime ?? current.mtime ?? 0,
           loading: false,
@@ -317,23 +325,14 @@ export default function RemoteFileEditorPage() {
     void loadFile(tabId(initialData));
   }, [initialData, loadFile]);
 
-  useEffect(() => {
-    const currentWindow = getCurrentWindow();
-    let unlisten: (() => void) | undefined;
-
-    listen<RemoteFileEditorOpenPayload>("remote-file-editor-open", (event) => {
-      if (event.payload.targetLabel && event.payload.targetLabel !== currentWindow.label) return;
-      addOrFocusTab(event.payload.data);
-    })
-      .then((dispose) => {
-        unlisten = dispose;
-      })
-      .catch(() => {});
-
-    return () => {
-      unlisten?.();
-    };
-  }, [addOrFocusTab]);
+  useChildWindowCommand<RemoteFileEditorOpenPayload>(
+    CHILD_WINDOW_COMMANDS.remoteFileEditorOpen,
+    (payload) => {
+      const currentWindow = getCurrentWindow();
+      if (payload.targetLabel && payload.targetLabel !== currentWindow.label) return;
+      addOrFocusTab(payload.data);
+    },
+  );
 
   useEffect(() => {
     const currentWindow = getCurrentWindow();
@@ -434,6 +433,8 @@ export default function RemoteFileEditorPage() {
             content: tab.content,
             expectedMtime: tab.baseMtime,
             expectedSize: tab.baseSize,
+            expectedMtimeNanos: tab.baseMtimeNanos,
+            expectedHash: tab.baseContentHash || undefined,
             force,
           },
         );
@@ -444,7 +445,9 @@ export default function RemoteFileEditorPage() {
         updateTab(id, (current) => ({
           ...current,
           baseMtime: result.mtime ?? current.baseMtime,
+          baseMtimeNanos: result.mtimeNanos ?? current.baseMtimeNanos,
           baseSize: result.size ?? new Blob([current.content]).size,
+          baseContentHash: result.contentHash ?? current.baseContentHash,
           mtime: result.mtime ?? current.mtime,
           size: result.size ?? current.size,
           dirty: false,

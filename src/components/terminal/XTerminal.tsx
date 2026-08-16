@@ -112,6 +112,12 @@ import {
   TerminalOutputDrain,
   type TerminalOutputDrainMode,
 } from "./terminalOutputDrain";
+import { AlternateScreenStateTracker } from "./alternateScreenStateTracker";
+import {
+  Dec2026FrameGate,
+  resolveDec2026FrameGateMode,
+} from "./dec2026FrameGate";
+import { TerminalOutputScheduler } from "./terminalOutputScheduling";
 import { useTerminalExternalDrop } from "./useTerminalExternalDrop";
 import { useTerminalRefreshEffects } from "./useTerminalRefreshEffects";
 import {
@@ -348,6 +354,7 @@ export default function XTerminal({
     beforeLine: number;
     ts: number;
   }> | null>(null);
+  const frameGateRef = useRef<Dec2026FrameGate | null>(null);
   const lineTimestampsRef = useRef<Map<number, number>>(new Map());
   const gutterLineOffsetRef = useRef(0);
   const sessionTypeRef = useRef(sessionType);
@@ -361,7 +368,7 @@ export default function XTerminal({
   const visibleRef = useRef(visible);
   const activeRef = useRef(active);
   const performanceModeRef = useRef<PerformanceMode>("normal");
-  const lastAlternateScreenWriteAtRef = useRef(0);
+  const alternateScreenTrackerRef = useRef(new AlternateScreenStateTracker());
   const handleVisibilityChangeRef = useRef<(() => void) | null>(null);
   const replaceInputCommandRef = useRef<((command: string) => void) | null>(
     null,
@@ -799,9 +806,14 @@ export default function XTerminal({
     setTerminalReady(false);
     lineTimestampsRef.current = new Map();
     gutterLineOffsetRef.current = 0;
+    frameGateRef.current?.dispose({
+      ackRemaining: true,
+      reason: "terminal_rebuild",
+    });
+    frameGateRef.current = null;
     outputDrainRef.current?.dispose({ ackRemaining: true });
     outputDrainRef.current = null;
-    lastAlternateScreenWriteAtRef.current = 0;
+    alternateScreenTrackerRef.current.reset();
     disconnectedRef.current = false;
     disconnectedNoticeShownRef.current = false;
     disconnectedCloseRequestedRef.current = false;
@@ -856,6 +868,9 @@ export default function XTerminal({
     );
     const serializeAddon = new SerializeAddon();
     const unicodeGraphemesAddon = new UnicodeGraphemesAddon();
+    let writeOrderedTerminalStatus = (data: string) => {
+      terminal.write(data);
+    };
     const zmodemHandler = createZmodemEventHandler(
       terminal,
       sessionId,
@@ -866,6 +881,9 @@ export default function XTerminal({
         upsertProgress: upsertExternalTransferProgress,
         complete: completeExternalTransfer,
         fail: failExternalTransfer,
+      },
+      (data) => {
+        writeOrderedTerminalStatus(data);
       },
     );
 
@@ -1969,6 +1987,9 @@ export default function XTerminal({
     );
 
     const writeParsedDisposable = terminal.onWriteParsed(() => {
+      alternateScreenTrackerRef.current.setXtermBufferType(
+        terminal.buffer.active.type,
+      );
       if (terminal.buffer.active.type === "alternate") {
         dismissSuggestions();
       }
@@ -2145,20 +2166,17 @@ export default function XTerminal({
     };
 
     const isAlternateScreenActive = () =>
-      terminal.buffer.active.type === "alternate";
+      terminal.buffer.active.type === "alternate" ||
+      alternateScreenTrackerRef.current.isAlternateScreenActive();
 
-    const getWriteChunkBytes = () =>
-      isAlternateScreenActive()
-        ? XTERM_PERFORMANCE_CONFIG.output.alternateScreenWriteChunkBytes
-        : XTERM_PERFORMANCE_CONFIG.output.writeChunkBytes;
+    const outputScheduler = new TerminalOutputScheduler({
+      getQueueBytes: () =>
+        (outputDrainRef.current?.getQueueBytes() ?? 0) +
+        (frameGateRef.current?.getHeldBytes() ?? 0),
+      isAlternateScreenActive,
+    });
 
-    const getAlternateScreenWriteIntervalMs = () =>
-      1000 / XTERM_PERFORMANCE_CONFIG.output.alternateScreenMaxWriteFps;
-
-    const shouldThrottleAlternateScreenWrite = () =>
-      isAlternateScreenActive() &&
-      (outputDrainRef.current?.getQueueBytes() ?? 0) >
-        XTERM_PERFORMANCE_CONFIG.output.alternateScreenThrottleBacklogBytes;
+    const getWriteChunkBytes = () => outputScheduler.getWriteChunkBytes();
 
     const getRecoveryThresholdBytes = () =>
       visibleRef.current
@@ -2166,7 +2184,8 @@ export default function XTerminal({
         : XTERM_PERFORMANCE_CONFIG.output.hiddenRecoveryThresholdBytes;
 
     const getPendingOutputBytes = () =>
-      outputDrainRef.current?.getPendingBytes() ?? 0;
+      (outputDrainRef.current?.getPendingBytes() ?? 0) +
+      (frameGateRef.current?.getHeldBytes() ?? 0);
 
     const getNonOverloadedPressureMode = (): PerformanceMode =>
       getPendingOutputBytes() >=
@@ -2215,13 +2234,7 @@ export default function XTerminal({
     };
 
     const getForegroundDelayMs = () => {
-      if (!shouldThrottleAlternateScreenWrite()) return 0;
-      const now = Date.now();
-      const intervalMs = getAlternateScreenWriteIntervalMs();
-      const elapsedMs = now - lastAlternateScreenWriteAtRef.current;
-      return lastAlternateScreenWriteAtRef.current > 0 && elapsedMs < intervalMs
-        ? Math.max(1, intervalMs - elapsedMs)
-        : 0;
+      return outputScheduler.getForegroundDelayMs();
     };
 
     const updateOutputDrainMode = () => {
@@ -2239,9 +2252,7 @@ export default function XTerminal({
       shouldUseLowLatencyFlush,
       onAck: sendOutputAck,
       onWriteStart: () => {
-        if (visibleRef.current && isAlternateScreenActive()) {
-          lastAlternateScreenWriteAtRef.current = Date.now();
-        }
+        outputScheduler.noteWriteStart();
         return { beforeLine: getCurrentAbsoluteLine(), ts: Date.now() };
       },
       onWriteComplete: (_payload, context) => {
@@ -2280,6 +2291,7 @@ export default function XTerminal({
             visible: visibleRef.current,
             queue_bytes: outputDrainRef.current?.getQueueBytes() ?? 0,
             pending_bytes: outputDrainRef.current?.getPendingBytes() ?? 0,
+            frame_gate: frameGateRef.current?.snapshot(),
             performance_mode: performanceModeRef.current,
           },
         });
@@ -2294,6 +2306,7 @@ export default function XTerminal({
             queue_bytes: queueBytes,
             writing_bytes: writingBytes,
             unacked_bytes: unackedBytes,
+            frame_gate: frameGateRef.current?.snapshot(),
             performance_mode: performanceModeRef.current,
             buffer_type: terminal.buffer.active.type,
           },
@@ -2301,9 +2314,58 @@ export default function XTerminal({
       },
     });
     outputDrainRef.current = outputDrain;
+    const frameGateMode = resolveDec2026FrameGateMode();
+    const frameGate = new Dec2026FrameGate({
+      mode: frameGateMode,
+      forward: (chunk) => outputDrain.enqueue(chunk),
+      ackDropped: sendOutputAck,
+      getPressureSnapshot: () => ({
+        alternateScreen: isAlternateScreenActive(),
+        outputDrainQueueBytes: outputDrain.getQueueBytes(),
+        outputDrainPendingBytes: outputDrain.getPendingBytes(),
+        frameGateHeldBytes: frameGateRef.current?.getHeldBytes() ?? 0,
+        performanceMode: performanceModeRef.current,
+      }),
+      onPressureChange: () => {
+        maybeRecoverPerformanceMode();
+        refreshOutputPressureMode();
+      },
+      logDebug: (event, message, data) => {
+        logger.debug({
+          domain: "terminal.input",
+          event,
+          message,
+          ids: { session_id: sessionId },
+          data: {
+            mode: frameGateMode,
+            ...(data ?? {}),
+          },
+        });
+      },
+    });
+    frameGateRef.current = frameGate;
+    logger.debug({
+      domain: "terminal.input",
+      event: "terminal.dec2026_frame_gate.mode",
+      message: "Initialized DEC 2026 frame gate",
+      ids: { session_id: sessionId },
+      data: { mode: frameGateMode },
+    });
     updateOutputDrainMode();
 
-    const writeTerminalTextAfterOutputQueue = (data: string) => {
+    const flushFrameGateAndDrain = async (reason: string) => {
+      clearHibernateTimer();
+      frameGateRef.current?.flush(reason);
+      const drained = await outputDrain.waitForIdle(
+        XTERM_PERFORMANCE_CONFIG.output.hibernateDrainTimeoutMs,
+      );
+      maybeRecoverPerformanceMode();
+      refreshOutputPressureMode();
+      return drained;
+    };
+
+    const writeTerminalTextAfterOutputQueue = async (data: string) => {
+      await flushFrameGateAndDrain("terminal_status_write");
       return outputDrain.writeExternal(
         () =>
           new Promise<void>((resolve) => {
@@ -2328,14 +2390,12 @@ export default function XTerminal({
       );
     };
 
-    const flushQueuedOutputBeforeStatusNotice = async () => {
-      clearHibernateTimer();
-      await outputDrain.waitForIdle(
-        XTERM_PERFORMANCE_CONFIG.output.hibernateDrainTimeoutMs,
-      );
-      maybeRecoverPerformanceMode();
-      refreshOutputPressureMode();
+    writeOrderedTerminalStatus = (data: string) => {
+      void writeTerminalTextAfterOutputQueue(data);
     };
+
+    const flushQueuedOutputBeforeStatusNotice = async () =>
+      flushFrameGateAndDrain("status_notice");
 
     const resetDisconnectedInputState = () => {
       inputStateRef.current = createTerminalInputState();
@@ -2455,10 +2515,14 @@ export default function XTerminal({
               inputStateRef.current = createTerminalInputState();
               clearCredentialPromptInputMode();
               dismissSuggestions();
-              terminal.write(renderAiCommandStart(event.payload));
+              void writeTerminalTextAfterOutputQueue(
+                renderAiCommandStart(event.payload),
+              );
             } else if (event.payload.type === "commandEnd") {
               aiCapturingRef.current = false;
-              terminal.write(renderAiCommandEnd(event.payload));
+              void writeTerminalTextAfterOutputQueue(
+                renderAiCommandEnd(event.payload),
+              );
             }
             break;
         }
@@ -2539,9 +2603,8 @@ export default function XTerminal({
           "Draining terminal output before hibernation",
           { epoch },
         );
-        const drainedBeforeDetach = await outputDrain.waitForIdle(
-          XTERM_PERFORMANCE_CONFIG.output.hibernateDrainTimeoutMs,
-        );
+        const drainedBeforeDetach =
+          await flushFrameGateAndDrain("hibernate_before_detach");
         if (!drainedBeforeDetach) {
           hibernationPhaseRef.current = "idle";
           logHibernation(
@@ -2582,9 +2645,8 @@ export default function XTerminal({
           return;
         }
 
-        const drainedAfterDetach = await outputDrain.waitForIdle(
-          XTERM_PERFORMANCE_CONFIG.output.hibernateDrainTimeoutMs,
-        );
+        const drainedAfterDetach =
+          await flushFrameGateAndDrain("hibernate_after_detach");
         if (!drainedAfterDetach) {
           logHibernation(
             "drain_timeout",
@@ -2683,15 +2745,11 @@ export default function XTerminal({
             return;
           }
 
-          outputDrain.enqueue({
-            data: payload.data,
-            bytes: payload.bytes,
-          });
-
           const recentPayload =
             payload.data.length > 4096
               ? payload.data.slice(-4096)
               : payload.data;
+          alternateScreenTrackerRef.current.ingest(payload.data);
           updateCredentialPromptInputMode(recentPayload);
           feedCredentialOutput(recentPayload);
           if (visibleRef.current && hasErrorKeyword(recentPayload)) {
@@ -2706,6 +2764,10 @@ export default function XTerminal({
           }
 
           noteSkippedOutput(payload.droppedBytes ?? 0);
+          frameGate.enqueue({
+            data: payload.data,
+            bytes: payload.bytes,
+          });
 
           if (!visibleRef.current) {
             maybeRecoverPerformanceMode();
@@ -2810,12 +2872,14 @@ export default function XTerminal({
             clearCredentialPromptInputMode();
             dismissSuggestions();
             if (isTerminalAlive()) {
-              terminal.write(renderAiCommandStart(payload));
+              void writeTerminalTextAfterOutputQueue(
+                renderAiCommandStart(payload),
+              );
             }
           } else if (payload.type === "commandEnd") {
             aiCapturingRef.current = false;
             if (isTerminalAlive()) {
-              terminal.write(renderAiCommandEnd(payload));
+              void writeTerminalTextAfterOutputQueue(renderAiCommandEnd(payload));
             }
           }
         },
@@ -3394,11 +3458,15 @@ export default function XTerminal({
       if (zmodemUnlisten) zmodemUnlisten();
       if (commandAcceptedUnlisten) commandAcceptedUnlisten();
       zmodemHandler.dispose();
+      frameGate.dispose({ ackRemaining: true, reason: "terminal_cleanup" });
+      if (frameGateRef.current === frameGate) {
+        frameGateRef.current = null;
+      }
       outputDrain.dispose();
       if (outputDrainRef.current === outputDrain) {
         outputDrainRef.current = null;
       }
-      lastAlternateScreenWriteAtRef.current = 0;
+      outputScheduler.reset();
       const latestLifecycleState = terminalLifecycleStateRef.current;
       if (
         !hibernationCleanupRef.current &&

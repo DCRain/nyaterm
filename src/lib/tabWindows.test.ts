@@ -12,7 +12,7 @@ describe("terminal window persistence", () => {
         connectionId: "ssh-1",
         backend: "remote",
         path: "/srv/notes.md",
-        file: { content: "notes", size: 5, mtime: 42 },
+        file: { content: "notes", size: 5, mtime: 42, contentHash: "hash-notes" },
       }),
       0,
     );

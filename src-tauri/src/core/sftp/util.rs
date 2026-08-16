@@ -4,6 +4,7 @@
 use crate::error::{AppError, AppResult};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 pub(crate) const SFTP_FILE_TYPE_MASK: u32 = 0o170000;
 pub(crate) const POSIX_MODE_MASK: u32 = 0o7777;
@@ -95,11 +96,15 @@ pub struct RemoteFileAttributeUpdate {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RemoteTextFile {
     pub path: String,
     pub content: String,
     pub size: u64,
     pub mtime: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mtime_nanos: Option<String>,
+    pub content_hash: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -126,9 +131,11 @@ pub fn classify_text_file(file: RemoteBinaryFile) -> TextFileOpenResult {
         Ok(content) => TextFileOpenResult::Text {
             file: RemoteTextFile {
                 path: file.path,
-                content,
                 size: file.size,
                 mtime: file.mtime,
+                mtime_nanos: file.mtime_nanos,
+                content_hash: content_hash(content.as_bytes()),
+                content,
             },
         },
         Err(_) => TextFileOpenResult::Unsupported {
@@ -144,6 +151,8 @@ pub struct RemoteBinaryFile {
     pub content_bytes: Vec<u8>,
     pub size: u64,
     pub mtime: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mtime_nanos: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -152,24 +161,38 @@ pub struct WriteRemoteTextResult {
     pub status: String,
     pub mtime: Option<u64>,
     pub size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mtime_nanos: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
 }
 
 impl WriteRemoteTextResult {
-    pub fn saved(mtime: u64, size: u64) -> Self {
+    pub fn saved(mtime: u64, size: u64, mtime_nanos: Option<String>, content_hash: String) -> Self {
         Self {
             status: "saved".to_string(),
             mtime: Some(mtime),
             size: Some(size),
+            mtime_nanos,
+            content_hash: Some(content_hash),
         }
     }
 
-    pub fn conflict(mtime: u64, size: u64) -> Self {
+    pub fn conflict(mtime: u64, size: u64, mtime_nanos: Option<String>) -> Self {
         Self {
             status: "conflict".to_string(),
             mtime: Some(mtime),
             size: Some(size),
+            mtime_nanos,
+            content_hash: None,
         }
     }
+}
+
+pub(crate) fn content_hash(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
 }
 
 pub(crate) fn ensure_text_bytes(bytes: &[u8], max_bytes: u64) -> AppResult<()> {
@@ -459,7 +482,7 @@ fn is_windows_reserved_device_name(name: &str) -> bool {
 mod tests {
     use super::{
         FileProperties, RemoteBinaryFile, RemotePathRef, TextFileOpenResult,
-        TextFileUnsupportedReason, classify_text_file, decode_raw_path_token,
+        TextFileUnsupportedReason, classify_text_file, content_hash, decode_raw_path_token,
         permissions_string_to_octal_mode, raw_path_token, sanitize_download_file_name_for_platform,
         scp_finalize_replace_command,
     };
@@ -470,6 +493,7 @@ mod tests {
             path: "/tmp/file".to_string(),
             size: content_bytes.len() as u64,
             mtime: 1,
+            mtime_nanos: None,
             content_bytes,
         };
         assert!(matches!(
@@ -484,9 +508,11 @@ mod tests {
                 reason: TextFileUnsupportedReason::UnsupportedEncoding
             }
         ));
+        let opened = classify_text_file(file(b"hello".to_vec()));
         assert!(matches!(
-            classify_text_file(file(b"hello".to_vec())),
-            TextFileOpenResult::Text { file } if file.content == "hello"
+            opened,
+            TextFileOpenResult::Text { ref file }
+                if file.content == "hello" && file.content_hash == content_hash(b"hello")
         ));
     }
 

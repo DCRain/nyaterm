@@ -3,12 +3,20 @@ import { XTERM_PERFORMANCE_CONFIG } from "@/lib/xtermPerformance";
 import { TerminalOutputDrain } from "./terminalOutputDrain";
 
 const settle = async () => {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let i = 0; i < 10; i += 1) {
+    await Promise.resolve();
+  }
 };
 
-function createHarness(options: { writeChunkBytes?: number; autoCompleteWrites?: boolean } = {}) {
+function createHarness(
+  options: {
+    writeChunkBytes?: number;
+    autoCompleteWrites?: boolean;
+    shouldUseLowLatencyFlush?: () => boolean;
+    getForegroundDelayMs?: () => number;
+    writeDurationMs?: number;
+  } = {},
+) {
   let now = 0;
   let nextTimerId = 1;
   let nextFrameId = 1;
@@ -22,6 +30,7 @@ function createHarness(options: { writeChunkBytes?: number; autoCompleteWrites?:
   const terminal = {
     write: vi.fn((data: string, callback?: () => void) => {
       writes.push(data);
+      now += options.writeDurationMs ?? 0;
       if (!callback) return;
       if (options.autoCompleteWrites === false) {
         pendingWriteCallbacks.push(callback);
@@ -35,6 +44,8 @@ function createHarness(options: { writeChunkBytes?: number; autoCompleteWrites?:
     sessionId: "session-1",
     getTerminal: () => terminal,
     getWriteChunkBytes: () => options.writeChunkBytes ?? 1024,
+    getForegroundDelayMs: options.getForegroundDelayMs,
+    shouldUseLowLatencyFlush: options.shouldUseLowLatencyFlush,
     onAck: (bytes) => acks.push(bytes),
     onPressureChange: (bytes) => pressure.push(bytes),
     timers: {
@@ -90,6 +101,8 @@ function createHarness(options: { writeChunkBytes?: number; autoCompleteWrites?:
     terminal,
     timers,
     writes,
+    getFrameCount: () => frames.size,
+    getNow: () => now,
   };
 }
 
@@ -139,6 +152,61 @@ describe("TerminalOutputDrain", () => {
     flushFrame();
     await settle();
     expect(writes).toEqual(["abcd", "efgh", "ij"]);
+  });
+
+  it("uses the microtask fast path for light foreground pressure", async () => {
+    const { drain, getFrameCount, writes } = createHarness({
+      shouldUseLowLatencyFlush: () => true,
+      writeChunkBytes: 16,
+    });
+
+    drain.setMode("foreground");
+    drain.enqueue({ data: "hello", bytes: 5 });
+    await settle();
+
+    expect(writes).toEqual(["hello"]);
+    expect(getFrameCount()).toBe(0);
+  });
+
+  it("yields to the next frame when a foreground drain turn exhausts its budget", async () => {
+    const { drain, flushFrame, getFrameCount, writes } = createHarness({
+      shouldUseLowLatencyFlush: () => true,
+      writeChunkBytes: 4,
+      writeDurationMs: XTERM_PERFORMANCE_CONFIG.output.maxForegroundDrainTurnMs + 1,
+    });
+
+    drain.setMode("foreground");
+    drain.enqueue({ data: "abcdefghijkl", bytes: 12 });
+    await settle();
+
+    expect(writes).toEqual(["abcd"]);
+    expect(getFrameCount()).toBe(1);
+
+    flushFrame();
+    await settle();
+    expect(writes).toEqual(["abcd", "efgh"]);
+  });
+
+  it("honors foreground delay only when the scheduler reports severe backlog", async () => {
+    let severeBacklog = false;
+    const { advance, drain, timers, writes } = createHarness({
+      getForegroundDelayMs: () => (severeBacklog ? 50 : 0),
+      writeChunkBytes: 8,
+    });
+
+    drain.setMode("foreground");
+    severeBacklog = true;
+    drain.enqueue({ data: "alt", bytes: 3 });
+    expect(timers.size).toBe(1);
+    expect(writes).toEqual([]);
+
+    advance(49);
+    await settle();
+    expect(writes).toEqual([]);
+
+    advance(1);
+    await settle();
+    expect(writes).toEqual(["alt"]);
   });
 
   it("acks only bytes completed by write callbacks", async () => {

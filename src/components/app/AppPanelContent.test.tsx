@@ -71,7 +71,7 @@ describe("AppPanelContent file explorer", () => {
       file: {
         backend: "remote",
         path: "/tmp/notes.txt",
-        initial: { content: "notes", size: 5, mtime: 1 },
+        initial: { content: "notes", size: 5, mtime: 1, contentHash: "hash-notes" },
       },
     };
 
