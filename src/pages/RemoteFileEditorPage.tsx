@@ -44,11 +44,10 @@ import {
   getDisplayLanguage,
 } from "@/lib/codeMirrorFileView";
 import { getErrorMessage } from "@/lib/errors";
+import { MAX_EDITOR_FILE_BYTES } from "@/lib/fileEditorLimits";
 import { invoke } from "@/lib/invoke";
 import { cn, formatSize, parseJsonSearchParam } from "@/lib/utils";
 import type { FileWindowTarget } from "@/lib/windowManager";
-
-const MAX_EDITOR_FILE_BYTES = 5 * 1024 * 1024;
 
 type FileEditorBackendKind = "remote" | "local";
 
@@ -81,6 +80,8 @@ interface EditorTab {
   content: string;
   baseSize: number;
   baseMtime: number;
+  baseMtimeNanos?: string;
+  baseContentHash: string;
   loading: boolean;
   saving: boolean;
   dirty: boolean;
@@ -92,7 +93,9 @@ interface EditorTab {
 interface WriteRemoteFileTextResult {
   status: "saved" | "conflict";
   mtime?: number;
+  mtimeNanos?: string;
   size?: number;
+  contentHash?: string;
 }
 
 function getEditorDataPath(data: Pick<RemoteFileEditorData, "path" | "remotePath">) {
@@ -141,6 +144,8 @@ function createTab(data: RemoteFileEditorData): EditorTab {
     content: "",
     baseSize: data.size,
     baseMtime: data.mtime,
+    baseMtimeNanos: undefined,
+    baseContentHash: "",
     loading: true,
     saving: false,
     dirty: false,
@@ -276,6 +281,8 @@ export default function RemoteFileEditorPage() {
           content: result.content,
           baseSize: result.size,
           baseMtime: result.mtime ?? current.mtime ?? 0,
+          baseMtimeNanos: result.mtimeNanos,
+          baseContentHash: result.contentHash,
           size: result.size,
           mtime: result.mtime ?? current.mtime ?? 0,
           loading: false,
@@ -426,6 +433,8 @@ export default function RemoteFileEditorPage() {
             content: tab.content,
             expectedMtime: tab.baseMtime,
             expectedSize: tab.baseSize,
+            expectedMtimeNanos: tab.baseMtimeNanos,
+            expectedHash: tab.baseContentHash || undefined,
             force,
           },
         );
@@ -436,7 +445,9 @@ export default function RemoteFileEditorPage() {
         updateTab(id, (current) => ({
           ...current,
           baseMtime: result.mtime ?? current.baseMtime,
+          baseMtimeNanos: result.mtimeNanos ?? current.baseMtimeNanos,
           baseSize: result.size ?? new Blob([current.content]).size,
+          baseContentHash: result.contentHash ?? current.baseContentHash,
           mtime: result.mtime ?? current.mtime,
           size: result.size ?? current.size,
           dirty: false,
@@ -851,7 +862,7 @@ export default function RemoteFileEditorPage() {
         onOpenChange={(open) => {
           if (!open) setConflictTabId(null);
         }}
-        onReload={() => {
+        onDiscardAndReload={() => {
           const id = conflictTabId;
           setConflictTabId(null);
           if (id) void loadFile(id);

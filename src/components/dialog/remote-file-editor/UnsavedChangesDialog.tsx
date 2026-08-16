@@ -34,7 +34,7 @@ export default function UnsavedChangesDialog({
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent size="sm">
+      <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>{t("fileEditor.unsavedTitle")}</AlertDialogTitle>
           <AlertDialogDescription>
@@ -43,7 +43,7 @@ export default function UnsavedChangesDialog({
               : t("fileEditor.unsavedFilesDesc", { count: dirtyCount })}
           </AlertDialogDescription>
         </AlertDialogHeader>
-        <AlertDialogFooter className="group-data-[size=sm]/alert-dialog-content:grid-cols-3">
+        <AlertDialogFooter>
           <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
           <Button
             variant="outline"

@@ -1,6 +1,7 @@
+use crate::core::sftp::util::content_hash;
 use crate::core::sftp::{
     DirectoryChild, FileEntry, FileProperties, RemoteBinaryFile, RemoteTextFile,
-    WriteRemoteTextResult,
+    TextFileOpenResult, WriteRemoteTextResult, classify_text_file,
 };
 use crate::core::{SessionManager, SessionType};
 use crate::error::{AppError, AppResult};
@@ -242,6 +243,18 @@ pub async fn read_local_file_text(
     read_local_file_text_impl(&path, max_bytes).await
 }
 
+#[tauri::command]
+pub async fn open_local_file_text(
+    state: tauri::State<'_, Arc<SessionManager>>,
+    session_id: String,
+    path: String,
+    max_bytes: u64,
+) -> AppResult<TextFileOpenResult> {
+    ensure_local_session(state.inner(), &session_id).await?;
+    let file = read_local_file_bytes_impl(&path, max_bytes).await?;
+    Ok(classify_text_file(file))
+}
+
 async fn read_local_file_text_impl(path: &str, max_bytes: u64) -> AppResult<RemoteTextFile> {
     let metadata = tokio::fs::metadata(&path).await?;
     if metadata.is_dir() {
@@ -257,6 +270,7 @@ async fn read_local_file_text_impl(path: &str, max_bytes: u64) -> AppResult<Remo
     }
 
     let bytes = tokio::fs::read(&path).await?;
+    let file_hash = content_hash(&bytes);
     let content = String::from_utf8(bytes)
         .map_err(|_| AppError::Config("File is not valid UTF-8 text".to_string()))?;
     Ok(RemoteTextFile {
@@ -264,6 +278,8 @@ async fn read_local_file_text_impl(path: &str, max_bytes: u64) -> AppResult<Remo
         content,
         size: metadata.len(),
         mtime: modified_time_secs(&metadata),
+        mtime_nanos: modified_time_nanos(&metadata),
+        content_hash: file_hash,
     })
 }
 
@@ -298,6 +314,7 @@ async fn read_local_file_bytes_impl(path: &str, max_bytes: u64) -> AppResult<Rem
         content_bytes: bytes,
         size: metadata.len(),
         mtime: modified_time_secs(&metadata),
+        mtime_nanos: modified_time_nanos(&metadata),
     })
 }
 
@@ -309,6 +326,8 @@ pub async fn write_local_file_text(
     content: String,
     expected_mtime: Option<u64>,
     expected_size: Option<u64>,
+    expected_mtime_nanos: Option<String>,
+    expected_hash: Option<String>,
     force: Option<bool>,
 ) -> AppResult<WriteRemoteTextResult> {
     ensure_local_session(state.inner(), &session_id).await?;
@@ -317,6 +336,8 @@ pub async fn write_local_file_text(
         &content,
         expected_mtime,
         expected_size,
+        expected_mtime_nanos.as_deref(),
+        expected_hash.as_deref(),
         force.unwrap_or(false),
     )
     .await
@@ -327,16 +348,36 @@ async fn write_local_file_text_impl(
     content: &str,
     expected_mtime: Option<u64>,
     expected_size: Option<u64>,
+    expected_mtime_nanos: Option<&str>,
+    expected_hash: Option<&str>,
     force: bool,
 ) -> AppResult<WriteRemoteTextResult> {
     let metadata = tokio::fs::metadata(&path).await?;
     let current_mtime = modified_time_secs(&metadata);
+    let current_mtime_nanos = modified_time_nanos(&metadata);
     let current_size = metadata.len();
     let has_conflict = expected_mtime.is_some_and(|mtime| mtime != current_mtime)
-        || expected_size.is_some_and(|size| size != current_size);
+        || expected_size.is_some_and(|size| size != current_size)
+        || expected_mtime_nanos.is_some_and(|mtime| Some(mtime) != current_mtime_nanos.as_deref());
 
-    if has_conflict && !force {
-        return Ok(WriteRemoteTextResult::conflict(current_mtime, current_size));
+    let has_hash_conflict = if !force && !has_conflict {
+        match expected_hash {
+            Some(expected_hash) => {
+                let current_bytes = tokio::fs::read(&path).await?;
+                content_hash(&current_bytes) != expected_hash
+            }
+            None => false,
+        }
+    } else {
+        false
+    };
+
+    if (has_conflict || has_hash_conflict) && !force {
+        return Ok(WriteRemoteTextResult::conflict(
+            current_mtime,
+            current_size,
+            current_mtime_nanos,
+        ));
     }
 
     tokio::fs::write(&path, content).await?;
@@ -344,6 +385,8 @@ async fn write_local_file_text_impl(
     Ok(WriteRemoteTextResult::saved(
         modified_time_secs(&next_metadata),
         next_metadata.len(),
+        modified_time_nanos(&next_metadata),
+        content_hash(content.as_bytes()),
     ))
 }
 
@@ -419,6 +462,14 @@ fn system_time_secs(time: std::io::Result<std::time::SystemTime>) -> u64 {
 
 fn modified_time_secs(metadata: &std::fs::Metadata) -> u64 {
     system_time_secs(metadata.modified())
+}
+
+fn modified_time_nanos(metadata: &std::fs::Metadata) -> Option<String> {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos().to_string())
 }
 
 fn accessed_time_secs(metadata: &std::fs::Metadata) -> u64 {
@@ -571,21 +622,79 @@ mod tests {
         rename_local_file_impl(original.to_str().unwrap(), renamed.to_str().unwrap())
             .await
             .unwrap();
-        write_local_file_text_impl(renamed.to_str().unwrap(), "hello", None, None, false)
-            .await
-            .unwrap();
+        write_local_file_text_impl(
+            renamed.to_str().unwrap(),
+            "hello",
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
         let text = read_local_file_text_impl(renamed.to_str().unwrap(), 1024)
             .await
             .unwrap();
 
         assert_eq!(text.content, "hello");
         assert_eq!(text.size, 5);
+        assert_eq!(text.content_hash, content_hash(b"hello"));
+
+        let saved = write_local_file_text_impl(
+            renamed.to_str().unwrap(),
+            "hello!",
+            Some(text.mtime),
+            Some(text.size),
+            text.mtime_nanos.as_deref(),
+            Some(&text.content_hash),
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(saved.status, "saved");
+        assert_eq!(
+            saved.content_hash.as_deref(),
+            Some(content_hash(b"hello!").as_str())
+        );
+
+        let text = read_local_file_text_impl(renamed.to_str().unwrap(), 1024)
+            .await
+            .unwrap();
+
+        let conflict = write_local_file_text_impl(
+            renamed.to_str().unwrap(),
+            "changed",
+            Some(text.mtime + 1),
+            Some(text.size),
+            text.mtime_nanos.as_deref(),
+            Some(&text.content_hash),
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(conflict.status, "conflict");
 
         let conflict = write_local_file_text_impl(
             renamed.to_str().unwrap(),
             "changed",
             Some(text.mtime),
             Some(text.size + 1),
+            text.mtime_nanos.as_deref(),
+            Some(&text.content_hash),
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(conflict.status, "conflict");
+
+        let conflict = write_local_file_text_impl(
+            renamed.to_str().unwrap(),
+            "changed",
+            Some(text.mtime),
+            Some(text.size),
+            text.mtime_nanos.as_deref(),
+            Some("definitely-not-the-current-hash"),
             false,
         )
         .await
@@ -597,11 +706,17 @@ mod tests {
             "changed",
             Some(text.mtime),
             Some(text.size + 1),
+            text.mtime_nanos.as_deref(),
+            Some("definitely-not-the-current-hash"),
             true,
         )
         .await
         .unwrap();
         assert_eq!(forced.status, "saved");
+        assert_eq!(
+            forced.content_hash.as_deref(),
+            Some(content_hash(b"changed").as_str())
+        );
 
         delete_local_file_impl(root.to_str().unwrap())
             .await

@@ -31,11 +31,24 @@ import CloseAllSessionsDialog from "@/components/dialog/terminal/CloseAllSession
 import TabRenameDialog from "@/components/dialog/terminal/TabRenameDialog";
 import TabStartupCommandDialog from "@/components/dialog/terminal/TabStartupCommandDialog";
 import { hasMatchingTemporaryConfig } from "@/lib/appWorkspace";
+import { useFileDocumentStates } from "@/lib/fileDocumentRegistry";
 import type { TabMouseAction } from "@/lib/interactionSettings";
 import { normalizeTabMouseAction } from "@/lib/interactionSettings";
-import { getActiveGroupForSession, isSessionPausedInGroup } from "@/lib/syncInputGroups";
-import { getActivePane, getTabDisplayName } from "@/lib/workspaceTabs";
-import type { Group, PaneSplitDirection, SavedConnection, Tab } from "@/types/global";
+import {
+  getActiveGroupForSession,
+  isSessionPausedInGroup,
+} from "@/lib/syncInputGroups";
+import {
+  collectSessionPanes,
+  getActivePane,
+  getTabDisplayName,
+} from "@/lib/workspaceTabs";
+import type {
+  Group,
+  PaneSplitDirection,
+  SavedConnection,
+  Tab,
+} from "@/types/global";
 import { useApp } from "../../context/AppContext";
 import { resolveConnectionIcon } from "../icons";
 import {
@@ -77,7 +90,10 @@ interface TabBarProps {
   ) => void | Promise<void>;
   onReconnectSession: (tab: Tab) => void | Promise<void>;
   onDisconnectSession: (tab: Tab) => void | Promise<void>;
-  onSplitSession: (tab: Tab, direction: PaneSplitDirection) => void | Promise<void>;
+  onSplitSession: (
+    tab: Tab,
+    direction: PaneSplitDirection,
+  ) => void | Promise<void>;
   onUnsplit?: () => void;
   onCloseSession: (tab: Tab) => void | Promise<void>;
   onCloseAll: () => void | Promise<void>;
@@ -109,7 +125,9 @@ interface PointerTabDragState {
 
 function shouldUsePointerTabDrag() {
   if (typeof navigator === "undefined") return false;
-  return /Mac/.test(navigator.platform) && /AppleWebKit/.test(navigator.userAgent);
+  return (
+    /Mac/.test(navigator.platform) && /AppleWebKit/.test(navigator.userAgent)
+  );
 }
 
 function easeOutCubic(progress: number): number {
@@ -140,7 +158,10 @@ function animateTabStripScroll(
   let rafId = 0;
 
   const step = (now: number) => {
-    const progress = Math.min(1, (now - startTime) / TAB_STRIP_SCROLL_DURATION_MS);
+    const progress = Math.min(
+      1,
+      (now - startTime) / TAB_STRIP_SCROLL_DURATION_MS,
+    );
     strip.scrollLeft = startScrollLeft + distance * easeOutCubic(progress);
     if (progress < 1) {
       rafId = requestAnimationFrame(step);
@@ -154,7 +175,10 @@ function animateTabStripScroll(
   return () => cancelAnimationFrame(rafId);
 }
 
-function compareSortOrder(left: { sort_order?: number }, right: { sort_order?: number }) {
+function compareSortOrder(
+  left: { sort_order?: number },
+  right: { sort_order?: number },
+) {
   return (left.sort_order ?? 0) - (right.sort_order ?? 0);
 }
 
@@ -184,15 +208,19 @@ function isSshTab(tab: Tab, savedConnections: SavedConnection[]): boolean {
 
 function getTabServerIp(tab: Tab, savedConnections: SavedConnection[]): string | null {
   const pane = getActivePane(tab);
-  if (pane?.type !== "SSH") return null;
+  if (pane?.paneKind !== "terminal" || pane.type !== "SSH") return null;
   if (pane.temporaryConfig?.protocol === "ssh") return pane.temporaryConfig.host;
   return getTabConnection(tab, savedConnections)?.host || null;
 }
 
-function canMultiplexTab(tab: Tab, savedConnections: SavedConnection[]): boolean {
+function canMultiplexTab(
+  tab: Tab,
+  savedConnections: SavedConnection[],
+): boolean {
   const pane = getActivePane(tab);
   return (
     !!pane &&
+    pane.paneKind === "terminal" &&
     isSshTab(tab, savedConnections) &&
     !pane.connecting &&
     !pane.connectError &&
@@ -204,6 +232,7 @@ function canReconnectTab(tab: Tab): boolean {
   const pane = getActivePane(tab);
   return (
     !!pane &&
+    pane.paneKind === "terminal" &&
     !pane.connecting &&
     (pane.type === "Local" || !!pane.connectionId || hasMatchingTemporaryConfig(pane))
   );
@@ -211,7 +240,20 @@ function canReconnectTab(tab: Tab): boolean {
 
 function canDisconnectTab(tab: Tab): boolean {
   const pane = getActivePane(tab);
-  return !!pane && !pane.connecting && !pane.connectError;
+  return (
+    !!pane &&
+    pane.paneKind === "terminal" &&
+    !pane.connecting &&
+    !pane.connectError
+  );
+}
+
+function supportsFileTabMouseAction(action: TabMouseAction) {
+  return (
+    action === "rename_tab" ||
+    action === "copy_tab_name" ||
+    action === "close_tab"
+  );
 }
 
 function SyncIndicator({
@@ -227,14 +269,24 @@ function SyncIndicator({
   const sessionId = pane?.sessionId;
 
   const activeGroup = useMemo(() => {
-    if (!sessionId || pane?.connecting || pane?.connectError) return null;
+    if (
+      pane?.paneKind !== "terminal" ||
+      !sessionId ||
+      pane.connecting ||
+      pane.connectError
+    ) {
+      return null;
+    }
     if (broadcastToAll) return null;
     return getActiveGroupForSession(sessionId, syncGroups);
-  }, [sessionId, syncGroups, broadcastToAll, pane?.connecting, pane?.connectError]);
+  }, [sessionId, syncGroups, broadcastToAll, pane]);
 
-  const isMember = broadcastToAll || !!activeGroup;
+  const isMember =
+    pane?.paneKind === "terminal" && (broadcastToAll || !!activeGroup);
   const isPaused =
-    activeGroup && sessionId ? isSessionPausedInGroup(activeGroup, sessionId) : false;
+    activeGroup && sessionId
+      ? isSessionPausedInGroup(activeGroup, sessionId)
+      : false;
 
   if (!isMember) return null;
 
@@ -277,8 +329,15 @@ function TabBar({
   onMoveTabHere,
 }: TabBarProps) {
   const { t } = useTranslation();
-  const { appSettings, savedConnections, savedGroups, syncGroups, broadcastToAll, updateTab } =
-    useApp();
+  const {
+    appSettings,
+    savedConnections,
+    savedGroups,
+    syncGroups,
+    broadcastToAll,
+    updateTab,
+  } = useApp();
+  const fileDocumentStates = useFileDocumentStates();
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
   const [renameTab, setRenameTab] = useState<Tab | null>(null);
@@ -355,7 +414,9 @@ function TabBar({
     };
     roots.forEach(computeTotal);
 
-    const pruneEmpty = (node: ConnectionGroupNode): ConnectionGroupNode | null => {
+    const pruneEmpty = (
+      node: ConnectionGroupNode,
+    ): ConnectionGroupNode | null => {
       const children = node.children
         .map(pruneEmpty)
         .filter((child): child is ConnectionGroupNode => !!child);
@@ -364,7 +425,9 @@ function TabBar({
     };
 
     return {
-      roots: roots.map(pruneEmpty).filter((node): node is ConnectionGroupNode => !!node),
+      roots: roots
+        .map(pruneEmpty)
+        .filter((node): node is ConnectionGroupNode => !!node),
       ungrouped,
     };
   }, [savedConnections, savedGroups]);
@@ -378,7 +441,9 @@ function TabBar({
   );
 
   const recentConnections = useMemo(() => {
-    const byId = new Map(savedConnections.map((connection) => [connection.id, connection]));
+    const byId = new Map(
+      savedConnections.map((connection) => [connection.id, connection]),
+    );
     return (appSettings.ui.recent_connection_ids ?? [])
       .map((connectionId) => byId.get(connectionId))
       .filter((connection): connection is SavedConnection => !!connection)
@@ -411,11 +476,15 @@ function TabBar({
 
       tabStripScrollAnimationRef.current?.();
       tabStripAnimatingRef.current = true;
-      tabStripScrollAnimationRef.current = animateTabStripScroll(strip, targetScrollLeft, () => {
+      tabStripScrollAnimationRef.current = animateTabStripScroll(
+        strip,
+        targetScrollLeft,
+        () => {
         tabStripScrollAnimationRef.current = null;
         tabStripAnimatingRef.current = false;
         updateTabStripScrollState();
-      });
+        },
+      );
     },
     [updateTabStripScrollState],
   );
@@ -431,7 +500,10 @@ function TabBar({
     const tabLeft = tabElement.offsetLeft;
     const tabRight = tabLeft + tabElement.offsetWidth;
 
-    if (tabLeft >= scrollLeft + padding && tabRight <= viewportRight - padding) {
+    if (
+      tabLeft >= scrollLeft + padding &&
+      tabRight <= viewportRight - padding
+    ) {
       return null;
     }
 
@@ -439,7 +511,10 @@ function TabBar({
       return clampTabStripScrollLeft(strip, tabLeft - padding);
     }
 
-    return clampTabStripScrollLeft(strip, tabRight - strip.clientWidth + padding);
+    return clampTabStripScrollLeft(
+      strip,
+      tabRight - strip.clientWidth + padding,
+    );
   }, []);
 
   const scrollTabIntoView = useCallback(
@@ -509,10 +584,16 @@ function TabBar({
       tabStripScrollAnimationRef.current = null;
       tabStripAnimatingRef.current = false;
 
-      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      const delta =
+        Math.abs(event.deltaX) > Math.abs(event.deltaY)
+          ? event.deltaX
+          : event.deltaY;
       if (Math.abs(delta) < 0.5) return;
 
-      strip.scrollLeft = clampTabStripScrollLeft(strip, strip.scrollLeft + delta);
+      strip.scrollLeft = clampTabStripScrollLeft(
+        strip,
+        strip.scrollLeft + delta,
+      );
       updateTabStripScrollState();
     },
     [updateTabStripScrollState],
@@ -534,7 +615,11 @@ function TabBar({
     if (trimmed.length > 64) return;
 
     try {
-      await updateTab(renameTab.id, { customName: trimmed }, { immediatePersist: true });
+      await updateTab(
+        renameTab.id,
+        { customName: trimmed },
+        { immediatePersist: true },
+      );
       setRenameTab(null);
     } catch {
       toast.error(t("tabCtx.renameFailed"));
@@ -572,7 +657,9 @@ function TabBar({
     (tab: Tab, action: "duplicate" | "multiplex") => {
       setCommandDialog({ tab, action });
       setCommandValue("");
-      setCommandDelayMs(appSettings.interaction.duplicate_session_command_delay_ms);
+      setCommandDelayMs(
+        appSettings.interaction.duplicate_session_command_delay_ms,
+      );
     },
     [appSettings.interaction.duplicate_session_command_delay_ms],
   );
@@ -580,7 +667,9 @@ function TabBar({
   const closeCommandDialog = useCallback(() => {
     setCommandDialog(null);
     setCommandValue("");
-    setCommandDelayMs(appSettings.interaction.duplicate_session_command_delay_ms);
+    setCommandDelayMs(
+      appSettings.interaction.duplicate_session_command_delay_ms,
+    );
   }, [appSettings.interaction.duplicate_session_command_delay_ms]);
 
   const handleCommandDialogSubmit = useCallback(() => {
@@ -632,14 +721,24 @@ function TabBar({
       if (!detail?.tabId || !detail.action) return;
       const tab = tabs.find((item) => item.id === detail.tabId);
       if (!tab) return;
-      if (detail.action === "multiplex" && !canMultiplexTab(tab, savedConnections)) return;
+      if (
+        detail.action === "multiplex" &&
+        !canMultiplexTab(tab, savedConnections)
+      )
+        return;
       if (detail.action === "duplicate" && !canSpawnSessionFromTab(tab)) return;
       openCommandDialog(tab, detail.action);
     };
 
-    window.addEventListener("nyaterm:open-tab-startup-command-dialog", listener);
+    window.addEventListener(
+      "nyaterm:open-tab-startup-command-dialog",
+      listener,
+    );
     return () => {
-      window.removeEventListener("nyaterm:open-tab-startup-command-dialog", listener);
+      window.removeEventListener(
+        "nyaterm:open-tab-startup-command-dialog",
+        listener,
+      );
     };
   }, [openCommandDialog, savedConnections, tabs]);
 
@@ -729,10 +828,13 @@ function TabBar({
     [isTabMouseActionEnabled, runTabMouseAction],
   );
 
-  const getInsertionIndex = useCallback((event: DragEvent<HTMLDivElement>, index: number) => {
+  const getInsertionIndex = useCallback(
+    (event: DragEvent<HTMLDivElement>, index: number) => {
     const rect = event.currentTarget.getBoundingClientRect();
     return event.clientX < rect.left + rect.width / 2 ? index : index + 1;
-  }, []);
+    },
+    [],
+  );
 
   const resetDragState = useCallback(() => {
     draggedTabIdRef.current = null;
@@ -741,13 +843,16 @@ function TabBar({
     setDropIndex(null);
   }, []);
 
-  const setVisibleTabRef = useCallback((tabId: string, element: HTMLDivElement | null) => {
+  const setVisibleTabRef = useCallback(
+    (tabId: string, element: HTMLDivElement | null) => {
     if (element) {
       tabButtonRefs.current.set(tabId, element);
     } else {
       tabButtonRefs.current.delete(tabId);
     }
-  }, []);
+    },
+    [],
+  );
 
   const getInsertionIndexFromClientX = useCallback(
     (clientX: number) => {
@@ -765,7 +870,8 @@ function TabBar({
     [tabs],
   );
 
-  const isDragEndFallbackNearTabStrip = useCallback((clientX: number, clientY: number) => {
+  const isDragEndFallbackNearTabStrip = useCallback(
+    (clientX: number, clientY: number) => {
     const strip = tabStripRef.current;
     if (!strip || clientX === 0) return false;
 
@@ -773,18 +879,27 @@ function TabBar({
     const horizontalTolerance = 48;
     const verticalTolerance = Math.max(96, rect.height * 3);
     const isWithinHorizontalRange =
-      clientX >= rect.left - horizontalTolerance && clientX <= rect.right + horizontalTolerance;
+        clientX >= rect.left - horizontalTolerance &&
+        clientX <= rect.right + horizontalTolerance;
     if (!isWithinHorizontalRange) return false;
 
     if (clientY === 0) return true;
 
-    return clientY >= rect.top - verticalTolerance && clientY <= rect.bottom + verticalTolerance;
-  }, []);
+      return (
+        clientY >= rect.top - verticalTolerance &&
+        clientY <= rect.bottom + verticalTolerance
+      );
+    },
+    [],
+  );
 
   const handleDropAtIndex = useCallback(
     (insertionIndex: number, event?: DragEvent<HTMLDivElement>) => {
-      const externalTabId = event?.dataTransfer.getData("application/nyaterm-tab");
-      const effectiveTabId = draggedTabIdRef.current || draggedTabId || externalTabId;
+      const externalTabId = event?.dataTransfer.getData(
+        "application/nyaterm-tab",
+      );
+      const effectiveTabId =
+        draggedTabIdRef.current || draggedTabId || externalTabId;
       if (!effectiveTabId) return;
 
       droppedTabRef.current = true;
@@ -801,7 +916,8 @@ function TabBar({
         return;
       }
 
-      const nextIndex = insertionIndex > fromIndex ? insertionIndex - 1 : insertionIndex;
+      const nextIndex =
+        insertionIndex > fromIndex ? insertionIndex - 1 : insertionIndex;
       if (nextIndex === fromIndex) {
         resetDragState();
         return;
@@ -827,9 +943,18 @@ function TabBar({
     setDropIndex(tabs.findIndex((tab) => tab.id === tabId));
   };
 
-  const handlePointerDown = (event: PointerEvent<HTMLDivElement>, tabId: string) => {
+  const handlePointerDown = (
+    event: PointerEvent<HTMLDivElement>,
+    tabId: string,
+  ) => {
     if (!usePointerTabDrag) return;
-    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) {
+    if (
+      event.button !== 0 ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.altKey ||
+      event.shiftKey
+    ) {
       return;
     }
 
@@ -876,7 +1001,10 @@ function TabBar({
 
     if (!state.dragging) return;
 
-    if (state.dragging && isDragEndFallbackNearTabStrip(event.clientX, event.clientY)) {
+    if (
+      state.dragging &&
+      isDragEndFallbackNearTabStrip(event.clientX, event.clientY)
+    ) {
       handleDropAtIndex(getInsertionIndexFromClientX(event.clientX));
     } else {
       resetDragState();
@@ -913,7 +1041,10 @@ function TabBar({
     }
 
     const fallbackTabId = draggedTabIdRef.current;
-    if (fallbackTabId && isDragEndFallbackNearTabStrip(event.clientX, event.clientY)) {
+    if (
+      fallbackTabId &&
+      isDragEndFallbackNearTabStrip(event.clientX, event.clientY)
+    ) {
       handleDropAtIndex(getInsertionIndexFromClientX(event.clientX));
       return;
     }
@@ -965,12 +1096,19 @@ function TabBar({
     }
 
     const conn = pane?.connectionId
-      ? savedConnections.find((connection) => connection.id === pane.connectionId)
+      ? savedConnections.find(
+          (connection) => connection.id === pane.connectionId,
+        )
       : undefined;
     if (conn?.icon) {
       const iconDef = resolveConnectionIcon(conn.icon);
       const IconComp = iconDef.icon;
-      return <IconComp className="text-sm shrink-0" style={{ color: iconDef.color }} />;
+      return (
+        <IconComp
+          className="text-sm shrink-0"
+          style={{ color: iconDef.color }}
+        />
+      );
     }
 
     if (pane?.type === "Local") {
@@ -1017,7 +1155,12 @@ function TabBar({
     if (connection.icon) {
       const iconDef = resolveConnectionIcon(connection.icon);
       const IconComp = iconDef.icon;
-      return <IconComp className="text-sm shrink-0" style={{ color: iconDef.color }} />;
+      return (
+        <IconComp
+          className="text-sm shrink-0"
+          style={{ color: iconDef.color }}
+        />
+      );
     }
 
     if (connection.type === "local_terminal") {
@@ -1038,6 +1181,11 @@ function TabBar({
         ? "var(--df-link)"
         : undefined;
     const displayName = getTabDisplayName(tab);
+    const isDirty = collectSessionPanes(tab.root).some(
+      (pane) =>
+        pane.paneKind === "file" && fileDocumentStates.get(pane.id)?.dirty,
+    );
+    const activePaneIsFile = getActivePane(tab)?.paneKind === "file";
     const accentColor = tab.tabColor;
     const conn = getTabConnection(tab, savedConnections);
     const canCopyIp = !!getTabServerIp(tab, savedConnections);
@@ -1057,7 +1205,11 @@ function TabBar({
         ? `ssh -p ${conn.port} ${conn.username}@${conn.host}`
         : null;
 
-    const renderTooltipCopyRow = (value: string, label: string, copiedMessage: string) => (
+    const renderTooltipCopyRow = (
+      value: string,
+      label: string,
+      copiedMessage: string,
+    ) => (
       <div className="flex min-w-0 items-center gap-2 text-[var(--df-text-muted)]">
         <span className="min-w-0 truncate">{value}</span>
         <button
@@ -1078,18 +1230,36 @@ function TabBar({
     );
 
     const tooltipContent =
-      tab.locked || host || sshAddress || groupPath || isDisconnected || showUnreadIndicator ? (
+      tab.locked ||
+      host ||
+      sshAddress ||
+      groupPath ||
+      isDisconnected ||
+      showUnreadIndicator ||
+      isDirty ? (
         <div className="flex max-w-[260px] min-w-0 flex-col gap-1">
+          {isDirty && (
+            <div className="flex min-w-0 items-center gap-2 text-[var(--df-primary)]">
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" />
+              <span className="min-w-0 truncate">
+                {t("fileEditor.unsaved")}
+              </span>
+            </div>
+          )}
           {isDisconnected && (
             <div className="flex min-w-0 items-center gap-2 text-[var(--df-danger)]">
               <MdErrorOutline className="text-[12px] shrink-0" />
-              <span className="min-w-0 truncate">{t("tabCtx.disconnected")}</span>
+              <span className="min-w-0 truncate">
+                {t("tabCtx.disconnected")}
+              </span>
             </div>
           )}
           {showUnreadIndicator && (
             <div className="flex min-w-0 items-center gap-2 text-[var(--df-link)]">
               <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-green-500" />
-              <span className="min-w-0 truncate">{t("tabCtx.unreadOutput")}</span>
+              <span className="min-w-0 truncate">
+                {t("tabCtx.unreadOutput")}
+              </span>
             </div>
           )}
           {tab.locked && (
@@ -1106,7 +1276,12 @@ function TabBar({
               </span>
             </div>
           )}
-          {host && renderTooltipCopyRow(host, t("tabCtx.copyIp"), t("tabCtx.ipCopied"))}
+          {host &&
+            renderTooltipCopyRow(
+              host,
+              t("tabCtx.copyIp"),
+              t("tabCtx.ipCopied"),
+            )}
           {sshAddress &&
             renderTooltipCopyRow(
               sshAddress,
@@ -1141,21 +1316,37 @@ function TabBar({
           onTabChange(tab.id);
         }}
         onDoubleClick={(event) => {
+          if (
+            !activePaneIsFile ||
+            supportsFileTabMouseAction(doubleClickAction)
+          ) {
           handleConfiguredTabMouseAction(event, tab, doubleClickAction);
+          }
         }}
         onMouseDown={(event) => {
-          if (event.button === 1 && middleClickAction !== "none") {
+          if (
+            event.button === 1 &&
+            middleClickAction !== "none" &&
+            (!activePaneIsFile || supportsFileTabMouseAction(middleClickAction))
+          ) {
             handleConfiguredTabMouseAction(event, tab, middleClickAction);
           }
         }}
         onAuxClick={(event) => {
-          if (event.button === 1 && middleClickAction !== "none") {
+          if (
+            event.button === 1 &&
+            middleClickAction !== "none" &&
+            (!activePaneIsFile || supportsFileTabMouseAction(middleClickAction))
+          ) {
             event.preventDefault();
             event.stopPropagation();
           }
         }}
         onContextMenu={(event) => {
-          if (rightClickAction === "none") {
+          if (
+            rightClickAction === "none" ||
+            (activePaneIsFile && !supportsFileTabMouseAction(rightClickAction))
+          ) {
             onTabChange(tab.id);
             return;
           }
@@ -1171,7 +1362,10 @@ function TabBar({
           handleDragEnd(event);
         }}
         onDragOver={(event) => {
-          if (!draggedTabId && !event.dataTransfer.types.includes("application/nyaterm-tab"))
+          if (
+            !draggedTabId &&
+            !event.dataTransfer.types.includes("application/nyaterm-tab")
+          )
             return;
           event.preventDefault();
           setDropIndex(getInsertionIndex(event, index));
@@ -1210,11 +1404,19 @@ function TabBar({
           {index + 1}
         </span>
 
-        <span className="max-w-[160px] truncate whitespace-nowrap" style={{ color: tabNameColor }}>
+        <span
+          className="max-w-[160px] truncate whitespace-nowrap"
+          style={{ color: tabNameColor }}
+        >
           {displayName}
+          {isDirty ? " *" : ""}
         </span>
 
-        <SyncIndicator tab={tab} syncGroups={syncGroups} broadcastToAll={broadcastToAll} />
+        <SyncIndicator
+          tab={tab}
+          syncGroups={syncGroups}
+          broadcastToAll={broadcastToAll}
+        />
 
         <div className="relative ml-0.5 flex h-[18px] w-[18px] shrink-0 items-center justify-center">
           {tab.locked ? (
@@ -1278,7 +1480,9 @@ function TabBar({
           tabs={tabs}
           onDuplicateSession={onDuplicateSession}
           onMultiplexSshSession={onMultiplexSshSession}
-          onDuplicateSessionWithCommand={(targetTab) => openCommandDialog(targetTab, "duplicate")}
+          onDuplicateSessionWithCommand={(targetTab) =>
+            openCommandDialog(targetTab, "duplicate")
+          }
           onMultiplexSshSessionWithCommand={(targetTab) =>
             openCommandDialog(targetTab, "multiplex")
           }
@@ -1310,7 +1514,7 @@ function TabBar({
       scrollTabIntoView(tab.id, true);
       requestAnimationFrame(() => {
         window.dispatchEvent(new CustomEvent("nyaterm:refresh-terminals"));
-        if (pane?.sessionId) {
+        if (pane?.paneKind === "terminal" && pane.sessionId) {
           void emit(`focus-terminal-${pane.sessionId}`);
         }
       });
@@ -1326,6 +1530,10 @@ function TabBar({
   const renderOpenTabMenuItem = (tab: Tab, index: number) => {
     const isActive = activeTabId === tab.id;
     const displayName = getTabDisplayName(tab);
+    const isDirty = collectSessionPanes(tab.root).some(
+      (pane) =>
+        pane.paneKind === "file" && fileDocumentStates.get(pane.id)?.dirty,
+    );
     const showUnreadIndicator = !isActive && unreadTabIds?.has(tab.id);
     const isDisconnected = disconnectedTabIds?.has(tab.id) ?? false;
     const tabNameColor = isDisconnected
@@ -1343,7 +1551,10 @@ function TabBar({
         <span className="grid w-full grid-cols-[1rem_1rem_minmax(0,1fr)_1rem] items-center gap-x-2 gap-y-1.5">
           <span className="flex h-4 w-4 items-center justify-center">
             {isActive ? (
-              <MdCheck className="text-sm" style={{ color: "var(--df-primary)" }} />
+              <MdCheck
+                className="text-sm"
+                style={{ color: "var(--df-primary)" }}
+              />
             ) : showUnreadIndicator ? (
               <span className="h-2 w-2 rounded-full bg-green-500 animate-breathing" />
             ) : null}
@@ -1352,18 +1563,26 @@ function TabBar({
             {renderTabIcon(tab)}
           </span>
           <span className="min-w-0 truncate" style={{ color: tabNameColor }}>
-            <span className="mr-1.5 text-[var(--df-text-dimmed)] tabular-nums">{index + 1}</span>
+            <span className="mr-1.5 text-[var(--df-text-dimmed)] tabular-nums">
+              {index + 1}
+            </span>
             {displayName}
+            {isDirty ? " *" : ""}
           </span>
           <span className="flex h-4 w-4 items-center justify-center text-[var(--df-text-dimmed)]">
-            {tab.locked ? <MdLock className="text-[12px]" aria-label={t("tabCtx.locked")} /> : null}
+            {tab.locked ? (
+              <MdLock className="text-[12px]" aria-label={t("tabCtx.locked")} />
+            ) : null}
           </span>
         </span>
       </DropdownMenuItem>
     );
   };
 
-  const renderConnectionMenuItem = (connection: SavedConnection, label = connection.name) => (
+  const renderConnectionMenuItem = (
+    connection: SavedConnection,
+    label = connection.name,
+  ) => (
     <DropdownMenuItem
       key={connection.id}
       className="max-w-[320px]"
@@ -1389,8 +1608,12 @@ function TabBar({
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent className="min-w-[240px] max-w-[340px] max-h-[70vh] overflow-y-auto">
         {node.children.map(renderGroupNode)}
-        {node.children.length > 0 && node.connections.length > 0 && <DropdownMenuSeparator />}
-        {node.connections.map((connection) => renderConnectionMenuItem(connection))}
+        {node.children.length > 0 && node.connections.length > 0 && (
+          <DropdownMenuSeparator />
+        )}
+        {node.connections.map((connection) =>
+          renderConnectionMenuItem(connection),
+        )}
       </DropdownMenuSubContent>
     </DropdownMenuSub>
   );
@@ -1420,7 +1643,10 @@ function TabBar({
           <div
             className="relative flex min-w-6 flex-1 shrink-0"
             onDragOver={(event) => {
-              if (!draggedTabId && !event.dataTransfer.types.includes("application/nyaterm-tab"))
+              if (
+                !draggedTabId &&
+                !event.dataTransfer.types.includes("application/nyaterm-tab")
+              )
                 return;
               event.preventDefault();
               setDropIndex(tabs.length);
@@ -1430,7 +1656,8 @@ function TabBar({
               handleDropAtIndex(tabs.length, event);
             }}
           >
-            {(draggedTabId || dropIndex !== null) && dropIndex === tabs.length && (
+            {(draggedTabId || dropIndex !== null) &&
+              dropIndex === tabs.length && (
               <div
                 className="pointer-events-none absolute inset-y-1 left-0 z-20 w-0.5 rounded-full"
                 style={{ backgroundColor: "var(--df-primary)" }}
@@ -1477,7 +1704,9 @@ function TabBar({
                 {t("terminal.openTabs")}
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
-              {openTabsMenuItems.map(({ tab, index }) => renderOpenTabMenuItem(tab, index))}
+              {openTabsMenuItems.map(({ tab, index }) =>
+                renderOpenTabMenuItem(tab, index),
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         )}
@@ -1502,7 +1731,10 @@ function TabBar({
               {t("terminal.newSession")}
             </TooltipContent>
           </Tooltip>
-          <DropdownMenuContent align="end" className="min-w-[260px] max-w-[360px]">
+          <DropdownMenuContent
+            align="end"
+            className="min-w-[260px] max-w-[360px]"
+          >
             <DropdownMenuGroup>
               <DropdownMenuItem onSelect={() => onAddTab()}>
                 <MdAdd className="text-sm text-muted-foreground" />
@@ -1514,12 +1746,14 @@ function TabBar({
                   {t("terminal.allSessions")}
                 </DropdownMenuSubTrigger>
                 <DropdownMenuSubContent className="min-w-[260px] max-w-[360px] max-h-[70vh] overflow-y-auto">
-                  {connectionTree.roots.length === 0 && connectionTree.ungrouped.length === 0 ? (
+                  {connectionTree.roots.length === 0 &&
+                  connectionTree.ungrouped.length === 0 ? (
                     renderEmptyMenuItem(t("terminal.noSavedSessions"))
                   ) : (
                     <>
                       {connectionTree.roots.map(renderGroupNode)}
-                      {connectionTree.roots.length > 0 && connectionTree.ungrouped.length > 0 && (
+                      {connectionTree.roots.length > 0 &&
+                        connectionTree.ungrouped.length > 0 && (
                         <DropdownMenuSeparator />
                       )}
                       {connectionTree.ungrouped.map((connection) =>
@@ -1536,7 +1770,9 @@ function TabBar({
               {t("terminal.shellSessions")}
             </DropdownMenuLabel>
             {shellConnections.length > 0
-              ? shellConnections.map((connection) => renderConnectionMenuItem(connection))
+              ? shellConnections.map((connection) =>
+                  renderConnectionMenuItem(connection),
+                )
               : renderEmptyMenuItem(t("terminal.noShellSessions"))}
 
             <DropdownMenuSeparator />
@@ -1548,7 +1784,10 @@ function TabBar({
             </DropdownMenuLabel>
             {recentConnections.length > 0
               ? recentConnections.map((connection) =>
-                  renderConnectionMenuItem(connection, getRecentConnectionLabel(connection)),
+                  renderConnectionMenuItem(
+                    connection,
+                    getRecentConnectionLabel(connection),
+                  ),
                 )
               : renderEmptyMenuItem(t("terminal.noRecentSessions"))}
           </DropdownMenuContent>

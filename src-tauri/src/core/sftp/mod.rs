@@ -43,7 +43,7 @@ pub(crate) use util::RemotePathRef;
 pub(crate) use util::sanitize_download_file_name;
 pub use util::{
     DirectoryChild, FileEntry, FileProperties, RemoteBinaryFile, RemoteFileAttributeUpdate,
-    RemoteTextFile, WriteRemoteTextResult,
+    RemoteTextFile, TextFileOpenResult, WriteRemoteTextResult, classify_text_file,
 };
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -2201,6 +2201,16 @@ pub async fn read_remote_file_text(
     fs.read_file_text(path, max_bytes).await
 }
 
+pub async fn open_remote_file_text(
+    manager: Arc<SessionManager>,
+    session_id: &str,
+    path: &str,
+    max_bytes: u64,
+) -> AppResult<TextFileOpenResult> {
+    let file = read_remote_file_bytes(manager, session_id, path, max_bytes).await?;
+    Ok(classify_text_file(file))
+}
+
 pub async fn read_remote_file_bytes(
     manager: Arc<SessionManager>,
     session_id: &str,
@@ -2220,13 +2230,21 @@ pub async fn write_remote_file_text(
     content: &str,
     expected_mtime: Option<u64>,
     expected_size: Option<u64>,
+    expected_hash: Option<&str>,
     force: bool,
 ) -> AppResult<WriteRemoteTextResult> {
     let auto_fs = get_or_create_auto_fs(&manager, session_id).await?;
     let guard = auto_fs.backend().await?;
     let fs = guard.as_ref().unwrap();
-    fs.write_file_text(path, content, expected_mtime, expected_size, force)
-        .await
+    fs.write_file_text(
+        path,
+        content,
+        expected_mtime,
+        expected_size,
+        expected_hash,
+        force,
+    )
+    .await
 }
 
 pub async fn create_remote_file(

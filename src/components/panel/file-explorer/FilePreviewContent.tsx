@@ -2,7 +2,10 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import Papa from "papaparse";
-import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist/types/src/display/api";
+import type {
+  PDFDocumentProxy,
+  RenderTask,
+} from "pdfjs-dist/types/src/display/api";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -28,6 +31,8 @@ import { codeMirrorFileViewExtensions } from "@/lib/codeMirrorFileView";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import { cn } from "@/lib/utils";
+import type { FileDocumentPane } from "@/types/global";
+import FileDocumentEditor from "./FileDocumentEditor";
 import {
   type FileExplorerBackendKind,
   type FilePreviewKind,
@@ -63,7 +68,8 @@ export interface FilePreviewLoadSummary {
   message?: string;
 }
 
-interface FilePreviewContentProps {
+interface FilePreviewModeProps {
+  mode: "preview";
   data: FilePreviewContentData;
   reloadKey?: number;
   active?: boolean;
@@ -71,19 +77,44 @@ interface FilePreviewContentProps {
   onLoadStateChange?: (summary: FilePreviewLoadSummary) => void;
 }
 
+interface FileEditModeProps {
+  mode: "edit";
+  pane: FileDocumentPane;
+  active?: boolean;
+  className?: string;
+}
+
+export type FilePreviewContentProps = FilePreviewModeProps | FileEditModeProps;
+
 type PreviewLoadState =
   | { status: "idle" | "loading" }
   | { status: "error"; message: string; kind: FilePreviewKind }
-  | { status: "text"; kind: "markdown" | "csv" | "json" | "text"; file: RemoteTextFile }
+  | {
+      status: "text";
+      kind: "markdown" | "csv" | "json" | "text";
+      file: RemoteTextFile;
+    }
   | { status: "binary"; kind: "image" | "pdf"; file: RemoteBinaryFile };
 
-export function FilePreviewContent({
+export function FilePreviewContent(props: FilePreviewContentProps) {
+  if (props.mode === "edit") {
+    return (
+      <div className={cn("h-full min-h-0 overflow-hidden", props.className)}>
+        <FileDocumentEditor pane={props.pane} active={props.active ?? true} />
+      </div>
+    );
+  }
+
+  return <FilePreview {...props} />;
+}
+
+function FilePreview({
   data,
   reloadKey = 0,
   active = true,
   className,
   onLoadStateChange,
-}: FilePreviewContentProps) {
+}: FilePreviewModeProps) {
   const { t } = useTranslation();
   const [state, setState] = useState<PreviewLoadState>({ status: "idle" });
   const requestIdRef = useRef(0);
@@ -167,7 +198,10 @@ export function FilePreviewContent({
   }, [data.backend, data.name, data.path, data.sessionId, reloadKey, t]);
 
   return (
-    <div className={cn("h-full min-h-0 overflow-hidden", className)}>
+    <div
+      className={cn("h-full min-h-0 overflow-hidden", className)}
+      data-file-document-mode="preview"
+    >
       {renderPreviewBody(state, data.name, t, active)}
     </div>
   );
@@ -198,11 +232,18 @@ function renderPreviewBody(
         <PdfPreview file={state.file} />
       );
     case "text":
-      if (state.kind === "markdown") return <MarkdownPreview content={state.file.content} />;
+      if (state.kind === "markdown")
+        return <MarkdownPreview content={state.file.content} />;
       if (state.kind === "csv") {
-        return <CsvPreview content={state.file.content} extension={getFileExtension(fileName)} />;
+        return (
+          <CsvPreview
+            content={state.file.content}
+            extension={getFileExtension(fileName)}
+          />
+        );
       }
-      if (state.kind === "json") return <JsonPreview content={state.file.content} />;
+      if (state.kind === "json")
+        return <JsonPreview content={state.file.content} />;
       return <TextPreview content={state.file.content} fileName={fileName} />;
   }
 }
@@ -223,7 +264,13 @@ function binaryFileBytes(file: RemoteBinaryFile) {
   return Uint8Array.from(contentBytes);
 }
 
-function ImagePreview({ file, fileName }: { file: RemoteBinaryFile; fileName: string }) {
+function ImagePreview({
+  file,
+  fileName,
+}: {
+  file: RemoteBinaryFile;
+  fileName: string;
+}) {
   const { t } = useTranslation();
   const [scale, setScale] = useState(1);
   const [rotation, setRotation] = useState(0);
@@ -384,15 +431,23 @@ function MarkdownPreview({ content }: { content: string }) {
             </pre>
           ),
           code: ({ children }) => (
-            <code className="rounded bg-muted/40 px-1 py-0.5 font-mono text-xs">{children}</code>
+            <code className="rounded bg-muted/40 px-1 py-0.5 font-mono text-xs">
+              {children}
+            </code>
           ),
           table: ({ children }) => (
             <div className="terminal-scroll my-3 overflow-auto">
-              <table className="w-full border-collapse text-left text-xs">{children}</table>
+              <table className="w-full border-collapse text-left text-xs">
+                {children}
+              </table>
             </div>
           ),
-          th: ({ children }) => <th className="border px-2 py-1 font-medium">{children}</th>,
-          td: ({ children }) => <td className="border px-2 py-1">{children}</td>,
+          th: ({ children }) => (
+            <th className="border px-2 py-1 font-medium">{children}</th>
+          ),
+          td: ({ children }) => (
+            <td className="border px-2 py-1">{children}</td>
+          ),
         }}
       >
         {content}
@@ -409,7 +464,11 @@ function isPlainDecimal(value: string) {
   return /^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(value);
 }
 
-function compareCsvCells(leftValue: unknown, rightValue: unknown, direction: CsvSortDirection) {
+function compareCsvCells(
+  leftValue: unknown,
+  rightValue: unknown,
+  direction: CsvSortDirection,
+) {
   const left = normalizeCsvCell(leftValue);
   const right = normalizeCsvCell(rightValue);
   const leftEmpty = left.length === 0;
@@ -426,12 +485,20 @@ function compareCsvCells(leftValue: unknown, rightValue: unknown, direction: Csv
   }
 
   return (
-    left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }) *
-    directionMultiplier
+    left.localeCompare(right, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    }) * directionMultiplier
   );
 }
 
-function CsvPreview({ content, extension }: { content: string; extension: string }) {
+function CsvPreview({
+  content,
+  extension,
+}: {
+  content: string;
+  extension: string;
+}) {
   const { t } = useTranslation();
   const [firstRowHeader, setFirstRowHeader] = useState(true);
   const [sortColumnIndex, setSortColumnIndex] = useState<number | null>(null);
@@ -442,14 +509,23 @@ function CsvPreview({ content, extension }: { content: string; extension: string
       delimiter: extension === "tsv" ? "\t" : "",
       skipEmptyLines: false,
     });
-    return result.data.filter((row) => row.some((cell) => String(cell ?? "").length > 0));
+    return result.data.filter((row) =>
+      row.some((cell) => String(cell ?? "").length > 0),
+    );
   }, [content, extension]);
 
   const headers = useMemo(() => {
     const first = parsedRows[0] ?? [];
-    const columnCount = Math.max(...parsedRows.map((row) => row.length), first.length, 1);
+    const columnCount = Math.max(
+      ...parsedRows.map((row) => row.length),
+      first.length,
+      1,
+    );
     if (firstRowHeader && first.length > 0) {
-      return Array.from({ length: columnCount }, (_, index) => first[index] || `#${index + 1}`);
+      return Array.from(
+        { length: columnCount },
+        (_, index) => first[index] || `#${index + 1}`,
+      );
     }
     return Array.from({ length: columnCount }, (_, index) => `#${index + 1}`);
   }, [firstRowHeader, parsedRows]);
@@ -552,7 +628,11 @@ function CsvPreview({ content, extension }: { content: string; extension: string
                       key={column.id}
                       scope="col"
                       aria-sort={
-                        isSorted ? (sortDirection === "asc" ? "ascending" : "descending") : "none"
+                        isSorted
+                          ? sortDirection === "asc"
+                            ? "ascending"
+                            : "descending"
+                          : "none"
                       }
                       className={cn(
                         "group min-w-0 border-r p-0 text-left",
@@ -566,7 +646,9 @@ function CsvPreview({ content, extension }: { content: string; extension: string
                         aria-label={`${nextSortLabel}: ${column.label}`}
                         onClick={() => toggleSort(column.index)}
                       >
-                        <span className="min-w-0 flex-1 truncate">{column.label}</span>
+                        <span className="min-w-0 flex-1 truncate">
+                          {column.label}
+                        </span>
                         {isSorted && sortDirection === "asc" ? (
                           <MdKeyboardArrowUp
                             className="h-4 w-4 shrink-0"
@@ -609,7 +691,10 @@ function CsvPreview({ content, extension }: { content: string; extension: string
                   }}
                 >
                   {columns.map((column) => (
-                    <div key={column.id} className="truncate border-r px-2 py-1.5">
+                    <div
+                      key={column.id}
+                      className="truncate border-r px-2 py-1.5"
+                    >
                       {item[column.index] ?? ""}
                     </div>
                   ))}
@@ -627,7 +712,10 @@ function JsonPreview({ content }: { content: string }) {
   const { t } = useTranslation();
   const formatted = useMemo(() => {
     try {
-      return { content: JSON.stringify(JSON.parse(content), null, 2), error: "" };
+      return {
+        content: JSON.stringify(JSON.parse(content), null, 2),
+        error: "",
+      };
     } catch (error) {
       return {
         content,
@@ -665,7 +753,13 @@ function TextPreview({
   );
 }
 
-function ReadOnlyCodeMirror({ content, language }: { content: string; language: string }) {
+function ReadOnlyCodeMirror({
+  content,
+  language,
+}: {
+  content: string;
+  language: string;
+}) {
   const parentRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -691,7 +785,9 @@ function PdfPreview({ file }: { file: RemoteBinaryFile }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const renderTaskRef = useRef<RenderTask | null>(null);
   const [pdfApi, setPdfApi] = useState<PdfJsApi | null>(null);
-  const [documentProxy, setDocumentProxy] = useState<PDFDocumentProxy | null>(null);
+  const [documentProxy, setDocumentProxy] = useState<PDFDocumentProxy | null>(
+    null,
+  );
   const [pageNumber, setPageNumber] = useState(1);
   const [scale, setScale] = useState(1);
   const [error, setError] = useState("");
@@ -705,7 +801,10 @@ function PdfPreview({ file }: { file: RemoteBinaryFile }) {
     setError("");
 
     const bytes = binaryFileBytes(file);
-    Promise.all([import("pdfjs-dist"), import("pdfjs-dist/build/pdf.worker.mjs?url")])
+    Promise.all([
+      import("pdfjs-dist"),
+      import("pdfjs-dist/build/pdf.worker.mjs?url"),
+    ])
       .then(([pdfjs, worker]) => {
         if (cancelled) return;
         pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
@@ -717,7 +816,8 @@ function PdfPreview({ file }: { file: RemoteBinaryFile }) {
         if (!cancelled && pdf) setDocumentProxy(pdf);
       })
       .catch((loadError) => {
-        if (!cancelled) setError(getErrorMessage(loadError) || String(loadError));
+        if (!cancelled)
+          setError(getErrorMessage(loadError) || String(loadError));
       });
 
     return () => {
@@ -741,7 +841,11 @@ function PdfPreview({ file }: { file: RemoteBinaryFile }) {
         if (!context) return;
         canvas.width = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
-        const renderTask = page.render({ canvas, canvasContext: context, viewport });
+        const renderTask = page.render({
+          canvas,
+          canvasContext: context,
+          viewport,
+        });
         renderTaskRef.current = renderTask;
         return renderTask.promise;
       })
@@ -774,7 +878,10 @@ function PdfPreview({ file }: { file: RemoteBinaryFile }) {
         </Button>
         <span className="text-xs text-muted-foreground">
           {documentProxy
-            ? t("filePreview.pdfPage", { page: pageNumber, total: documentProxy.numPages })
+            ? t("filePreview.pdfPage", {
+                page: pageNumber,
+                total: documentProxy.numPages,
+              })
             : t("filePreview.loading")}
         </span>
         <Button
@@ -784,7 +891,9 @@ function PdfPreview({ file }: { file: RemoteBinaryFile }) {
           className="h-7 w-7"
           disabled={!documentProxy || pageNumber >= documentProxy.numPages}
           onClick={() =>
-            setPageNumber((value) => Math.min(documentProxy?.numPages ?? value, value + 1))
+            setPageNumber((value) =>
+              Math.min(documentProxy?.numPages ?? value, value + 1),
+            )
           }
         >
           <MdChevronRight className="h-4 w-4" />
@@ -813,7 +922,10 @@ function PdfPreview({ file }: { file: RemoteBinaryFile }) {
         </Button>
       </PreviewToolbar>
       <div className="terminal-scroll flex min-h-0 flex-1 justify-center overflow-auto bg-background/60 p-4">
-        <canvas ref={canvasRef} className={cn("h-fit max-w-none bg-white shadow-sm")} />
+        <canvas
+          ref={canvasRef}
+          className={cn("h-fit max-w-none bg-white shadow-sm")}
+        />
       </div>
     </div>
   );

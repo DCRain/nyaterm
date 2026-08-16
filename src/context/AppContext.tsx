@@ -2,11 +2,14 @@ import { createContext, useContext } from "react";
 import type {
   AppRuntimeInfo,
   AppSettings,
+  FileDocumentBackend,
+  FileDocumentSnapshot,
   Group,
   PaneSplitDirection,
   RemoteDesktopSessionPane,
   SavedConnection,
   SessionPane,
+  SessionType,
   SyncGroup,
   Tab,
   UiConfig,
@@ -45,6 +48,7 @@ export interface AppContextType {
   updateTabSession: (tabId: string, sessionId: string) => void;
   markTabConnectionFailed: (tabId: string, error: string) => void;
   updatePaneSession: (tabId: string, paneId: string, sessionId: string) => void;
+  replaceSessionReferences: (oldSessionId: string, newSessionId: string) => void;
   markPaneConnectionFailed: (tabId: string, paneId: string, error: string) => void;
   markPaneConnecting: (
     tabId: string,
@@ -62,6 +66,15 @@ export interface AppContextType {
     pane: SessionPane,
     options?: { immediatePersist?: boolean },
   ) => string | null;
+  openFileDocument: (input: {
+    sessionId: string;
+    name: string;
+    type: SessionType;
+    connectionId?: string;
+    backend: FileDocumentBackend;
+    path: string;
+    file: FileDocumentSnapshot;
+  }) => { tabId: string; paneId: string; created: boolean };
   closePane: (tabId: string, paneId: string, options?: { immediatePersist?: boolean }) => void;
   reorderTabs: (fromTabId: string, toIndex: number) => void;
   updateTab: (
@@ -115,7 +128,6 @@ export type TerminalAppSettings = Pick<
   | "transfer"
 >;
 
-/** 仅包含上下文契约，避免子窗口加载主窗口的工作区状态实现。 */
 export const AppContext = createContext<AppContextType | null>(null);
 export const TerminalAppSettingsContext = createContext<TerminalAppSettings | null>(null);
 
