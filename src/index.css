@@ -533,6 +533,22 @@ html[data-window-transparency="true"] [data-slot="alert-dialog-overlay"] {
   opacity: 1 !important;
 }
 
+.note-tree-row--selected {
+  background-color: var(
+    --df-selection,
+    color-mix(in srgb, var(--df-primary) 28%, var(--df-bg-panel-solid, var(--df-bg-panel, #161b22)))
+  ) !important;
+  box-shadow: inset 2px 0 0 var(--df-primary);
+}
+
+.note-tree-row--selected:hover {
+  background-color: var(
+    --df-selection,
+    color-mix(in srgb, var(--df-primary) 34%, var(--df-bg-panel-solid, var(--df-bg-panel, #161b22)))
+  ) !important;
+  filter: brightness(1.06);
+}
+
 .file-explorer-row--path-draggable {
   cursor: grab;
 }
@@ -615,123 +631,163 @@ html.nyaterm-explorer-path-dragging * {
 }
 
 .nyaterm-note-editor-shell {
-  background: var(--df-bg-panel);
+  background: var(--df-bg-panel) !important;
+  color: var(--df-text) !important;
 }
 
-.nyaterm-note-editor-shell .mdxeditor {
-  min-height: 100%;
+.nyaterm-note-editor-shell .cm-editor,
+.nyaterm-note-editor-shell .cm-scroller,
+.nyaterm-note-editor-shell .cm-content {
+  height: 100%;
+  background: var(--df-bg-panel) !important;
+  color: var(--df-text) !important;
+  caret-color: var(--df-caret, var(--df-text)) !important;
 }
 
-.mdxeditor.nyaterm-note-mdxeditor {
-  --basePageBg: var(--df-bg-panel);
-  --baseBase: var(--df-bg-panel);
-  --baseBgSubtle: var(--df-bg-section-header);
-  --baseBg: var(--df-bg-hover);
-  --baseBgHover: color-mix(in srgb, var(--df-text) 10%, transparent);
-  --baseBgActive: color-mix(in srgb, var(--df-primary) 18%, transparent);
-  --baseLine: var(--df-border);
-  --baseBorder: var(--df-border);
-  --baseBorderHover: color-mix(in srgb, var(--df-text-muted) 50%, var(--df-border));
-  --baseSolid: var(--df-text-muted);
-  --baseSolidHover: var(--df-text);
-  --baseText: var(--df-text-muted);
-  --baseTextContrast: var(--df-text);
-  --accentBase: color-mix(in srgb, var(--df-primary) 8%, transparent);
-  --accentBgSubtle: color-mix(in srgb, var(--df-primary) 10%, transparent);
-  --accentBg: color-mix(in srgb, var(--df-primary) 14%, transparent);
-  --accentBgHover: color-mix(in srgb, var(--df-primary) 18%, transparent);
-  --accentBgActive: color-mix(in srgb, var(--df-primary) 24%, transparent);
-  --accentLine: color-mix(in srgb, var(--df-primary) 42%, transparent);
-  --accentBorder: color-mix(in srgb, var(--df-primary) 55%, var(--df-border));
-  --accentBorderHover: var(--df-primary);
-  --accentSolid: var(--df-primary);
-  --accentSolidHover: color-mix(in srgb, var(--df-primary) 86%, white 14%);
-  --accentText: var(--df-primary);
-  --accentTextContrast: var(--df-text);
-  --admonitionTipBg: color-mix(in srgb, var(--df-primary) 12%, transparent);
-  --admonitionTipBorder: color-mix(in srgb, var(--df-primary) 55%, var(--df-border));
-  --admonitionInfoBg: color-mix(in srgb, #22c55e 13%, transparent);
-  --admonitionInfoBorder: color-mix(in srgb, #22c55e 55%, var(--df-border));
-  --admonitionCautionBg: color-mix(in srgb, #f59e0b 14%, transparent);
-  --admonitionCautionBorder: color-mix(in srgb, #f59e0b 58%, var(--df-border));
-  --admonitionDangerBg: color-mix(in srgb, #ef4444 13%, transparent);
-  --admonitionDangerBorder: color-mix(in srgb, #ef4444 58%, var(--df-border));
-  --admonitionNoteBg: var(--df-bg-hover);
-  --admonitionNoteBorder: var(--df-border);
-  --error-color: #ef4444;
-  background: var(--df-bg-panel);
-  color: var(--df-text);
+.nyaterm-note-editor-shell .cm-cursor,
+.nyaterm-note-editor-shell .cm-dropCursor {
+  border-left-color: var(--df-caret, var(--df-text)) !important;
+}
+
+.nyaterm-note-editor-shell .cm-gutters {
+  background: var(--df-bg-panel) !important;
+  color: var(--df-text-dimmed) !important;
+  border-right: 1px solid var(--df-divider, var(--df-border)) !important;
+}
+
+.nyaterm-note-editor-shell .cm-activeLineGutter {
+  background: var(--df-bg-panel) !important;
+}
+
+.nyaterm-note-editor-shell .cm-selectionBackground,
+.nyaterm-note-editor-shell .cm-selectionLayer .cm-selectionBackground,
+.nyaterm-note-editor-shell.cm-focused .cm-selectionLayer .cm-selectionBackground {
+  background-color: var(--df-selection, color-mix(in srgb, var(--df-primary) 35%, transparent)) !important;
+}
+
+.nyaterm-note-editor-shell .cm-content ::selection {
+  background-color: var(--df-selection, color-mix(in srgb, var(--df-primary) 35%, transparent)) !important;
 }
 
 .nyaterm-note-toolbar {
-  position: sticky;
-  top: 0;
-  z-index: 5;
-  border-bottom: 1px solid var(--df-border);
-  background: var(--df-bg-section-header);
   color: var(--df-text);
-  gap: 4px;
-}
-
-.nyaterm-note-toolbar button,
-.nyaterm-note-toolbar [role="button"],
-.nyaterm-note-toolbar [role="combobox"] {
-  color: var(--df-text);
-}
-
-.nyaterm-note-toolbar button:hover,
-.nyaterm-note-toolbar [role="button"]:hover,
-.nyaterm-note-toolbar [role="combobox"]:hover {
-  background: var(--df-bg-hover);
-}
-
-.nyaterm-note-toolbar [data-state="on"],
-.nyaterm-note-toolbar [data-state="open"] {
-  background: color-mix(in srgb, var(--df-primary) 16%, transparent);
-  color: var(--df-text);
-}
-
-.nyaterm-note-mdxeditor .cm-editor {
   background: var(--df-bg-panel);
-  color: var(--df-text);
 }
 
-.nyaterm-note-mdxeditor .cm-gutters {
-  border-right-color: var(--df-border);
-  color: var(--df-text-dimmed);
+/* Invisible drag handle for note regions — the visible line is a CSS border on the pane. */
+.nyaterm-note-region-handle {
+  position: relative;
+  width: 0 !important;
+  min-width: 0 !important;
+  align-self: stretch;
+  flex-shrink: 0;
+  background-color: transparent !important;
 }
 
-.nyaterm-note-mdxeditor .cm-activeLine,
-.nyaterm-note-mdxeditor .cm-activeLineGutter {
-  background: var(--df-bg-hover);
+.nyaterm-note-region-handle > [aria-hidden] {
+  background-color: transparent !important;
 }
 
-.nyaterm-note-mdxeditor input,
-.nyaterm-note-mdxeditor textarea {
-  background: var(--df-bg-input);
-  color: var(--df-text);
-  border-color: var(--df-border);
+.nyaterm-note-region-handle:hover > [aria-hidden],
+.nyaterm-note-region-handle:active > [aria-hidden] {
+  width: 3px !important;
+  background-color: var(--df-primary) !important;
 }
 
+.nyaterm-note-preview,
 .nyaterm-note-content {
-  max-width: 900px;
-  min-height: calc(100vh - 130px);
-  margin: 0 auto;
-  padding: 32px 28px 80px;
+  width: 100%;
+  max-width: none;
+  margin: 0;
   color: var(--df-text);
+  background: var(--df-bg-panel);
   font-size: 15px;
   line-height: 1.7;
 }
 
+/* KaTeX inherits app theme text color */
+.nyaterm-note-preview .katex,
+.nyaterm-note-preview .katex * {
+  color: inherit !important;
+  border-color: currentColor;
+}
+
+.nyaterm-note-preview .katex-display {
+  margin: 1rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  color: var(--df-text);
+}
+
+.nyaterm-note-preview .katex {
+  font-size: 1.05em;
+  color: var(--df-text);
+}
+
+.nyaterm-note-preview .katex-error {
+  color: var(--df-danger) !important;
+}
+
+.nyaterm-note-preview h1,
+.nyaterm-note-preview h2,
+.nyaterm-note-preview h3,
+.nyaterm-note-preview h4,
+.nyaterm-note-preview h5,
+.nyaterm-note-preview h6,
 .nyaterm-note-content h1,
 .nyaterm-note-content h2,
-.nyaterm-note-content h3 {
+.nyaterm-note-content h3,
+.nyaterm-note-content h4,
+.nyaterm-note-content h5,
+.nyaterm-note-content h6 {
   margin-top: 1.25em;
   margin-bottom: 0.55em;
   font-weight: 650;
   line-height: 1.25;
+  color: var(--df-text);
 }
 
+.nyaterm-note-preview h1,
+.nyaterm-note-content h1 {
+  font-size: 1.75em;
+  margin-top: 1.4em;
+}
+
+.nyaterm-note-preview h2,
+.nyaterm-note-content h2 {
+  font-size: 1.4em;
+  margin-top: 1.3em;
+}
+
+.nyaterm-note-preview h3,
+.nyaterm-note-content h3 {
+  font-size: 1.2em;
+}
+
+.nyaterm-note-preview h4,
+.nyaterm-note-content h4 {
+  font-size: 1.05em;
+}
+
+.nyaterm-note-preview h5,
+.nyaterm-note-content h5 {
+  font-size: 1em;
+  font-weight: 600;
+}
+
+.nyaterm-note-preview h6,
+.nyaterm-note-content h6 {
+  font-size: 0.9em;
+  font-weight: 600;
+  color: var(--df-text-muted);
+}
+
+.nyaterm-note-preview p,
+.nyaterm-note-preview ul,
+.nyaterm-note-preview ol,
+.nyaterm-note-preview blockquote,
+.nyaterm-note-preview pre,
+.nyaterm-note-preview table,
 .nyaterm-note-content p,
 .nyaterm-note-content ul,
 .nyaterm-note-content ol,
@@ -742,29 +798,61 @@ html.nyaterm-explorer-path-dragging * {
   margin-bottom: 0.75em;
 }
 
+.nyaterm-note-preview p,
+.nyaterm-note-content p {
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.nyaterm-note-preview pre,
+.nyaterm-note-content pre {
+  white-space: pre;
+  overflow-x: auto;
+  font-family: var(--font-mono), "JetBrains Mono", ui-monospace, monospace;
+}
+
+/* Split mode: keep a single scrollbar on the preview (right) side. */
+.nyaterm-note-split-editor .cm-scroller {
+  scrollbar-width: none;
+}
+
+.nyaterm-note-split-editor .cm-scroller::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.nyaterm-note-preview blockquote,
 .nyaterm-note-content blockquote {
   border-left: 3px solid var(--df-primary);
   padding-left: 0.9rem;
   color: var(--df-text-muted);
 }
 
+.nyaterm-note-preview code,
 .nyaterm-note-content code {
   border-radius: 4px;
   background: var(--df-bg-hover);
+  color: var(--df-text);
   padding: 0.1rem 0.25rem;
   font-family: "JetBrains Mono", monospace;
 }
 
+.nyaterm-note-preview pre code,
 .nyaterm-note-content pre code {
   display: block;
   overflow-x: auto;
   padding: 0.9rem;
+  background: transparent;
 }
 
+.nyaterm-note-preview a,
 .nyaterm-note-content a {
   color: var(--df-link);
 }
 
+.nyaterm-note-preview table,
 .nyaterm-note-content table {
   display: block;
   max-width: 100%;
@@ -772,8 +860,42 @@ html.nyaterm-explorer-path-dragging * {
   border-collapse: collapse;
 }
 
+.nyaterm-note-preview th,
+.nyaterm-note-preview td,
 .nyaterm-note-content th,
 .nyaterm-note-content td {
   border: 1px solid var(--df-border);
   padding: 0.4rem 0.55rem;
+}
+
+.nyaterm-note-preview ul.contains-task-list,
+.nyaterm-note-content ul.contains-task-list {
+  list-style: none;
+  padding-left: 0.15rem;
+}
+
+.nyaterm-note-preview .task-list-item,
+.nyaterm-note-content .task-list-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  list-style: none;
+}
+
+.nyaterm-note-preview .task-list-item input[type="checkbox"],
+.nyaterm-note-content .task-list-item input[type="checkbox"] {
+  margin-top: 0.35rem;
+  accent-color: var(--df-primary);
+  pointer-events: auto;
+}
+
+.nyaterm-note-preview .task-list-item [data-nyaterm-task="true"] {
+  cursor: pointer;
+  pointer-events: auto !important;
+}
+
+.nyaterm-note-preview .nyaterm-mermaid svg,
+.nyaterm-note-content .nyaterm-mermaid svg {
+  max-width: 100%;
+  height: auto;
 }

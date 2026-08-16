@@ -71,6 +71,10 @@ export interface CursorPosition {
 interface FileViewExtensionOptions {
   editable?: boolean;
   updateListener?: Extension;
+  /** Allow scrolling past the last line (default true). */
+  allowScrollPastEnd?: boolean;
+  /** Soft-wrap long lines (default true). Disable for large notes to avoid scroll blanks. */
+  lineWrapping?: boolean;
 }
 
 const fileViewHighlightStyle = HighlightStyle.define([
@@ -251,7 +255,12 @@ export function getCursorPosition(state: EditorState): CursorPosition {
 
 export function codeMirrorFileViewExtensions(
   language: string,
-  { editable = true, updateListener }: FileViewExtensionOptions = {},
+  {
+    editable = true,
+    updateListener,
+    allowScrollPastEnd = true,
+    lineWrapping = true,
+  }: FileViewExtensionOptions = {},
 ) {
   const extensions: Extension[] = [
     lineNumbers(),
@@ -268,9 +277,9 @@ export function codeMirrorFileViewExtensions(
     languageExtension(language),
     rectangularSelection(),
     crosshairCursor(),
-    scrollPastEnd(),
+    ...(allowScrollPastEnd ? [scrollPastEnd()] : []),
     keymap.of([...defaultKeymap, ...searchKeymap, ...foldKeymap]),
-    EditorView.lineWrapping,
+    ...(lineWrapping ? [EditorView.lineWrapping] : []),
     EditorView.theme({
       "&": {
         height: "100%",
@@ -294,6 +303,9 @@ export function codeMirrorFileViewExtensions(
         borderLeftColor: "var(--foreground)",
       },
       ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
+        backgroundColor: "color-mix(in srgb, var(--primary) 28%, transparent)",
+      },
+      "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground": {
         backgroundColor: "color-mix(in srgb, var(--primary) 28%, transparent)",
       },
       ".cm-scroller": {

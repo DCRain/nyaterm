@@ -1,5 +1,5 @@
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { type ComponentProps, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -88,17 +88,15 @@ import { HEADER_STATUS_MODES, normalizeHeaderStatusMode } from "@/lib/headerStat
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
 import { isMacOS } from "@/lib/platform";
-import {
-  isReactDevtoolsPlusEnabled,
-  toggleReactDevtoolsPlus,
-} from "@/lib/reactDevtoolsPlus";
+import { NOTE_THEME_FOLLOW_UI } from "@/lib/prismTheme";
+import { isReactDevtoolsPlusEnabled, toggleReactDevtoolsPlus } from "@/lib/reactDevtoolsPlus";
 import {
   decreaseTerminalFontSizeDelta,
   increaseTerminalFontSizeDelta,
   resetTerminalFontSizeDelta,
 } from "@/lib/terminalFontSize";
-import { getActivePane, getTabDisplayName } from "@/lib/workspaceTabs";
 import { openSettings } from "@/lib/windowManager";
+import { getActivePane, getTabDisplayName } from "@/lib/workspaceTabs";
 import type {
   AppearanceSettings,
   RemoteGpuOverview,
@@ -258,8 +256,17 @@ function getHardwareCardLimit(width: number): number {
   return 1;
 }
 
-function getHardwareStatusCompact(visibleCardCount: number, hiddenCount: number, cardLimit: number): boolean {
-  return cardLimit <= 1 || (cardLimit <= 2 && visibleCardCount >= 2) || visibleCardCount >= 3 || hiddenCount > 0;
+function getHardwareStatusCompact(
+  visibleCardCount: number,
+  hiddenCount: number,
+  cardLimit: number,
+): boolean {
+  return (
+    cardLimit <= 1 ||
+    (cardLimit <= 2 && visibleCardCount >= 2) ||
+    visibleCardCount >= 3 ||
+    hiddenCount > 0
+  );
 }
 
 function formatUptimeShort(
@@ -484,13 +491,7 @@ function HeaderHardwareSeparator() {
   );
 }
 
-function HeaderHardwareCardCell({
-  card,
-  compact,
-}: {
-  card: HeaderHardwareCard;
-  compact: boolean;
-}) {
+function HeaderHardwareCardCell({ card, compact }: { card: HeaderHardwareCard; compact: boolean }) {
   return (
     <span className="grid shrink-0 grid-rows-2 gap-y-0.5">
       <HeaderHardwareCardRow card={card} compact={compact} row="utilization" />
@@ -514,7 +515,9 @@ function HeaderHardwareCardRow({
   return (
     <span
       className={`grid shrink-0 items-center gap-x-1 text-[0.625rem] ${
-        compact ? "w-[2.95rem] grid-cols-[1rem_1.75rem]" : "w-[7.45rem] grid-cols-[1rem_2.75rem_1fr]"
+        compact
+          ? "w-[2.95rem] grid-cols-[1rem_1.75rem]"
+          : "w-[7.45rem] grid-cols-[1rem_2.75rem_1fr]"
       }`}
     >
       <span className="text-right text-[var(--df-text-muted)]">
@@ -663,7 +666,10 @@ function getMacosAccelerator(shortcutId: string, keybindings: Record<string, str
     .split("+")
     .map((part) => part.trim().toLowerCase())
     .filter(Boolean);
-  const key = pieces.find((part) => !["meta", "cmd", "command", "ctrl", "control", "shift", "alt", "option"].includes(part));
+  const key = pieces.find(
+    (part) =>
+      !["meta", "cmd", "command", "ctrl", "control", "shift", "alt", "option"].includes(part),
+  );
   if (!key || key.includes("-")) return null;
 
   const modifiers: string[] = [];
@@ -733,7 +739,15 @@ export default function Header({
   onRequestQuit,
 }: HeaderProps) {
   const [appWindow] = useState(() => getCurrentWindow());
-  const { themeName, setTheme, themeNames, terminalThemeName, setTerminalTheme } = useTheme();
+  const {
+    themeName,
+    setTheme,
+    themeNames,
+    terminalThemeName,
+    setTerminalTheme,
+    noteThemePreference,
+    setNoteThemePreference,
+  } = useTheme();
   const { updateAppSettings, updateUi, appSettings, tabs } = useApp();
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
@@ -925,12 +939,16 @@ export default function Header({
 
   const menus: Record<string, MenuItem[]> = {
     file: [
-      addNativeAccelerator({
-        id: "file.newSession",
-        label: t("menu.newSession"),
-        action: onNewSession,
-        icon: "add",
-      }, "tab.newSession", appSettings.keybindings),
+      addNativeAccelerator(
+        {
+          id: "file.newSession",
+          label: t("menu.newSession"),
+          action: onNewSession,
+          icon: "add",
+        },
+        "tab.newSession",
+        appSettings.keybindings,
+      ),
       { label: "separator", separator: true },
       {
         id: "file.importConfig",
@@ -945,12 +963,16 @@ export default function Header({
         icon: "file_export",
       },
       { label: "separator", separator: true },
-      addNativeAccelerator({
-        id: "file.openSettings",
-        label: t("settings.title"),
-        action: () => void openSettings(),
-        icon: "settings",
-      }, "view.openSettings", appSettings.keybindings),
+      addNativeAccelerator(
+        {
+          id: "file.openSettings",
+          label: t("settings.title"),
+          action: () => void openSettings(),
+          icon: "settings",
+        },
+        "view.openSettings",
+        appSettings.keybindings,
+      ),
     ],
     view: [
       {
@@ -980,6 +1002,31 @@ export default function Header({
             label: th.name,
             checked: terminalThemeName === th.id,
             action: () => setTerminalTheme(th.id),
+          })),
+        ],
+      },
+      {
+        id: "view.noteTheme",
+        label: t("menu.noteTheme"),
+        icon: "sticky_note",
+        submenu: [
+          {
+            id: "view.noteTheme.followTerminal",
+            label: t("settings.followTerminalTheme"),
+            checked: noteThemePreference === null,
+            action: () => setNoteThemePreference(null),
+          },
+          {
+            id: "view.noteTheme.followUi",
+            label: t("settings.followUiTheme"),
+            checked: noteThemePreference === NOTE_THEME_FOLLOW_UI,
+            action: () => setNoteThemePreference(NOTE_THEME_FOLLOW_UI),
+          },
+          ...themeNames.map((th) => ({
+            id: `view.noteTheme.${th.id}`,
+            label: th.name,
+            checked: noteThemePreference === th.id,
+            action: () => setNoteThemePreference(th.id),
           })),
         ],
       },
@@ -1049,35 +1096,51 @@ export default function Header({
         ],
       },
       { label: "separator", separator: true },
-      addNativeAccelerator({
-        id: "view.zoomIn",
-        label: t("menu.zoomIn"),
-        action: () => handleZoom(0.1),
-        icon: "zoom_in",
-        disabled: !terminalZoomEnabled,
-      }, "view.zoomIn", appSettings.keybindings),
-      addNativeAccelerator({
-        id: "view.zoomOut",
-        label: t("menu.zoomOut"),
-        action: () => handleZoom(-0.1),
-        icon: "zoom_out",
-        disabled: !terminalZoomEnabled,
-      }, "view.zoomOut", appSettings.keybindings),
-      addNativeAccelerator({
-        id: "view.resetZoom",
-        label: t("menu.resetZoom"),
-        action: handleResetZoom,
-        icon: "restart_alt",
-        disabled: !terminalZoomEnabled,
-      }, "view.resetZoom", appSettings.keybindings),
+      addNativeAccelerator(
+        {
+          id: "view.zoomIn",
+          label: t("menu.zoomIn"),
+          action: () => handleZoom(0.1),
+          icon: "zoom_in",
+          disabled: !terminalZoomEnabled,
+        },
+        "view.zoomIn",
+        appSettings.keybindings,
+      ),
+      addNativeAccelerator(
+        {
+          id: "view.zoomOut",
+          label: t("menu.zoomOut"),
+          action: () => handleZoom(-0.1),
+          icon: "zoom_out",
+          disabled: !terminalZoomEnabled,
+        },
+        "view.zoomOut",
+        appSettings.keybindings,
+      ),
+      addNativeAccelerator(
+        {
+          id: "view.resetZoom",
+          label: t("menu.resetZoom"),
+          action: handleResetZoom,
+          icon: "restart_alt",
+          disabled: !terminalZoomEnabled,
+        },
+        "view.resetZoom",
+        appSettings.keybindings,
+      ),
     ],
     terminal: [
-      addNativeAccelerator({
-        id: "terminal.commandPalette",
-        label: t("menu.commandPalette"),
-        icon: "search",
-        action: () => onOpenCommandPalette?.(),
-      }, "tab.quickSwitch", appSettings.keybindings),
+      addNativeAccelerator(
+        {
+          id: "terminal.commandPalette",
+          label: t("menu.commandPalette"),
+          icon: "search",
+          action: () => onOpenCommandPalette?.(),
+        },
+        "tab.quickSwitch",
+        appSettings.keybindings,
+      ),
       { label: "separator", separator: true },
       {
         id: "terminal.display",
@@ -1185,12 +1248,16 @@ export default function Header({
         label: t("menu.syncInput"),
         icon: "sync",
         submenu: [
-          addNativeAccelerator({
-            id: "terminal.syncInput.manageGroups",
-            label: t("menu.manageGroups"),
-            icon: "settings",
-            action: () => onManageSyncGroups?.(),
-          }, "terminal.manageSyncGroups", appSettings.keybindings),
+          addNativeAccelerator(
+            {
+              id: "terminal.syncInput.manageGroups",
+              label: t("menu.manageGroups"),
+              icon: "settings",
+              action: () => onManageSyncGroups?.(),
+            },
+            "terminal.manageSyncGroups",
+            appSettings.keybindings,
+          ),
         ],
       },
       { label: "separator", separator: true },
@@ -1202,12 +1269,16 @@ export default function Header({
         checked: broadcastToAll,
       },
       { label: "separator", separator: true },
-      addNativeAccelerator({
-        id: "terminal.clear",
-        label: t("menu.clearTerminal"),
-        icon: "delete_sweep",
-        action: () => onClearTerminal?.(),
-      }, "terminal.clear", appSettings.keybindings),
+      addNativeAccelerator(
+        {
+          id: "terminal.clear",
+          label: t("menu.clearTerminal"),
+          icon: "delete_sweep",
+          action: () => onClearTerminal?.(),
+        },
+        "terminal.clear",
+        appSettings.keybindings,
+      ),
       {
         id: "terminal.refit",
         label: t("menu.refitTerminals"),

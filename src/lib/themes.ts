@@ -1,5 +1,5 @@
 // ── Theme Definitions ──────────────────────────────────────────────────────
-// Each theme defines both UI surface colors and a full xterm 16-color palette.
+// Each theme defines UI surfaces, a terminal palette, and note editor colors.
 
 export interface TerminalColors {
   background: string;
@@ -25,6 +25,23 @@ export interface TerminalColors {
   brightMagenta: string;
   brightCyan: string;
   brightWhite: string;
+}
+
+/** Note editor / preview surfaces + syntax palette. */
+export interface NoteColors {
+  bg: string;
+  bgPanel: string;
+  bgHover: string;
+  /** Text selection and selected-row fill. */
+  selectionBackground: string;
+  border: string;
+  text: string;
+  textMuted: string;
+  primary: string;
+  danger: string;
+  link: string;
+  /** Syntax / code-block palette (Prism). */
+  syntax: TerminalColors;
 }
 
 export interface ThemeColors {
@@ -53,6 +70,8 @@ export interface ThemeColors {
   accent: string;
   // Terminal 16-color ANSI palette
   terminal: TerminalColors;
+  // Note editor palette (initialized from UI + terminal for built-ins)
+  notes: NoteColors;
 }
 
 export interface Theme {
@@ -63,6 +82,158 @@ export interface Theme {
   /** Representative color swatch for the picker */
   swatch: string;
   colors: ThemeColors;
+}
+
+/** Built-in theme body before notes is derived. */
+export type ThemeDefinition = Omit<Theme, "colors"> & {
+  colors: Omit<ThemeColors, "notes">;
+};
+
+function parseHexRgb(hex: string): [number, number, number] | null {
+  const match = /^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(hex.trim());
+  if (!match) return null;
+  return [
+    Number.parseInt(match[1], 16),
+    Number.parseInt(match[2], 16),
+    Number.parseInt(match[3], 16),
+  ];
+}
+
+function relativeLuminance(hex: string): number {
+  const rgb = parseHexRgb(hex);
+  if (!rgb) return 0;
+  const channels = rgb.map((channel) => {
+    const value = channel / 255;
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+}
+
+function contrastRatio(left: string, right: string): number {
+  const lighter = Math.max(relativeLuminance(left), relativeLuminance(right));
+  const darker = Math.min(relativeLuminance(left), relativeLuminance(right));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function sameColor(left: string, right: string) {
+  return left.trim().toLowerCase() === right.trim().toLowerCase();
+}
+
+function mixHex(base: string, tint: string, amount: number): string {
+  const a = parseHexRgb(base);
+  const b = parseHexRgb(tint);
+  if (!a || !b) return base;
+  const mix = (from: number, to: number) => Math.round(from + (to - from) * amount);
+  const toHex = (value: number) => value.toString(16).padStart(2, "0");
+  return `#${toHex(mix(a[0], b[0]))}${toHex(mix(a[1], b[1]))}${toHex(mix(a[2], b[2]))}`;
+}
+
+/** Keep selection visible against the note writing surface. */
+function ensureNoteSelection(selection: string, surface: string, primary: string): string {
+  if (!parseHexRgb(selection) || !parseHexRgb(surface)) return selection;
+  if (contrastRatio(selection, surface) >= 1.4) return selection;
+  return mixHex(surface, primary, 0.32);
+}
+
+/** Code-block fill must differ from the writing canvas. */
+function deriveNoteCodeBackground(
+  term: TerminalColors,
+  writingSurface: string,
+  hover: string,
+): string {
+  if (!sameColor(term.lineHighlight, writingSurface)) return term.lineHighlight;
+  if (!sameColor(hover, writingSurface)) return hover;
+  if (!sameColor(term.background, writingSurface)) return term.background;
+  return mixHex(writingSurface, term.foreground, 0.08);
+}
+
+/**
+ * Derive note editor/preview colors for every theme.
+ * Writing canvas follows the terminal palette; chrome accents follow UI.
+ */
+export function deriveNoteColors(colors: Omit<ThemeColors, "notes">): NoteColors {
+  const term = colors.terminal;
+  // Editor/preview canvas: terminal background reads as a document surface.
+  const writingSurface = term.background;
+  // Outer/shell surface: keep a slight elevation when UI panel differs.
+  const shellSurface = sameColor(colors.bgPanel, writingSurface)
+    ? colors.bg
+    : colors.bgPanel;
+  const codeBackground = deriveNoteCodeBackground(term, writingSurface, colors.bgHover);
+
+  return {
+    bg: shellSurface,
+    bgPanel: writingSurface,
+    bgHover: colors.bgHover,
+    selectionBackground: ensureNoteSelection(
+      term.selectionBackground,
+      writingSurface,
+      colors.primary,
+    ),
+    border: colors.border,
+    text: term.foreground,
+    textMuted: colors.textMuted,
+    primary: colors.primary,
+    danger: colors.danger,
+    link: colors.link,
+    syntax: {
+      ...term,
+      background: codeBackground,
+      foreground: term.foreground,
+    },
+  };
+}
+
+export function finalizeTheme(definition: ThemeDefinition): Theme {
+  return {
+    ...definition,
+    colors: {
+      ...definition.colors,
+      notes: deriveNoteColors(definition.colors),
+    },
+  };
+}
+
+/** Theme payloads that may omit notes (older custom themes / settings JSON). */
+export type ThemeInput = Omit<Theme, "colors"> & {
+  colors: Omit<ThemeColors, "notes"> & { notes?: Partial<NoteColors> & { syntax?: TerminalColors } };
+};
+
+/** Normalize a possibly partial / legacy notes palette. */
+export function normalizeNoteColors(
+  notes: (Partial<NoteColors> & { syntax?: Partial<TerminalColors> }) | undefined,
+  fallback: Omit<ThemeColors, "notes">,
+): NoteColors {
+  const derived = deriveNoteColors(fallback);
+  if (!notes) return derived;
+  return {
+    bg: notes.bg ?? derived.bg,
+    bgPanel: notes.bgPanel ?? derived.bgPanel,
+    bgHover: notes.bgHover ?? derived.bgHover,
+    selectionBackground: notes.selectionBackground?.trim() || derived.selectionBackground,
+    border: notes.border ?? derived.border,
+    text: notes.text ?? derived.text,
+    textMuted: notes.textMuted ?? derived.textMuted,
+    primary: notes.primary ?? derived.primary,
+    danger: notes.danger ?? derived.danger,
+    link: notes.link ?? derived.link,
+    syntax: notes.syntax ? { ...derived.syntax, ...notes.syntax } : derived.syntax,
+  };
+}
+
+/** Ensure a theme (including older custom themes) has a notes palette. */
+export function ensureThemeNotes(theme: ThemeInput): Theme {
+  const base = theme.colors as Omit<ThemeColors, "notes">;
+  if (!base.terminal || !base.bg) {
+    return theme as Theme;
+  }
+  return {
+    ...theme,
+    colors: {
+      ...theme.colors,
+      notes: normalizeNoteColors(theme.colors.notes, base),
+    },
+  } as Theme;
 }
 
 // ── GitHub Dark ────────────────────────────────────────────────────────────
@@ -120,7 +291,7 @@ const githubDark = {
       brightWhite: "#f0f6fc",
     },
   },
-} as const satisfies Theme;
+} as const satisfies ThemeDefinition;
 
 // ── Nya Acrylic ─────────────────────────────────────────────────────────────
 // Tuned for window transparency + system Acrylic: brighter chrome text, cooler
@@ -179,7 +350,7 @@ const nyaAcrylic = {
       brightWhite: "#ffffff",
     },
   },
-} as const satisfies Theme;
+} as const satisfies ThemeDefinition;
 
 // ── Nya High Contrast ─────────────────────────────────────────────────────
 const nyaHighContrast = {
@@ -236,7 +407,7 @@ const nyaHighContrast = {
       brightWhite: "#ffffff",
     },
   },
-} as const satisfies Theme;
+} as const satisfies ThemeDefinition;
 
 // ── Nya High Contrast White ───────────────────────────────────────────────
 const nyaHighContrastWhite = {
@@ -293,7 +464,7 @@ const nyaHighContrastWhite = {
       brightWhite: "#111827",
     },
   },
-} as const satisfies Theme;
+} as const satisfies ThemeDefinition;
 
 // ── Dracula ────────────────────────────────────────────────────────────────
 const dracula = {
@@ -350,7 +521,7 @@ const dracula = {
       brightWhite: "#ffffff",
     },
   },
-} as const satisfies Theme;
+} as const satisfies ThemeDefinition;
 
 // ── Nord ───────────────────────────────────────────────────────────────────
 const nord = {
@@ -407,7 +578,7 @@ const nord = {
       brightWhite: "#eceff4",
     },
   },
-} as const satisfies Theme;
+} as const satisfies ThemeDefinition;
 
 // ── Monokai Pro ────────────────────────────────────────────────────────────
 const monokaiPro = {
@@ -464,7 +635,7 @@ const monokaiPro = {
       brightWhite: "#ffffff",
     },
   },
-} as const satisfies Theme;
+} as const satisfies ThemeDefinition;
 
 // ── Solarized Light ────────────────────────────────────────────────────────
 const solarizedLight = {
@@ -521,7 +692,7 @@ const solarizedLight = {
       brightWhite: "#586e75",
     },
   },
-} as const satisfies Theme;
+} as const satisfies ThemeDefinition;
 
 // ── Catppuccin Mocha ──────────────────────────────────────────────────────
 const catppuccinMocha = {
@@ -578,7 +749,7 @@ const catppuccinMocha = {
       brightWhite: "#cdd6f4",
     },
   },
-} as const satisfies Theme;
+} as const satisfies ThemeDefinition;
 
 // ── Tokyo Night ───────────────────────────────────────────────────────────
 const tokyoNight = {
@@ -635,7 +806,7 @@ const tokyoNight = {
       brightWhite: "#d5dcff",
     },
   },
-} as const satisfies Theme;
+} as const satisfies ThemeDefinition;
 
 // ── One Dark Pro ──────────────────────────────────────────────────────────
 const oneDarkPro = {
@@ -692,7 +863,7 @@ const oneDarkPro = {
       brightWhite: "#e6e6e6",
     },
   },
-} as const satisfies Theme;
+} as const satisfies ThemeDefinition;
 
 // ── Rosé Pine ─────────────────────────────────────────────────────────────
 const rosePine = {
@@ -749,7 +920,7 @@ const rosePine = {
       brightWhite: "#f2e9f6",
     },
   },
-} as const satisfies Theme;
+} as const satisfies ThemeDefinition;
 
 // ── Gruvbox Dark ──────────────────────────────────────────────────────────
 const gruvboxDark = {
@@ -806,7 +977,7 @@ const gruvboxDark = {
       brightWhite: "#fbf1c7",
     },
   },
-} as const satisfies Theme;
+} as const satisfies ThemeDefinition;
 
 // ── GitHub Light ──────────────────────────────────────────────────────────
 const githubLight = {
@@ -863,7 +1034,7 @@ const githubLight = {
       brightWhite: "#8c959f",
     },
   },
-} as const satisfies Theme;
+} as const satisfies ThemeDefinition;
 
 // ── Catppuccin Latte ─────────────────────────────────────────────────────
 const catppuccinLatte = {
@@ -920,7 +1091,7 @@ const catppuccinLatte = {
       brightWhite: "#4c4f69",
     },
   },
-} as const satisfies Theme;
+} as const satisfies ThemeDefinition;
 
 // ── Rosé Pine Dawn ───────────────────────────────────────────────────────
 const rosePineDawn = {
@@ -977,7 +1148,7 @@ const rosePineDawn = {
       brightWhite: "#575279",
     },
   },
-} as const satisfies Theme;
+} as const satisfies ThemeDefinition;
 
 // ── Nord Light ────────────────────────────────────────────────────────────
 const nordLight = {
@@ -1034,7 +1205,7 @@ const nordLight = {
       brightWhite: "#2e3440",
     },
   },
-} as const satisfies Theme;
+} as const satisfies ThemeDefinition;
 
 // ── One Light ─────────────────────────────────────────────────────────────
 const oneLight = {
@@ -1091,11 +1262,11 @@ const oneLight = {
       brightWhite: "#383a42",
     },
   },
-} as const satisfies Theme;
+} as const satisfies ThemeDefinition;
 
 // ── Exports ────────────────────────────────────────────────────────────────
 
-export const themeList = [
+export const themeDefinitions = [
   githubDark,
   nyaAcrylic,
   nyaHighContrast,
@@ -1114,9 +1285,11 @@ export const themeList = [
   rosePineDawn,
   nordLight,
   oneLight,
-] as const satisfies readonly Theme[];
+] as const satisfies readonly ThemeDefinition[];
 
-export type ThemeId = (typeof themeList)[number]["id"];
+export type ThemeId = (typeof themeDefinitions)[number]["id"];
+
+export const themeList: Theme[] = themeDefinitions.map((theme) => finalizeTheme(theme));
 
 export const themes = Object.fromEntries(themeList.map((theme) => [theme.id, theme])) as Record<
   ThemeId,
@@ -1136,22 +1309,24 @@ export function isBuiltinThemeId(id: string) {
   return !!themes[id];
 }
 
-export function getAvailableThemes(customThemes: readonly Theme[] = []): Theme[] {
+export function getAvailableThemes(customThemes: readonly ThemeInput[] = []): Theme[] {
   const seen = new Set<string>(themeList.map((theme) => theme.id));
-  const custom = customThemes.filter((theme) => {
-    if (!theme?.id || seen.has(theme.id)) return false;
-    seen.add(theme.id);
-    return true;
-  });
+  const custom = customThemes
+    .filter((theme) => {
+      if (!theme?.id || seen.has(theme.id)) return false;
+      seen.add(theme.id);
+      return true;
+    })
+    .map((theme) => ensureThemeNotes(theme));
   return [...themeList, ...custom];
 }
 
-export function resolveTheme(id: string | null | undefined, customThemes: readonly Theme[] = []) {
+export function resolveTheme(id: string | null | undefined, customThemes: readonly ThemeInput[] = []) {
   if (id) {
     const customTheme = customThemes.find(
       (theme) => theme.id === id && !isBuiltinThemeId(theme.id),
     );
-    if (customTheme) return customTheme;
+    if (customTheme) return ensureThemeNotes(customTheme);
     if (themes[id]) return themes[id];
   }
   return themes[DEFAULT_THEME_ID];

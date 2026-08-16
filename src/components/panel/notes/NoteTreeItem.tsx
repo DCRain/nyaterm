@@ -81,10 +81,10 @@ export default function NoteTreeItem({
       data-note-node-id={node.id}
       draggable={!editing}
       className={cn(
-        "group flex h-7 min-w-0 cursor-default items-center gap-1 rounded px-1 text-xs outline-none transition-colors",
+        "note-tree-row group flex h-7 min-w-0 cursor-default items-center gap-1 rounded px-1 text-xs outline-none transition-colors",
         selected
-          ? "bg-[color-mix(in_srgb,var(--df-primary)_18%,transparent)] text-[var(--df-text)]"
-          : "text-[var(--df-text-muted)] hover:bg-[var(--df-bg-hover)] hover:text-[var(--df-text)]",
+          ? "note-tree-row--selected text-[var(--df-text)]"
+          : "text-[var(--df-text-muted)] hover:bg-[var(--df-bg-hover-solid,var(--df-bg-hover))] hover:text-[var(--df-text)]",
         dragOver && "ring-1 ring-[var(--df-primary)]",
       )}
       style={{ paddingLeft: 4 + depth * 14 }}
@@ -92,10 +92,12 @@ export default function NoteTreeItem({
       aria-selected={selected}
       aria-expanded={isFolder ? expanded : undefined}
       tabIndex={0}
-      onClick={() => onSelect(node)}
+      onClick={() => {
+        onSelect(node);
+        if (!isFolder) onOpen(node);
+      }}
       onDoubleClick={() => {
         if (isFolder) onToggle(node);
-        else onOpen(node);
       }}
       onDragStart={(event) => {
         event.dataTransfer.setData("application/x-nyaterm-note-node", node.id);

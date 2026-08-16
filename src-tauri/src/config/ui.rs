@@ -41,9 +41,12 @@ pub enum RestorablePaneNode {
         title: String,
         session_type: String,
         connection_id: Option<String>,
-        /// Dual-pane SFTP workspace when Some("sftp"); omitted means terminal.
+        /// Dual-pane SFTP / workbench / note workspace when set; omitted means terminal.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         view: Option<String>,
+        /// Bound note id when view is "note".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         display: Option<RemoteDesktopDisplayMetadata>,
     },
@@ -122,6 +125,7 @@ impl RestorableTab {
                 session_type: self.session_type.clone(),
                 connection_id: self.connection_id.clone(),
                 view: None,
+                note_id: None,
                 display: None,
             });
             if self.active_pane_id.is_none() {
@@ -305,6 +309,10 @@ pub struct UiConfig {
     pub header_status_visible: bool,
     #[serde(default = "default_true_fn")]
     pub show_notes_panel: bool,
+    #[serde(default = "default_false")]
+    pub show_note_outline: bool,
+    #[serde(default = "default_note_outline_width")]
+    pub note_outline_width: f64,
     #[serde(default = "default_true_fn")]
     pub show_remote_stats: bool,
     #[serde(default = "default_remote_stats_interval")]
@@ -367,6 +375,10 @@ impl UiConfig {
 
 fn default_left_width() -> f64 {
     306.0
+}
+
+fn default_note_outline_width() -> f64 {
+    180.0
 }
 
 fn default_right_width() -> f64 {
@@ -490,6 +502,8 @@ impl Default for UiConfig {
             header_status_mode: default_header_status_mode(),
             header_status_visible: true,
             show_notes_panel: true,
+            show_note_outline: false,
+            note_outline_width: default_note_outline_width(),
             show_remote_stats: true,
             remote_stats_interval: default_remote_stats_interval(),
             show_gpu_monitor: false,

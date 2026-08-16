@@ -27,6 +27,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { codeMirrorFileViewExtensions } from "@/lib/codeMirrorFileView";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
+import { noteMarkdownHtmlRehypePlugins } from "@/lib/markdownHtmlSchema";
 import { cn } from "@/lib/utils";
 import {
   type FileExplorerBackendKind,
@@ -361,7 +362,7 @@ function MarkdownPreview({ content }: { content: string }) {
     <div className="terminal-scroll h-full overflow-auto bg-background/60 p-4 text-sm leading-6">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        skipHtml
+        rehypePlugins={[...noteMarkdownHtmlRehypePlugins]}
         components={{
           a: ({ children, href }) => (
             <a

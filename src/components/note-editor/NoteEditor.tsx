@@ -1,16 +1,5 @@
-import "@mdxeditor/editor/style.css";
-
-import { MDXEditor, type MDXEditorMethods } from "@mdxeditor/editor";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import {
-  forwardRef,
-  useCallback,
-  useEffect,
-  useImperativeHandle,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MdClose, MdNote, MdRefresh, MdSave } from "react-icons/md";
 import { toast } from "sonner";
@@ -25,13 +14,16 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { useTheme } from "@/context/ThemeContext";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
 import { listenNotesChanged } from "@/lib/noteEvents";
+import { noteColorsToCssVars } from "@/lib/prismTheme";
 import type { NoteDocument } from "@/types/notes";
 import NoteEditorToolbarStatus, { type NoteSaveStatus } from "./NoteEditorToolbarStatus";
-import { noteEditorPlugins } from "./noteEditorPlugins";
+import NoteMarkdownEditor, { type NoteMarkdownEditorHandle } from "./NoteMarkdownEditor";
+import NoteMarkdownToolbar from "./NoteMarkdownToolbar";
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
 
@@ -49,7 +41,10 @@ const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function NoteEd
   ref,
 ) {
   const { t } = useTranslation();
-  const editorRef = useRef<MDXEditorMethods>(null);
+  const { noteTheme } = useTheme();
+  const colors = noteTheme.colors.notes;
+  const noteThemeVars = noteColorsToCssVars(colors);
+  const editorRef = useRef<NoteMarkdownEditorHandle>(null);
   const latestMarkdownRef = useRef("");
   const latestTitleRef = useRef("");
   const revisionRef = useRef(0);
@@ -68,7 +63,6 @@ const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function NoteEd
   const [conflictOpen, setConflictOpen] = useState(false);
   const [closeFailureOpen, setCloseFailureOpen] = useState(false);
 
-  const plugins = useMemo(() => noteEditorPlugins(), []);
   const statusLabels = {
     saved: t("notes.saved"),
     saving: t("notes.saving"),
@@ -360,44 +354,72 @@ const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function NoteEd
   }
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background text-foreground">
-      <div className="flex min-h-0 shrink-0 items-center gap-3 border-b bg-muted/15 px-3 py-2">
-        <input
-          value={title}
-          onChange={(event) => handleTitleChange(event.target.value)}
-          onBlur={() => void flushSave()}
-          className="min-w-0 flex-1 bg-transparent text-base font-medium outline-none"
-          placeholder={t("notes.untitled")}
-        />
-        <NoteEditorToolbarStatus status={status} labels={statusLabels} />
-        <Button variant="ghost" size="icon-sm" onClick={() => void loadNote(true)}>
-          <MdRefresh />
-        </Button>
-        <Button variant="ghost" size="icon-sm" onClick={() => void flushSave()}>
-          <MdSave />
-        </Button>
+    <div
+      className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
+      style={{
+        ...noteThemeVars,
+        backgroundColor: colors.bgPanel,
+        color: colors.text,
+      }}
+    >
+      <div
+        className="flex min-h-0 shrink-0 flex-col"
+        style={{
+          borderColor: colors.border,
+          backgroundColor: colors.bgPanel,
+          borderBottom: "1px solid var(--df-divider, var(--df-border))",
+        }}
+      >
+        <div
+          className="flex items-center gap-3 px-3 py-2"
+          style={{ borderBottom: "1px solid var(--df-divider, var(--df-border))" }}
+        >
+          <input
+            value={title}
+            onChange={(event) => handleTitleChange(event.target.value)}
+            onBlur={() => void flushSave()}
+            className="min-w-0 flex-1 bg-transparent text-base font-medium outline-none"
+            style={{ color: colors.text }}
+            placeholder={t("notes.untitled")}
+          />
+          <NoteEditorToolbarStatus status={status} labels={statusLabels} />
+          <Button variant="ghost" size="icon-sm" onClick={() => void loadNote(true)}>
+            <MdRefresh />
+          </Button>
+          <Button variant="ghost" size="icon-sm" onClick={() => void flushSave()}>
+            <MdSave />
+          </Button>
+        </div>
+        <NoteMarkdownToolbar getView={() => editorRef.current?.getView() ?? null} />
       </div>
       {error ? (
-        <div className="border-b border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+        <div
+          className="border-b px-3 py-2 text-xs"
+          style={{
+            borderColor: `${colors.danger}59`,
+            backgroundColor: `${colors.danger}1f`,
+            color: colors.danger,
+          }}
+        >
           {error}
         </div>
       ) : null}
       {!note ? (
-        <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+        <div
+          className="flex flex-1 items-center justify-center text-sm"
+          style={{ color: colors.textMuted }}
+        >
           {t("common.loading")}
         </div>
       ) : (
         <div
-          className="nyaterm-note-editor-shell min-h-0 flex-1 overflow-auto"
+          className="nyaterm-note-editor-shell min-h-0 flex-1 overflow-hidden"
           onBlur={() => void flushSave()}
         >
-          <MDXEditor
+          <NoteMarkdownEditor
             ref={editorRef}
-            className="nyaterm-note-mdxeditor"
-            markdown={note.markdown}
+            initialMarkdown={note.markdown}
             onChange={handleMarkdownChange}
-            plugins={plugins}
-            contentEditableClassName="nyaterm-note-content"
           />
         </div>
       )}

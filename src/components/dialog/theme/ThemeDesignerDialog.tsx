@@ -34,6 +34,7 @@ import {
   cloneThemeAsCustom,
   getThemeColor,
   isHexColor,
+  NOTE_THEME_COLOR_FIELDS,
   normalizeImportedTheme,
   setThemeColor,
   structuredCloneTheme,
@@ -42,7 +43,13 @@ import {
 } from "@/lib/customThemes";
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
-import { DEFAULT_THEME_ID, isBuiltinThemeId, resolveTheme, type Theme } from "@/lib/themes";
+import {
+  DEFAULT_THEME_ID,
+  ensureThemeNotes,
+  isBuiltinThemeId,
+  resolveTheme,
+  type Theme,
+} from "@/lib/themes";
 import type { AppearanceSettings } from "@/types/global";
 
 interface ThemeDesignerDialogProps {
@@ -108,13 +115,14 @@ export function ThemeDesignerDialog({
   const terminalContrast = draft
     ? contrastRatio(draft.colors.terminal.foreground, draft.colors.terminal.background)
     : null;
+  const noteContrast = draft ? contrastRatio(draft.colors.notes.text, draft.colors.notes.bg) : null;
 
   useEffect(() => {
     if (!open) return;
     const initial = customThemes[0];
     if (initial) {
       setSelectedThemeId(initial.id);
-      setDraft(structuredCloneTheme(initial));
+      setDraft(ensureThemeNotes(structuredCloneTheme(initial)));
     } else {
       const next = cloneThemeAsCustom(resolveTheme(appearance.theme, customThemes));
       setSelectedThemeId(next.id);
@@ -159,7 +167,7 @@ export function ThemeDesignerDialog({
     const next = customThemes.find((theme) => theme.id === id);
     if (!next) return;
     setSelectedThemeId(id);
-    setDraft(structuredCloneTheme(next));
+    setDraft(ensureThemeNotes(structuredCloneTheme(next)));
   }
 
   function deleteSelected() {
@@ -168,6 +176,7 @@ export function ThemeDesignerDialog({
     const patch: Partial<AppearanceSettings> = { custom_themes: nextThemes };
     if (appearance.theme === draft.id) patch.theme = DEFAULT_THEME_ID;
     if (appearance.terminal_theme === draft.id) patch.terminal_theme = null;
+    if (appearance.note_theme === draft.id) patch.note_theme = null;
     updateAppearance(patch);
     const next = nextThemes[0]
       ? structuredCloneTheme(nextThemes[0])
@@ -217,7 +226,7 @@ export function ThemeDesignerDialog({
       }
       updateAppearance({ custom_themes: [...customThemes, next] });
       setSelectedThemeId(next.id);
-      setDraft(structuredCloneTheme(next));
+      setDraft(ensureThemeNotes(structuredCloneTheme(next)));
       toast.success(t("settings.themeDesignerImportSuccess"));
     } catch (error) {
       logger.error({
@@ -301,7 +310,9 @@ export function ThemeDesignerDialog({
                       style={{ backgroundColor: theme.swatch, borderColor: "var(--df-border)" }}
                     />
                     <span className="min-w-0 flex-1 truncate">{theme.name}</span>
-                    {(appearance.theme === theme.id || appearance.terminal_theme === theme.id) && (
+                    {(appearance.theme === theme.id ||
+                      appearance.terminal_theme === theme.id ||
+                      appearance.note_theme === theme.id) && (
                       <MdCheck className="shrink-0 text-[var(--df-success)]" />
                     )}
                   </button>
@@ -357,6 +368,11 @@ export function ThemeDesignerDialog({
                           {t("settings.themeDesignerTerminalContrastWarning")}
                         </div>
                       )}
+                      {noteContrast !== null && noteContrast < 4.5 && (
+                        <div className="rounded-md border border-[var(--df-warning)]/50 p-2 text-[var(--df-warning)]">
+                          {t("settings.themeDesignerNoteContrastWarning")}
+                        </div>
+                      )}
                       {hasValidationErrors && (
                         <div className="rounded-md border border-[var(--df-danger)]/50 p-2 text-[var(--df-danger)]">
                           {t("settings.themeDesignerValidationHint", {
@@ -372,6 +388,9 @@ export function ThemeDesignerDialog({
                         <TabsTrigger value="terminal">
                           {t("settings.themeDesignerTerminalColors")}
                         </TabsTrigger>
+                        <TabsTrigger value="notes">
+                          {t("settings.themeDesignerNoteColors")}
+                        </TabsTrigger>
                       </TabsList>
                       <TabsContent value="ui" className="mt-4">
                         <ColorFieldGrid
@@ -385,6 +404,13 @@ export function ThemeDesignerDialog({
                           fields={ALL_THEME_COLOR_FIELDS.filter((field) =>
                             field.path.startsWith("terminal."),
                           )}
+                          draft={draft}
+                          onChange={patchColor}
+                        />
+                      </TabsContent>
+                      <TabsContent value="notes" className="mt-4">
+                        <ColorFieldGrid
+                          fields={NOTE_THEME_COLOR_FIELDS}
                           draft={draft}
                           onChange={patchColor}
                         />
@@ -505,6 +531,33 @@ function ThemePreview({ theme }: { theme: Theme }) {
           <span style={{ color: theme.colors.terminal.brightYellow }}>warn</span>{" "}
           {t("settings.themeDesignerPreviewWarn")}
         </div>
+      </div>
+
+      <div
+        className="rounded-md border p-3 text-xs"
+        style={{
+          backgroundColor: theme.colors.notes.bgPanel,
+          borderColor: theme.colors.notes.border,
+          color: theme.colors.notes.text,
+        }}
+      >
+        <div className="mb-2 font-semibold">{t("settings.themeDesignerPreviewNoteTitle")}</div>
+        <div style={{ color: theme.colors.notes.textMuted }}>
+          {t("settings.themeDesignerPreviewNoteBody")}
+        </div>
+        <pre
+          className="mt-2 overflow-auto rounded-sm border p-2 font-mono"
+          style={{
+            backgroundColor: theme.colors.notes.syntax.background,
+            borderColor: theme.colors.notes.border,
+            color: theme.colors.notes.syntax.foreground,
+          }}
+        >
+          <span style={{ color: theme.colors.notes.syntax.magenta }}>const</span>{" "}
+          <span style={{ color: theme.colors.notes.syntax.blue }}>greet</span>
+          {" = () => "}
+          <span style={{ color: theme.colors.notes.syntax.green }}>"hi"</span>;
+        </pre>
       </div>
 
       <div className="grid grid-cols-8 gap-1">

@@ -26,6 +26,7 @@ function appearance(partial: Partial<AppearanceSettings>): AppearanceSettings {
     cursor_blink: true,
     ui_font_size: 13,
     terminal_theme: null,
+    note_theme: null,
     minimum_contrast_ratio: 1,
     panel_multi_open: false,
     window_transparency: "transparent",

@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { buildPrismThemeFromColors as buildPrismThemeFromColorsShared } from "@/lib/prismTheme";
 import type { ThemeColors } from "@/lib/themes";
 import type { AIAction, AIMessage, AISession } from "@/types/global";
 
@@ -79,64 +80,5 @@ export function groupSessionsByDate(sessions: AISession[]) {
 }
 
 export function buildPrismThemeFromColors(colors: ThemeColors): Record<string, CSSProperties> {
-  const t = colors.terminal;
-  return {
-    'code[class*="language-"]': {
-      color: t.foreground,
-      background: "none",
-      fontFamily: "inherit",
-      textAlign: "left",
-      whiteSpace: "pre",
-      wordSpacing: "normal",
-      wordBreak: "normal",
-      wordWrap: "normal",
-      lineHeight: "1.5",
-      tabSize: 4,
-    },
-    'pre[class*="language-"]': {
-      color: t.foreground,
-      background: "transparent",
-      fontFamily: "inherit",
-      textAlign: "left",
-      whiteSpace: "pre",
-      wordSpacing: "normal",
-      wordBreak: "normal",
-      wordWrap: "normal",
-      lineHeight: "1.5",
-      tabSize: 4,
-      overflow: "auto",
-    },
-    comment: { color: t.brightBlack, fontStyle: "italic" },
-    prolog: { color: t.brightBlack },
-    doctype: { color: t.brightBlack },
-    cdata: { color: t.brightBlack },
-    punctuation: { color: t.foreground },
-    property: { color: t.cyan },
-    tag: { color: t.red },
-    boolean: { color: t.magenta },
-    number: { color: t.magenta },
-    constant: { color: t.magenta },
-    symbol: { color: t.green },
-    deleted: { color: t.red },
-    selector: { color: t.green },
-    "attr-name": { color: t.yellow },
-    string: { color: t.green },
-    char: { color: t.green },
-    builtin: { color: t.cyan },
-    inserted: { color: t.green },
-    operator: { color: t.foreground },
-    entity: { color: t.yellow, cursor: "help" },
-    url: { color: t.cyan },
-    variable: { color: t.red },
-    atrule: { color: t.yellow },
-    "attr-value": { color: t.green },
-    function: { color: t.blue },
-    "class-name": { color: t.yellow },
-    keyword: { color: t.magenta },
-    regex: { color: t.cyan },
-    important: { color: t.yellow, fontWeight: "bold" },
-    bold: { fontWeight: "bold" },
-    italic: { fontStyle: "italic" },
-    namespace: { opacity: 0.7 },
-  };
+  return buildPrismThemeFromColorsShared(colors);
 }

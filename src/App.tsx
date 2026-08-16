@@ -9,8 +9,8 @@ import AppPanelContent from "./components/app/AppPanelContent";
 import ExternalConnectionMatchDialog from "./components/dialog/connections/ExternalConnectionMatchDialog";
 import type { HostKeyVerifyRequest } from "./components/dialog/connections/HostKeyVerifyDialog";
 import type { OtpRequest } from "./components/dialog/connections/OtpDialog";
-import RemoteDesktopClientMissingDialog from "./components/dialog/connections/RemoteDesktopClientMissingDialog";
 import type { RdpCertificateVerifyRequest } from "./components/dialog/connections/RdpCertificateVerifyDialog";
+import RemoteDesktopClientMissingDialog from "./components/dialog/connections/RemoteDesktopClientMissingDialog";
 import type { SshAgentAuthRequest } from "./components/dialog/connections/SshAgentAuthDialog";
 import type { SshAuthRequest } from "./components/dialog/connections/SshAuthDialog";
 import TemporarySshLinkDialog from "./components/dialog/connections/TemporarySshLinkDialog";
@@ -93,12 +93,13 @@ import {
 import { normalizeHeaderStatusMode } from "./lib/headerStatus";
 import { invoke } from "./lib/invoke";
 import { logger } from "./lib/logger";
+import { NOTE_OPEN_EVENT, type NoteOpenDetail } from "./lib/noteEditorEvents";
 import { subscribeOpenSshTerminalAtPath } from "./lib/openSshTerminalAtPath";
 import {
   launchSavedRemoteDesktop,
-  shouldLaunchExternalRemoteDesktop,
   type RemoteDesktopClientInstallRecommendation,
   type RemoteDesktopProtocol,
+  shouldLaunchExternalRemoteDesktop,
 } from "./lib/remoteDesktop";
 import {
   listenOpenSendCommandPanel,
@@ -172,9 +173,7 @@ import type {
   WorkspaceSessionType,
 } from "./types/global";
 
-const CONNECTION_SESSION_TYPES: Partial<
-  Record<SavedConnection["type"], WorkspaceSessionType>
-> = {
+const CONNECTION_SESSION_TYPES: Partial<Record<SavedConnection["type"], WorkspaceSessionType>> = {
   ssh: "SSH",
   local_terminal: "Local",
   telnet: "Telnet",
@@ -419,6 +418,7 @@ function App() {
     addTab,
     addPendingTab,
     openWorkbenchTab,
+    openNoteTab,
     updateTabSession,
     markTabConnectionFailed,
     updatePaneSession,
@@ -1222,15 +1222,16 @@ function App() {
     };
   }, [windowTitle]);
 
-  const handleNewSession = useCallback((parentGroupId?: string) => {
-    const workbench = getActiveWorkbenchTarget();
-    openNewSession(undefined, undefined, {
-      ...(parentGroupId ? { initialGroupId: parentGroupId } : {}),
-      ...(workbench
-        ? { sourceTabId: workbench.tabId, sourcePaneId: workbench.paneId }
-        : {}),
-    });
-  }, [getActiveWorkbenchTarget]);
+  const handleNewSession = useCallback(
+    (parentGroupId?: string) => {
+      const workbench = getActiveWorkbenchTarget();
+      openNewSession(undefined, undefined, {
+        ...(parentGroupId ? { initialGroupId: parentGroupId } : {}),
+        ...(workbench ? { sourceTabId: workbench.tabId, sourcePaneId: workbench.paneId } : {}),
+      });
+    },
+    [getActiveWorkbenchTarget],
+  );
 
   const handleOpenWorkbench = useCallback(() => {
     updateUi({ start_workspace_mode: "workbench" });
@@ -1266,10 +1267,7 @@ function App() {
   );
 
   const connectSavedConnection = useCallback(
-    async (
-      connection: SavedConnection,
-      options?: { failureContext?: string },
-    ) => {
+    async (connection: SavedConnection, options?: { failureContext?: string }) => {
       if (shouldLaunchExternalRemoteDesktop(connection)) {
         try {
           const result = await launchSavedRemoteDesktop(connection);
@@ -1855,6 +1853,16 @@ function App() {
     return () => window.removeEventListener(AI_OPEN_EVENT, handler);
   }, [multiPanelOpen, updateUi]);
 
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<NoteOpenDetail>).detail;
+      if (!detail?.noteId) return;
+      openNoteTab(detail.noteId, detail.title);
+    };
+    window.addEventListener(NOTE_OPEN_EVENT, handler);
+    return () => window.removeEventListener(NOTE_OPEN_EVENT, handler);
+  }, [openNoteTab]);
+
   const { unreadTabIds, disconnectedTabIds } = useTabStatusIndicators(tabs, activeTabId);
 
   const handleSelectLeafTab = useCallback(
@@ -2013,12 +2021,7 @@ function App() {
         getFirstTerminalWindowLeaf(terminalWindows);
       await handleConnectConnectionFromLeaf(leaf.id, connection);
     },
-    [
-      activeTabId,
-      connectSavedConnection,
-      handleConnectConnectionFromLeaf,
-      terminalWindows,
-    ],
+    [activeTabId, connectSavedConnection, handleConnectConnectionFromLeaf, terminalWindows],
   );
 
   const handleMoveTabToLeaf = useCallback(
@@ -2183,7 +2186,7 @@ function App() {
       >,
     ) => {
       if (pane.connecting) {
-        if (pane.view === "workbench") {
+        if (pane.view === "workbench" || pane.view === "note") {
           return true;
         }
         if (pane.type === "RDP") {
@@ -2220,7 +2223,7 @@ function App() {
         return true;
       }
 
-      if (pane.view === "workbench") {
+      if (pane.view === "workbench" || pane.view === "note") {
         return true;
       }
 
@@ -3121,9 +3124,7 @@ function App() {
     async (tab: Tab, direction: PaneSplitDirection) => {
       const pane = getActivePane(tab);
       if (!pane || pane.view === "sftp" || !canCreateSessionFromPane(pane)) return;
-      const leaf = terminalWindows
-        ? findTerminalWindowLeafByTabId(terminalWindows, tab.id)
-        : null;
+      const leaf = terminalWindows ? findTerminalWindowLeafByTabId(terminalWindows, tab.id) : null;
       if (!leaf) {
         toast.error(t("tabCtx.splitFailed"));
         return;
@@ -4192,33 +4193,33 @@ function App() {
           onToggleLeftActivityBar: () => handleToggleVisibility("left"),
           onToggleRightActivityBar: () => handleToggleVisibility("right"),
           tabBar: {
-                  tabs: terminalWindows ? flattenLeafTabs(terminalWindows, tabsById) : tabs,
-                  activeTabId,
-                  focusedTabId: activeTabId,
-                  unreadTabIds,
-                  disconnectedTabIds,
-                  onTabChange: handleSelectHeaderTab,
-                  onTabClose: handleCloseWorkspaceTab,
-                  onAddTab: handleAddHeaderTab,
-                  onOpenWorkbench: handleOpenWorkbench,
-                  onConnectConnection: handleConnectConnectionFromHeader,
-                  onSelectLocalShell: handleSelectLocalShell,
-                  onDuplicateSession: handleDuplicateSession,
-                  onMultiplexSshSession: handleMultiplexSshSession,
-                  onMultiplexSshSftpSession: handleMultiplexSshSftpSession,
-                  onDuplicateSessionWithCommand: handleDuplicateSessionWithCommand,
-                  onMultiplexSshSessionWithCommand: handleMultiplexSshSessionWithCommand,
-                  onReconnectSession: handleReconnectSession,
-                  onDisconnectSession: handleDisconnectSession,
-                  onSplitSession: handleSplitSession,
-                  onUnsplit: handleUnsplit,
-                  onCloseSession: handleCloseSession,
-                  onCloseAll: handleCloseAllTabs,
-                  onCloseInactive: handleCloseInactiveTabs,
-                  onCloseRight: handleCloseRightTabs,
-                  onSessionInfo: handleSessionInfo,
-                  onReorderTabs: handleReorderHeaderTabs,
-                },
+            tabs: terminalWindows ? flattenLeafTabs(terminalWindows, tabsById) : tabs,
+            activeTabId,
+            focusedTabId: activeTabId,
+            unreadTabIds,
+            disconnectedTabIds,
+            onTabChange: handleSelectHeaderTab,
+            onTabClose: handleCloseWorkspaceTab,
+            onAddTab: handleAddHeaderTab,
+            onOpenWorkbench: handleOpenWorkbench,
+            onConnectConnection: handleConnectConnectionFromHeader,
+            onSelectLocalShell: handleSelectLocalShell,
+            onDuplicateSession: handleDuplicateSession,
+            onMultiplexSshSession: handleMultiplexSshSession,
+            onMultiplexSshSftpSession: handleMultiplexSshSftpSession,
+            onDuplicateSessionWithCommand: handleDuplicateSessionWithCommand,
+            onMultiplexSshSessionWithCommand: handleMultiplexSshSessionWithCommand,
+            onReconnectSession: handleReconnectSession,
+            onDisconnectSession: handleDisconnectSession,
+            onSplitSession: handleSplitSession,
+            onUnsplit: handleUnsplit,
+            onCloseSession: handleCloseSession,
+            onCloseAll: handleCloseAllTabs,
+            onCloseInactive: handleCloseInactiveTabs,
+            onCloseRight: handleCloseRightTabs,
+            onSessionInfo: handleSessionInfo,
+            onReorderTabs: handleReorderHeaderTabs,
+          },
           activeTab,
           savedConnections,
           remoteStatsEnabled: activeRemoteStatsEnabled,
@@ -4398,10 +4399,7 @@ function App() {
         recommendations={remoteDesktopMissing?.recommendations ?? []}
         onClose={() => setRemoteDesktopMissing(null)}
       />
-      <AlertDialog
-        open={postLoginConfirm !== null}
-        onOpenChange={handlePostLoginConfirmOpenChange}
-      >
+      <AlertDialog open={postLoginConfirm !== null} onOpenChange={handlePostLoginConfirmOpenChange}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{t("externalOpen.postLoginConfirmTitle")}</AlertDialogTitle>

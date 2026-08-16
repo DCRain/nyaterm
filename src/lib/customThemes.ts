@@ -1,8 +1,18 @@
-import { isBuiltinThemeId, type TerminalColors, type Theme, type ThemeColors } from "./themes";
+import {
+  ensureThemeNotes,
+  isBuiltinThemeId,
+  type NoteColors,
+  type TerminalColors,
+  type Theme,
+  type ThemeColors,
+  type ThemeInput,
+} from "./themes";
 
 export type ThemeColorPath =
-  | keyof Omit<ThemeColors, "terminal">
-  | `terminal.${keyof TerminalColors}`;
+  | keyof Omit<ThemeColors, "terminal" | "notes">
+  | `terminal.${keyof TerminalColors}`
+  | `notes.${keyof Omit<NoteColors, "syntax">}`
+  | `notes.syntax.${keyof TerminalColors}`;
 
 export interface ThemeColorField {
   path: ThemeColorPath;
@@ -65,9 +75,33 @@ export const TERMINAL_THEME_COLOR_FIELDS: readonly ThemeColorField[] = [
   { path: "terminal.brightWhite", labelKey: "settings.themeColorAnsiBrightWhite" },
 ];
 
+export const NOTE_SURFACE_COLOR_FIELDS: readonly ThemeColorField[] = [
+  { path: "notes.bg", labelKey: "settings.themeColorNoteBg" },
+  { path: "notes.bgPanel", labelKey: "settings.themeColorNoteBgPanel" },
+  { path: "notes.bgHover", labelKey: "settings.themeColorNoteBgHover" },
+  { path: "notes.selectionBackground", labelKey: "settings.themeColorNoteSelection" },
+  { path: "notes.border", labelKey: "settings.themeColorNoteBorder" },
+  { path: "notes.text", labelKey: "settings.themeColorNoteText" },
+  { path: "notes.textMuted", labelKey: "settings.themeColorNoteTextMuted" },
+  { path: "notes.primary", labelKey: "settings.themeColorNotePrimary" },
+  { path: "notes.danger", labelKey: "settings.themeColorNoteDanger" },
+  { path: "notes.link", labelKey: "settings.themeColorNoteLink" },
+];
+
+export const NOTE_SYNTAX_COLOR_FIELDS: readonly ThemeColorField[] = [
+  { path: "notes.syntax.background", labelKey: "settings.themeColorNoteCodeBackground" },
+  { path: "notes.syntax.foreground", labelKey: "settings.themeColorNoteCodeForeground" },
+];
+
+export const NOTE_THEME_COLOR_FIELDS: readonly ThemeColorField[] = [
+  ...NOTE_SURFACE_COLOR_FIELDS,
+  ...NOTE_SYNTAX_COLOR_FIELDS,
+];
+
 export const ALL_THEME_COLOR_FIELDS = [
   ...UI_THEME_COLOR_FIELDS,
   ...TERMINAL_THEME_COLOR_FIELDS,
+  ...NOTE_THEME_COLOR_FIELDS,
 ] as const;
 
 export function generateCustomThemeId() {
@@ -84,8 +118,8 @@ export function cloneThemeAsCustom(source: Theme, name?: string): Theme {
   };
 }
 
-export function structuredCloneTheme(theme: Theme): Theme {
-  return JSON.parse(JSON.stringify(theme)) as Theme;
+export function structuredCloneTheme(theme: ThemeInput): Theme {
+  return ensureThemeNotes(JSON.parse(JSON.stringify(theme)) as ThemeInput);
 }
 
 export function isHexColor(value: string) {
@@ -102,32 +136,50 @@ export function isCssColor(value: string) {
 }
 
 export function getThemeColor(theme: Theme, path: ThemeColorPath): string {
+  if (path.startsWith("notes.syntax.")) {
+    const key = path.slice("notes.syntax.".length) as keyof TerminalColors;
+    return theme.colors.notes.syntax[key];
+  }
+  if (path.startsWith("notes.")) {
+    const key = path.slice("notes.".length) as keyof Omit<NoteColors, "syntax">;
+    return theme.colors.notes[key] as string;
+  }
   if (path.startsWith("terminal.")) {
     const key = path.slice("terminal.".length) as keyof TerminalColors;
     return theme.colors.terminal[key];
   }
-  return theme.colors[path as keyof Omit<ThemeColors, "terminal">] as string;
+  return theme.colors[path as keyof Omit<ThemeColors, "terminal" | "notes">] as string;
 }
 
 export function setThemeColor(theme: Theme, path: ThemeColorPath, value: string): Theme {
   const next = structuredCloneTheme(theme);
+  if (path.startsWith("notes.syntax.")) {
+    const key = path.slice("notes.syntax.".length) as keyof TerminalColors;
+    next.colors.notes.syntax[key] = value;
+    return next;
+  }
+  if (path.startsWith("notes.")) {
+    const key = path.slice("notes.".length) as keyof Omit<NoteColors, "syntax">;
+    (next.colors.notes[key] as string) = value;
+    return next;
+  }
   if (path.startsWith("terminal.")) {
     const key = path.slice("terminal.".length) as keyof TerminalColors;
     next.colors.terminal[key] = value;
     return next;
   }
-  (next.colors[path as keyof Omit<ThemeColors, "terminal">] as string) = value;
+  (next.colors[path as keyof Omit<ThemeColors, "terminal" | "notes">] as string) = value;
   return next;
 }
 
-export function normalizeImportedTheme(theme: Theme, existingIds: Set<string>): Theme {
+export function normalizeImportedTheme(theme: ThemeInput, existingIds: Set<string>): Theme {
   const next = structuredCloneTheme(theme);
   if (!next.id || isBuiltinThemeId(next.id) || existingIds.has(next.id)) {
     next.id = generateCustomThemeId();
   }
   next.name = next.name?.trim() || "Imported Theme";
   next.label = (next.label?.trim() || next.name).slice(0, 14);
-  return next;
+  return ensureThemeNotes(next);
 }
 
 export function validateTheme(theme: Theme): string[] {

@@ -14,6 +14,7 @@ import {
 import { useTranslation } from "react-i18next";
 import {
   MdAdd,
+  MdApps,
   MdCellTower,
   MdCheck,
   MdClose,
@@ -22,10 +23,10 @@ import {
   MdDns,
   MdErrorOutline,
   MdExpandMore,
-  MdApps,
   MdFolder,
   MdHistory,
   MdLock,
+  MdOutlineStickyNote2,
   MdTerminal,
 } from "react-icons/md";
 import { toast } from "sonner";
@@ -1009,6 +1010,12 @@ function TabBar({
       return <MdApps className="text-sm shrink-0" style={{ color: "var(--df-primary)" }} />;
     }
 
+    if (pane?.view === "note") {
+      return (
+        <MdOutlineStickyNote2 className="text-sm shrink-0" style={{ color: "var(--df-primary)" }} />
+      );
+    }
+
     const conn = pane?.connectionId
       ? savedConnections.find((connection) => connection.id === pane.connectionId)
       : undefined;
@@ -1418,9 +1425,7 @@ function TabBar({
   );
 
   const renderLocalShellMenuItem = (shell: LocalShellOption) => {
-    const label = shell.elevated
-      ? `${shell.name} (${t("localShellPicker.admin")})`
-      : shell.name;
+    const label = shell.elevated ? `${shell.name} (${t("localShellPicker.admin")})` : shell.name;
     return (
       <DropdownMenuItem
         key={shell.id}

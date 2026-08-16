@@ -29,6 +29,7 @@ import {
 import {
   collectSessionPanes,
   createSessionPane,
+  createWorkspaceId,
   createWorkspaceTab,
   ensureActivePane,
   findSessionPaneById,
@@ -92,6 +93,8 @@ interface AppContextType {
   ) => PendingTabCreation;
   /** Open or focus a workbench tab that does not bind a backend session. */
   openWorkbenchTab: (name: string) => string;
+  /** Open or focus a note editor tab in the center workspace. */
+  openNoteTab: (noteId: string, name?: string) => string;
   /** Swap the active pane's temporary sessionId for the real one and clear the connecting flag. */
   updateTabSession: (tabId: string, sessionId: string) => void;
   /** Mark the active pane in a tab as failed while keeping the tab visible. */
@@ -224,6 +227,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     cursor_blink: true,
     ui_font_size: 16,
     terminal_theme: null,
+    note_theme: null,
     minimum_contrast_ratio: 1,
     panel_multi_open: false,
     window_transparency: "none",
@@ -367,6 +371,8 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     header_status_mode: "session",
     header_status_visible: true,
     show_notes_panel: true,
+    show_note_outline: false,
+    note_outline_width: 180,
     show_remote_stats: true,
     remote_stats_interval: 3,
     show_gpu_monitor: false,
@@ -643,10 +649,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         });
         const changed = Object.keys(nextUpdates).some(
           (key) =>
-            !areSettingsValuesEqual(
-              prev[key as keyof AppSettings],
-              next[key as keyof AppSettings],
-            ),
+            !areSettingsValuesEqual(prev[key as keyof AppSettings], next[key as keyof AppSettings]),
         );
         if (!changed) {
           return prev;
@@ -900,6 +903,42 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const pane = createSessionPane(name, "Local", undefined, {
         view: "workbench",
         connecting: false,
+      });
+      const newTab = createWorkspaceTab(pane, getNextPersistOrder(tabsRef.current));
+      void commitTabs([...tabsRef.current, newTab]);
+      setActiveTabId(newTab.id);
+      return newTab.id;
+    },
+    [commitTabs, setActiveTabId],
+  );
+
+  const openNoteTab = useCallback(
+    (noteId: string, name?: string) => {
+      const existing = tabsRef.current.find((tab) => {
+        const panes = collectSessionPanes(tab.root);
+        return panes.some((pane) => pane.view === "note" && pane.noteId === noteId);
+      });
+      if (existing) {
+        const notePane = collectSessionPanes(existing.root).find(
+          (pane) => pane.view === "note" && pane.noteId === noteId,
+        );
+        if (notePane && existing.activePaneId !== notePane.id) {
+          void commitTabs(
+            tabsRef.current.map((tab) =>
+              tab.id === existing.id ? { ...tab, activePaneId: notePane.id } : tab,
+            ),
+          );
+        }
+        setActiveTabId(existing.id);
+        return existing.id;
+      }
+
+      const title = name?.trim() || "Note";
+      const pane = createSessionPane(title, "Local", undefined, {
+        view: "note",
+        noteId,
+        connecting: false,
+        sessionId: createWorkspaceId("note"),
       });
       const newTab = createWorkspaceTab(pane, getNextPersistOrder(tabsRef.current));
       void commitTabs([...tabsRef.current, newTab]);
@@ -1267,7 +1306,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         panes.forEach((pane) => {
           if (!hasPane(tab.id, pane.id)) return;
-          if (pane.view === "workbench") return;
+          if (pane.view === "workbench" || pane.view === "note") return;
 
           const cid = pane.connectionId;
           switch (pane.type) {
@@ -1406,6 +1445,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addTab,
       addPendingTab,
       openWorkbenchTab,
+      openNoteTab,
       updateTabSession,
       markTabConnectionFailed,
       updatePaneSession,
@@ -1455,6 +1495,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addTab,
       addPendingTab,
       openWorkbenchTab,
+      openNoteTab,
       updateTabSession,
       markTabConnectionFailed,
       updatePaneSession,

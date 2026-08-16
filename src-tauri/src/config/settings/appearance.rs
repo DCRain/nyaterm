@@ -36,6 +36,10 @@ pub struct AppearanceSettings {
     pub ui_font_size: f64,
     #[serde(default)]
     pub terminal_theme: Option<String>,
+    /// Note editor/preview theme. `None` follows the terminal theme.
+    /// Use `"__ui__"` to follow the UI theme; otherwise a theme id.
+    #[serde(default)]
+    pub note_theme: Option<String>,
     #[serde(default = "default_minimum_contrast_ratio")]
     pub minimum_contrast_ratio: f64,
     #[serde(default = "default_false")]
@@ -89,6 +93,26 @@ pub struct ThemeColorsConfig {
     pub scroll_thumb: String,
     pub accent: String,
     pub terminal: TerminalColorsConfig,
+    /// Note editor palette. Older theme JSON may omit this; frontend fills defaults.
+    #[serde(default)]
+    pub notes: Option<NoteColorsConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteColorsConfig {
+    pub bg: String,
+    pub bg_panel: String,
+    pub bg_hover: String,
+    #[serde(default)]
+    pub selection_background: String,
+    pub border: String,
+    pub text: String,
+    pub text_muted: String,
+    pub primary: String,
+    pub danger: String,
+    pub link: String,
+    pub syntax: TerminalColorsConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,6 +201,7 @@ impl Default for AppearanceSettings {
             cursor_blink: true,
             ui_font_size: default_ui_font_size(),
             terminal_theme: None,
+            note_theme: None,
             minimum_contrast_ratio: default_minimum_contrast_ratio(),
             panel_multi_open: false,
             window_transparency: String::from("none"),

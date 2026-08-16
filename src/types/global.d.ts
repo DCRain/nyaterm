@@ -65,7 +65,7 @@ export interface SessionInfo {
 }
 
 /** Workspace leaf content mode. Default / omitted is the terminal. */
-export type SessionPaneView = "terminal" | "sftp" | "workbench";
+export type SessionPaneView = "terminal" | "sftp" | "workbench" | "note";
 
 /** Shared fields for one session-like leaf inside a workspace tab. */
 export interface WorkspacePaneBase {
@@ -78,6 +78,8 @@ export interface WorkspacePaneBase {
   connectionId?: string;
   /** Main-area content: terminal shell or dual-pane SFTP. Default is terminal. */
   view?: SessionPaneView;
+  /** Bound note document when view is "note". */
+  noteId?: string;
   /** Config for ad-hoc (temporary) sessions that have no saved connection. */
   temporaryConfig?: import("@/types/temporaryConnection").TemporaryLinkConfig;
   /** True while the backend session is being established. XTerminal is not rendered yet. */
@@ -648,8 +650,10 @@ export interface RestorableSessionPane {
   title: string;
   session_type: WorkspaceSessionType | "local";
   connection_id?: string;
-  /** Persist dual-pane SFTP workspace leaves; omitted means terminal. */
+  /** Persist dual-pane SFTP / workbench / note workspace leaves; omitted means terminal. */
   view?: SessionPaneView;
+  /** Bound note id when view is "note". */
+  note_id?: string;
   display?: RemoteDesktopDisplayMetadata;
 }
 
@@ -768,6 +772,10 @@ export interface UiConfig {
   header_status_mode?: HeaderStatusMode;
   header_status_visible?: boolean;
   show_notes_panel: boolean;
+  /** Whether the note editor outline / TOC sidebar is visible. */
+  show_note_outline?: boolean;
+  /** Width in px of the note outline sidebar. */
+  note_outline_width?: number;
   show_remote_stats: boolean;
   remote_stats_interval: number;
   show_gpu_monitor: boolean;
@@ -1159,6 +1167,22 @@ export interface ThemeSettingsColors {
   scrollThumb: string;
   accent: string;
   terminal: TerminalThemeColors;
+  /** Note editor palette; may be omitted on older custom themes. */
+  notes?: NoteThemeColors;
+}
+
+export interface NoteThemeColors {
+  bg: string;
+  bgPanel: string;
+  bgHover: string;
+  selectionBackground: string;
+  border: string;
+  text: string;
+  textMuted: string;
+  primary: string;
+  danger: string;
+  link: string;
+  syntax: TerminalThemeColors;
 }
 
 export interface CustomThemeSettings {
@@ -1185,6 +1209,11 @@ export interface AppearanceSettings {
   cursor_blink: boolean;
   ui_font_size: number;
   terminal_theme: string | null;
+  /**
+   * Note editor/preview theme preference.
+   * `null` = follow terminal theme; `"__ui__"` = follow UI theme; otherwise a theme id.
+   */
+  note_theme: string | null;
   minimum_contrast_ratio: number;
   /** Allow opening multiple side panels at once, stacked vertically. */
   panel_multi_open: boolean;

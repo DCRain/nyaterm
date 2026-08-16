@@ -138,6 +138,13 @@ function normalizeActivityBarState(uiConfig: UiConfig): Partial<UiConfig> | null
     layout.right_top = insertAfter(layout.right_top, "savedConnections", "aiAssistant");
     seen.add("aiAssistant");
   }
+  // Drop legacy noteEditor activity-bar entry after notes moved to the center workspace.
+  if (seen.has("noteEditor")) {
+    for (const zone of ACTIVITY_LAYOUT_ZONES) {
+      layout[zone] = layout[zone].filter((id) => id !== "noteEditor");
+    }
+    seen.delete("noteEditor");
+  }
 
   if (!seen.has("serialSend")) {
     const quickCmdIndex = layout.right_bottom.indexOf("quickCmdBar");

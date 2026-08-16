@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { useNotesTree } from "@/hooks/useNotesTree";
-import { openNoteEditor } from "@/lib/windowManager";
+import { openNoteInWorkspace } from "@/lib/noteEditorEvents";
 import type { NoteTreeNode } from "@/types/notes";
 import NotesPanelHeader from "./NotesPanelHeader";
 import NoteTree from "./NoteTree";
@@ -131,7 +131,7 @@ export default function NotesPanel() {
 
   const openNode = (node: NoteTreeNode) => {
     if (node.kind !== "note") return;
-    void openNoteEditor(node.id, node.name);
+    openNoteInWorkspace(node.id, node.name);
   };
 
   const submitRename = (node: NoteTreeNode, name: string) => {

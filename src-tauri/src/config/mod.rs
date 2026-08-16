@@ -83,7 +83,7 @@ pub use settings::{
     OpenCodeIntegrationSettings,
     GeneralSettings, InteractionSettings, KeywordHighlightRule, ProxySettings, RecordingSettings,
     RiskLevel, SearchEngine, SearchSettings, SecuritySettings, TerminalColorsConfig,
-    TerminalSettings, ThemeColorsConfig, ThemeConfig, TransferSettings, TranslationSettings,
+    TerminalSettings, ThemeColorsConfig, ThemeConfig, NoteColorsConfig, TransferSettings, TranslationSettings,
     ai_model_id_for_credential, ai_model_id_for_provider, decrypt_ai_settings, encrypt_ai_settings,
     load_app_settings, mask_ai_settings, merge_masked_ai_settings, normalize_ai_settings,
     save_app_settings,

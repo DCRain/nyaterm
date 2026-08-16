@@ -42,6 +42,14 @@ export function isWorkbenchPane(node: PaneNode): node is SessionPane {
   return isSessionPane(node) && node.view === "workbench";
 }
 
+export function isNotePane(node: PaneNode): node is SessionPane {
+  return isSessionPane(node) && node.view === "note";
+}
+
+export function isSessionlessWorkspacePane(node: PaneNode): node is SessionPane {
+  return isWorkbenchPane(node) || isNotePane(node);
+}
+
 export function isRdpPane(node: PaneNode): node is Extract<SessionPane, { type: "RDP" }> {
   return isRemoteDesktopPane(node) && node.type === "RDP";
 }
@@ -73,6 +81,7 @@ export function createSessionPane(
     type,
     connectionId,
     view: overrides?.view,
+    noteId: overrides?.noteId,
     display: remoteDesktop
       ? ((overrides && "display" in overrides ? overrides.display : undefined) ?? {
           ...DEFAULT_REMOTE_DESKTOP_DISPLAY,
@@ -169,9 +178,9 @@ export function updateSessionPane(
     const remoteDesktop = isRemoteDesktopSessionType(type);
     const nextDisplay = remoteDesktop
       ? (updates.display ??
-          ("display" in current ? current.display : undefined) ?? {
-            ...DEFAULT_REMOTE_DESKTOP_DISPLAY,
-          })
+        ("display" in current ? current.display : undefined) ?? {
+          ...DEFAULT_REMOTE_DESKTOP_DISPLAY,
+        })
       : undefined;
     const next = {
       ...current,
@@ -293,7 +302,11 @@ function serializePane(node: PaneNode): RestorablePaneNode {
       title: node.name,
       session_type: node.type,
       connection_id: node.connectionId,
-      view: node.view === "sftp" || node.view === "workbench" ? node.view : undefined,
+      view:
+        node.view === "sftp" || node.view === "workbench" || node.view === "note"
+          ? node.view
+          : undefined,
+      note_id: node.view === "note" ? node.noteId : undefined,
       display: isRemoteDesktopPane(node) ? node.display : undefined,
     };
   }
@@ -369,25 +382,30 @@ function restorePane(node: RestorablePaneNode): PaneNode | null {
         : (persistedPaneKind ?? (remoteDesktop ? "remote-desktop" : "terminal"));
     if ((paneKind === "remote-desktop") !== remoteDesktop) return null;
     const view =
-      node.view === "sftp" || node.view === "workbench" ? node.view : undefined;
-    const isWorkbench = view === "workbench";
+      node.view === "sftp" || node.view === "workbench" || node.view === "note"
+        ? node.view
+        : undefined;
+    const isSessionless = view === "workbench" || view === "note";
     return {
       id: node.id || createWorkspaceId("pane"),
       kind: "leaf",
       paneKind,
-      sessionId: createWorkspaceId(isWorkbench ? "workbench" : "pending"),
+      sessionId: createWorkspaceId(
+        view === "note" ? "note" : view === "workbench" ? "workbench" : "pending",
+      ),
       name: node.title,
       type,
       connectionId: node.connection_id,
       view,
+      noteId: view === "note" ? node.note_id : undefined,
       display: remoteDesktop
         ? {
             ...DEFAULT_REMOTE_DESKTOP_DISPLAY,
             ...node.display,
           }
         : undefined,
-      connecting: !isWorkbench,
-      createRequestId: isWorkbench ? undefined : crypto.randomUUID(),
+      connecting: !isSessionless,
+      createRequestId: isSessionless ? undefined : crypto.randomUUID(),
     } as SessionPane;
   }
 

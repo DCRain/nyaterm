@@ -7,6 +7,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import { NOTE_THEME_FOLLOW_UI } from "@/lib/prismTheme";
 import {
   DEFAULT_THEME_ID,
   getAvailableThemes,
@@ -23,6 +24,13 @@ interface ThemeContextType {
   terminalTheme: Theme;
   terminalThemeName: string | null;
   setTerminalTheme: (id: string | null) => void;
+  /** Resolved theme used by the note editor/preview. */
+  noteTheme: Theme;
+  /**
+   * Raw preference: `null` = follow terminal, `"__ui__"` = follow UI, else theme id.
+   */
+  noteThemePreference: string | null;
+  setNoteThemePreference: (id: string | null) => void;
   themeNames: Theme[];
 }
 
@@ -79,6 +87,16 @@ export function applyTerminalThemeToDOM(colors: ThemeColors["terminal"]) {
   root.setProperty("--df-terminal-fg", colors.foreground);
 }
 
+function normalizeNoteThemePreference(
+  preference: string | null | undefined,
+  availableThemes: Theme[],
+): string | null {
+  if (!preference) return null;
+  if (preference === NOTE_THEME_FOLLOW_UI) return NOTE_THEME_FOLLOW_UI;
+  if (availableThemes.some((theme) => theme.id === preference)) return preference;
+  return null;
+}
+
 /** Provides theme, themeName, setTheme. Syncs with appSettings.appearance.theme from backend. */
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const { appSettings, updateAppSettings } = useApp();
@@ -90,6 +108,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const initialTerminalId = appSettings.appearance.terminal_theme || null;
   const [terminalThemeName, setTerminalThemeName] = useState<string | null>(initialTerminalId);
 
+  const [noteThemePreference, setNoteThemePreferenceState] = useState<string | null>(() =>
+    normalizeNoteThemePreference(appSettings.appearance.note_theme, availableThemes),
+  );
+
   const current = resolveTheme(themeName, customThemes);
 
   const resolvedTerminalTheme = useMemo(() => {
@@ -98,6 +120,16 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     }
     return current;
   }, [availableThemes, customThemes, terminalThemeName, current]);
+
+  const resolvedNoteTheme = useMemo(() => {
+    if (noteThemePreference === NOTE_THEME_FOLLOW_UI) {
+      return current;
+    }
+    if (noteThemePreference && availableThemes.some((theme) => theme.id === noteThemePreference)) {
+      return resolveTheme(noteThemePreference, customThemes);
+    }
+    return resolvedTerminalTheme;
+  }, [availableThemes, customThemes, noteThemePreference, current, resolvedTerminalTheme]);
 
   // Apply CSS vars whenever UI theme changes and cache the ID
   useEffect(() => {
@@ -136,6 +168,17 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     }
   }, [appSettings.appearance.terminal_theme, terminalThemeName]);
 
+  // Sync note theme preference from backend
+  useEffect(() => {
+    const normalized = normalizeNoteThemePreference(
+      appSettings.appearance.note_theme,
+      availableThemes,
+    );
+    if (normalized !== noteThemePreference) {
+      setNoteThemePreferenceState(normalized);
+    }
+  }, [appSettings.appearance.note_theme, availableThemes, noteThemePreference]);
+
   const setTheme = useCallback(
     (id: string) => {
       if (availableThemes.some((theme) => theme.id === id)) {
@@ -157,6 +200,17 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     [appSettings.appearance, availableThemes, updateAppSettings],
   );
 
+  const setNoteThemePreference = useCallback(
+    (id: string | null) => {
+      const normalized = normalizeNoteThemePreference(id, availableThemes);
+      setNoteThemePreferenceState(normalized);
+      updateAppSettings({
+        appearance: { ...appSettings.appearance, note_theme: normalized },
+      });
+    },
+    [appSettings.appearance, availableThemes, updateAppSettings],
+  );
+
   const contextValue = useMemo(
     () => ({
       theme: current,
@@ -165,6 +219,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       terminalTheme: resolvedTerminalTheme,
       terminalThemeName,
       setTerminalTheme,
+      noteTheme: resolvedNoteTheme,
+      noteThemePreference,
+      setNoteThemePreference,
       themeNames: availableThemes,
     }),
     [
@@ -174,6 +231,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       resolvedTerminalTheme,
       terminalThemeName,
       setTerminalTheme,
+      resolvedNoteTheme,
+      noteThemePreference,
+      setNoteThemePreference,
       availableThemes,
     ],
   );

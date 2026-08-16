@@ -21,7 +21,13 @@ import type { RemoteNpuOverviewState } from "@/hooks/useRemoteNpuOverview";
 import type { RemoteStatsState } from "@/hooks/useRemoteStats";
 import type { AIOpenIntent } from "@/lib/aiEvents";
 import type { NewSessionTarget } from "@/lib/windowManager";
-import type { RecordingMode, RecordingStatus, SavedConnection, SessionInfo, SessionPane } from "@/types/global";
+import type {
+  RecordingMode,
+  RecordingStatus,
+  SavedConnection,
+  SessionInfo,
+  SessionPane,
+} from "@/types/global";
 
 interface AppPanelContentProps {
   panelId: string | null;

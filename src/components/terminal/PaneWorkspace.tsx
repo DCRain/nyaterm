@@ -1,10 +1,11 @@
-import { memo, useCallback, useMemo, useRef, useState } from "react";
 import type { ComponentProps } from "react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MdErrorOutline } from "react-icons/md";
 import StartWorkspace from "@/components/app/start-workspace/StartWorkspace";
 import ResizeHandle from "@/components/layout/ResizeHandle";
 import SftpWorkspace from "@/components/panel/file-explorer/SftpWorkspace";
+import NoteEditorPanel from "@/components/panel/note-editor/NoteEditorPanel";
 import RdpPaneHost from "@/components/rdp/RdpPaneHost";
 import { Button } from "@/components/ui/button";
 import VncPaneHost from "@/components/vnc/VncPaneHost";
@@ -211,6 +212,7 @@ function PaneNodeView({
   const isActive = visible && tab.activePaneId === node.id;
   const showReconnectAction =
     node.view !== "workbench" &&
+    node.view !== "note" &&
     !!(node.type === "Local" || node.connectionId || hasMatchingTemporaryConfig(node)) &&
     !!onReconnectPane;
   const statusTitle = isReconnectPending
@@ -233,6 +235,23 @@ function PaneNodeView({
         onMouseDown={() => onActivatePane(node.id)}
       >
         {workbench ? <StartWorkspace {...workbench} /> : null}
+      </div>
+    );
+  }
+
+  if (node.view === "note") {
+    return (
+      <div
+        className={`relative h-full w-full overflow-hidden ${
+          showChrome ? "rounded-sm border" : ""
+        } ${showChrome && isActive ? "ring-1 ring-primary/60" : ""}`}
+        style={{
+          borderColor: showChrome ? "var(--df-border)" : undefined,
+          backgroundColor: "var(--df-bg)",
+        }}
+        onMouseDown={() => onActivatePane(node.id)}
+      >
+        {node.noteId ? <NoteEditorPanel noteId={node.noteId} tabId={tab.id} /> : null}
       </div>
     );
   }

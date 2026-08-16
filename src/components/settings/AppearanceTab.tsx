@@ -29,6 +29,7 @@ import {
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
 import { isWindows } from "@/lib/platform";
+import { NOTE_THEME_FOLLOW_UI } from "@/lib/prismTheme";
 import {
   DEFAULT_TERMINAL_FONT_SIZE,
   MAX_TERMINAL_FONT_SIZE,
@@ -476,7 +477,7 @@ function FontStackSection({
 export function AppearanceTab() {
   const { t } = useTranslation();
   const { appSettings, updateAppSettings } = useApp();
-  const { themeNames } = useTheme();
+  const { themeNames, setTheme, setNoteThemePreference } = useTheme();
   const appearance = appSettings.appearance;
   const mountedRef = useRef(true);
   const [themeDesignerOpen, setThemeDesignerOpen] = useState(false);
@@ -538,7 +539,7 @@ export function AppearanceTab() {
           label={t("settings.theme")}
           desc={t("settings.themeDesc")}
           value={appearance.theme || "github-dark"}
-          onValueChange={(v) => updateAppearance({ theme: v })}
+          onValueChange={(v) => setTheme(v)}
         >
           {themeNames.map((tm) => (
             <SelectItem key={tm.id} value={tm.id}>
@@ -560,6 +561,37 @@ export function AppearanceTab() {
           <SelectItem value="__follow__">{t("settings.followUiTheme")}</SelectItem>
           {themeNames.map((tm) => (
             <SelectItem key={tm.id} value={tm.id}>
+              {tm.name}
+            </SelectItem>
+          ))}
+        </SettingSelect>
+
+        <SettingSelect
+          label={t("settings.noteTheme")}
+          desc={t("settings.noteThemeDesc")}
+          value={
+            !appearance.note_theme
+              ? "__follow_terminal__"
+              : appearance.note_theme === NOTE_THEME_FOLLOW_UI
+                ? "__follow_ui__"
+                : appearance.note_theme
+          }
+          onValueChange={(v) => {
+            if (v === "__follow_terminal__") {
+              setNoteThemePreference(null);
+              return;
+            }
+            if (v === "__follow_ui__") {
+              setNoteThemePreference(NOTE_THEME_FOLLOW_UI);
+              return;
+            }
+            setNoteThemePreference(v);
+          }}
+        >
+          <SelectItem value="__follow_terminal__">{t("settings.followTerminalTheme")}</SelectItem>
+          <SelectItem value="__follow_ui__">{t("settings.followUiTheme")}</SelectItem>
+          {themeNames.map((tm) => (
+            <SelectItem key={`note-${tm.id}`} value={tm.id}>
               {tm.name}
             </SelectItem>
           ))}
@@ -642,15 +674,15 @@ export function AppearanceTab() {
               type="button"
               size="sm"
               variant="outline"
-              onClick={() =>
+              onClick={() => {
+                setTheme(ACRYLIC_THEME_ID);
                 updateAppearance({
-                  theme: ACRYLIC_THEME_ID,
                   terminal_theme: null,
                   window_transparency_tint: ACRYLIC_PRESET_OPACITY,
                   window_transparency: "transparent",
                   window_transparency_blur: true,
-                })
-              }
+                });
+              }}
             >
               {t("settings.windowTransparencyAcrylicPresetApply")}
             </Button>
