@@ -628,64 +628,64 @@ html.nyaterm-explorer-path-dragging * {
   body {
     @apply bg-background text-foreground;
   }
+
+  /* Note editor writing surface: kill focus ring / black chrome around CM + iframe. */
+  .nyaterm-note-editor-shell,
+  .nyaterm-note-editor-shell *:focus,
+  .nyaterm-note-editor-shell *:focus-visible {
+    outline: none !important;
+  }
 }
 
 .nyaterm-note-editor-shell {
-  background: var(--df-bg-panel) !important;
-  color: var(--df-text) !important;
+  /* Opaque writing surface: translucent --df-bg-panel under acrylic breaks CM text paint. */
+  background: var(--df-bg-panel-solid, var(--df-bg-panel));
+  color: var(--df-text-solid, var(--df-text));
+  min-height: 0;
+  /* solid-surface adds a drop shadow under acrylic; that reads as a divider halo. */
+  box-shadow: none !important;
 }
 
-.nyaterm-note-editor-shell .cm-editor,
-.nyaterm-note-editor-shell .cm-scroller,
-.nyaterm-note-editor-shell .cm-content {
-  height: 100%;
-  background: var(--df-bg-panel) !important;
-  color: var(--df-text) !important;
-  caret-color: var(--df-caret, var(--df-text)) !important;
+html[data-window-transparency="true"] .nyaterm-note-editor-shell.nyaterm-solid-surface,
+html[data-window-transparency="true"] .nyaterm-note-editor-shell .nyaterm-solid-surface {
+  box-shadow: none !important;
 }
 
-.nyaterm-note-editor-shell .cm-cursor,
-.nyaterm-note-editor-shell .cm-dropCursor {
-  border-left-color: var(--df-caret, var(--df-text)) !important;
+.nyaterm-note-editor-shell iframe {
+  background: var(--df-bg-panel-solid, var(--df-bg-panel));
+  vertical-align: top;
+  border: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
 }
 
-.nyaterm-note-editor-shell .cm-gutters {
-  background: var(--df-bg-panel) !important;
-  color: var(--df-text-dimmed) !important;
-  border-right: 1px solid var(--df-divider, var(--df-border)) !important;
-}
-
-.nyaterm-note-editor-shell .cm-activeLineGutter {
-  background: var(--df-bg-panel) !important;
-}
-
-.nyaterm-note-editor-shell .cm-selectionBackground,
-.nyaterm-note-editor-shell .cm-selectionLayer .cm-selectionBackground,
-.nyaterm-note-editor-shell.cm-focused .cm-selectionLayer .cm-selectionBackground {
-  background-color: var(--df-selection, color-mix(in srgb, var(--df-primary) 35%, transparent)) !important;
-}
-
-.nyaterm-note-editor-shell .cm-content ::selection {
-  background-color: var(--df-selection, color-mix(in srgb, var(--df-primary) 35%, transparent)) !important;
+.nyaterm-note-editor-shell iframe:focus,
+.nyaterm-note-editor-shell iframe:focus-visible {
+  outline: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
 }
 
 .nyaterm-note-toolbar {
-  color: var(--df-text);
-  background: var(--df-bg-panel);
+  color: var(--df-text-solid, var(--df-text));
+  background: var(--df-bg-panel-solid, var(--df-bg-panel));
 }
 
 /* Invisible drag handle for note regions — the visible line is a CSS border on the pane. */
 .nyaterm-note-region-handle {
   position: relative;
+  z-index: 30;
   width: 0 !important;
   min-width: 0 !important;
   align-self: stretch;
   flex-shrink: 0;
   background-color: transparent !important;
+  box-shadow: none !important;
 }
 
 .nyaterm-note-region-handle > [aria-hidden] {
   background-color: transparent !important;
+  box-shadow: none !important;
 }
 
 .nyaterm-note-region-handle:hover > [aria-hidden],
@@ -796,6 +796,33 @@ html.nyaterm-explorer-path-dragging * {
 .nyaterm-note-content table {
   margin-top: 0.75em;
   margin-bottom: 0.75em;
+}
+
+/* Tailwind preflight removes markers; restore them for note preview/export. */
+.nyaterm-note-preview ul:not(.contains-task-list),
+.nyaterm-note-content ul:not(.contains-task-list) {
+  list-style-type: disc;
+  padding-left: 1.5rem;
+}
+
+.nyaterm-note-preview ol,
+.nyaterm-note-content ol {
+  list-style-type: decimal;
+  padding-left: 1.5rem;
+}
+
+.nyaterm-note-preview li,
+.nyaterm-note-content li {
+  margin-top: 0.2em;
+  margin-bottom: 0.2em;
+}
+
+.nyaterm-note-preview li > ul,
+.nyaterm-note-preview li > ol,
+.nyaterm-note-content li > ul,
+.nyaterm-note-content li > ol {
+  margin-top: 0.25em;
+  margin-bottom: 0.25em;
 }
 
 .nyaterm-note-preview p,

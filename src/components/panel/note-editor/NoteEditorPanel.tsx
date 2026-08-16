@@ -3,12 +3,15 @@ import { useTranslation } from "react-i18next";
 import {
   MdEditNote,
   MdFormatListBulleted,
+  MdNoteAdd,
   MdNotes,
   MdRefresh,
   MdSave,
+  MdSaveAs,
   MdVerticalSplit,
   MdVisibility,
 } from "react-icons/md";
+import { toast } from "sonner";
 import ResizeHandle from "@/components/layout/ResizeHandle";
 import MarkdownRenderer from "@/components/markdown/MarkdownRenderer";
 import NoteEditorToolbarStatus from "@/components/note-editor/NoteEditorToolbarStatus";
@@ -28,10 +31,20 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useApp } from "@/context/AppContext";
 import { useTheme } from "@/context/ThemeContext";
+import { useMarkdownFileDocument } from "@/hooks/useMarkdownFileDocument";
 import { useNoteDocument } from "@/hooks/useNoteDocument";
+import { getErrorMessage } from "@/lib/errors";
+import { invoke } from "@/lib/invoke";
 import { toggleMarkdownTaskAtIndex } from "@/lib/markdownTaskList";
+import { exportNoteContent, type NoteExportFormat } from "@/lib/noteExport";
 import {
   extractNoteOutline,
   type NoteOutlineItem,
@@ -55,29 +68,36 @@ const MAX_OUTLINE_WIDTH = 420;
 const DEFAULT_OUTLINE_WIDTH = 180;
 
 interface NoteEditorPanelProps {
-  noteId: string;
+  noteId?: string;
+  /** When set, opens a temporary external markdown file (not a note document). */
+  filePath?: string;
   tabId?: string;
 }
 
-export default function NoteEditorPanel({ noteId, tabId }: NoteEditorPanelProps) {
+export default function NoteEditorPanel({ noteId, filePath, tabId }: NoteEditorPanelProps) {
   const { t } = useTranslation();
-  const { appSettings, updateTab, updateUi } = useApp();
+  const { appSettings, updateTab, updateUi, openNoteTab } = useApp();
   const { noteTheme } = useTheme();
   const colors = noteTheme.colors.notes;
   const noteThemeVars = noteColorsToCssVars(colors);
   const editorRef = useRef<NoteMarkdownEditorHandle>(null);
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const previewScrollRef = useRef<HTMLDivElement>(null);
+  const previewCaptureRef = useRef<HTMLDivElement>(null);
   const syncingScrollRef = useRef(false);
   const [viewMode, setViewMode] = useState<NoteViewMode>("edit");
   const [splitRatio, setSplitRatio] = useState(0.5);
   const [editorKey, setEditorKey] = useState(0);
+  const [editorReadyToken, setEditorReadyToken] = useState(0);
   const [activeOutlineLine, setActiveOutlineLine] = useState<number | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [savingToNotes, setSavingToNotes] = useState(false);
   const showOutline = appSettings.ui.show_note_outline ?? false;
   const outlineWidth = Math.min(
     MAX_OUTLINE_WIDTH,
     Math.max(MIN_OUTLINE_WIDTH, appSettings.ui.note_outline_width ?? DEFAULT_OUTLINE_WIDTH),
   );
+  const isFileMode = Boolean(filePath);
   const showEditorRef = useRef(true);
   showEditorRef.current = viewMode === "edit" || viewMode === "split";
 
@@ -94,27 +114,119 @@ export default function NoteEditorPanel({ noteId, tabId }: NoteEditorPanelProps)
     editorRef.current?.setMarkdown(nextMarkdown);
   }, []);
 
-  const {
-    note,
-    title,
-    markdown,
-    status,
-    statusLabels,
-    error,
-    loading,
-    conflictOpen,
-    setConflictOpen,
-    deleted,
-    loadNote,
-    flushSave,
-    handleMarkdownChange,
-    handleTitleChange,
-    saveCopy,
-  } = useNoteDocument({
-    noteId,
+  const noteDoc = useNoteDocument({
+    noteId: isFileMode ? null : (noteId ?? null),
     onTitleChange: syncTitle,
     onMarkdownApplied,
   });
+
+  const fileDoc = useMarkdownFileDocument({
+    filePath: isFileMode ? (filePath ?? null) : null,
+    onTitleChange: syncTitle,
+    onMarkdownApplied,
+  });
+
+  const title = isFileMode ? fileDoc.title : noteDoc.title;
+  const markdown = isFileMode ? fileDoc.markdown : noteDoc.markdown;
+  const status = isFileMode
+    ? fileDoc.status === "loading"
+      ? "saving"
+      : fileDoc.status === "failed"
+        ? "failed"
+        : fileDoc.status
+    : noteDoc.status;
+  const statusLabels = isFileMode
+    ? {
+        saved: t("notes.saved"),
+        saving: t("notes.saving"),
+        unsaved: t("notes.unsaved"),
+        failed: t("notes.saveFailed"),
+        external: t("notes.externalUpdate"),
+        deleted: t("notes.deletedStatus"),
+      }
+    : noteDoc.statusLabels;
+  const error = isFileMode ? fileDoc.error : noteDoc.error;
+  const loading = isFileMode ? fileDoc.loading : noteDoc.loading;
+  const conflictOpen = isFileMode ? false : noteDoc.conflictOpen;
+  const setConflictOpen = isFileMode ? () => {} : noteDoc.setConflictOpen;
+  const deleted = isFileMode ? false : noteDoc.deleted;
+  const documentReady = isFileMode ? fileDoc.ready : Boolean(noteDoc.note);
+  const flushSave = isFileMode ? fileDoc.flushSave : noteDoc.flushSave;
+  const handleMarkdownChange = isFileMode
+    ? fileDoc.handleMarkdownChange
+    : noteDoc.handleMarkdownChange;
+  const handleTitleChange = isFileMode ? fileDoc.handleTitleChange : noteDoc.handleTitleChange;
+  const saveCopy = noteDoc.saveCopy;
+  const documentKey = isFileMode ? (filePath ?? "file") : (noteId ?? "note");
+
+  const reloadNote = useCallback(() => {
+    if (isFileMode) {
+      void fileDoc.loadFile(true).then(() => setEditorKey((key) => key + 1));
+      return;
+    }
+    void noteDoc.loadNote(true).then(() => setEditorKey((key) => key + 1));
+  }, [fileDoc.loadFile, isFileMode, noteDoc.loadNote]);
+
+  const ensurePreviewForCapture = useCallback(async () => {
+    if (previewCaptureRef.current) return;
+    setViewMode("preview");
+    for (let attempt = 0; attempt < 45; attempt += 1) {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+      if (previewCaptureRef.current) return;
+    }
+  }, []);
+
+  const handleExport = useCallback(
+    async (format: NoteExportFormat) => {
+      if (exporting) return;
+      setExporting(true);
+      try {
+        if (format === "pdf" || format === "png") {
+          await ensurePreviewForCapture();
+        }
+        const path = await exportNoteContent({
+          title,
+          markdown,
+          format,
+          previewElement: previewCaptureRef.current,
+        });
+        if (path) {
+          toast.success(t("notes.saveAsSuccess"));
+        }
+      } catch (err) {
+        const message = getErrorMessage(err);
+        if (message === "preview_required") {
+          toast.error(t("notes.saveAsPreviewRequired"));
+        } else {
+          toast.error(t("notes.saveAsFailed", { error: message }));
+        }
+      } finally {
+        setExporting(false);
+      }
+    },
+    [ensurePreviewForCapture, exporting, markdown, t, title],
+  );
+
+  const handleSaveToNotes = useCallback(async () => {
+    if (!isFileMode || savingToNotes) return;
+    setSavingToNotes(true);
+    try {
+      await flushSave();
+      const created = await invoke<{ id: string; title: string }>("create_note", {
+        parentId: null,
+        title: title.trim() || t("notes.untitled"),
+        markdown,
+      });
+      openNoteTab(created.id, created.title);
+      toast.success(t("notes.saveToNotesSuccess"));
+    } catch (err) {
+      toast.error(t("notes.saveToNotesFailed", { error: getErrorMessage(err) }));
+    } finally {
+      setSavingToNotes(false);
+    }
+  }, [flushSave, isFileMode, markdown, openNoteTab, savingToNotes, t, title]);
 
   const handleSplitResize = useCallback((delta: number) => {
     const width = splitContainerRef.current?.clientWidth ?? 0;
@@ -145,10 +257,6 @@ export default function NoteEditorPanel({ noteId, tabId }: NoteEditorPanelProps)
     },
     [handleMarkdownChange, markdown],
   );
-
-  const reloadNote = useCallback(() => {
-    void loadNote(true).then(() => setEditorKey((key) => key + 1));
-  }, [loadNote]);
 
   const outlineItems = useMemo(() => extractNoteOutline(markdown), [markdown]);
 
@@ -182,8 +290,9 @@ export default function NoteEditorPanel({ noteId, tabId }: NoteEditorPanelProps)
   );
 
   // Line-mapped scroll sync so editor/preview stay on the same source section.
+  // Editor mounts async inside an iframe — wait until onReady bumps the token.
   useEffect(() => {
-    if (viewMode !== "split" || !note) return;
+    if (viewMode !== "split" || !documentReady) return;
     if (editorKey < 0) return;
 
     const view = editorRef.current?.getView();
@@ -225,12 +334,12 @@ export default function NoteEditorPanel({ noteId, tabId }: NoteEditorPanelProps)
       editorScroller.removeEventListener("scroll", fromEditor);
       preview.removeEventListener("scroll", fromPreview);
     };
-  }, [viewMode, note, editorKey, showOutline, outlineItems]);
+  }, [viewMode, documentReady, editorKey, editorReadyToken, showOutline, outlineItems]);
 
   // Outline active heading when not in split sync (edit-only / preview-only).
   useEffect(() => {
     if (editorKey < 0) return;
-    if (!showOutline || !note || viewMode === "split") {
+    if (!showOutline || !documentReady || viewMode === "split") {
       if (!showOutline) setActiveOutlineLine(null);
       return;
     }
@@ -251,7 +360,7 @@ export default function NoteEditorPanel({ noteId, tabId }: NoteEditorPanelProps)
     const onScroll = () => refreshActiveOutline();
     preview.addEventListener("scroll", onScroll, { passive: true });
     return () => preview.removeEventListener("scroll", onScroll);
-  }, [showOutline, note, viewMode, editorKey, refreshActiveOutline]);
+  }, [showOutline, documentReady, viewMode, editorKey, editorReadyToken, refreshActiveOutline]);
 
   const modeButtons: { mode: NoteViewMode; icon: typeof MdEditNote; label: string }[] = [
     { mode: "edit", icon: MdEditNote, label: t("notes.modeEdit") },
@@ -322,6 +431,7 @@ export default function NoteEditorPanel({ noteId, tabId }: NoteEditorPanelProps)
             className="min-w-0 flex-1 bg-transparent text-sm font-medium outline-none"
             style={{ color: colors.text }}
             placeholder={t("notes.untitled")}
+            title={isFileMode ? filePath : undefined}
           />
           <NoteEditorToolbarStatus status={status} labels={statusLabels} />
           <div
@@ -353,15 +463,62 @@ export default function NoteEditorPanel({ noteId, tabId }: NoteEditorPanelProps)
               </button>
             ))}
           </div>
-          <Button variant="ghost" size="icon-sm" onClick={reloadNote}>
+          <Button variant="ghost" size="icon-sm" onClick={reloadNote} title={t("notes.reload")}>
             <MdRefresh />
           </Button>
-          <Button variant="ghost" size="icon-sm" onClick={() => void flushSave()}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => void flushSave()}
+            title={t("common.save")}
+          >
             <MdSave />
           </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                disabled={exporting || !documentReady}
+                title={t("notes.saveAs")}
+                aria-label={t("notes.saveAs")}
+              >
+                <MdSaveAs />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => void handleExport("markdown")}>
+                {t("notes.saveAsMarkdown")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => void handleExport("docx")}>
+                {t("notes.saveAsWord")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => void handleExport("pdf")}>
+                {t("notes.saveAsPdf")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => void handleExport("png")}>
+                {t("notes.saveAsPng")}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          {isFileMode ? (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              disabled={savingToNotes || !documentReady}
+              onClick={() => void handleSaveToNotes()}
+              title={t("notes.saveToNotes")}
+              aria-label={t("notes.saveToNotes")}
+            >
+              <MdNoteAdd />
+            </Button>
+          ) : null}
         </div>
         {showEditor ? (
-          <NoteMarkdownToolbar getView={() => editorRef.current?.getView() ?? null} />
+          <NoteMarkdownToolbar
+            getView={() => editorRef.current?.getView() ?? null}
+            viewEpoch={editorReadyToken}
+          />
         ) : null}
       </div>
 
@@ -378,7 +535,7 @@ export default function NoteEditorPanel({ noteId, tabId }: NoteEditorPanelProps)
         </div>
       ) : null}
 
-      {loading && !note ? (
+      {loading && !documentReady ? (
         <div
           className="flex flex-1 items-center justify-center text-sm"
           style={{ color: colors.textMuted }}
@@ -405,26 +562,32 @@ export default function NoteEditorPanel({ noteId, tabId }: NoteEditorPanelProps)
 
           <div
             ref={splitContainerRef}
-            className="nyaterm-note-editor-shell flex min-h-0 min-w-0 flex-1 overflow-hidden"
+            className="nyaterm-note-editor-shell nyaterm-solid-surface flex min-h-0 min-w-0 flex-1 overflow-hidden"
             onBlur={() => {
               if (showEditor) void flushSave();
             }}
           >
             <div
               className={cn(
-                "min-h-0 min-w-0 overflow-hidden",
+                "relative min-h-0 min-w-0 overflow-hidden",
                 viewMode === "edit" && "flex-1",
                 viewMode === "preview" && "hidden",
                 viewMode === "split" && "nyaterm-note-split-editor",
               )}
-              style={viewMode === "split" ? { width: `${splitRatio * 100}%` } : undefined}
+              style={
+                viewMode === "split"
+                  ? { width: `${splitRatio * 100}%`, minHeight: 0 }
+                  : { minHeight: 0 }
+              }
             >
-              {note ? (
+              {documentReady ? (
                 <NoteMarkdownEditor
-                  key={`${noteId}-${editorKey}-${noteTheme.id}-fixed-lines`}
+                  key={`${documentKey}-${editorKey}-${noteTheme.id}`}
                   ref={editorRef}
                   initialMarkdown={markdown}
                   onChange={handleMarkdownChange}
+                  onReady={() => setEditorReadyToken((token) => token + 1)}
+                  className="nyaterm-solid-surface absolute inset-0 min-h-0 min-w-0 overflow-hidden"
                 />
               ) : null}
             </div>
@@ -453,12 +616,14 @@ export default function NoteEditorPanel({ noteId, tabId }: NoteEditorPanelProps)
                     : undefined
                 }
               >
-                <MarkdownRenderer
-                  content={markdown}
-                  colors={colors}
-                  onTaskToggle={handleTaskToggle}
-                  className="h-auto min-h-full min-w-full overflow-visible"
-                />
+                <div ref={previewCaptureRef}>
+                  <MarkdownRenderer
+                    content={markdown}
+                    colors={colors}
+                    onTaskToggle={handleTaskToggle}
+                    className="h-auto min-h-full min-w-full overflow-visible"
+                  />
+                </div>
               </div>
             ) : null}
           </div>

@@ -95,6 +95,8 @@ interface AppContextType {
   openWorkbenchTab: (name: string) => string;
   /** Open or focus a note editor tab in the center workspace. */
   openNoteTab: (noteId: string, name?: string) => string;
+  /** Open or focus a temporary external markdown file tab (not persisted / not imported). */
+  openExternalMarkdownTab: (filePath: string, name?: string) => string;
   /** Swap the active pane's temporary sessionId for the real one and clear the connecting flag. */
   updateTabSession: (tabId: string, sessionId: string) => void;
   /** Mark the active pane in a tab as failed while keeping the tab visible. */
@@ -948,6 +950,51 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [commitTabs, setActiveTabId],
   );
 
+  const openExternalMarkdownTab = useCallback(
+    (filePath: string, name?: string) => {
+      const normalizedPath = filePath.replace(/\\/g, "/").toLowerCase();
+      const existing = tabsRef.current.find((tab) => {
+        const panes = collectSessionPanes(tab.root);
+        return panes.some(
+          (pane) =>
+            pane.view === "externalMarkdown" &&
+            (pane.markdownPath ?? "").replace(/\\/g, "/").toLowerCase() === normalizedPath,
+        );
+      });
+      if (existing) {
+        const mdPane = collectSessionPanes(existing.root).find(
+          (pane) =>
+            pane.view === "externalMarkdown" &&
+            (pane.markdownPath ?? "").replace(/\\/g, "/").toLowerCase() === normalizedPath,
+        );
+        if (mdPane && existing.activePaneId !== mdPane.id) {
+          void commitTabs(
+            tabsRef.current.map((tab) =>
+              tab.id === existing.id ? { ...tab, activePaneId: mdPane.id } : tab,
+            ),
+          );
+        }
+        setActiveTabId(existing.id);
+        return existing.id;
+      }
+
+      const fileName = filePath.replace(/\\/g, "/").split("/").pop() || filePath;
+      const title =
+        name?.trim() || fileName.replace(/\.(md|markdown)$/i, "") || fileName || "Markdown";
+      const pane = createSessionPane(title, "Local", undefined, {
+        view: "externalMarkdown",
+        markdownPath: filePath,
+        connecting: false,
+        sessionId: createWorkspaceId("md"),
+      });
+      const newTab = createWorkspaceTab(pane, getNextPersistOrder(tabsRef.current));
+      void commitTabs([...tabsRef.current, newTab]);
+      setActiveTabId(newTab.id);
+      return newTab.id;
+    },
+    [commitTabs, setActiveTabId],
+  );
+
   const updateTabSession = useCallback(
     (tabId: string, sessionId: string) => {
       const tab = tabsRef.current.find((item) => item.id === tabId);
@@ -1306,7 +1353,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         panes.forEach((pane) => {
           if (!hasPane(tab.id, pane.id)) return;
-          if (pane.view === "workbench" || pane.view === "note") return;
+          if (pane.view === "workbench" || pane.view === "note" || pane.view === "externalMarkdown")
+            return;
 
           const cid = pane.connectionId;
           switch (pane.type) {
@@ -1446,6 +1494,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addPendingTab,
       openWorkbenchTab,
       openNoteTab,
+      openExternalMarkdownTab,
       updateTabSession,
       markTabConnectionFailed,
       updatePaneSession,
@@ -1496,6 +1545,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addPendingTab,
       openWorkbenchTab,
       openNoteTab,
+      openExternalMarkdownTab,
       updateTabSession,
       markTabConnectionFailed,
       updatePaneSession,

@@ -75,6 +75,10 @@ interface FileViewExtensionOptions {
   allowScrollPastEnd?: boolean;
   /** Soft-wrap long lines (default true). Disable for large notes to avoid scroll blanks. */
   lineWrapping?: boolean;
+  /** When false, skip the shared file-view highlight style (caller supplies its own). */
+  includeSyntaxHighlighting?: boolean;
+  /** When false, omit the fold gutter (keeps line numbers only). */
+  includeFoldGutter?: boolean;
 }
 
 const fileViewHighlightStyle = HighlightStyle.define([
@@ -260,16 +264,18 @@ export function codeMirrorFileViewExtensions(
     updateListener,
     allowScrollPastEnd = true,
     lineWrapping = true,
+    includeSyntaxHighlighting = true,
+    includeFoldGutter = true,
   }: FileViewExtensionOptions = {},
 ) {
   const extensions: Extension[] = [
     lineNumbers(),
-    foldGutter(),
+    ...(includeFoldGutter ? [foldGutter()] : []),
     highlightSpecialChars(),
     drawSelection(),
     dropCursor(),
     EditorState.allowMultipleSelections.of(true),
-    syntaxHighlighting(fileViewHighlightStyle),
+    ...(includeSyntaxHighlighting ? [syntaxHighlighting(fileViewHighlightStyle)] : []),
     bracketMatching(),
     highlightActiveLine(),
     highlightActiveLineGutter(),
@@ -278,7 +284,11 @@ export function codeMirrorFileViewExtensions(
     rectangularSelection(),
     crosshairCursor(),
     ...(allowScrollPastEnd ? [scrollPastEnd()] : []),
-    keymap.of([...defaultKeymap, ...searchKeymap, ...foldKeymap]),
+    keymap.of([
+      ...defaultKeymap,
+      ...searchKeymap,
+      ...(includeFoldGutter ? foldKeymap : []),
+    ]),
     ...(lineWrapping ? [EditorView.lineWrapping] : []),
     EditorView.theme({
       "&": {

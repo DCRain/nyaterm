@@ -46,8 +46,12 @@ export function isNotePane(node: PaneNode): node is SessionPane {
   return isSessionPane(node) && node.view === "note";
 }
 
+export function isExternalMarkdownPane(node: PaneNode): node is SessionPane {
+  return isSessionPane(node) && node.view === "externalMarkdown";
+}
+
 export function isSessionlessWorkspacePane(node: PaneNode): node is SessionPane {
-  return isWorkbenchPane(node) || isNotePane(node);
+  return isWorkbenchPane(node) || isNotePane(node) || isExternalMarkdownPane(node);
 }
 
 export function isRdpPane(node: PaneNode): node is Extract<SessionPane, { type: "RDP" }> {
@@ -82,6 +86,7 @@ export function createSessionPane(
     connectionId,
     view: overrides?.view,
     noteId: overrides?.noteId,
+    markdownPath: overrides?.markdownPath,
     display: remoteDesktop
       ? ((overrides && "display" in overrides ? overrides.display : undefined) ?? {
           ...DEFAULT_REMOTE_DESKTOP_DISPLAY,
@@ -307,6 +312,7 @@ function serializePane(node: PaneNode): RestorablePaneNode {
           ? node.view
           : undefined,
       note_id: node.view === "note" ? node.noteId : undefined,
+      // externalMarkdown tabs are intentionally not persisted across restarts.
       display: isRemoteDesktopPane(node) ? node.display : undefined,
     };
   }
@@ -323,6 +329,7 @@ function serializePane(node: PaneNode): RestorablePaneNode {
 
 export function serializeTabsForPersistence(tabs: Tab[]): RestorableTab[] {
   return [...tabs]
+    .filter((tab) => !collectSessionPanes(tab.root).some((pane) => pane.view === "externalMarkdown"))
     .sort((a, b) => a.persistOrder - b.persistOrder)
     .map((tab) => ({
       title: getTabDisplayName(tab),

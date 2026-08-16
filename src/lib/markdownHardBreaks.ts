@@ -1,5 +1,7 @@
 const FENCE_RE = /^([ \t]*)(`{3,}|~{3,})/;
 const TABLE_DELIM_RE = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/;
+/** Accept short dash cells (`--`) so we can normalize them to GFM (`---`). */
+const LOOSE_TABLE_DELIM_RE = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)+\|?\s*$/;
 const TABLE_ROW_RE = /^\s*\|.*\|\s*$/;
 
 /**
@@ -23,6 +25,50 @@ function buildTableLineFlags(lines: string[]): boolean[] {
     }
   }
   return flags;
+}
+
+/**
+ * Pad delimiter cells with fewer than 3 dashes up to `---` so common
+ * authoring like `| -- | -- |` still parses as a GFM table.
+ */
+export function normalizeGfmTableDelimiters(markdown: string): string {
+  const lines = markdown.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  let inFence = false;
+  let fenceMarker: string | null = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const fence = FENCE_RE.exec(line);
+    if (fence) {
+      const marker = fence[2][0];
+      const length = fence[2].length;
+      if (!inFence) {
+        inFence = true;
+        fenceMarker = marker.repeat(length);
+      } else if (
+        fenceMarker &&
+        fence[2].startsWith(fenceMarker[0]) &&
+        fence[2].length >= fenceMarker.length
+      ) {
+        inFence = false;
+        fenceMarker = null;
+      }
+      continue;
+    }
+    if (inFence) continue;
+    if (!LOOSE_TABLE_DELIM_RE.test(line)) continue;
+    // Only pure delimiter chrome — never rewrite content rows.
+    if (/[^\s|:\-]/.test(line)) continue;
+
+    lines[i] = line.replace(/:?-{1,}:?/g, (cell) => {
+      const left = cell.startsWith(":") ? ":" : "";
+      const right = cell.length > 1 && cell.endsWith(":") ? ":" : "";
+      const dashCount = cell.length - left.length - right.length;
+      return `${left}${"-".repeat(Math.max(3, dashCount))}${right}`;
+    });
+  }
+
+  return lines.join("\n");
 }
 
 /**
@@ -167,5 +213,5 @@ export function wrapAsciiDiagrams(markdown: string): string {
 
 /** Full note-preview preprocess: preserve diagrams + hard line breaks. */
 export function prepareNoteMarkdownForPreview(markdown: string): string {
-  return hardenMarkdownNewlines(wrapAsciiDiagrams(markdown));
+  return hardenMarkdownNewlines(wrapAsciiDiagrams(normalizeGfmTableDelimiters(markdown)));
 }

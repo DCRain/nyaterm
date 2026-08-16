@@ -1010,7 +1010,7 @@ function TabBar({
       return <MdApps className="text-sm shrink-0" style={{ color: "var(--df-primary)" }} />;
     }
 
-    if (pane?.view === "note") {
+    if (pane?.view === "note" || pane?.view === "externalMarkdown") {
       return (
         <MdOutlineStickyNote2 className="text-sm shrink-0" style={{ color: "var(--df-primary)" }} />
       );

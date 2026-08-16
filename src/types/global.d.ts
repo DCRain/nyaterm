@@ -65,7 +65,7 @@ export interface SessionInfo {
 }
 
 /** Workspace leaf content mode. Default / omitted is the terminal. */
-export type SessionPaneView = "terminal" | "sftp" | "workbench" | "note";
+export type SessionPaneView = "terminal" | "sftp" | "workbench" | "note" | "externalMarkdown";
 
 /** Shared fields for one session-like leaf inside a workspace tab. */
 export interface WorkspacePaneBase {
@@ -80,6 +80,8 @@ export interface WorkspacePaneBase {
   view?: SessionPaneView;
   /** Bound note document when view is "note". */
   noteId?: string;
+  /** Absolute path when view is "externalMarkdown". */
+  markdownPath?: string;
   /** Config for ad-hoc (temporary) sessions that have no saved connection. */
   temporaryConfig?: import("@/types/temporaryConnection").TemporaryLinkConfig;
   /** True while the backend session is being established. XTerminal is not rendered yet. */

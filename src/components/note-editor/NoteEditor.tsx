@@ -45,6 +45,7 @@ const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function NoteEd
   const colors = noteTheme.colors.notes;
   const noteThemeVars = noteColorsToCssVars(colors);
   const editorRef = useRef<NoteMarkdownEditorHandle>(null);
+  const [editorReadyToken, setEditorReadyToken] = useState(0);
   const latestMarkdownRef = useRef("");
   const latestTitleRef = useRef("");
   const revisionRef = useRef(0);
@@ -390,7 +391,10 @@ const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function NoteEd
             <MdSave />
           </Button>
         </div>
-        <NoteMarkdownToolbar getView={() => editorRef.current?.getView() ?? null} />
+        <NoteMarkdownToolbar
+          getView={() => editorRef.current?.getView() ?? null}
+          viewEpoch={editorReadyToken}
+        />
       </div>
       {error ? (
         <div
@@ -413,13 +417,15 @@ const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function NoteEd
         </div>
       ) : (
         <div
-          className="nyaterm-note-editor-shell min-h-0 flex-1 overflow-hidden"
+          className="nyaterm-note-editor-shell nyaterm-solid-surface relative min-h-0 flex-1 overflow-hidden"
           onBlur={() => void flushSave()}
         >
           <NoteMarkdownEditor
             ref={editorRef}
             initialMarkdown={note.markdown}
             onChange={handleMarkdownChange}
+            onReady={() => setEditorReadyToken((token) => token + 1)}
+            className="nyaterm-solid-surface absolute inset-0 min-h-0 min-w-0 overflow-hidden"
           />
         </div>
       )}

@@ -11,35 +11,52 @@ interface ResizeHandleProps {
 export default function ResizeHandle({ direction, onResize, className = "" }: ResizeHandleProps) {
   const startPos = useRef(0);
   const onResizeRef = useRef(onResize);
+  const draggingRef = useRef(false);
 
   // Keep the ref up to date
   useEffect(() => {
     onResizeRef.current = onResize;
   }, [onResize]);
 
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent) => {
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return;
       e.preventDefault();
+      e.stopPropagation();
+
+      const target = e.currentTarget;
+      // Capture so drags keep working over iframes / WebViews (note editor, terminal).
+      target.setPointerCapture(e.pointerId);
+      draggingRef.current = true;
       startPos.current = direction === "horizontal" ? e.clientX : e.clientY;
 
-      const handleMouseMove = (ev: MouseEvent) => {
-        const current = direction === "horizontal" ? ev.clientX : ev.clientY;
-        const delta = current - startPos.current;
-        startPos.current = current;
-        onResizeRef.current(delta);
-      };
-
-      const handleMouseUp = () => {
-        document.removeEventListener("mousemove", handleMouseMove);
-        document.removeEventListener("mouseup", handleMouseUp);
+      const endDrag = (ev: PointerEvent) => {
+        if (!draggingRef.current) return;
+        draggingRef.current = false;
+        if (target.hasPointerCapture(ev.pointerId)) {
+          target.releasePointerCapture(ev.pointerId);
+        }
+        target.removeEventListener("pointermove", onPointerMove);
+        target.removeEventListener("pointerup", endDrag);
+        target.removeEventListener("pointercancel", endDrag);
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
       };
 
+      const onPointerMove = (ev: PointerEvent) => {
+        if (!draggingRef.current) return;
+        const current = direction === "horizontal" ? ev.clientX : ev.clientY;
+        const delta = current - startPos.current;
+        if (delta === 0) return;
+        startPos.current = current;
+        onResizeRef.current(delta);
+      };
+
+      target.addEventListener("pointermove", onPointerMove);
+      target.addEventListener("pointerup", endDrag);
+      target.addEventListener("pointercancel", endDrag);
       document.body.style.cursor = direction === "horizontal" ? "col-resize" : "row-resize";
       document.body.style.userSelect = "none";
-      document.addEventListener("mousemove", handleMouseMove);
-      document.addEventListener("mouseup", handleMouseUp);
     },
     [direction],
   );
@@ -63,12 +80,12 @@ export default function ResizeHandle({ direction, onResize, className = "" }: Re
       {/* Wider invisible hit target so a thin line stays easy to grab */}
       <div
         className={cn(
-          "absolute z-10",
+          "absolute z-10 touch-none",
           isHorizontal
             ? "-left-[6px] inset-y-0 w-[13px] cursor-col-resize"
             : "-top-[6px] inset-x-0 h-[13px] cursor-row-resize",
         )}
-        onMouseDown={handleMouseDown}
+        onPointerDown={handlePointerDown}
       />
     </div>
   );

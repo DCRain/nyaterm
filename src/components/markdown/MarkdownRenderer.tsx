@@ -176,7 +176,10 @@ function createMarkdownComponents(
     },
     ul: ({ children, className, node, ...props }) => (
       <ul
-        className={cn(className, className?.includes("contains-task-list") && "list-none pl-1")}
+        className={cn(
+          className,
+          className?.includes("contains-task-list") ? "list-none pl-1" : "list-disc pl-6",
+        )}
         {...sourceLineAttr(node)}
         {...props}
       >
@@ -184,7 +187,11 @@ function createMarkdownComponents(
       </ul>
     ),
     ol: ({ children, className, node, ...props }) => (
-      <ol className={className} {...sourceLineAttr(node)} {...props}>
+      <ol
+        className={cn(className, "list-decimal pl-6")}
+        {...sourceLineAttr(node)}
+        {...props}
+      >
         {children}
       </ol>
     ),

@@ -1,5 +1,7 @@
 import { redo, undo } from "@codemirror/commands";
-import type { EditorView } from "@codemirror/view";
+import { Compartment, StateEffect } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   MdAccountTree,
@@ -23,6 +25,14 @@ import {
 } from "react-icons/md";
 import { Button } from "@/components/ui/button";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  detectBlockStyleLevelAtCursor,
   insertBlockMath,
   insertBulletList,
   insertCodeBlock,
@@ -37,6 +47,7 @@ import {
   insertQuote,
   insertTable,
   insertTaskList,
+  type NoteBlockStyleLevel,
   setHeading,
   wrapSelection,
 } from "@/lib/noteMarkdownActions";
@@ -44,7 +55,15 @@ import { cn } from "@/lib/utils";
 
 interface NoteMarkdownToolbarProps {
   getView: () => EditorView | null;
+  /** Bumps when the editor view (re)mounts so the toolbar can rebind. */
+  viewEpoch?: number;
   className?: string;
+}
+
+const BLOCK_STYLE_OPTIONS: NoteBlockStyleLevel[] = [0, 1, 2, 3, 4, 5];
+
+function blockStyleLabelKey(level: NoteBlockStyleLevel) {
+  return level === 0 ? "notes.toolbar.paragraph" : `notes.toolbar.heading${level}`;
 }
 
 function ToolbarButton({
@@ -77,12 +96,90 @@ function Separator() {
   return <div className="mx-0.5 h-4 w-px shrink-0 bg-[var(--df-border)]" />;
 }
 
-export default function NoteMarkdownToolbar({ getView, className }: NoteMarkdownToolbarProps) {
+export default function NoteMarkdownToolbar({
+  getView,
+  viewEpoch = 0,
+  className,
+}: NoteMarkdownToolbarProps) {
   const { t } = useTranslation();
+  const [blockStyle, setBlockStyle] = useState("0");
+  const getViewRef = useRef(getView);
+  getViewRef.current = getView;
+
+  useEffect(() => {
+    let cancelled = false;
+    let attached: EditorView | null = null;
+    let compartment: Compartment | null = null;
+    let retryTimer = 0;
+
+    const syncFromView = (view: EditorView) => {
+      const next = String(detectBlockStyleLevelAtCursor(view));
+      setBlockStyle((prev) => (prev === next ? prev : next));
+    };
+
+    const detach = () => {
+      if (attached && compartment) {
+        try {
+          attached.dispatch({ effects: compartment.reconfigure([]) });
+        } catch {
+          // View may already be destroyed.
+        }
+      }
+      attached = null;
+      compartment = null;
+    };
+
+    const attach = (view: EditorView) => {
+      if (attached === view) return;
+      detach();
+      attached = view;
+      compartment = new Compartment();
+      syncFromView(view);
+      try {
+        view.dispatch({
+          effects: StateEffect.appendConfig.of(
+            compartment.of(
+              EditorView.updateListener.of((update) => {
+                if (update.selectionSet || update.docChanged) {
+                  syncFromView(update.view);
+                }
+              }),
+            ),
+          ),
+        });
+      } catch {
+        attached = null;
+        compartment = null;
+      }
+    };
+
+    const watch = () => {
+      if (cancelled) return;
+      const view = getViewRef.current();
+      if (view) attach(view);
+      else detach();
+      retryTimer = window.setTimeout(watch, view ? 400 : 80);
+    };
+
+    watch();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(retryTimer);
+      detach();
+    };
+  }, [viewEpoch]);
 
   const run = (action: (view: EditorView) => void) => {
-    const view = getView();
+    const view = getViewRef.current();
     if (view) action(view);
+  };
+
+  const applyBlockStyle = (value: string | null) => {
+    if (value == null) return;
+    const level = Number(value) as NoteBlockStyleLevel;
+    if (![0, 1, 2, 3, 4, 5].includes(level)) return;
+    setBlockStyle(value);
+    run((view) => setHeading(view, level));
   };
 
   return (
@@ -103,24 +200,37 @@ export default function NoteMarkdownToolbar({ getView, className }: NoteMarkdown
         <MdRedo className="size-4" />
       </ToolbarButton>
       <Separator />
-      <ToolbarButton
-        label={t("notes.toolbar.heading1")}
-        onClick={() => run((view) => setHeading(view, 1))}
-      >
-        <span className="text-[10px] font-semibold">H1</span>
-      </ToolbarButton>
-      <ToolbarButton
-        label={t("notes.toolbar.heading2")}
-        onClick={() => run((view) => setHeading(view, 2))}
-      >
-        <span className="text-[10px] font-semibold">H2</span>
-      </ToolbarButton>
-      <ToolbarButton
-        label={t("notes.toolbar.heading3")}
-        onClick={() => run((view) => setHeading(view, 3))}
-      >
-        <span className="text-[10px] font-semibold">H3</span>
-      </ToolbarButton>
+      <Select value={blockStyle} onValueChange={applyBlockStyle}>
+        <SelectTrigger
+          size="sm"
+          aria-label={t("notes.toolbar.blockStyle")}
+          title={t("notes.toolbar.blockStyle")}
+          className={cn(
+            "h-7 w-auto min-w-[4.75rem] gap-1 rounded-md border-0 bg-transparent px-1.5 py-0 text-xs shadow-none",
+            "text-[var(--df-text-muted)] hover:bg-accent hover:text-[var(--df-text)]",
+            "focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent dark:hover:bg-accent/50",
+            "[&_svg]:size-3.5 [&_svg]:opacity-70",
+          )}
+          onMouseDown={(event) => event.preventDefault()}
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent
+          position="popper"
+          align="start"
+          className="min-w-[7.5rem] border-[var(--df-border)] bg-[var(--df-bg-panel)] text-[var(--df-text)]"
+        >
+          {BLOCK_STYLE_OPTIONS.map((level) => (
+            <SelectItem
+              key={level}
+              value={String(level)}
+              className="text-xs text-[var(--df-text-muted)] focus:bg-[color-mix(in_srgb,var(--df-text)_10%,transparent)] focus:text-[var(--df-text)]"
+            >
+              {t(blockStyleLabelKey(level))}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
       <Separator />
       <ToolbarButton
         label={t("notes.toolbar.bold")}

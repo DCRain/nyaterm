@@ -20,9 +20,17 @@ const DEDUPLICATION_WINDOW: Duration = Duration::from_millis(500);
 pub struct ExternalOpenRequest {
     pub id: String,
     pub raw_url: String,
+    pub kind: ExternalOpenKind,
     pub source: ExternalOpenSource,
     pub target_window_label: String,
     pub received_at_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ExternalOpenKind {
+    Url,
+    MarkdownFile,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
@@ -66,25 +74,31 @@ impl ExternalOpenState {
         target_window_label: &str,
         now: Instant,
     ) -> usize {
-        let accepted = extract_external_open_urls(values);
+        let accepted = extract_external_open_candidates(values);
         let mut enqueued = 0;
 
         for candidate in accepted {
-            let Some(scheme) = allowed_scheme(&candidate) else {
-                log_external_open(
-                    StructuredLogLevel::Warn,
-                    "external_open.request_rejected",
-                    "Rejected external open request",
-                    None,
-                    Some(serde_json::json!({
-                        "scheme": scheme_hint(&candidate),
-                        "source": source.as_str(),
-                        "target_window_label": target_window_label,
-                        "error_type": "unsupported_scheme",
-                    })),
-                    None,
-                );
-                continue;
+            let scheme = match candidate.kind {
+                ExternalOpenKind::Url => match allowed_scheme(&candidate.value) {
+                    Some(scheme) => scheme,
+                    None => {
+                        log_external_open(
+                            StructuredLogLevel::Warn,
+                            "external_open.request_rejected",
+                            "Rejected external open request",
+                            None,
+                            Some(serde_json::json!({
+                                "scheme": scheme_hint(&candidate.value),
+                                "source": source.as_str(),
+                                "target_window_label": target_window_label,
+                                "error_type": "unsupported_scheme",
+                            })),
+                            None,
+                        );
+                        continue;
+                    }
+                },
+                ExternalOpenKind::MarkdownFile => "file",
             };
 
             log_external_open(
@@ -94,13 +108,17 @@ impl ExternalOpenState {
                 None,
                 Some(serde_json::json!({
                     "scheme": scheme,
+                    "kind": match candidate.kind {
+                        ExternalOpenKind::Url => "url",
+                        ExternalOpenKind::MarkdownFile => "markdown_file",
+                    },
                     "source": source.as_str(),
                     "target_window_label": target_window_label,
                 })),
                 None,
             );
 
-            let normalized = normalize_external_url_for_deduplication(&candidate);
+            let normalized = normalize_external_url_for_deduplication(&candidate.value);
             if self.is_duplicate(&normalized, now) {
                 log_external_open(
                     StructuredLogLevel::Info,
@@ -119,7 +137,8 @@ impl ExternalOpenState {
 
             let request = ExternalOpenRequest {
                 id: Uuid::new_v4().to_string(),
-                raw_url: candidate,
+                raw_url: candidate.value,
+                kind: candidate.kind,
                 source,
                 target_window_label: target_window_label.to_string(),
                 received_at_ms: current_time_ms(),
@@ -238,13 +257,28 @@ pub fn handle_deep_link_urls(app: &tauri::AppHandle, urls: Vec<String>) {
 }
 
 pub fn extract_external_open_urls(args: impl IntoIterator<Item = String>) -> Vec<String> {
+    extract_external_open_candidates(args)
+        .into_iter()
+        .map(|candidate| candidate.value)
+        .collect()
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ExternalOpenCandidate {
+    kind: ExternalOpenKind,
+    value: String,
+}
+
+pub fn extract_external_open_candidates(
+    args: impl IntoIterator<Item = String>,
+) -> Vec<ExternalOpenCandidate> {
     args.into_iter()
         .filter_map(|arg| sanitize_external_open_arg(&arg))
         .take(MAX_URLS_PER_BATCH)
         .collect()
 }
 
-fn sanitize_external_open_arg(arg: &str) -> Option<String> {
+fn sanitize_external_open_arg(arg: &str) -> Option<ExternalOpenCandidate> {
     let candidate = arg.trim();
     if candidate.is_empty() {
         return None;
@@ -263,10 +297,108 @@ fn sanitize_external_open_arg(arg: &str) -> Option<String> {
         );
         return None;
     }
-    if allowed_scheme(candidate).is_none() {
-        return None;
+    if allowed_scheme(candidate).is_some() {
+        return Some(ExternalOpenCandidate {
+            kind: ExternalOpenKind::Url,
+            value: candidate.to_string(),
+        });
     }
-    Some(candidate.to_string())
+    if let Some(path) = markdown_path_from_arg(candidate) {
+        return Some(ExternalOpenCandidate {
+            kind: ExternalOpenKind::MarkdownFile,
+            value: path,
+        });
+    }
+    None
+}
+
+fn markdown_path_from_arg(value: &str) -> Option<String> {
+    let lowered = value.to_ascii_lowercase();
+    if lowered.starts_with("file:") {
+        let path = file_url_to_path(value)?;
+        return is_markdown_path(&path).then_some(path);
+    }
+    // Absolute or relative filesystem paths ending in .md / .markdown.
+    if is_markdown_path(value) && looks_like_filesystem_path(value) {
+        return Some(value.to_string());
+    }
+    None
+}
+
+fn looks_like_filesystem_path(value: &str) -> bool {
+    let path = std::path::Path::new(value);
+    path.is_absolute()
+        || value.starts_with('.')
+        || value.starts_with('/')
+        || value.starts_with('\\')
+        || (value.len() >= 3
+            && value.as_bytes()[0].is_ascii_alphabetic()
+            && value.as_bytes()[1] == b':'
+            && (value.as_bytes()[2] == b'\\' || value.as_bytes()[2] == b'/'))
+}
+
+fn is_markdown_path(value: &str) -> bool {
+    let path = std::path::Path::new(value);
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            let lower = ext.to_ascii_lowercase();
+            lower == "md" || lower == "markdown"
+        })
+        .unwrap_or(false)
+}
+
+fn file_url_to_path(value: &str) -> Option<String> {
+    let url = value.trim();
+    let without_scheme = url
+        .strip_prefix("file://")
+        .or_else(|| url.strip_prefix("FILE://"))?;
+    // file:///C:/path or file://localhost/C:/path or file:///home/...
+    let path = without_scheme
+        .strip_prefix("localhost")
+        .unwrap_or(without_scheme);
+    let path = if cfg!(windows) {
+        let trimmed = path.trim_start_matches('/');
+        // Keep leading slash for Unix-like; on Windows prefer C:/...
+        if trimmed.len() >= 2 && trimmed.as_bytes()[1] == b':' {
+            trimmed.to_string()
+        } else {
+            format!("/{trimmed}")
+        }
+    } else if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    };
+    let decoded = percent_decode_path(&path);
+    Some(decoded)
+}
+
+fn percent_decode_path(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (from_hex(bytes[i + 1]), from_hex(bytes[i + 2])) {
+                out.push((hi << 4) | lo);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn from_hex(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn allowed_scheme(value: &str) -> Option<&'static str> {
@@ -397,6 +529,21 @@ mod tests {
             "not-a-url".to_string(),
         ];
         assert!(extract_external_open_urls(args).is_empty());
+    }
+
+    #[test]
+    fn extracts_markdown_file_paths() {
+        let args = vec![
+            "C:\\Users\\user\\notes\\readme.md".to_string(),
+            "/tmp/doc.markdown".to_string(),
+            "file:///C:/Users/user/notes/todo.md".to_string(),
+        ];
+        let extracted = extract_external_open_candidates(args);
+        assert_eq!(extracted.len(), 3);
+        assert!(extracted.iter().all(|item| item.kind == ExternalOpenKind::MarkdownFile));
+        assert_eq!(extracted[0].value, "C:\\Users\\user\\notes\\readme.md");
+        assert_eq!(extracted[1].value, "/tmp/doc.markdown");
+        assert!(extracted[2].value.to_ascii_lowercase().ends_with("todo.md"));
     }
 
     #[test]

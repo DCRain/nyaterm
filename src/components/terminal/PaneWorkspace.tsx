@@ -213,6 +213,7 @@ function PaneNodeView({
   const showReconnectAction =
     node.view !== "workbench" &&
     node.view !== "note" &&
+    node.view !== "externalMarkdown" &&
     !!(node.type === "Local" || node.connectionId || hasMatchingTemporaryConfig(node)) &&
     !!onReconnectPane;
   const statusTitle = isReconnectPending
@@ -239,7 +240,7 @@ function PaneNodeView({
     );
   }
 
-  if (node.view === "note") {
+  if (node.view === "note" || node.view === "externalMarkdown") {
     return (
       <div
         className={`relative h-full w-full overflow-hidden ${
@@ -251,7 +252,12 @@ function PaneNodeView({
         }}
         onMouseDown={() => onActivatePane(node.id)}
       >
-        {node.noteId ? <NoteEditorPanel noteId={node.noteId} tabId={tab.id} /> : null}
+        {node.view === "note" && node.noteId ? (
+          <NoteEditorPanel noteId={node.noteId} tabId={tab.id} />
+        ) : null}
+        {node.view === "externalMarkdown" && node.markdownPath ? (
+          <NoteEditorPanel filePath={node.markdownPath} tabId={tab.id} />
+        ) : null}
       </div>
     );
   }

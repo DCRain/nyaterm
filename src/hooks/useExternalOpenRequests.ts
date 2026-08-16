@@ -5,9 +5,12 @@ import { toast } from "sonner";
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
 
+export type ExternalOpenKind = "url" | "markdownFile";
+
 export interface ExternalOpenRequest {
   id: string;
   rawUrl: string;
+  kind: ExternalOpenKind;
   source: "startupArguments" | "secondInstance" | "deepLink";
   targetWindowLabel: string;
   receivedAtMs: number;

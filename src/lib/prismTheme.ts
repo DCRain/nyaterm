@@ -137,6 +137,9 @@ export function noteColorsToCssVars(notes: NoteColors): CSSProperties {
     "--df-danger": notes.danger,
     "--df-danger-hover": notes.danger,
     "--df-link": notes.link,
+    "--df-success": notes.syntax.green || notes.link,
+    "--df-warning": notes.syntax.yellow || notes.primary,
+    "--df-accent": notes.syntax.cyan || notes.primary,
     "--df-selection": notes.selectionBackground,
     "--df-caret": notes.syntax.cursor || notes.text,
     // Higher-contrast region lines (plain --df-border often blends with bgPanel).

@@ -70,11 +70,27 @@ export function toggleLinePrefix(view: EditorView, prefix: string) {
   });
 }
 
-export function setHeading(view: EditorView, level: 1 | 2 | 3 | 4) {
-  const marks = "#".repeat(level);
+export type NoteBlockStyleLevel = 0 | 1 | 2 | 3 | 4 | 5;
+
+/** Detect paragraph (0) or ATX heading 1–5 for a source line. Heading 6 clamps to 5. */
+export function detectBlockStyleLevel(line: string): NoteBlockStyleLevel {
+  const match = /^(#{1,6})\s+/.exec(line);
+  if (!match) return 0;
+  return Math.min(5, match[1].length) as NoteBlockStyleLevel;
+}
+
+/** Detect block style for the line under the primary cursor. */
+export function detectBlockStyleLevelAtCursor(view: EditorView): NoteBlockStyleLevel {
+  const line = view.state.doc.lineAt(view.state.selection.main.head).text;
+  return detectBlockStyleLevel(line);
+}
+
+/** Set selected lines to paragraph (0) or ATX heading level 1–5. */
+export function setHeading(view: EditorView, level: NoteBlockStyleLevel) {
   mapSelectedLines(view, (line) => {
     const stripped = line.replace(/^#{1,6}\s+/, "");
-    return `${marks} ${stripped || "Heading"}`;
+    if (level === 0) return stripped;
+    return `${"#".repeat(level)} ${stripped || "Heading"}`;
   });
 }
 

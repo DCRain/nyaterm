@@ -27,6 +27,7 @@ export default function NoteOutline({
         backgroundColor: "var(--df-bg-panel)",
         color: "var(--df-text)",
         borderRight: "1px solid var(--df-divider, var(--df-border))",
+        boxShadow: "none",
         ...style,
       }}
       aria-label={t("notes.outline")}

@@ -419,6 +419,7 @@ function App() {
     addPendingTab,
     openWorkbenchTab,
     openNoteTab,
+    openExternalMarkdownTab,
     updateTabSession,
     markTabConnectionFailed,
     updatePaneSession,
@@ -1595,8 +1596,14 @@ function App() {
         data: {
           source: request.source,
           target_window_label: request.targetWindowLabel,
+          kind: request.kind,
         },
       });
+
+      if (request.kind === "markdownFile") {
+        openExternalMarkdownTab(request.rawUrl);
+        return;
+      }
 
       const parsed = parseExternalOpenUrl(request.rawUrl);
       if (!parsed.ok) {
@@ -1687,6 +1694,7 @@ function App() {
       confirmExternalPostLogin,
       connectSavedConnection,
       connectTemporaryConnection,
+      openExternalMarkdownTab,
       t,
     ],
   );
@@ -2186,7 +2194,7 @@ function App() {
       >,
     ) => {
       if (pane.connecting) {
-        if (pane.view === "workbench" || pane.view === "note") {
+        if (pane.view === "workbench" || pane.view === "note" || pane.view === "externalMarkdown") {
           return true;
         }
         if (pane.type === "RDP") {
@@ -2223,7 +2231,7 @@ function App() {
         return true;
       }
 
-      if (pane.view === "workbench" || pane.view === "note") {
+      if (pane.view === "workbench" || pane.view === "note" || pane.view === "externalMarkdown") {
         return true;
       }
 

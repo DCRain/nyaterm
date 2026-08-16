@@ -347,6 +347,35 @@ async fn write_local_file_text_impl(
     ))
 }
 
+/// Read a user-chosen text file without requiring an active session (Save As / Open With).
+#[tauri::command]
+pub async fn read_user_text_file(path: String, max_bytes: Option<u64>) -> AppResult<RemoteTextFile> {
+    read_local_file_text_impl(&path, max_bytes.unwrap_or(20 * 1024 * 1024)).await
+}
+
+/// Write/create a user-chosen text file without requiring an active session.
+#[tauri::command]
+pub async fn write_user_text_file(path: String, content: String) -> AppResult<()> {
+    write_user_path_bytes(&path, content.as_bytes()).await
+}
+
+/// Write/create a user-chosen binary file without requiring an active session.
+#[tauri::command]
+pub async fn write_user_binary_file(path: String, contents: Vec<u8>) -> AppResult<()> {
+    write_user_path_bytes(&path, &contents).await
+}
+
+async fn write_user_path_bytes(path: &str, contents: &[u8]) -> AppResult<()> {
+    let target = Path::new(path);
+    if let Some(parent) = target.parent() {
+        if !parent.as_os_str().is_empty() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+    }
+    tokio::fs::write(target, contents).await?;
+    Ok(())
+}
+
 async fn ensure_local_session(manager: &SessionManager, session_id: &str) -> AppResult<()> {
     let sessions = manager.sessions.lock().await;
     // Local host FS ops don't depend on session type; any live session can
@@ -507,7 +536,7 @@ async fn set_local_mode_if_supported(_path: &str, _mode: Option<String>) -> AppR
 mod tests {
     use super::*;
     use crate::config::AiExecutionProfile;
-    use crate::core::{SessionCommand, SessionHandle, SessionInfo};
+    use crate::core::{SessionCommand, SessionHandle, SessionInfo, SessionType};
     use tokio::sync::{Mutex, mpsc};
 
     fn temp_test_dir(name: &str) -> PathBuf {
