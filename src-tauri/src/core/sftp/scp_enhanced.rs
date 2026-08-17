@@ -874,7 +874,8 @@ impl RemoteFs for ScpEnhancedBackend {
         let output = self.exec_ok(&cmd).await?;
 
         ensure_text_bytes(&output, max_bytes)?;
-        let content = String::from_utf8(output.clone())
+        let file_hash = content_hash(&output);
+        let content = String::from_utf8(output)
             .map_err(|_| AppError::Config("Only UTF-8 text files are supported".to_string()))?;
 
         Ok(RemoteTextFile {
@@ -882,6 +883,8 @@ impl RemoteFs for ScpEnhancedBackend {
             content,
             size: props.size,
             mtime: props.mtime,
+            mtime_nanos: None,
+            content_hash: file_hash,
         })
     }
 
@@ -907,6 +910,7 @@ impl RemoteFs for ScpEnhancedBackend {
             content_bytes: bytes,
             size: props.size,
             mtime: props.mtime,
+            mtime_nanos: None,
         })
     }
 
@@ -916,6 +920,7 @@ impl RemoteFs for ScpEnhancedBackend {
         content: &str,
         expected_mtime: Option<u64>,
         expected_size: Option<u64>,
+        expected_hash: Option<&str>,
         force: bool,
     ) -> AppResult<WriteRemoteTextResult> {
         let props = self.stat(path).await?;
@@ -923,7 +928,24 @@ impl RemoteFs for ScpEnhancedBackend {
             && (expected_mtime.is_some_and(|mtime| mtime != props.mtime)
                 || expected_size.is_some_and(|size| size != props.size))
         {
-            return Ok(WriteRemoteTextResult::conflict(props.mtime, props.size));
+            return Ok(WriteRemoteTextResult::conflict(
+                props.mtime,
+                props.size,
+                None,
+            ));
+        }
+        if !force {
+            if let Some(expected_hash) = expected_hash {
+                let cmd = format!("head -c {} -- {}", props.size, sh_quote(path));
+                let current_bytes = self.exec_ok(&cmd).await?;
+                if content_hash(&current_bytes) != expected_hash {
+                    return Ok(WriteRemoteTextResult::conflict(
+                        props.mtime,
+                        props.size,
+                        None,
+                    ));
+                }
+            }
         }
 
         let tmp = format!(
@@ -947,7 +969,12 @@ impl RemoteFs for ScpEnhancedBackend {
             )));
         }
         let props = self.stat(path).await?;
-        Ok(WriteRemoteTextResult::saved(props.mtime, props.size))
+        Ok(WriteRemoteTextResult::saved(
+            props.mtime,
+            props.size,
+            None,
+            content_hash(content.as_bytes()),
+        ))
     }
 
     async fn download_file(

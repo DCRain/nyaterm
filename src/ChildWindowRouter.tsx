@@ -6,7 +6,6 @@ import {
   isModalChildLabel,
   prepareForModalChildClose,
   setOwnerMainWindowLabel,
-  signalChildWindowReady,
 } from "./lib/windowManager";
 
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
@@ -31,16 +30,20 @@ const PAGES: Record<string, React.ComponentType> = {
   "note-editor": NoteEditorPage,
 };
 
+function ChildWindowLoadingShell() {
+  return (
+    <div
+      className="flex h-screen w-full items-center justify-center bg-background"
+      aria-busy="true"
+      style={{ backgroundColor: "var(--df-bg, #0d1117)" }}
+    >
+      <span className="size-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+    </div>
+  );
+}
+
 function ReadyContent({ children }: { children: ReactNode }) {
-  useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      void signalChildWindowReady();
-    }, 0);
-
-    return () => window.clearTimeout(timeoutId);
-  }, []);
-
-  return children;
+  return <div className="relative h-screen w-full bg-background">{children}</div>;
 }
 
 export default function ChildWindowRouter({ windowType }: { windowType: string }) {
@@ -112,10 +115,10 @@ export default function ChildWindowRouter({ windowType }: { windowType: string }
   }
 
   return (
-    <Suspense fallback={null}>
-      <ReadyContent>
+    <ReadyContent>
+      <Suspense fallback={<ChildWindowLoadingShell />}>
         <Page />
-      </ReadyContent>
-    </Suspense>
+      </Suspense>
+    </ReadyContent>
   );
 }

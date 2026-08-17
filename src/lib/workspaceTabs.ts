@@ -1,9 +1,13 @@
 import type {
+  FileDocumentBackend,
+  FileDocumentPane,
+  FileDocumentSnapshot,
   PaneNode,
   PaneSplitDirection,
   RestorablePaneNode,
   RestorableTab,
   SessionPane,
+  SessionType,
   SplitPane,
   Tab,
   WorkspaceSessionType,
@@ -58,6 +62,10 @@ export function isRdpPane(node: PaneNode): node is Extract<SessionPane, { type: 
   return isRemoteDesktopPane(node) && node.type === "RDP";
 }
 
+export function isFileDocumentPane(node: PaneNode): node is FileDocumentPane {
+  return isSessionPane(node) && node.paneKind === "file";
+}
+
 function isRemoteDesktopSessionType(type: WorkspaceSessionType): type is "RDP" | "VNC" {
   return type === "RDP" || type === "VNC";
 }
@@ -67,7 +75,6 @@ const DEFAULT_REMOTE_DESKTOP_DISPLAY = {
   remoteHeight: 1080,
   scaleMode: "fit",
 } as const;
-
 export function createSessionPane(
   name: string,
   type: WorkspaceSessionType,
@@ -99,6 +106,35 @@ export function createSessionPane(
   } as SessionPane;
 }
 
+export function createFileDocumentPane({
+  sessionId,
+  name,
+  type,
+  connectionId,
+  backend,
+  path,
+  file,
+}: {
+  sessionId: string;
+  name: string;
+  type: SessionType;
+  connectionId?: string;
+  backend: FileDocumentBackend;
+  path: string;
+  file: FileDocumentSnapshot;
+}): FileDocumentPane {
+  return {
+    id: createWorkspaceId("pane"),
+    kind: "leaf",
+    paneKind: "file",
+    sessionId,
+    name,
+    type,
+    connectionId,
+    file: { backend, path, initial: file },
+  };
+}
+
 export function createWorkspaceTab(
   pane: SessionPane,
   persistOrder: number,
@@ -116,7 +152,10 @@ export function createWorkspaceTab(
 
 export function collectSessionPanes(node: PaneNode): SessionPane[] {
   if (isSessionPane(node)) return [node];
-  return [...collectSessionPanes(node.first), ...collectSessionPanes(node.second)];
+  return [
+    ...collectSessionPanes(node.first),
+    ...collectSessionPanes(node.second),
+  ];
 }
 
 export function getFirstSessionPane(node: PaneNode): SessionPane | null {
@@ -130,12 +169,18 @@ export function findPaneById(node: PaneNode, paneId: string): PaneNode | null {
   return findPaneById(node.first, paneId) ?? findPaneById(node.second, paneId);
 }
 
-export function findSessionPaneById(node: PaneNode, paneId: string): SessionPane | null {
+export function findSessionPaneById(
+  node: PaneNode,
+  paneId: string,
+): SessionPane | null {
   const pane = findPaneById(node, paneId);
   return pane && isSessionPane(pane) ? pane : null;
 }
 
-export function findSessionPaneBySessionId(node: PaneNode, sessionId: string): SessionPane | null {
+export function findSessionPaneBySessionId(
+  node: PaneNode,
+  sessionId: string,
+): SessionPane | null {
   if (isSessionPane(node)) return node.sessionId === sessionId ? node : null;
   return (
     findSessionPaneBySessionId(node.first, sessionId) ??
@@ -155,6 +200,31 @@ function updatePaneTree(
   const nextSecond = updatePaneTree(node.second, paneId, updater);
   if (nextFirst === node.first && nextSecond === node.second) return node;
   return { ...node, first: nextFirst, second: nextSecond };
+}
+
+export function replaceSessionReferences(
+  root: PaneNode,
+  oldSessionId: string,
+  newSessionId: string,
+): PaneNode {
+  if (isSessionPane(root)) {
+    return root.sessionId === oldSessionId
+      ? ({ ...root, sessionId: newSessionId } as SessionPane)
+      : root;
+  }
+
+  const first = replaceSessionReferences(
+    root.first,
+    oldSessionId,
+    newSessionId,
+  );
+  const second = replaceSessionReferences(
+    root.second,
+    oldSessionId,
+    newSessionId,
+  );
+  if (first === root.first && second === root.second) return root;
+  return { ...root, first, second };
 }
 
 export function updateSessionPane(
@@ -178,7 +248,7 @@ export function updateSessionPane(
   },
 ): PaneNode {
   return updatePaneTree(root, paneId, (current) => {
-    if (!isSessionPane(current)) return current;
+    if (!isSessionPane(current) || current.paneKind === "file") return current;
     const type = updates.type ?? current.type;
     const remoteDesktop = isRemoteDesktopSessionType(type);
     const nextDisplay = remoteDesktop
@@ -220,14 +290,21 @@ export function splitSessionPane(
   });
 }
 
-export function updateSplitRatio(root: PaneNode, splitId: string, ratio: number): PaneNode {
+export function updateSplitRatio(
+  root: PaneNode,
+  splitId: string,
+  ratio: number,
+): PaneNode {
   return updatePaneTree(root, splitId, (current) => {
     if (!isSplitPane(current)) return current;
     return { ...current, ratio: clampSplitRatio(ratio) };
   });
 }
 
-export function removeSessionPane(root: PaneNode, paneId: string): PaneNode | null {
+export function removeSessionPane(
+  root: PaneNode,
+  paneId: string,
+): PaneNode | null {
   if (isSessionPane(root)) return root.id === paneId ? null : root;
 
   const nextFirst = removeSessionPane(root.first, paneId);
@@ -241,7 +318,10 @@ export function removeSessionPane(root: PaneNode, paneId: string): PaneNode | nu
 }
 
 export function getActivePane(tab: Tab): SessionPane | null {
-  return findSessionPaneById(tab.root, tab.activePaneId) ?? getFirstSessionPane(tab.root);
+  return (
+    findSessionPaneById(tab.root, tab.activePaneId) ??
+    getFirstSessionPane(tab.root)
+  );
 }
 
 export function getTabDisplayName(tab: Tab): string {
@@ -270,7 +350,11 @@ export function getNextPersistOrder(tabs: Tab[]) {
   return tabs.reduce((max, tab) => Math.max(max, tab.persistOrder), -1) + 1;
 }
 
-export function insertTabAfter(tabs: Tab[], afterTabId: string, newTab: Tab): Tab[] {
+export function insertTabAfter(
+  tabs: Tab[],
+  afterTabId: string,
+  newTab: Tab,
+): Tab[] {
   const index = tabs.findIndex((tab) => tab.id === afterTabId);
   if (index === -1) return [...tabs, newTab];
   const next = [...tabs];
@@ -278,7 +362,11 @@ export function insertTabAfter(tabs: Tab[], afterTabId: string, newTab: Tab): Ta
   return next;
 }
 
-export function moveTab(tabs: Tab[], fromTabId: string, toIndex: number): Tab[] {
+export function moveTab(
+  tabs: Tab[],
+  fromTabId: string,
+  toIndex: number,
+): Tab[] {
   const fromIndex = tabs.findIndex((tab) => tab.id === fromTabId);
   if (fromIndex === -1) return tabs;
   const boundedIndex = Math.max(0, Math.min(tabs.length - 1, toIndex));
@@ -298,8 +386,51 @@ export function findPaneBySessionId(tab: Tab, sessionId: string) {
   return findSessionPaneBySessionId(tab.root, sessionId);
 }
 
-function serializePane(node: PaneNode): RestorablePaneNode {
+export interface FileDocumentIdentity {
+  backend: FileDocumentBackend;
+  sessionId: string;
+  path: string;
+}
+
+export function findOpenFileDocument(
+  tabs: Tab[],
+  identity: FileDocumentIdentity,
+): { tabId: string; paneId: string } | null {
+  for (const tab of tabs) {
+    const pane = collectSessionPanes(tab.root).find(
+      (candidate) =>
+        candidate.paneKind === "file" &&
+        candidate.sessionId === identity.sessionId &&
+        candidate.file.backend === identity.backend &&
+        candidate.file.path === identity.path,
+    );
+    if (pane) return { tabId: tab.id, paneId: pane.id };
+  }
+  return null;
+}
+
+function collectSessionReferenceCounts(tabs: Tab[]) {
+  const counts = new Map<string, number>();
+  for (const tab of tabs) {
+    for (const pane of collectSessionPanes(tab.root)) {
+      counts.set(pane.sessionId, (counts.get(pane.sessionId) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
+export function getReleasedSessionIds(
+  previousTabs: Tab[],
+  nextTabs: Tab[],
+): string[] {
+  const previous = collectSessionReferenceCounts(previousTabs);
+  const next = collectSessionReferenceCounts(nextTabs);
+  return [...previous.keys()].filter((sessionId) => !next.has(sessionId));
+}
+
+function serializePane(node: PaneNode): RestorablePaneNode | null {
   if (isSessionPane(node)) {
+    if (node.paneKind === "file") return null;
     return {
       id: node.id,
       kind: "leaf",
@@ -317,30 +448,61 @@ function serializePane(node: PaneNode): RestorablePaneNode {
     };
   }
 
+  const first = serializePane(node.first);
+  const second = serializePane(node.second);
+  if (!first) return second;
+  if (!second) return first;
   return {
     id: node.id,
     kind: "split",
     direction: node.direction,
     ratio: clampSplitRatio(node.ratio),
-    first: serializePane(node.first),
-    second: serializePane(node.second),
+    first,
+    second,
   };
+}
+
+function findFirstRestorableLeaf(
+  node: RestorablePaneNode,
+): Extract<RestorablePaneNode, { kind: "leaf" }> {
+  return node.kind === "leaf" ? node : findFirstRestorableLeaf(node.first);
+}
+
+function hasRestorablePaneId(
+  node: RestorablePaneNode,
+  paneId: string,
+): boolean {
+  if (node.kind === "leaf") return node.id === paneId;
+  return (
+    hasRestorablePaneId(node.first, paneId) ||
+    hasRestorablePaneId(node.second, paneId)
+  );
 }
 
 export function serializeTabsForPersistence(tabs: Tab[]): RestorableTab[] {
   return [...tabs]
     .filter((tab) => !collectSessionPanes(tab.root).some((pane) => pane.view === "externalMarkdown"))
     .sort((a, b) => a.persistOrder - b.persistOrder)
-    .map((tab) => ({
-      title: getTabDisplayName(tab),
-      session_type: getActivePane(tab)?.type ?? "Local",
-      connection_id: getActivePane(tab)?.connectionId,
+    .flatMap((tab) => {
+      const root = serializePane(tab.root);
+      if (!root) return [];
+      const fallback = findFirstRestorableLeaf(root);
+      const activePaneId = hasRestorablePaneId(root, tab.activePaneId)
+        ? tab.activePaneId
+        : fallback.id;
+      return [
+        {
+          title: tab.customName || fallback.title,
+          session_type: fallback.session_type,
+          connection_id: fallback.connection_id,
       custom_name: tab.customName,
       tab_color: tab.tabColor,
       locked: tab.locked,
-      active_pane_id: tab.activePaneId,
-      root: serializePane(tab.root),
-    }));
+          active_pane_id: activePaneId,
+          root,
+        },
+      ];
+    });
 }
 
 function createLegacyPaneNode(tab: RestorableTab): RestorablePaneNode | null {
@@ -355,7 +517,9 @@ function createLegacyPaneNode(tab: RestorableTab): RestorablePaneNode | null {
   };
 }
 
-export function normalizeSessionType(value: string): WorkspaceSessionType | null {
+export function normalizeSessionType(
+  value: string,
+): WorkspaceSessionType | null {
   switch (value) {
     case "SSH":
       return "SSH";
@@ -380,7 +544,7 @@ export function normalizeSessionType(value: string): WorkspaceSessionType | null
 function restorePane(node: RestorablePaneNode): PaneNode | null {
   if (node.kind === "leaf") {
     const type = normalizeSessionType(node.session_type);
-    if (!type) return null;
+    if (!type || node.pane_kind === "file") return null;
     const remoteDesktop = isRemoteDesktopSessionType(type);
     const persistedPaneKind = node.pane_kind;
     const paneKind =
@@ -432,7 +596,10 @@ function restorePane(node: RestorablePaneNode): PaneNode | null {
   };
 }
 
-export function restoreTabFromPersistence(tab: RestorableTab, persistOrder: number): Tab | null {
+export function restoreTabFromPersistence(
+  tab: RestorableTab,
+  persistOrder: number,
+): Tab | null {
   const restorableRoot = tab.root ?? createLegacyPaneNode(tab);
   if (!restorableRoot) return null;
 

@@ -1,3 +1,4 @@
+import { collectSessionPanes } from "@/lib/workspaceTabs";
 import type { PaneSplitDirection, RestorableTerminalWindowNode, Tab } from "@/types/global";
 
 export interface TerminalWindowLeaf {
@@ -497,7 +498,10 @@ export function serializeTerminalWindowLayout(
 ): RestorableTerminalWindowNode | null {
   if (!node || tabs.length === 0) return null;
 
-  const tabIndexById = new Map(tabs.map((tab, index) => [tab.id, index]));
+  const restorableTabs = tabs.filter((tab) =>
+    collectSessionPanes(tab.root).some((pane) => pane.paneKind !== "file"),
+  );
+  const tabIndexById = new Map(restorableTabs.map((tab, index) => [tab.id, index]));
 
   const serialize = (current: TerminalWindowNode): RestorableTerminalWindowNode | null => {
     if (!isTerminalWindowSplit(current)) {

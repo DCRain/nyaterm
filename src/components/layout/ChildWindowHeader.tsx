@@ -18,6 +18,7 @@ interface ChildWindowHeaderProps {
   icon?: ReactNode;
   windowControls?: boolean;
   alwaysOnTopControl?: boolean;
+  macOSDragOnly?: boolean;
 }
 
 export default function ChildWindowHeader({
@@ -26,6 +27,7 @@ export default function ChildWindowHeader({
   icon,
   windowControls = false,
   alwaysOnTopControl = false,
+  macOSDragOnly = false,
 }: ChildWindowHeaderProps) {
   const { t } = useTranslation();
   const [appWindow] = useState(() => getCurrentWindow());
@@ -83,18 +85,24 @@ export default function ChildWindowHeader({
     setIsAlwaysOnTop(alwaysOnTop);
   };
 
+  const hideHeaderContent = isMacOS && macOSDragOnly;
+
   return (
     <header
       className="h-10 border-b flex items-center shrink-0 select-none"
       style={{ backgroundColor: "var(--df-bg-panel)", borderColor: "var(--df-border)" }}
     >
-      <div
-        className={`flex-1 min-w-0 h-full flex items-center gap-2 px-3${isMacOS ? " pl-[70px]" : ""}`}
-        data-tauri-drag-region
-      >
-        {icon ? <span className="text-primary pointer-events-none shrink-0">{icon}</span> : null}
-        <span className="text-sm font-medium truncate pointer-events-none">{title}</span>
-      </div>
+      {hideHeaderContent ? (
+        <div className="h-full min-w-0 flex-1" data-tauri-drag-region />
+      ) : (
+        <div
+          className={`flex-1 min-w-0 h-full flex items-center gap-2 px-3${isMacOS ? " pl-[84px]" : ""}`}
+          data-tauri-drag-region
+        >
+          {icon ? <span className="text-primary pointer-events-none shrink-0">{icon}</span> : null}
+          <span className="text-sm font-medium truncate pointer-events-none">{title}</span>
+        </div>
+      )}
 
       {!isMacOS && (
         <div className="flex h-full shrink-0 items-center">

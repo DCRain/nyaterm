@@ -1,12 +1,22 @@
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import LockScreen from "@/components/dialog/app/LockScreen";
 import { useAppLockState } from "@/hooks/useAppLockState";
 import { useIdleLock } from "@/hooks/useIdleLock";
 import { DEFAULT_AI_SETTINGS } from "@/lib/aiSettings";
 import { DEFAULT_CLOUD_SYNC_SETTINGS } from "@/lib/cloudSync";
-import { DEFAULT_TERMINAL_FONT_FAMILY, getDefaultUiFontFamily } from "@/lib/defaultFonts";
+import {
+  DEFAULT_TERMINAL_FONT_FAMILY,
+  getDefaultUiFontFamily,
+} from "@/lib/defaultFonts";
 import {
   DEFAULT_COMMAND_SUGGESTION_MAX_CHARS,
   DEFAULT_COMMAND_SUGGESTION_MIN_CHARS,
@@ -15,13 +25,18 @@ import {
   DEFAULT_TAB_RIGHT_CLICK_ACTION,
 } from "@/lib/interactionSettings";
 import { normalizeQuickCommandAppSettings } from "@/lib/quickCommandSettings";
-import type { AppRuntimeInfo, AppSettings, Group, SavedConnection, UiConfig } from "@/types/global";
+import type {
+  AppRuntimeInfo,
+  AppSettings,
+  Group,
+  SavedConnection,
+  UiConfig,
+} from "@/types/global";
 import i18n from "../i18n";
 import { invoke } from "../lib/invoke";
 import { logger, setLoggerLevel } from "../lib/logger";
 import { DEFAULT_TERMINAL_FONT_SIZE } from "../lib/terminalFontSize";
 import { resolveTheme } from "../lib/themes";
-import { signalChildWindowReady } from "../lib/windowManager";
 import { useWindowTransparencyDom } from "../lib/windowTransparencyDom";
 import { AppContext } from "./AppContext";
 
@@ -247,7 +262,8 @@ const DEFAULT_RUNTIME_INFO: AppRuntimeInfo = {
  * Tabs, connections, and dialog state are stubbed since child windows don't use them.
  */
 export function ChildAppProvider({ children }: { children: ReactNode }) {
-  const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS);
+  const [appSettings, setAppSettings] =
+    useState<AppSettings>(DEFAULT_APP_SETTINGS);
   const loaded = useRef(false);
   const appSettingsRef = useRef<AppSettings>(DEFAULT_APP_SETTINGS);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -263,7 +279,10 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
         setLoggerLevel(normalized.diagnostics.level);
         loaded.current = true;
         setSettingsLoaded(true);
-        if (normalized.ui?.language && normalized.ui.language !== i18n.language) {
+        if (
+          normalized.ui?.language &&
+          normalized.ui.language !== i18n.language
+        ) {
           i18n.changeLanguage(normalized.ui.language);
         }
       })
@@ -320,26 +339,23 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
     }
   }, [appSettings.ui?.language]);
 
-  useEffect(() => {
-    if (!settingsLoaded || !lockStateLoaded || !isLocked) return;
-
-    const timeoutId = window.setTimeout(() => {
-      void signalChildWindowReady();
-    }, 0);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [isLocked, lockStateLoaded, settingsLoaded]);
-
   useIdleLock(
-    appSettings.security.enable_screen_lock ? appSettings.security.idle_lock_minutes : 0,
+    appSettings.security.enable_screen_lock
+      ? appSettings.security.idle_lock_minutes
+      : 0,
     isLocked,
     () => setIsLocked(true),
   );
 
   const updateAppSettings = useCallback(
-    (updates: Partial<AppSettings> | ((prev: AppSettings) => Partial<AppSettings>)) => {
+    (
+      updates:
+        | Partial<AppSettings>
+        | ((prev: AppSettings) => Partial<AppSettings>),
+    ) => {
       setAppSettings((prev) => {
-        const nextUpdates = typeof updates === "function" ? updates(prev) : updates;
+        const nextUpdates =
+          typeof updates === "function" ? updates(prev) : updates;
         if (Object.keys(nextUpdates).length === 0 || nextUpdates === prev) {
           return prev;
         }
@@ -389,7 +405,8 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
   const updateUi = useCallback(
     (updates: Partial<UiConfig> | ((prev: UiConfig) => Partial<UiConfig>)) => {
       updateAppSettings((prev) => {
-        const nextUpdates = typeof updates === "function" ? updates(prev.ui) : updates;
+        const nextUpdates =
+          typeof updates === "function" ? updates(prev.ui) : updates;
         return { ui: { ...prev.ui, ...nextUpdates } };
       });
     },
@@ -423,6 +440,7 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
       updateTabSession: noop,
       markTabConnectionFailed: noop,
       updatePaneSession: noop,
+      replaceSessionReferences: noop,
       markPaneConnectionFailed: noop,
       markPaneConnecting: noopPaneConnecting,
       hasTab: noopBoolean,
@@ -430,6 +448,7 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
       setActivePane: noop,
       updateSplitRatio: noop,
       splitPane: noopSplitPane,
+      openFileDocument: () => ({ tabId: "", paneId: "", created: false }),
       closePane: noop,
       reorderTabs: noop,
       updateTab: noopAsync,
@@ -492,6 +511,15 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
 
   return (
     <AppContext.Provider value={contextValue}>
+      {!appStateReady ? (
+        <div
+          className="flex h-screen w-full items-center justify-center bg-background"
+          aria-busy="true"
+          style={{ backgroundColor: "var(--df-bg, #0d1117)" }}
+        >
+          <span className="size-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+        </div>
+      ) : null}
       {showContent ? children : null}
       {appStateReady && isLocked ? (
         <LockScreen

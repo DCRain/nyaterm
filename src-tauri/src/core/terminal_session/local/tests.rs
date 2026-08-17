@@ -4,6 +4,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::is_utf8_locale;
     use super::{
+        WorkingDirectoryOutcome, apply_working_dir_to_command,
         build_local_startup_script_for_platform, parse_shell_args, resolve_shell_command,
         should_emit_visible_output,
     };
@@ -12,6 +13,13 @@ mod tests {
 
     fn ready_marker() -> String {
         build_ready_marker("session-1")
+    }
+
+    fn argv_strings(cmd: &CommandBuilder) -> Vec<String> {
+        cmd.get_argv()
+            .iter()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect()
     }
 
     #[test]
@@ -125,6 +133,88 @@ mod tests {
         let args = parse_shell_args(r#"-Command "echo hi" "C:\Program Files\Tool""#).expect("args");
 
         assert_eq!(args, vec!["-Command", "echo hi", r"C:\Program Files\Tool"]);
+    }
+
+    #[test]
+    fn wsl_working_dir_uses_cd_arg_before_user_args() {
+        let mut cmd = CommandBuilder::new("wsl.exe");
+        cmd.args(["-d", "Ubuntu"]);
+
+        let outcome = apply_working_dir_to_command(&mut cmd, "/home/nya");
+
+        assert_eq!(outcome, WorkingDirectoryOutcome::AppliedWslCd);
+        assert_eq!(
+            argv_strings(&cmd),
+            vec!["wsl.exe", "--cd", "/home/nya", "-d", "Ubuntu"]
+        );
+        assert!(cmd.get_cwd().is_none());
+    }
+
+    #[test]
+    fn wsl_working_dir_accepts_home_marker() {
+        let mut cmd = CommandBuilder::new("wsl.exe");
+
+        let outcome = apply_working_dir_to_command(&mut cmd, "~");
+
+        assert_eq!(outcome, WorkingDirectoryOutcome::AppliedWslCd);
+        assert_eq!(argv_strings(&cmd), vec!["wsl.exe", "--cd", "~"]);
+        assert!(cmd.get_cwd().is_none());
+    }
+
+    #[test]
+    fn wsl_working_dir_accepts_windows_path_without_local_validation() {
+        let mut cmd = CommandBuilder::new(r"C:\Windows\System32\wsl.exe");
+
+        let outcome = apply_working_dir_to_command(&mut cmd, r"C:\Projects");
+
+        assert_eq!(outcome, WorkingDirectoryOutcome::AppliedWslCd);
+        assert_eq!(
+            argv_strings(&cmd),
+            vec![r"C:\Windows\System32\wsl.exe", "--cd", r"C:\Projects"]
+        );
+        assert!(cmd.get_cwd().is_none());
+    }
+
+    #[test]
+    fn wsl_working_dir_does_not_duplicate_explicit_cd_arg() {
+        let mut cmd = CommandBuilder::new("wsl.exe");
+        cmd.args(["--cd", "/explicit"]);
+
+        let outcome = apply_working_dir_to_command(&mut cmd, "/home/nya");
+
+        assert_eq!(outcome, WorkingDirectoryOutcome::WslCdAlreadyConfigured);
+        assert_eq!(argv_strings(&cmd), vec!["wsl.exe", "--cd", "/explicit"]);
+        assert!(cmd.get_cwd().is_none());
+    }
+
+    #[test]
+    fn local_shell_valid_working_dir_uses_process_cwd() {
+        let current_dir = std::env::current_dir().expect("current dir");
+        let current_dir_string = current_dir.to_string_lossy().to_string();
+        let mut cmd = CommandBuilder::new("pwsh.exe");
+
+        let outcome = apply_working_dir_to_command(&mut cmd, &current_dir_string);
+
+        assert_eq!(outcome, WorkingDirectoryOutcome::AppliedLocalCwd);
+        assert_eq!(
+            cmd.get_cwd().and_then(|cwd| cwd.to_str()),
+            Some(current_dir_string.as_str())
+        );
+    }
+
+    #[test]
+    fn local_shell_missing_working_dir_falls_back() {
+        let missing_dir = std::env::current_dir()
+            .expect("current dir")
+            .join(format!("__nyaterm_missing_work_dir_{}__", std::process::id()));
+        assert!(!missing_dir.exists());
+        let missing_dir_string = missing_dir.to_string_lossy().to_string();
+        let mut cmd = CommandBuilder::new("pwsh.exe");
+
+        let outcome = apply_working_dir_to_command(&mut cmd, &missing_dir_string);
+
+        assert_eq!(outcome, WorkingDirectoryOutcome::MissingLocalDirectory);
+        assert!(cmd.get_cwd().is_none());
     }
 
     #[test]

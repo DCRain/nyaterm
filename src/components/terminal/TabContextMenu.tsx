@@ -65,7 +65,10 @@ interface TabContextMenuProps {
   onMultiplexSshSessionWithCommand: (tab: Tab) => void | Promise<void>;
   onReconnectSession: (tab: Tab) => void | Promise<void>;
   onDisconnectSession: (tab: Tab) => void | Promise<void>;
-  onSplitSession: (tab: Tab, direction: PaneSplitDirection) => void | Promise<void>;
+  onSplitSession: (
+    tab: Tab,
+    direction: PaneSplitDirection,
+  ) => void | Promise<void>;
   onUnsplit?: () => void;
   onCloseSession: (tab: Tab) => void | Promise<void>;
   onCloseAll: () => void | Promise<void>;
@@ -118,12 +121,14 @@ export default function TabContextMenu({
       hasMatchingTemporaryConfig(activePane));
   const canReconnect =
     !!activePane &&
+    isTerminalPane &&
     !activePane.connecting &&
     (activePane.type === "Local" ||
       !!activePane.connectionId ||
       hasMatchingTemporaryConfig(activePane));
   const canMultiplexSsh =
     !!activePane &&
+    isTerminalPane &&
     activePane.type === "SSH" &&
     (!!activePane.connectionId || activePane.temporaryConfig?.protocol === "ssh") &&
     !activePane.connecting &&
@@ -133,20 +138,31 @@ export default function TabContextMenu({
     !!activePane?.connectionId &&
     savedConnections.find((item) => item.id === activePane.connectionId)?.sftp?.enabled === false;
   const canMultiplexSshSftp = canMultiplexSsh && !sftpDisabledForConnection;
-  const canDisconnect = !!activePane && !activePane.connecting && !activePane.connectError;
+  const canDisconnect =
+    !!activePane &&
+    isTerminalPane &&
+    !activePane.connecting &&
+    !activePane.connectError;
   const canSplit = canSpawnSession && activePane?.view !== "sftp";
   const canUseAI =
-    !!activePane && isTerminalPane && !activePane.connecting && !activePane.connectError;
+    !!activePane &&
+    isTerminalPane &&
+    !activePane.connecting &&
+    !activePane.connectError;
   const canCloseInactive = tabs.length > 1;
   const canCloseRight = tabIndex !== -1 && tabIndex < tabs.length - 1;
   const canCloseTab = !!activePane && !tab.locked;
-  const canSessionInfo = !!activePane?.connectionId;
+  const canSessionInfo = !!activePane?.connectionId && isTerminalPane;
   const iconClass = "mr-2 text-[0.875rem] text-muted-foreground";
 
   const handleSetColor = useCallback(
     async (color: string | undefined) => {
       try {
-        await updateTab(tab.id, { tabColor: color }, { immediatePersist: true });
+        await updateTab(
+          tab.id,
+          { tabColor: color },
+          { immediatePersist: true },
+        );
       } catch {
         toast.error(t("tabCtx.colorFailed"));
       }
@@ -156,7 +172,11 @@ export default function TabContextMenu({
 
   const handleToggleLocked = useCallback(async () => {
     try {
-      await updateTab(tab.id, { locked: !tab.locked }, { immediatePersist: true });
+      await updateTab(
+        tab.id,
+        { locked: !tab.locked },
+        { immediatePersist: true },
+      );
     } catch {
       toast.error(t("tabCtx.lockToggleFailed"));
     }
@@ -177,7 +197,12 @@ export default function TabContextMenu({
           <TooltipTrigger asChild>
             <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
           </TooltipTrigger>
-          <TooltipContent side="bottom" sideOffset={6} showArrow className="max-w-xs">
+          <TooltipContent
+            side="bottom"
+            sideOffset={6}
+            showArrow
+            className="max-w-xs"
+          >
             {tooltipContent}
           </TooltipContent>
         </Tooltip>
@@ -226,7 +251,11 @@ export default function TabContextMenu({
         </ContextMenuItem>
 
         <ContextMenuItem onClick={() => void handleToggleLocked()}>
-          {tab.locked ? <MdLockOpen className={iconClass} /> : <MdLock className={iconClass} />}
+          {tab.locked ? (
+            <MdLockOpen className={iconClass} />
+          ) : (
+            <MdLock className={iconClass} />
+          )}
           {tab.locked ? t("tabCtx.unlockTab") : t("tabCtx.lockTab")}
         </ContextMenuItem>
 
@@ -235,14 +264,20 @@ export default function TabContextMenu({
           {t("tabCtx.copyName")}
         </ContextMenuItem>
 
-        <ContextMenuItem disabled={!canCopyIp} onClick={() => void onCopyServerIp(tab)}>
+        <ContextMenuItem
+          disabled={!canCopyIp}
+          onClick={() => void onCopyServerIp(tab)}
+        >
           <MdContentCopy className={iconClass} />
           {t("tabCtx.copyIp")}
         </ContextMenuItem>
 
         <ContextMenuSeparator />
 
-        <ContextMenuItem disabled={!canSpawnSession} onClick={() => void onDuplicateSession(tab)}>
+        <ContextMenuItem
+          disabled={!canSpawnSession}
+          onClick={() => void onDuplicateSession(tab)}
+        >
           <MdPlayArrow className={iconClass} />
           {t("tabCtx.duplicate")}
         </ContextMenuItem>
@@ -285,12 +320,18 @@ export default function TabContextMenu({
           </ContextMenuSubContent>
         </ContextMenuSub>
 
-        <ContextMenuItem disabled={!canReconnect} onClick={() => void onReconnectSession(tab)}>
+        <ContextMenuItem
+          disabled={!canReconnect}
+          onClick={() => void onReconnectSession(tab)}
+        >
           <MdRefresh className={iconClass} />
           {t("tabCtx.reconnect")}
         </ContextMenuItem>
 
-        <ContextMenuItem disabled={!canDisconnect} onClick={() => void onDisconnectSession(tab)}>
+        <ContextMenuItem
+          disabled={!canDisconnect}
+          onClick={() => void onDisconnectSession(tab)}
+        >
           <MdLinkOff className={iconClass} />
           {t("tabCtx.disconnect")}
         </ContextMenuItem>
@@ -301,10 +342,16 @@ export default function TabContextMenu({
             {t("ai.title")}
           </ContextMenuSubTrigger>
           <ContextMenuSubContent>
-            <ContextMenuItem disabled={!canUseAI} onClick={() => handleOpenAI("explain_output")}>
+            <ContextMenuItem
+              disabled={!canUseAI}
+              onClick={() => handleOpenAI("explain_output")}
+            >
               {t("ai.explainRecent")}
             </ContextMenuItem>
-            <ContextMenuItem disabled={!canUseAI} onClick={() => handleOpenAI("analyze_error")}>
+            <ContextMenuItem
+              disabled={!canUseAI}
+              onClick={() => handleOpenAI("analyze_error")}
+            >
               {t("ai.analyzeError")}
             </ContextMenuItem>
           </ContextMenuSubContent>
@@ -320,7 +367,10 @@ export default function TabContextMenu({
           {t("tabCtx.splitHorizontal")}
         </ContextMenuItem>
 
-        <ContextMenuItem disabled={!canSplit} onClick={() => void onSplitSession(tab, "vertical")}>
+        <ContextMenuItem
+          disabled={!canSplit}
+          onClick={() => void onSplitSession(tab, "vertical")}
+        >
           <MdVerticalSplit className={iconClass} />
           {t("tabCtx.splitVertical")}
         </ContextMenuItem>
@@ -334,7 +384,10 @@ export default function TabContextMenu({
 
         <ContextMenuSeparator />
 
-        <ContextMenuItem disabled={!canCloseTab} onClick={() => void onCloseSession(tab)}>
+        <ContextMenuItem
+          disabled={!canCloseTab}
+          onClick={() => void onCloseSession(tab)}
+        >
           <MdClose className={iconClass} />
           {t("tabCtx.close")}
         </ContextMenuItem>
@@ -344,17 +397,26 @@ export default function TabContextMenu({
           {t("tabCtx.closeAll")}
         </ContextMenuItem>
 
-        <ContextMenuItem disabled={!canCloseInactive} onClick={() => void onCloseInactive(tab.id)}>
+        <ContextMenuItem
+          disabled={!canCloseInactive}
+          onClick={() => void onCloseInactive(tab.id)}
+        >
           <TbCircleDotFilled className={iconClass} />
           {t("tabCtx.closeInactive")}
         </ContextMenuItem>
 
-        <ContextMenuItem disabled={!canCloseRight} onClick={() => void onCloseRight(tab.id)}>
+        <ContextMenuItem
+          disabled={!canCloseRight}
+          onClick={() => void onCloseRight(tab.id)}
+        >
           <TbArrowBarToRight className={iconClass} />
           {t("tabCtx.closeRight")}
         </ContextMenuItem>
 
-        <ContextMenuItem disabled={!canSessionInfo} onClick={() => void onSessionInfo(tab)}>
+        <ContextMenuItem
+          disabled={!canSessionInfo}
+          onClick={() => void onSessionInfo(tab)}
+        >
           <MdInfoOutline className={iconClass} />
           {t("tabCtx.sessionInfo")}
         </ContextMenuItem>

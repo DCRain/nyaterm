@@ -1,4 +1,3 @@
-import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
@@ -18,10 +17,8 @@ import { useCommandHistory } from "@/hooks/useCommandHistory";
 import { useCredentialAutofill } from "@/hooks/useCredentialAutofill";
 import { useKeywordHighlighter } from "@/hooks/useKeywordHighlighter";
 import { useShellIntegration } from "@/hooks/useShellIntegration";
-import { resolveShortcutKeys } from "@/hooks/useShortcutMap";
 import { useTerminalSearch } from "@/hooks/useTerminalSearch";
 import { useTerminalSettings } from "@/hooks/useTerminalSettings";
-import { emitAIErrorDetected } from "@/lib/aiEvents";
 import {
   renderAiCommandEnd,
   renderAiCommandStart,
@@ -56,13 +53,7 @@ import {
   sendSessionInput,
   sendSessionInputWithSync,
 } from "@/lib/sessionInput";
-import {
-  isModifierOnlyKeyEvent,
-  matchesKeyEvent,
-  resolveIndexedKeys,
-} from "@/lib/shortcutRegistry";
 import { registerTerminalContextProvider } from "@/lib/terminalContext";
-import { sendTerminalClearInput } from "@/lib/terminalControlInput";
 import { resolveTerminalFontSize } from "@/lib/terminalFontSize";
 import {
   applyTerminalInputData,
@@ -79,8 +70,7 @@ import {
   type TerminalReconnectSnapshot,
 } from "@/lib/terminalReconnectHistory";
 import { TERMINAL_SEARCH_VISIBLE_MATCH_LIMIT } from "@/lib/terminalSearch";
-import { XTERM_PERFORMANCE_CONFIG } from "@/lib/xtermPerformance";
-import type { AiCaptureEvent, SessionType } from "@/types/global";
+import type { AiCaptureEvent } from "@/types/global";
 import ActionLinkMenu from "./ActionLinkMenu";
 import ActionLinkTooltip from "./ActionLinkTooltip";
 import CommandSuggestions from "./CommandSuggestions";
@@ -97,23 +87,16 @@ import {
   TerminalResizeDeduper,
 } from "./terminalFitScheduler";
 import {
-  getInputIndexAtBufferPosition,
-  getMouseBufferPosition,
   getSelectedInputRange,
-  hasErrorKeyword,
   type InputSelectionRange,
   isMultiLineText,
-  isShiftInsertPasteEvent,
   readCurrentInputLine,
   readRecentOutput,
 } from "./terminalInputSelection";
 import { createTerminalLinkHandlers } from "./terminalLinkHandlers";
-import {
-  TerminalOutputDrain,
-  type TerminalOutputDrainMode,
-} from "./terminalOutputDrain";
+import type { TerminalOutputDrain } from "./terminalOutputDrain";
 import { AlternateScreenStateTracker } from "./alternateScreenStateTracker";
-import { TerminalOutputScheduler } from "./terminalOutputScheduling";
+import type { Dec2026FrameGate } from "./dec2026FrameGate";
 import { useTerminalExternalDrop } from "./useTerminalExternalDrop";
 import { useTerminalRefreshEffects } from "./useTerminalRefreshEffects";
 import {
@@ -121,6 +104,18 @@ import {
   decodeOsc52ClipboardText,
   quotePosixPath,
 } from "./xterminalClipboard";
+import { createXTerminalHibernationController } from "./xterminalHibernationController";
+import { installXTerminalKeyboardController } from "./xterminalKeyboardController";
+import { createXTerminalOutputController } from "./xterminalOutputController";
+import { installXTerminalSelectionController } from "./xterminalSelectionController";
+import { createXTerminalSessionEvents } from "./xterminalSessionEvents";
+import type {
+  HibernationLogEvent,
+  HibernationPhase,
+  PendingWakeEvent,
+  XTermInternalTrimSource,
+} from "./xterminalInternalTypes";
+import { isSessionNotFoundError } from "./xterminalKeyboardInput";
 import {
   serializeTerminalSnapshot,
   writeTextInFrames,
@@ -132,117 +127,10 @@ import {
 } from "./zmodemTerminalEvents";
 import "@xterm/xterm/css/xterm.css";
 
-const BACKSPACE_INPUT = "\x7f";
-const LEGACY_CTRL_KEYS = new Set([" ", "@", "[", "\\", "]", "^", "_", "?"]);
-
-interface XTermInternalTrimSource {
-  _core?: {
-    _bufferService?: {
-      buffers?: {
-        normal?: {
-          lines?: {
-            onTrim?: (listener: (amount: number) => void) => {
-              dispose: () => void;
-            };
-          };
-        };
-      };
-    };
-  };
-}
-
-function getCtrlPrintableCsiuInput(e: KeyboardEvent): string | null {
-  if (!e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) return null;
-
-  const codePoint = e.key.codePointAt(0);
-  if (!codePoint || codePoint < 0x20 || codePoint > 0x7e) return null;
-
-  if (
-    /^[a-z]$/i.test(e.key) ||
-    /^[2-8]$/.test(e.key) ||
-    LEGACY_CTRL_KEYS.has(e.key)
-  ) {
-    return null;
-  }
-
-  const modifier = 1 + 4 + (e.shiftKey ? 1 : 0);
-  return `\x1b[${codePoint};${modifier}u`;
-}
-
-interface SessionCommandAcceptedEvent {
-  sessionId: string;
-  command: string;
-}
-
-interface TerminalOutputPayload {
-  data: string;
-  bytes: number;
-  droppedBytes?: number;
-}
-
-type PendingWakeEvent =
-  | { type: "error"; message: string }
-  | { type: "closed" }
-  | { type: "focus" }
-  | { type: "zmodem"; payload: ZmodemEventPayload }
-  | { type: "ai"; payload: AiCaptureEvent };
-
 type SearchAddonWithLifecycle = SearchAddon & {
   onBeforeSearch?: (listener: () => void) => { dispose: () => void };
   onAfterSearch?: (listener: () => void) => { dispose: () => void };
 };
-
-type HibernationPhase =
-  | "idle"
-  | "preparing"
-  | "detached"
-  | "hibernated"
-  | "waking"
-  | "failed";
-type HibernationLogEvent =
-  | "scheduled"
-  | "start"
-  | "detached"
-  | "success"
-  | "wake"
-  | "rollback"
-  | "drain_start"
-  | "drain_complete"
-  | "drain_timeout"
-  | "fail"
-  | "cancel";
-
-function isLocalBackspaceEvent(
-  event: KeyboardEvent,
-  sessionType: SessionType,
-): boolean {
-  if (
-    sessionType !== "Local" ||
-    event.ctrlKey ||
-    event.metaKey ||
-    event.altKey
-  ) {
-    return false;
-  }
-
-  return (
-    event.key === "Backspace" ||
-    (event.key === "Delete" && event.code === "Backspace")
-  );
-}
-
-function isSessionNotFoundError(error: unknown): boolean {
-  const message =
-    typeof error === "string"
-      ? error
-      : error instanceof Error
-        ? error.message
-        : String(error ?? "");
-  return (
-    message.toLowerCase().includes("session") &&
-    message.toLowerCase().includes("not found")
-  );
-}
 
 /**
  * xterm.js terminal for a session. Handles OSC 133 shell integration (or fallback prompt
@@ -349,6 +237,7 @@ export default function XTerminal({
     beforeLine: number;
     ts: number;
   }> | null>(null);
+  const frameGateRef = useRef<Dec2026FrameGate | null>(null);
   const lineTimestampsRef = useRef<Map<number, number>>(new Map());
   const gutterLineOffsetRef = useRef(0);
   const sessionTypeRef = useRef(sessionType);
@@ -764,6 +653,22 @@ export default function XTerminal({
     commandSuggestionMaxChars,
   );
 
+  const canDetectCredentialPrompt = useCallback(() => {
+    const terminal = terminalRef.current;
+    if (terminal?.buffer.active.type === "alternate") {
+      return false;
+    }
+
+    const inputState = inputStateRef.current;
+    return (
+      inputState.value.length === 0 &&
+      !inputState.desynced &&
+      !inputState.lineRewriteRequired &&
+      !inputState.multiline &&
+      !inputState.pasteMode
+    );
+  }, []);
+
   const {
     panelState: credentialPanelState,
     selectedIndex: credentialSelectedIndex,
@@ -782,6 +687,7 @@ export default function XTerminal({
     activeRef,
     visibleRef,
     performanceModeRef,
+    canDetectCredentialPrompt,
   );
 
   // Create and setup terminal
@@ -800,6 +706,11 @@ export default function XTerminal({
     setTerminalReady(false);
     lineTimestampsRef.current = new Map();
     gutterLineOffsetRef.current = 0;
+    frameGateRef.current?.dispose({
+      ackRemaining: true,
+      reason: "terminal_rebuild",
+    });
+    frameGateRef.current = null;
     outputDrainRef.current?.dispose({ ackRemaining: true });
     outputDrainRef.current = null;
     alternateScreenTrackerRef.current.reset();
@@ -857,6 +768,9 @@ export default function XTerminal({
     );
     const serializeAddon = new SerializeAddon();
     const unicodeGraphemesAddon = new UnicodeGraphemesAddon();
+    let writeOrderedTerminalStatus = (data: string) => {
+      terminal.write(data);
+    };
     const zmodemHandler = createZmodemEventHandler(
       terminal,
       sessionId,
@@ -867,6 +781,9 @@ export default function XTerminal({
         upsertProgress: upsertExternalTransferProgress,
         complete: completeExternalTransfer,
         fail: failExternalTransfer,
+      },
+      (data) => {
+        writeOrderedTerminalStatus(data);
       },
     );
 
@@ -1280,20 +1197,7 @@ export default function XTerminal({
     };
     pasteTextRef.current = pasteText;
 
-    let lastSelection = "";
-    let primaryMouseDown: { x: number; y: number } | null = null;
-
-    const resetTerminalPointerState = (
-      options: { clearSelection?: boolean } = {},
-    ) => {
-      primaryMouseDown = null;
-      if (options.clearSelection && isTerminalAlive()) {
-        terminal.clearSelection();
-      }
-      if (options.clearSelection) {
-        clearSearchSelectionState();
-      }
-    };
+    const lastSelectionRef = { current: "" };
 
     const buildMoveInputCursorData = (
       currentCursor: number,
@@ -1382,15 +1286,6 @@ export default function XTerminal({
       sendRawInput(`${moveToSelectionEnd}${deleteSelection}${data}`, null);
     };
 
-    const getDirectInputDataFromKeyEvent = (e: KeyboardEvent) => {
-      if (e.ctrlKey || e.metaKey || e.altKey) return null;
-      if (e.key === "Dead" || e.key === "Process" || e.key === "Unidentified")
-        return null;
-      if (Array.from(e.key).length !== 1) return null;
-      if (/[\x00-\x1f\x7f]/u.test(e.key)) return null;
-      return e.key;
-    };
-
     const moveCredentialSelection = (direction: 1 | -1) => {
       if (
         !credentialShowPanelRef.current ||
@@ -1472,430 +1367,33 @@ export default function XTerminal({
       moveInputCursor(nextCursor);
     };
 
-    terminal.attachCustomKeyEventHandler((e) => {
-      if (e.type !== "keydown") return true;
-
-      if (isModifierOnlyKeyEvent(e)) {
-        e.preventDefault();
-        return false;
-      }
-
-      const kb = terminalAppSettingsRef.current.keybindings;
-
-      if (
-        matchesKeyEvent(
-          resolveShortcutKeys("terminal.showCommandSuggestions", kb),
-          e,
-        )
-      ) {
-        e.preventDefault();
-        if (!disconnectedRef.current) {
-          triggerSearch({ manual: true });
-        }
-        return false;
-      }
-
-      if (
-        disconnectedRef.current &&
-        e.ctrlKey &&
-        !e.metaKey &&
-        !e.altKey &&
-        !e.shiftKey &&
-        e.code === "KeyD"
-      ) {
-        e.preventDefault();
-        onDisconnectedCloseRequestedRef.current?.();
-        return false;
-      }
-
-      if (isShiftInsertPasteEvent(e)) {
-        e.preventDefault();
-        pasteClipboard().catch(() => {});
-        return false;
-      }
-
-      if (
-        e.key === "Tab" &&
-        !e.ctrlKey &&
-        !e.metaKey &&
-        !e.altKey &&
-        moveCredentialSelection(e.shiftKey ? -1 : 1)
-      ) {
-        e.preventDefault();
-        return false;
-      }
-
-      if (
-        !isCredentialPanelActive() &&
-        showSuggestionsRef.current &&
-        suggestionsRef.current.length > 0 &&
-        !e.ctrlKey &&
-        !e.metaKey &&
-        !e.altKey &&
-        !e.shiftKey
-      ) {
-        if (e.key === "ArrowUp") {
-          e.preventDefault();
-          moveCommandSuggestionSelection(-1);
-          return false;
-        }
-        if (e.key === "ArrowDown") {
-          e.preventDefault();
-          moveCommandSuggestionSelection(1);
-          return false;
-        }
-        if (e.key === "Escape") {
-          e.preventDefault();
-          dismissSuggestions();
-          return false;
-        }
-        if (e.key === "Enter" && acceptCommandSuggestion(true)) {
-          e.preventDefault();
-          return false;
-        }
-        if (e.key === "Tab" && acceptCommandSuggestion(false)) {
-          e.preventDefault();
-          return false;
-        }
-      }
-
-      if (isLocalBackspaceEvent(e, sessionTypeRef.current)) {
-        e.preventDefault();
-        if (isCredentialPromptInputMode()) {
-          sendRawInput(BACKSPACE_INPUT, null);
-          return false;
-        }
-
-        clearSearchSelectionBeforeInput();
-        const selectedInputRange = getSmartCursorSelectedInputRange();
-        if (selectedInputRange) {
-          deleteInputSelection(selectedInputRange);
-          return false;
-        }
-
-        inputStateRef.current = applyTerminalInputData(
-          inputStateRef.current,
-          BACKSPACE_INPUT,
-        );
-        syncSuggestionsWithInputState();
-        sendRawInput(BACKSPACE_INPUT, null);
-        return false;
-      }
-
-      // Smart cursor selection: preserve editing behavior for command-line input
-      if (
-        (e.key === "ArrowLeft" || e.key === "ArrowRight") &&
-        !e.ctrlKey &&
-        !e.metaKey &&
-        !e.altKey &&
-        !e.shiftKey
-      ) {
-        if (clearSearchSelectionBeforeInput()) {
-          return true;
-        }
-        const selectedInputRange = getSmartCursorSelectedInputRange();
-        if (selectedInputRange) {
-          e.preventDefault();
-          collapseInputSelection(
-            selectedInputRange,
-            e.key === "ArrowLeft" ? "start" : "end",
-          );
-          return false;
-        }
-      }
-
-      if (
-        (e.key === "Backspace" || e.key === "Delete") &&
-        !e.ctrlKey &&
-        !e.metaKey &&
-        !e.altKey
-      ) {
-        if (clearSearchSelectionBeforeInput()) {
-          return true;
-        }
-        const selectedInputRange = getSmartCursorSelectedInputRange();
-        if (selectedInputRange) {
-          e.preventDefault();
-          deleteInputSelection(selectedInputRange);
-          return false;
-        }
-      }
-
-      const directInputData = getDirectInputDataFromKeyEvent(e);
-      if (directInputData) {
-        if (clearSearchSelectionBeforeInput()) {
-          return true;
-        }
-        const selectedInputRange = getSmartCursorSelectedInputRange();
-        if (selectedInputRange) {
-          e.preventDefault();
-          replaceInputSelection(selectedInputRange, directInputData);
-          return false;
-        }
-      }
-
-      // Normal selection: preserve selection for ALL key presses - only clear on mouse click
-      // If there's a selection that's NOT a smart cursor selection,
-      // send the key input without triggering xterm's clearSelection
-      if (terminal.hasSelection() && !getSmartCursorSelectedInputRange()) {
-        if (directInputData) {
-          e.preventDefault();
-          terminal.input(directInputData, false);
-          return false;
-        }
-        // Handle Backspace/Delete - send control char without clearing selection
-        if (
-          (e.key === "Backspace" || e.key === "Delete") &&
-          !e.ctrlKey &&
-          !e.metaKey &&
-          !e.altKey
-        ) {
-          e.preventDefault();
-          terminal.input("\x7f", false);
-          return false;
-        }
-        // Handle Enter - send newline without clearing selection
-        if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.altKey) {
-          e.preventDefault();
-          terminal.input("\r", false);
-          return false;
-        }
-        // Handle arrow keys - send ANSI escape sequences without clearing selection
-        if (
-          e.key === "ArrowLeft" &&
-          !e.ctrlKey &&
-          !e.metaKey &&
-          !e.altKey &&
-          !e.shiftKey
-        ) {
-          e.preventDefault();
-          terminal.input("\x1b[D", false);
-          return false;
-        }
-        if (
-          e.key === "ArrowRight" &&
-          !e.ctrlKey &&
-          !e.metaKey &&
-          !e.altKey &&
-          !e.shiftKey
-        ) {
-          e.preventDefault();
-          terminal.input("\x1b[C", false);
-          return false;
-        }
-        if (
-          e.key === "ArrowUp" &&
-          !e.ctrlKey &&
-          !e.metaKey &&
-          !e.altKey &&
-          !e.shiftKey
-        ) {
-          e.preventDefault();
-          terminal.input("\x1b[A", false);
-          return false;
-        }
-        if (
-          e.key === "ArrowDown" &&
-          !e.ctrlKey &&
-          !e.metaKey &&
-          !e.altKey &&
-          !e.shiftKey
-        ) {
-          e.preventDefault();
-          terminal.input("\x1b[B", false);
-          return false;
-        }
-        // Handle Ctrl key combinations - send control characters without clearing selection
-        if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-          const ctrlCharMap: Record<string, string> = {
-            a: "\x01",
-            b: "\x02",
-            c: "\x03",
-            d: "\x04",
-            e: "\x05",
-            f: "\x06",
-            g: "\x07",
-            h: "\x08",
-            i: "\x09",
-            j: "\x0a",
-            k: "\x0b",
-            l: "\x0c",
-            m: "\x0d",
-            n: "\x0e",
-            o: "\x0f",
-            p: "\x10",
-            q: "\x11",
-            r: "\x12",
-            s: "\x13",
-            t: "\x14",
-            u: "\x15",
-            v: "\x16",
-            w: "\x17",
-            x: "\x18",
-            y: "\x19",
-            z: "\x1a",
-          };
-          const keyLower = e.key.toLowerCase();
-          if (ctrlCharMap[keyLower]) {
-            e.preventDefault();
-            terminal.input(ctrlCharMap[keyLower], false);
-            return false;
-          }
-          // Ctrl+Arrow keys (word navigation)
-          if (e.key === "ArrowLeft") {
-            e.preventDefault();
-            terminal.input("\x1b[1;5D", false);
-            return false;
-          }
-          if (e.key === "ArrowRight") {
-            e.preventDefault();
-            terminal.input("\x1b[1;5C", false);
-            return false;
-          }
-          if (e.key === "ArrowUp") {
-            e.preventDefault();
-            terminal.input("\x1b[1;5A", false);
-            return false;
-          }
-          if (e.key === "ArrowDown") {
-            e.preventDefault();
-            terminal.input("\x1b[1;5B", false);
-            return false;
-          }
-        }
-        // Handle Alt/Meta key combinations
-        if ((e.altKey || e.metaKey) && !e.ctrlKey && !e.shiftKey) {
-          // Alt+Arrow keys (word navigation on some shells)
-          if (e.key === "ArrowLeft") {
-            e.preventDefault();
-            terminal.input("\x1b[1;3D", false);
-            return false;
-          }
-          if (e.key === "ArrowRight") {
-            e.preventDefault();
-            terminal.input("\x1b[1;3C", false);
-            return false;
-          }
-          if (e.key === "ArrowUp") {
-            e.preventDefault();
-            terminal.input("\x1b[1;3A", false);
-            return false;
-          }
-          if (e.key === "ArrowDown") {
-            e.preventDefault();
-            terminal.input("\x1b[1;3B", false);
-            return false;
-          }
-          // Alt+b, Alt+f (word navigation shortcuts in bash)
-          const keyLower = e.key.toLowerCase();
-          if (keyLower === "b") {
-            e.preventDefault();
-            terminal.input("\x1bb", false);
-            return false;
-          }
-          if (keyLower === "f") {
-            e.preventDefault();
-            terminal.input("\x1bf", false);
-            return false;
-          }
-          // Alt+d (delete word forward)
-          if (keyLower === "d") {
-            e.preventDefault();
-            terminal.input("\x1bd", false);
-            return false;
-          }
-        }
-      }
-
-      if (matchesKeyEvent(resolveShortcutKeys("terminal.copy", kb), e)) {
-        e.preventDefault();
-        const sel = terminal.getSelection();
-        if (sel) writeClipboardText(sel).catch(() => {});
-        return false;
-      }
-      if (matchesKeyEvent(resolveShortcutKeys("terminal.paste", kb), e)) {
-        e.preventDefault();
-        pasteClipboard().catch(() => {});
-        return false;
-      }
-      if (matchesKeyEvent(resolveShortcutKeys("terminal.find", kb), e)) {
-        e.preventDefault();
-        doFindRef.current();
-        return false;
-      }
-      if (matchesKeyEvent(resolveShortcutKeys("terminal.clear", kb), e)) {
-        e.preventDefault();
-        sendTerminalClearInput(terminal);
-        return false;
-      }
-      if (
-        matchesKeyEvent(resolveShortcutKeys("terminal.pasteSelected", kb), e)
-      ) {
-        e.preventDefault();
-        const sel = terminal.getSelection() || lastSelection;
-        pasteText(sel);
-        return false;
-      }
-      if (matchesKeyEvent(resolveShortcutKeys("terminal.selectAll", kb), e)) {
-        e.preventDefault();
-        terminal.selectAll();
-        return false;
-      }
-
-      const swallowIds = [
-        "tab.newSession",
-        "tab.close",
-        "tab.next",
-        "tab.prev",
-        "tab.newLocalTerminal",
-        "tab.temporarySshLink",
-        "tab.quickSwitch",
-        "tab.duplicateSession",
-        "tab.multiplexSsh",
-        "tab.duplicateSessionWithCommand",
-        "tab.multiplexSshWithCommand",
-        "view.toggleLeftSidebar",
-        "view.toggleRightSidebar",
-        "view.toggleFullscreen",
-        "view.zoomIn",
-        "view.zoomOut",
-        "view.resetZoom",
-        "view.openSettings",
-        "view.openChat",
-        "view.showAllCommands",
-        "terminal.manageSyncGroups",
-        "terminal.showCommandSuggestions",
-        "terminal.recording.toggle",
-        "special.lockScreen",
-      ];
-      for (const sid of swallowIds) {
-        if (matchesKeyEvent(resolveShortcutKeys(sid, kb), e)) {
-          e.preventDefault();
-          return false;
-        }
-      }
-      for (let tabNumber = 1; tabNumber <= 9; tabNumber += 1) {
-        if (
-          matchesKeyEvent(
-            resolveIndexedKeys(
-              resolveShortcutKeys("tab.switchTo", kb),
-              tabNumber,
-            ),
-            e,
-          )
-        ) {
-          return false;
-        }
-      }
-
-      const ctrlPrintableInput = getCtrlPrintableCsiuInput(e);
-      if (ctrlPrintableInput) {
-        e.preventDefault();
-        terminal.input(ctrlPrintableInput, false);
-        return false;
-      }
-
-      return true;
+    installXTerminalKeyboardController({
+      terminal,
+      terminalAppSettingsRef,
+      sessionTypeRef,
+      inputStateRef,
+      disconnectedRef,
+      onDisconnectedCloseRequestedRef,
+      showSuggestionsRef,
+      suggestionsRef,
+      doFindRef,
+      pasteClipboard,
+      pasteText,
+      sendRawInput,
+      triggerSearch,
+      dismissSuggestions,
+      moveCredentialSelection,
+      isCredentialPanelActive,
+      moveCommandSuggestionSelection,
+      acceptCommandSuggestion,
+      isCredentialPromptInputMode,
+      clearSearchSelectionBeforeInput,
+      getSmartCursorSelectedInputRange,
+      deleteInputSelection,
+      collapseInputSelection,
+      replaceInputSelection,
+      syncSuggestionsWithInputState,
+      lastSelectionRef,
     });
 
     const blockedColorOscIds = new Set<number>();
@@ -1988,14 +1486,6 @@ export default function XTerminal({
         );
       }
     });
-
-    let outputUnlisten: UnlistenFn | null = null;
-    let errorUnlisten: UnlistenFn | null = null;
-    let closedUnlisten: UnlistenFn | null = null;
-    let focusUnlisten: UnlistenFn | null = null;
-    let captureUnlisten: UnlistenFn | null = null;
-    let zmodemUnlisten: UnlistenFn | null = null;
-    let commandAcceptedUnlisten: UnlistenFn | null = null;
 
     const clearCredentialPromptInputMode = () => {
       credentialPromptBufferRef.current = "";
@@ -2149,184 +1639,38 @@ export default function XTerminal({
       }
     };
 
-    const isAlternateScreenActive = () =>
-      terminal.buffer.active.type === "alternate" ||
-      alternateScreenTrackerRef.current.isAlternateScreenActive();
-
-    const outputScheduler = new TerminalOutputScheduler({
-      getQueueBytes: () => outputDrainRef.current?.getQueueBytes() ?? 0,
-      isAlternateScreenActive,
-    });
-
-    const getWriteChunkBytes = () => outputScheduler.getWriteChunkBytes();
-
-    const getRecoveryThresholdBytes = () =>
-      visibleRef.current
-        ? XTERM_PERFORMANCE_CONFIG.output.visibleRecoveryThresholdBytes
-        : XTERM_PERFORMANCE_CONFIG.output.hiddenRecoveryThresholdBytes;
-
-    const getPendingOutputBytes = () =>
-      outputDrainRef.current?.getPendingBytes() ?? 0;
-
-    const getNonOverloadedPressureMode = (): PerformanceMode =>
-      getPendingOutputBytes() >=
-      XTERM_PERFORMANCE_CONFIG.output.strainedBacklogBytes
-        ? "strained"
-        : "normal";
-
-    const refreshOutputPressureMode = () => {
-      if (performanceModeRef.current === "overloaded") return;
-      setOutputPressureMode(getNonOverloadedPressureMode());
-    };
-
-    const noteSkippedOutput = (count: number) => {
-      if (count <= 0) return;
-      enterOverloadedMode();
-    };
-
-    const sendOutputAck = (bytes: number) => {
-      if (bytes <= 0) return;
-      tauriInvoke("ack_session_output", { sessionId, bytes }).catch(() => {});
-    };
-
-    const maybeRecoverPerformanceMode = () => {
-      if (!isTerminalAlive()) return;
-      if (performanceModeRef.current !== "overloaded") return;
-      if (getPendingOutputBytes() > getRecoveryThresholdBytes()) return;
-      exitOverloadedMode(getNonOverloadedPressureMode());
-    };
-
-    const shouldUseLowLatencyFlush = () =>
-      visibleRef.current &&
-      !isAlternateScreenActive() &&
-      performanceModeRef.current !== "overloaded" &&
-      getPendingOutputBytes() <=
-        XTERM_PERFORMANCE_CONFIG.output.lowLatencyFlushBacklogBytes;
-
-    const resolveOutputDrainMode = (): TerminalOutputDrainMode => {
-      if (hibernatedRef.current) return "hibernated";
-      if (
-        hibernationPhaseRef.current === "preparing" ||
-        hibernationPhaseRef.current === "detached"
-      ) {
-        return "hibernating";
-      }
-      return visibleRef.current ? "foreground" : "background";
-    };
-
-    const getForegroundDelayMs = () => {
-      return outputScheduler.getForegroundDelayMs();
-    };
-
-    const updateOutputDrainMode = () => {
-      outputDrainRef.current?.setMode(resolveOutputDrainMode());
-    };
-
-    const outputDrain = new TerminalOutputDrain<{
-      beforeLine: number;
-      ts: number;
-    }>({
+    const {
+      outputScheduler,
+      outputDrain,
+      frameGate,
+      noteSkippedOutput,
+      maybeRecoverPerformanceMode,
+      refreshOutputPressureMode,
+      updateOutputDrainMode,
+      flushFrameGateAndDrain,
+      writeTerminalTextAfterOutputQueue,
+      flushQueuedOutputBeforeStatusNotice,
+    } = createXTerminalOutputController({
       sessionId,
-      getTerminal: () => (isTerminalAlive() ? terminal : null),
-      getWriteChunkBytes,
-      getForegroundDelayMs,
-      shouldUseLowLatencyFlush,
-      onAck: sendOutputAck,
-      onWriteStart: () => {
-        outputScheduler.noteWriteStart();
-        return { beforeLine: getCurrentAbsoluteLine(), ts: Date.now() };
-      },
-      onWriteComplete: (_payload, context) => {
-        if (!isTerminalAlive() || !context) return;
-        stampWrittenLines(
-          context.beforeLine,
-          getCurrentAbsoluteLine(),
-          context.ts,
-        );
-        maybeRecoverPerformanceMode();
-        refreshOutputPressureMode();
-      },
-      onWriteError: (payload, error) => {
-        logger.warn({
-          domain: "terminal.input",
-          event: "terminal.output.write_failed",
-          message: "Failed to write terminal output to xterm",
-          ids: { session_id: sessionId },
-          data: { bytes: payload.bytes },
-          error,
-        });
-        noteSkippedOutput(payload.bytes);
-      },
-      onPressureChange: () => {
-        maybeRecoverPerformanceMode();
-        refreshOutputPressureMode();
-      },
-      onModeChange: (mode) => {
-        logger.debug({
-          domain: "terminal.input",
-          event: "terminal.output.mode_changed",
-          message: "Terminal output drain mode changed",
-          ids: { session_id: sessionId },
-          data: {
-            mode,
-            visible: visibleRef.current,
-            queue_bytes: outputDrainRef.current?.getQueueBytes() ?? 0,
-            pending_bytes: outputDrainRef.current?.getPendingBytes() ?? 0,
-            performance_mode: performanceModeRef.current,
-          },
-        });
-      },
-      onBackgroundDrain: (queueBytes, writingBytes, unackedBytes) => {
-        logger.debug({
-          domain: "terminal.input",
-          event: "terminal.output.background_drain",
-          message: "Background terminal output drain cycle",
-          ids: { session_id: sessionId },
-          data: {
-            queue_bytes: queueBytes,
-            writing_bytes: writingBytes,
-            unacked_bytes: unackedBytes,
-            performance_mode: performanceModeRef.current,
-            buffer_type: terminal.buffer.active.type,
-          },
-        });
-      },
+      terminal,
+      outputDrainRef,
+      frameGateRef,
+      visibleRef,
+      hibernatedRef,
+      hibernationPhaseRef,
+      performanceModeRef,
+      alternateScreenTrackerRef,
+      isTerminalAlive,
+      getCurrentAbsoluteLine,
+      stampWrittenLines,
+      clearHibernateTimer,
+      enterOverloadedMode,
+      setOutputPressureMode,
+      exitOverloadedMode,
     });
-    outputDrainRef.current = outputDrain;
-    updateOutputDrainMode();
 
-    const writeTerminalTextAfterOutputQueue = (data: string) => {
-      return outputDrain.writeExternal(
-        () =>
-          new Promise<void>((resolve) => {
-            if (!isTerminalAlive()) {
-              resolve();
-              return;
-            }
-
-            try {
-              const ts = Date.now();
-              const beforeLine = getCurrentAbsoluteLine();
-              terminal.write(data, () => {
-                if (isTerminalAlive()) {
-                  stampWrittenLines(beforeLine, getCurrentAbsoluteLine(), ts);
-                }
-                resolve();
-              });
-            } catch {
-              resolve();
-            }
-          }),
-      );
-    };
-
-    const flushQueuedOutputBeforeStatusNotice = async () => {
-      clearHibernateTimer();
-      await outputDrain.waitForIdle(
-        XTERM_PERFORMANCE_CONFIG.output.hibernateDrainTimeoutMs,
-      );
-      maybeRecoverPerformanceMode();
-      refreshOutputPressureMode();
+    writeOrderedTerminalStatus = (data: string) => {
+      void writeTerminalTextAfterOutputQueue(data);
     };
 
     const resetDisconnectedInputState = () => {
@@ -2447,435 +1791,95 @@ export default function XTerminal({
               inputStateRef.current = createTerminalInputState();
               clearCredentialPromptInputMode();
               dismissSuggestions();
-              terminal.write(renderAiCommandStart(event.payload));
+              void writeTerminalTextAfterOutputQueue(
+                renderAiCommandStart(event.payload),
+              );
             } else if (event.payload.type === "commandEnd") {
               aiCapturingRef.current = false;
-              terminal.write(renderAiCommandEnd(event.payload));
+              void writeTerminalTextAfterOutputQueue(
+                renderAiCommandEnd(event.payload),
+              );
             }
             break;
         }
       }
     };
 
-    const canHibernateRenderer = (options: { allowPending?: boolean } = {}) => {
-      const phase = hibernationPhaseRef.current;
-      if (
-        !isTerminalAlive() ||
-        visibleRef.current ||
-        (!options.allowPending && hibernationPendingRef.current) ||
-        (phase !== "idle" &&
-          !(
-            options.allowPending &&
-            (phase === "preparing" || phase === "detached")
-          ))
-      ) {
-        return false;
-      }
-      if (sessionTypeRef.current === "Local") return false;
-      if (!["SSH", "Telnet", "Serial"].includes(sessionTypeRef.current))
-        return false;
-      if (terminal.buffer.active.type === "alternate") return false;
-      if (showSearchBar || activeMode === "history") return false;
-      if (aiCapturingRef.current || zmodemActiveRef.current) return false;
-      if (syncPeerSessionIdsRef.current?.length) return false;
-      if (outputDrainRef.current?.isWriteInFlight()) return false;
-      if (disconnectedRef.current || reconnectingRef.current) return false;
-      return true;
-    };
-
-    const restoreDetachedRenderer = async (epoch: number, reason: string) => {
-      if (detachedHibernateEpochRef.current !== epoch) return;
-      try {
-        await invoke("attach_session", { sessionId });
-        detachedHibernateEpochRef.current = null;
-        hibernationPhaseRef.current = "idle";
-        logHibernation("rollback", "Rolled back detached terminal renderer", {
-          reason,
-          epoch,
-        });
-      } catch (error) {
-        if (enterDisconnectedStateIfAttachSessionMissing(error)) return;
-        hibernationPhaseRef.current = "failed";
-        logHibernation(
-          "fail",
-          "Failed to roll back detached terminal renderer",
-          { reason, epoch },
-          error,
-        );
-      }
-    };
-
-    const hibernateRenderer = async (epoch: number) => {
-      clearHibernateTimer();
-      if (epoch !== hibernationEpochRef.current) return;
-      if (!canHibernateRenderer()) {
-        hibernationPhaseRef.current = "idle";
-        logHibernation(
-          "cancel",
-          "Skipped terminal hibernation after eligibility check",
-          { epoch },
-        );
-        return;
-      }
-
-      hibernationPhaseRef.current = "preparing";
-      hibernationPendingRef.current = true;
-      logHibernation("start", "Starting terminal renderer hibernation", {
-        epoch,
-      });
-
-      try {
-        updateOutputDrainMode();
-        logHibernation(
-          "drain_start",
-          "Draining terminal output before hibernation",
-          { epoch },
-        );
-        const drainedBeforeDetach = await outputDrain.waitForIdle(
-          XTERM_PERFORMANCE_CONFIG.output.hibernateDrainTimeoutMs,
-        );
-        if (!drainedBeforeDetach) {
-          hibernationPhaseRef.current = "idle";
-          logHibernation(
-            "drain_timeout",
-            "Timed out draining terminal output before hibernation",
-            {
-              epoch,
-              queue_bytes: outputDrain.getQueueBytes(),
-              pending_bytes: outputDrain.getPendingBytes(),
-            },
-          );
-          return;
-        }
-        logHibernation(
-          "drain_complete",
-          "Drained terminal output before backend detach",
-          {
-            epoch,
-          },
-        );
-
-        await invoke("detach_session_renderer", { sessionId });
-        detachedHibernateEpochRef.current = epoch;
-        hibernationPhaseRef.current = "detached";
-        updateOutputDrainMode();
-        logHibernation(
-          "detached",
-          "Detached terminal renderer from backend output",
-          { epoch },
-        );
-
-        if (
-          epoch !== hibernationEpochRef.current ||
-          !isTerminalAlive() ||
-          !canHibernateRenderer({ allowPending: true })
-        ) {
-          await restoreDetachedRenderer(epoch, "eligibility_changed");
-          return;
-        }
-
-        const drainedAfterDetach = await outputDrain.waitForIdle(
-          XTERM_PERFORMANCE_CONFIG.output.hibernateDrainTimeoutMs,
-        );
-        if (!drainedAfterDetach) {
-          logHibernation(
-            "drain_timeout",
-            "Timed out draining terminal output after backend detach",
-            {
-              epoch,
-              queue_bytes: outputDrain.getQueueBytes(),
-              pending_bytes: outputDrain.getPendingBytes(),
-            },
-          );
-          await restoreDetachedRenderer(epoch, "drain_timeout");
-          return;
-        }
-
-        hibernationSnapshotRef.current = captureReconnectSnapshot();
-        hibernationCleanupRef.current = true;
-        hibernationPhaseRef.current = "hibernated";
-        outputDrain.setMode("hibernated");
-        logHibernation("success", "Terminal renderer hibernated", { epoch });
-        hibernatedRef.current = true;
-        setTerminalReady(false);
-        setHibernated(true);
-        setTerminalGeneration((generation) => generation + 1);
-      } catch (error) {
-        hibernationSnapshotRef.current = null;
-        hibernationPhaseRef.current = "failed";
-        logHibernation(
-          "fail",
-          "Failed to hibernate terminal renderer",
-          { epoch },
-          error,
-        );
-        await restoreDetachedRenderer(epoch, "error");
-      } finally {
-        hibernationPendingRef.current = false;
-        if (
-          hibernationPhaseRef.current === "preparing" ||
-          (hibernationPhaseRef.current === "detached" &&
-            detachedHibernateEpochRef.current !== epoch) ||
-          (hibernationPhaseRef.current === "failed" &&
-            detachedHibernateEpochRef.current === null)
-        ) {
-          hibernationPhaseRef.current = "idle";
-        }
-      }
-    };
-
-    const scheduleHibernate = () => {
-      if (
-        visibleRef.current ||
-        hibernateTimerRef.current !== null ||
-        hibernationPhaseRef.current !== "idle"
-      ) {
-        return;
-      }
-      const epoch = hibernationEpochRef.current + 1;
-      hibernationEpochRef.current = epoch;
-      logHibernation("scheduled", "Scheduled terminal renderer hibernation", {
-        epoch,
-      });
-      hibernateTimerRef.current = window.setTimeout(() => {
-        hibernateTimerRef.current = null;
-        void hibernateRenderer(epoch);
-      }, XTERM_PERFORMANCE_CONFIG.lifecycle.deepHibernateDelayMs);
-    };
-
-    const applyVisibilityPolicy = () => {
-      if (!isTerminalAlive()) return;
-
-      if (visibleRef.current) {
-        clearHibernateTimer();
-      }
-
-      updateOutputDrainMode();
-      maybeRecoverPerformanceMode();
-      refreshOutputPressureMode();
-
-      if (visibleRef.current) {
-        repaintVisibleTerminal();
-      } else {
-        scheduleHibernate();
-      }
-    };
+    const { applyVisibilityPolicy } = createXTerminalHibernationController({
+      sessionId,
+      terminal,
+      outputDrain,
+      visibleRef,
+      sessionTypeRef,
+      aiCapturingRef,
+      zmodemActiveRef,
+      syncPeerSessionIdsRef,
+      outputDrainRef,
+      disconnectedRef,
+      reconnectingRef,
+      hibernateTimerRef,
+      hibernationEpochRef,
+      hibernationPendingRef,
+      hibernationPhaseRef,
+      detachedHibernateEpochRef,
+      hibernationSnapshotRef,
+      hibernationCleanupRef,
+      hibernatedRef,
+      showSearchBar,
+      activeMode,
+      isTerminalAlive,
+      logHibernation,
+      clearHibernateTimer,
+      enterDisconnectedStateIfAttachSessionMissing,
+      updateOutputDrainMode,
+      flushFrameGateAndDrain,
+      captureReconnectSnapshot,
+      setTerminalReady,
+      setHibernated,
+      setTerminalGeneration,
+      maybeRecoverPerformanceMode,
+      refreshOutputPressureMode,
+      repaintVisibleTerminal,
+    });
 
     handleVisibilityChangeRef.current = applyVisibilityPolicy;
     applyVisibilityPolicy();
 
-    const setupListeners = async () => {
-      const nextOutputUnlisten = await listen<TerminalOutputPayload>(
-        `terminal-output-${sessionId}`,
-        (event) => {
-          if (!isTerminalAlive()) return;
-          const payload = event.payload;
-          if (!payload.data || payload.bytes <= 0) {
-            noteSkippedOutput(payload.droppedBytes ?? 0);
-            return;
-          }
-
-          alternateScreenTrackerRef.current.ingest(payload.data);
-          outputDrain.enqueue({
-            data: payload.data,
-            bytes: payload.bytes,
-          });
-
-          const recentPayload =
-            payload.data.length > 4096
-              ? payload.data.slice(-4096)
-              : payload.data;
-          updateCredentialPromptInputMode(recentPayload);
-          feedCredentialOutput(recentPayload);
-          if (visibleRef.current && hasErrorKeyword(recentPayload)) {
-            const now = Date.now();
-            if (now - lastErrorNoticeAtRef.current > 30_000) {
-              lastErrorNoticeAtRef.current = now;
-              emitAIErrorDetected({
-                sessionId,
-                output: recentPayload.slice(-4000),
-              });
-            }
-          }
-
-          noteSkippedOutput(payload.droppedBytes ?? 0);
-
-          if (!visibleRef.current) {
-            maybeRecoverPerformanceMode();
-            refreshOutputPressureMode();
-            window.dispatchEvent(
-              new CustomEvent("nyaterm:session-output", {
-                detail: { sessionId },
-              }),
-            );
-            return;
-          }
-
-          refreshOutputPressureMode();
-        },
-      );
-      if (disposed) {
-        nextOutputUnlisten();
-        return;
-      }
-      outputUnlisten = nextOutputUnlisten;
-
-      const nextCommandAcceptedUnlisten =
-        await listen<SessionCommandAcceptedEvent>(
-          "session-command-accepted",
-          (event) => {
-            if (!isTerminalAlive()) return;
-            if (event.payload.sessionId !== sessionIdRef.current) return;
-            noteShellCommand(event.payload.command);
-          },
-        );
-      if (disposed) {
-        nextCommandAcceptedUnlisten();
-        return;
-      }
-      commandAcceptedUnlisten = nextCommandAcceptedUnlisten;
-
-      const nextErrorUnlisten = await listen<string>(
-        `session-error-${sessionId}`,
-        (event) => {
-          if (!isTerminalAlive()) return;
-          requestWake("session_error");
-          const message = String(
-            event.payload || tRef.current("terminal.connectionFailed"),
-          );
-          enterDisconnectedState({
-            title: tRef.current("terminal.connectionFailed"),
-            message,
-            titleColor: "31",
-            showReconnectPrompt: false,
-          });
-          toast.error(message);
-          onConnectionErrorRef.current?.(sessionIdRef.current, message);
-        },
-      );
-      if (disposed) {
-        nextErrorUnlisten();
-        return;
-      }
-      errorUnlisten = nextErrorUnlisten;
-
-      const nextClosedUnlisten = await listen<void>(
-        `session-closed-${sessionId}`,
-        () => {
-          if (!isTerminalAlive()) return;
-          requestWake("session_closed");
-          enterDisconnectedState({
-            title: tRef.current("terminal.sessionDisconnected"),
-            titleColor: "31",
-            showReconnectPrompt: true,
-          });
-        },
-      );
-      if (disposed) {
-        nextClosedUnlisten();
-        return;
-      }
-      closedUnlisten = nextClosedUnlisten;
-
-      const nextFocusUnlisten = await listen<void>(
-        `focus-terminal-${sessionId}`,
-        () => {
-          if (!isTerminalAlive()) return;
-          requestWake("focus");
-          terminal.focus();
-        },
-      );
-      if (disposed) {
-        nextFocusUnlisten();
-        return;
-      }
-      focusUnlisten = nextFocusUnlisten;
-
-      const nextCaptureUnlisten = await listen<AiCaptureEvent>(
-        `ai-capture-${sessionId}`,
-        (event) => {
-          if (!isTerminalAlive()) return;
-          const payload = event.payload;
-          requestWake("ai");
-          if (payload.type === "commandStart") {
-            aiCapturingRef.current = true;
-            inputStateRef.current = createTerminalInputState();
-            clearCredentialPromptInputMode();
-            dismissSuggestions();
-            if (isTerminalAlive()) {
-              terminal.write(renderAiCommandStart(payload));
-            }
-          } else if (payload.type === "commandEnd") {
-            aiCapturingRef.current = false;
-            if (isTerminalAlive()) {
-              terminal.write(renderAiCommandEnd(payload));
-            }
-          }
-        },
-      );
-      if (disposed) {
-        nextCaptureUnlisten();
-        return;
-      }
-      captureUnlisten = nextCaptureUnlisten;
-
-      const nextZmodemUnlisten = await listen<ZmodemEventPayload>(
-        `zmodem-event-${sessionId}`,
-        (event) => {
-          if (!isTerminalAlive()) return;
-          requestWake("zmodem");
-          if (
-            event.payload.type === "detected" ||
-            event.payload.type === "progress"
-          ) {
-            zmodemActiveRef.current = true;
-          } else if (
-            event.payload.type === "complete" ||
-            event.payload.type === "failed"
-          ) {
-            zmodemActiveRef.current = false;
-          }
-          zmodemHandler.handle(event.payload);
-        },
-      );
-      if (disposed) {
-        nextZmodemUnlisten();
-        return;
-      }
-      zmodemUnlisten = nextZmodemUnlisten;
-
-      replayPendingWakeEvents();
-
-      try {
-        await initialReplayPromise.catch(() => {});
-        await invoke("attach_session", { sessionId });
-        detachedHibernateEpochRef.current = null;
-        if (
-          hibernationPhaseRef.current === "waking" ||
-          hibernationPhaseRef.current === "hibernated"
-        ) {
-          logHibernation(
-            "wake",
-            "Attached backend output after terminal wake",
-            {
-              reason: "terminal_ready",
-            },
-          );
-        }
-        hibernationPhaseRef.current = "idle";
-        updateOutputDrainMode();
-      } catch (error) {
-        hibernationPhaseRef.current = "failed";
-        logHibernation(
-          "fail",
-          "Failed to attach backend output after terminal wake",
-          { reason: "terminal_ready" },
-          error,
-        );
-        enterDisconnectedStateIfAttachSessionMissing(error);
-      }
-    };
-    void setupListeners();
+    const sessionEvents = createXTerminalSessionEvents({
+      sessionId,
+      terminal,
+      frameGate,
+      sessionIdRef,
+      visibleRef,
+      lastErrorNoticeAtRef,
+      aiCapturingRef,
+      zmodemActiveRef,
+      inputStateRef,
+      alternateScreenTrackerRef,
+      hibernationPhaseRef,
+      detachedHibernateEpochRef,
+      onConnectionErrorRef,
+      tRef,
+      isTerminalAlive,
+      requestWake,
+      enterDisconnectedState,
+      enterDisconnectedStateIfAttachSessionMissing,
+      noteSkippedOutput,
+      updateCredentialPromptInputMode,
+      feedCredentialOutput,
+      maybeRecoverPerformanceMode,
+      refreshOutputPressureMode,
+      noteShellCommand,
+      clearCredentialPromptInputMode,
+      dismissSuggestions,
+      writeTerminalTextAfterOutputQueue,
+      initialReplayPromise,
+      updateOutputDrainMode,
+      logHibernation,
+      zmodemHandler,
+      replayPendingWakeEvents,
+    });
+    void sessionEvents.setup();
 
     const removePreviewListener = listenSessionInputPreview(
       sessionId,
@@ -3094,189 +2098,28 @@ export default function XTerminal({
     });
     observer.observe(containerRef.current);
 
-    const selectionDisposable = terminal.onSelectionChange(() => {
-      const text = terminal.getSelection();
-      if (!text) {
-        if (!pendingSearchSelectionRef.current) {
-          searchSelectionTextRef.current = null;
-        }
-        return;
-      }
-
-      if (pendingSearchSelectionRef.current) {
-        searchSelectionTextRef.current = text;
-      }
-
-      if (text) {
-        lastSelection = text;
-      }
-      if (terminalAppSettingsRef.current?.interaction?.copy_on_select) {
-        if (searchSelectionTextRef.current !== text) {
-          writeClipboardText(text).catch(() => {});
-        }
-      }
-    });
-
-    const handleTerminalMouseDown = (e: MouseEvent) => {
-      removeLinkPopup();
-      clearSearchSelectionState();
-
-      if (
-        e.button === 0 &&
-        !e.ctrlKey &&
-        !e.metaKey &&
-        !e.altKey &&
-        !e.shiftKey
-      ) {
-        primaryMouseDown = { x: e.clientX, y: e.clientY };
-      } else {
-        primaryMouseDown = null;
-      }
-
-      if (e.button === 1) e.preventDefault(); // Prevent auto-scroll mechanism
-    };
-
-    const handleTerminalMouseUp = (e: MouseEvent) => {
-      if (e.button === 0) {
-        const down = primaryMouseDown;
-        primaryMouseDown = null;
-        const isPlainPrimaryMouseUp =
-          down &&
-          !disconnectedRef.current &&
-          !aiCapturingRef.current &&
-          !e.ctrlKey &&
-          !e.metaKey &&
-          !e.altKey &&
-          !e.shiftKey;
-        const isStationaryMouseUp =
-          !!down &&
-          Math.abs(e.clientX - down.x) <= 4 &&
-          Math.abs(e.clientY - down.y) <= 4;
-
-        if (isPlainPrimaryMouseUp && terminal.hasSelection()) {
-          const selectedInputRange = getSmartCursorSelectedInputRange();
-          if (selectedInputRange) {
-            if (e.detail >= 2 || isStationaryMouseUp) {
-              moveInputCursorAfterSelection(
-                selectedInputRange,
-                selectedInputRange.end,
-              );
-            } else {
-              const position = getMouseBufferPosition(terminal, e);
-              const targetCursor = position
-                ? getInputIndexAtBufferPosition(
-                    terminal,
-                    inputStateRef.current,
-                    position,
-                  )
-                : null;
-              if (targetCursor !== null) {
-                moveInputCursorAfterSelection(selectedInputRange, targetCursor);
-              }
-            }
-          }
-        } else if (isPlainPrimaryMouseUp && isStationaryMouseUp) {
-          const state = inputStateRef.current;
-          if (canUseSmartCursor(state)) {
-            const position = getMouseBufferPosition(terminal, e);
-            if (position) {
-              const targetCursor = getInputIndexAtBufferPosition(
-                terminal,
-                state,
-                position,
-              );
-              if (targetCursor !== null) {
-                moveInputCursor(targetCursor);
-              }
-            }
-          }
-        }
-
-        if (terminalAppSettingsRef.current?.interaction?.copy_on_select) {
-          const sel = terminal.getSelection();
-          if (sel && searchSelectionTextRef.current !== sel)
-            writeClipboardText(sel).catch(() => {});
-        }
-        return;
-      }
-
-      if (e.button !== 1) return;
-      e.preventDefault();
-      const sel = terminal.getSelection();
-      if (sel) {
-        pasteText(sel);
-      } else {
-        pasteClipboard().catch(() => {});
-      }
-    };
-
-    const handleMacReleasedMouseMove = (e: MouseEvent) => {
-      if (!isMacOS || !primaryMouseDown || e.buttons !== 0) return;
-
-      primaryMouseDown = null;
-      e.stopImmediatePropagation();
-
-      // WKWebView can miss mouseup after a trackpad tap when three-finger drag is enabled.
-      // xterm listens on document while selecting, so synthesize the release there.
-      const syntheticMouseUp = new MouseEvent("mouseup", {
-        bubbles: true,
-        cancelable: true,
-        button: 0,
-        buttons: 0,
-        clientX: e.clientX,
-        clientY: e.clientY,
-        screenX: e.screenX,
-        screenY: e.screenY,
-        ctrlKey: e.ctrlKey,
-        metaKey: e.metaKey,
-        altKey: e.altKey,
-        shiftKey: e.shiftKey,
-      });
-      document.dispatchEvent(syntheticMouseUp);
-    };
-
-    const handleTerminalPointerCancel = () => {
-      resetTerminalPointerState({ clearSelection: true });
-    };
-
-    const handleTerminalMouseLeave = () => {
-      resetTerminalPointerState();
-    };
-
-    const handleTerminalDragStart = () => {
-      resetTerminalPointerState();
-    };
-
-    const handleTerminalWindowBlur = () => {
-      resetTerminalPointerState({ clearSelection: true });
-    };
-
-    const handleTerminalVisibilityChange = () => {
-      if (document.visibilityState !== "visible") {
-        resetTerminalPointerState({ clearSelection: true });
-      }
-    };
-
-    containerRef.current.addEventListener("mousedown", handleTerminalMouseDown);
-    containerRef.current.addEventListener("mouseup", handleTerminalMouseUp);
-    containerRef.current.addEventListener(
-      "pointercancel",
-      handleTerminalPointerCancel,
-    );
-    containerRef.current.addEventListener(
-      "mouseleave",
-      handleTerminalMouseLeave,
-    );
-    containerRef.current.addEventListener("dragstart", handleTerminalDragStart);
-    if (isMacOS) {
-      document.addEventListener("mousemove", handleMacReleasedMouseMove, true);
-    }
-    window.addEventListener("blur", handleTerminalWindowBlur);
-    document.addEventListener(
-      "visibilitychange",
-      handleTerminalVisibilityChange,
-    );
     const containerEl = containerRef.current;
+    const selectionController = installXTerminalSelectionController({
+      terminal,
+      containerEl,
+      isMacOS,
+      terminalAppSettingsRef,
+      pendingSearchSelectionRef,
+      searchSelectionTextRef,
+      lastSelectionRef,
+      disconnectedRef,
+      aiCapturingRef,
+      inputStateRef,
+      isTerminalAlive,
+      removeLinkPopup,
+      clearSearchSelectionState,
+      getSmartCursorSelectedInputRange,
+      moveInputCursorAfterSelection,
+      canUseSmartCursor,
+      moveInputCursor,
+      pasteText,
+      pasteClipboard,
+    });
 
     fitScheduler.schedule({
       reason: "initial",
@@ -3328,26 +2171,7 @@ export default function XTerminal({
           });
       }
       setTerminalReady(false);
-      containerEl.removeEventListener("mousedown", handleTerminalMouseDown);
-      containerEl.removeEventListener("mouseup", handleTerminalMouseUp);
-      containerEl.removeEventListener(
-        "pointercancel",
-        handleTerminalPointerCancel,
-      );
-      containerEl.removeEventListener("mouseleave", handleTerminalMouseLeave);
-      containerEl.removeEventListener("dragstart", handleTerminalDragStart);
-      if (isMacOS) {
-        document.removeEventListener(
-          "mousemove",
-          handleMacReleasedMouseMove,
-          true,
-        );
-      }
-      window.removeEventListener("blur", handleTerminalWindowBlur);
-      document.removeEventListener(
-        "visibilitychange",
-        handleTerminalVisibilityChange,
-      );
+      selectionController.dispose();
       if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
       inputStateRef.current = createTerminalInputState();
       clearCredentialPromptInputMode();
@@ -3364,7 +2188,6 @@ export default function XTerminal({
       dataDisposable.dispose();
       resizeDisposable.dispose();
       scrollDisposable.dispose();
-      selectionDisposable.dispose();
       for (const disposable of searchLifecycleDisposables) {
         disposable.dispose();
       }
@@ -3379,14 +2202,12 @@ export default function XTerminal({
       if (fitSchedulerRef.current === fitScheduler) {
         fitSchedulerRef.current = null;
       }
-      if (outputUnlisten) outputUnlisten();
-      if (errorUnlisten) errorUnlisten();
-      if (closedUnlisten) closedUnlisten();
-      if (focusUnlisten) focusUnlisten();
-      if (captureUnlisten) captureUnlisten();
-      if (zmodemUnlisten) zmodemUnlisten();
-      if (commandAcceptedUnlisten) commandAcceptedUnlisten();
+      sessionEvents.dispose();
       zmodemHandler.dispose();
+      frameGate.dispose({ ackRemaining: true, reason: "terminal_cleanup" });
+      if (frameGateRef.current === frameGate) {
+        frameGateRef.current = null;
+      }
       outputDrain.dispose();
       if (outputDrainRef.current === outputDrain) {
         outputDrainRef.current = null;

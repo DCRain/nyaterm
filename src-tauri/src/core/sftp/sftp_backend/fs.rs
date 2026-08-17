@@ -426,6 +426,7 @@ impl RemoteFs for SftpBackend {
         let _ = sftp.close().await;
 
         ensure_text_bytes(&bytes, max_bytes)?;
+        let file_hash = content_hash(&bytes);
         let content = String::from_utf8(bytes)
             .map_err(|_| AppError::Config("Only UTF-8 text files are supported".to_string()))?;
 
@@ -434,6 +435,8 @@ impl RemoteFs for SftpBackend {
             content,
             size,
             mtime,
+            mtime_nanos: None,
+            content_hash: file_hash,
         })
     }
 
@@ -474,6 +477,7 @@ impl RemoteFs for SftpBackend {
             content_bytes: bytes,
             size,
             mtime,
+            mtime_nanos: None,
         })
     }
 
@@ -483,8 +487,10 @@ impl RemoteFs for SftpBackend {
         content: &str,
         expected_mtime: Option<u64>,
         expected_size: Option<u64>,
+        expected_hash: Option<&str>,
         force: bool,
     ) -> AppResult<WriteRemoteTextResult> {
+        use tokio::io::AsyncReadExt;
         use tokio::io::AsyncWriteExt;
 
         let sftp = self.open_sftp().await?;
@@ -504,7 +510,32 @@ impl RemoteFs for SftpBackend {
                 || expected_size.is_some_and(|size| size != current_size)
             {
                 let _ = sftp.close().await;
-                return Ok(WriteRemoteTextResult::conflict(current_mtime, current_size));
+                return Ok(WriteRemoteTextResult::conflict(
+                    current_mtime,
+                    current_size,
+                    None,
+                ));
+            }
+
+            if let Some(expected_hash) = expected_hash {
+                let mut file = sftp.open(path).await.map_err(|error| {
+                    AppError::Channel(format!("Failed to open remote file: {error}"))
+                })?;
+                let mut current_bytes = Vec::with_capacity(current_size as usize);
+                file.read_to_end(&mut current_bytes)
+                    .await
+                    .map_err(|error| {
+                        AppError::Channel(format!("Failed to read remote file: {error}"))
+                    })?;
+                drop(file);
+                if content_hash(&current_bytes) != expected_hash {
+                    let _ = sftp.close().await;
+                    return Ok(WriteRemoteTextResult::conflict(
+                        current_mtime,
+                        current_size,
+                        None,
+                    ));
+                }
             }
         }
         let original_permissions = original_attrs
@@ -575,6 +606,8 @@ impl RemoteFs for SftpBackend {
         Ok(WriteRemoteTextResult::saved(
             u64::from(attrs.mtime.unwrap_or(0)),
             attrs.size.unwrap_or(content.len() as u64),
+            None,
+            content_hash(content.as_bytes()),
         ))
     }
 

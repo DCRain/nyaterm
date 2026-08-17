@@ -95,6 +95,11 @@ export default function AppPanelContent({
   const liveActivePane =
     activePane && !activePane.connecting && !activePane.connectError ? activePane : null;
   const liveTerminalPane = liveActivePane?.paneKind === "terminal" ? liveActivePane : null;
+  const filePanelPane =
+    liveActivePane?.paneKind === "terminal" || liveActivePane?.paneKind === "file"
+      ? liveActivePane
+      : null;
+  const filePanelSessionId = filePanelPane?.sessionId ?? activeSessionId;
 
   const aiEverMounted = useRef(false);
   if (panelId === "aiAssistant") aiEverMounted.current = true;
@@ -106,15 +111,15 @@ export default function AppPanelContent({
           <div className="h-full flex flex-col overflow-hidden">
             <div className="flex-1 min-h-0 overflow-hidden">
               <FileExplorer
-                activeSessionId={activeSessionId}
-                activeSessionType={liveTerminalPane ? liveTerminalPane.type : null}
-                activeConnectionId={liveTerminalPane?.connectionId ?? null}
+                activeSessionId={filePanelSessionId}
+                activeSessionType={filePanelPane?.type ?? null}
+                activeConnectionId={filePanelPane?.connectionId ?? null}
                 activeSessionName={liveTerminalPane?.name ?? null}
               />
             </div>
             <ResizeHandle direction="vertical" onResize={onTransferResize} />
             <div style={{ height: transferHeight }} className="shrink-0 overflow-hidden">
-              <FileTransfer activeSessionId={activeSessionId} />
+              <FileTransfer activeSessionId={filePanelSessionId} />
             </div>
           </div>
         );

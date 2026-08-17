@@ -1,4 +1,3 @@
-import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   type ComponentType,
@@ -57,7 +56,9 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AppContext, useApp } from "@/context/AppContext";
 import { SettingsDraftContext } from "@/context/SettingsDraftContext";
+import { useChildWindowCommand } from "@/hooks/useChildWindowCommand";
 import { useSettingsDraftState } from "@/hooks/useSettingsDraftState";
+import { CHILD_WINDOW_COMMANDS } from "@/lib/childWindowProtocol";
 import { type CloudSyncValidationCode, getCloudSyncValidationErrors } from "@/lib/cloudSync";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
@@ -133,19 +134,13 @@ export default function SettingsPage() {
     }
   }, [activeTab]);
 
-  useEffect(() => {
-    const unlisten = listen<{ tab: string; targetWindowLabel?: string | null }>(
-      "settings-open-tab",
-      ({ payload }) => {
-        if (payload.targetWindowLabel && payload.targetWindowLabel !== ownerWindowLabel) return;
-        setActiveTab(normalizeSettingsTab(payload.tab));
-      },
-    );
-
-    return () => {
-      unlisten.then((dispose) => dispose());
-    };
-  }, [ownerWindowLabel]);
+  useChildWindowCommand<{ tab: string; targetWindowLabel?: string | null }>(
+    CHILD_WINDOW_COMMANDS.settingsOpenTab,
+    (payload) => {
+      if (payload.targetWindowLabel && payload.targetWindowLabel !== ownerWindowLabel) return;
+      setActiveTab(normalizeSettingsTab(payload.tab));
+    },
+  );
 
   type SettingsCategory = {
     id: string;
@@ -457,6 +452,7 @@ export default function SettingsPage() {
       <ChildWindowHeader
         title={t("settings.title")}
         icon={<MdSettings className="text-base" />}
+        macOSDragOnly
         onClose={requestClose}
       />
 

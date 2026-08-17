@@ -8,7 +8,12 @@ import type {
   WorkspaceSessionType,
 } from "@/types/global";
 
-export const NON_PANEL_IDS = new Set(["settings", "lock", "quickCmdBar", "serialSend"]);
+export const NON_PANEL_IDS = new Set([
+  "settings",
+  "lock",
+  "quickCmdBar",
+  "serialSend",
+]);
 
 /** Panels that never join the multi-open stack and are always shown on their own. */
 export const EXCLUSIVE_PANEL_IDS = new Set(["aiAssistant"]);
@@ -24,7 +29,11 @@ const MONITOR_PANEL_VISIBILITY: Record<string, (ui: UiConfig) => boolean> = {
 
 export type TrayAction =
   | { type: "open_new_session"; targetWindowLabel?: string | null }
-  | { type: "focus_session"; sessionId: string; targetWindowLabel?: string | null }
+  | {
+      type: "focus_session";
+      sessionId: string;
+      targetWindowLabel?: string | null;
+    }
   | {
       type: "open_panel";
       panelId: "activeSessions" | "syncBackupHistory";
@@ -36,11 +45,12 @@ export type TrayAction =
   | { type: "request_quit"; targetWindowLabel?: string | null };
 
 export function canCreateSessionFromPane(
-  pane: Pick<SessionPane, "type" | "connectionId" | "temporaryConfig" | "view"> | null | undefined,
-): pane is Pick<SessionPane, "type" | "connectionId" | "temporaryConfig" | "view"> {
+  pane: Pick<SessionPane, "paneKind" | "type" | "connectionId" | "temporaryConfig" | "view"> | null | undefined,
+): pane is Pick<SessionPane, "paneKind" | "type" | "connectionId" | "temporaryConfig" | "view"> {
   return (
     !!pane &&
     pane.view !== "workbench" &&
+    pane.paneKind !== "file" &&
     (pane.type === "Local" || !!pane.connectionId || hasMatchingTemporaryConfig(pane))
   );
 }
@@ -68,9 +78,9 @@ export function assertMatchingTemporaryConfig<
   throw new Error("Temporary session config protocol mismatch");
 }
 
-export function hasLiveSession<T extends Pick<SessionPane, "connecting" | "connectError">>(
-  pane: T | null | undefined,
-): pane is T {
+export function hasLiveSession<
+  T extends Pick<SessionPane, "connecting" | "connectError">,
+>(pane: T | null | undefined): pane is T {
   return !!pane && !pane.connecting && !pane.connectError;
 }
 
@@ -78,9 +88,14 @@ export function isNonSerialSessionType(type: WorkspaceSessionType): boolean {
   return type === "SSH" || type === "Local" || type === "Telnet";
 }
 
-export function getItemSide(id: string, layout: ActivityBarLayout): "left" | "right" | null {
-  if (layout.left_top.includes(id) || layout.left_bottom.includes(id)) return "left";
-  if (layout.right_top.includes(id) || layout.right_bottom.includes(id)) return "right";
+export function getItemSide(
+  id: string,
+  layout: ActivityBarLayout,
+): "left" | "right" | null {
+  if (layout.left_top.includes(id) || layout.left_bottom.includes(id))
+    return "left";
+  if (layout.right_top.includes(id) || layout.right_bottom.includes(id))
+    return "right";
   return null;
 }
 
@@ -92,7 +107,10 @@ export function getVisibleActivityIds(ids: string[], ui: UiConfig): string[] {
   return ids.filter((id) => isActivityItemVisible(id, ui));
 }
 
-function getSidePanelOrder(layout: ActivityBarLayout, side: "left" | "right"): string[] {
+function getSidePanelOrder(
+  layout: ActivityBarLayout,
+  side: "left" | "right",
+): string[] {
   return side === "left"
     ? [...layout.left_top, ...layout.left_bottom]
     : [...layout.right_top, ...layout.right_bottom];
@@ -108,7 +126,9 @@ export function getSideOpenPanels(
   if (!multiOpen) {
     return active && isActivityItemVisible(active, ui) ? [active] : [];
   }
-  const open = new Set((side === "left" ? ui.left_open_panels : ui.right_open_panels) ?? []);
+  const open = new Set(
+    (side === "left" ? ui.left_open_panels : ui.right_open_panels) ?? [],
+  );
   if (open.size === 0) return [];
   return getSidePanelOrder(ui.activity_bar_layout, side).filter(
     (id) =>
@@ -127,7 +147,9 @@ export function getSideOverlayPanel(
 ): string | null {
   if (!multiOpen) return null;
   const active = side === "left" ? ui.active_left_panel : ui.active_right_panel;
-  return active && isActivityItemVisible(active, ui) && EXCLUSIVE_PANEL_IDS.has(active)
+  return active &&
+    isActivityItemVisible(active, ui) &&
+    EXCLUSIVE_PANEL_IDS.has(active)
     ? active
     : null;
 }
@@ -138,13 +160,19 @@ export function buildMultiPanelToggleUpdate(
   panelId: string,
   side: "left" | "right",
 ): Partial<UiConfig> {
-  const openList = (side === "left" ? prev.left_open_panels : prev.right_open_panels) ?? [];
-  const active = side === "left" ? prev.active_left_panel : prev.active_right_panel;
+  const openList =
+    (side === "left" ? prev.left_open_panels : prev.right_open_panels) ?? [];
+  const active =
+    side === "left" ? prev.active_left_panel : prev.active_right_panel;
 
   if (EXCLUSIVE_PANEL_IDS.has(panelId)) {
     const nextActive =
-      active === panelId ? (openList.find((id) => !EXCLUSIVE_PANEL_IDS.has(id)) ?? null) : panelId;
-    return side === "left" ? { active_left_panel: nextActive } : { active_right_panel: nextActive };
+      active === panelId
+        ? (openList.find((id) => !EXCLUSIVE_PANEL_IDS.has(id)) ?? null)
+        : panelId;
+    return side === "left"
+      ? { active_left_panel: nextActive }
+      : { active_right_panel: nextActive };
   }
 
   const isOpen = openList.includes(panelId);
@@ -152,10 +180,14 @@ export function buildMultiPanelToggleUpdate(
   // Clicking an already-open stacked panel while an exclusive panel is shown
   // dismisses the exclusive panel and reveals the stack instead of closing it.
   if (isOpen && active && EXCLUSIVE_PANEL_IDS.has(active)) {
-    return side === "left" ? { active_left_panel: panelId } : { active_right_panel: panelId };
+    return side === "left"
+      ? { active_left_panel: panelId }
+      : { active_right_panel: panelId };
   }
 
-  const nextOpen = isOpen ? openList.filter((id) => id !== panelId) : [...openList, panelId];
+  const nextOpen = isOpen
+    ? openList.filter((id) => id !== panelId)
+    : [...openList, panelId];
   const nextActive =
     nextOpen.length === 0
       ? null
@@ -181,18 +213,27 @@ export function buildPanelOpenUpdate(
     return side === "right"
       ? {
           active_right_panel: panelId,
-          ...(prev.active_left_panel === panelId ? { active_left_panel: null } : {}),
+          ...(prev.active_left_panel === panelId
+            ? { active_left_panel: null }
+            : {}),
         }
       : {
           active_left_panel: panelId,
-          ...(prev.active_right_panel === panelId ? { active_right_panel: null } : {}),
+          ...(prev.active_right_panel === panelId
+            ? { active_right_panel: null }
+            : {}),
         };
   }
   if (EXCLUSIVE_PANEL_IDS.has(panelId)) {
-    return side === "left" ? { active_left_panel: panelId } : { active_right_panel: panelId };
+    return side === "left"
+      ? { active_left_panel: panelId }
+      : { active_right_panel: panelId };
   }
-  const openList = (side === "left" ? prev.left_open_panels : prev.right_open_panels) ?? [];
-  const nextOpen = openList.includes(panelId) ? openList : [...openList, panelId];
+  const openList =
+    (side === "left" ? prev.left_open_panels : prev.right_open_panels) ?? [];
+  const nextOpen = openList.includes(panelId)
+    ? openList
+    : [...openList, panelId];
   return side === "left"
     ? { left_open_panels: nextOpen, active_left_panel: panelId }
     : { right_open_panels: nextOpen, active_right_panel: panelId };
@@ -218,7 +259,11 @@ export function collectActiveNonSerialSessionIds(
       if (!tab) continue;
 
       for (const pane of collectSessionPanes(tab.root)) {
-        if (hasLiveSession(pane) && isNonSerialSessionType(pane.type)) {
+        if (
+          pane.paneKind === "terminal" &&
+          hasLiveSession(pane) &&
+          isNonSerialSessionType(pane.type)
+        ) {
           sessionIds.add(pane.sessionId);
         }
       }

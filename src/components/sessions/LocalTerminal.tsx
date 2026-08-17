@@ -109,18 +109,11 @@ export function LocalTerminal({
             </Select>
             <div className="mt-1 flex min-w-0 flex-1 overflow-hidden rounded-md border bg-transparent">
               <Input
-                readOnly
-                className="h-8 flex-1 cursor-default rounded-none border-0 text-xs focus-visible:ring-0"
-                placeholder={t("dialog.selectShellFile", "Select shell file")}
-                title={shellPath || t("dialog.selectShellFile", "Select shell file")}
+                className="h-8 flex-1 rounded-none border-0 text-xs focus-visible:ring-0"
+                placeholder={t("dialog.shellPathPlaceholder", "e.g. /bin/zsh or pwsh.exe")}
+                title={shellPath || t("dialog.shellPathPlaceholder", "e.g. /bin/zsh or pwsh.exe")}
                 value={shellPath}
-                onClick={() => {
-                  if (
-                    !BUILTIN_SHELL_PATHS.includes(shellPath as (typeof BUILTIN_SHELL_PATHS)[number])
-                  ) {
-                    void handlePickShellFile();
-                  }
-                }}
+                onChange={(e) => setShellPath(e.target.value)}
               />
               <Button
                 type="button"

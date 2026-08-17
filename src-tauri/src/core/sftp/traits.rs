@@ -59,6 +59,7 @@ pub(crate) trait RemoteFs: Send + Sync {
         content: &str,
         expected_mtime: Option<u64>,
         expected_size: Option<u64>,
+        expected_hash: Option<&str>,
         force: bool,
     ) -> AppResult<WriteRemoteTextResult>;
 

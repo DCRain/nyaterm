@@ -1,7 +1,7 @@
 /** Type of terminal session. */
 export type SessionType = "SSH" | "Local" | "Telnet" | "Serial";
 export type WorkspaceSessionType = SessionType | "RDP" | "VNC";
-export type WorkspacePaneKind = "terminal" | "remote-desktop";
+export type WorkspacePaneKind = "terminal" | "remote-desktop" | "file";
 export type PersistedWorkspacePaneKind = WorkspacePaneKind | "rdp";
 export type { TemporaryLinkConfig } from "@/types/temporaryConnection";
 
@@ -23,9 +23,21 @@ export interface AppSupportInfo {
 }
 
 /** AI Agent command execution wrapper profile. */
-export type AIExecutionProfile = "auto" | "posix" | "powershell" | "cmd" | "send_only" | "disabled";
+export type AIExecutionProfile =
+  | "auto"
+  | "posix"
+  | "powershell"
+  | "cmd"
+  | "send_only"
+  | "disabled";
 export type SshProfile = "standard" | "network_device";
-export type SshTerminalType = "xterm-256color" | "xterm" | "vt100" | "vt220" | "ansi" | "linux";
+export type SshTerminalType =
+  | "xterm-256color"
+  | "xterm"
+  | "vt100"
+  | "vt220"
+  | "ansi"
+  | "linux";
 
 /** A group of sessions whose terminal input is broadcast to all members. */
 export interface SyncGroup {
@@ -127,7 +139,32 @@ export interface VncSessionPane extends RemoteDesktopSessionPane {
   type: "VNC";
 }
 
-export type SessionPane = TerminalSessionPane | RdpSessionPane | VncSessionPane;
+export type FileDocumentBackend = "local" | "remote";
+
+export interface FileDocumentSnapshot {
+  content: string;
+  size: number;
+  mtime: number;
+  mtimeNanos?: string;
+  contentHash: string;
+}
+
+/** Runtime-only editable document backed by an existing terminal session. */
+export interface FileDocumentPane extends WorkspacePaneBase {
+  paneKind: "file";
+  type: SessionType;
+  file: {
+    backend: FileDocumentBackend;
+    path: string;
+    initial: FileDocumentSnapshot;
+  };
+}
+
+export type SessionPane =
+  | TerminalSessionPane
+  | RdpSessionPane
+  | VncSessionPane
+  | FileDocumentPane;
 
 /** Split node containing two child panes. */
 export interface SplitPane {
@@ -578,7 +615,12 @@ export interface VncReconnectSettings {
 }
 
 export type RecordingMode = "transcript" | "raw";
-export type RecordingState = "starting" | "recording" | "degraded" | "failed" | "stopping";
+export type RecordingState =
+  | "starting"
+  | "recording"
+  | "degraded"
+  | "failed"
+  | "stopping";
 export type ExistingFileBehavior = "unique" | "append" | "overwrite";
 export type RotationPolicy =
   | { type: "session" }
@@ -705,7 +747,11 @@ export type RightPanelId =
   | "recording"
   | "syncBackupHistory";
 
-export type ActivityBarZone = "left_top" | "left_bottom" | "right_top" | "right_bottom";
+export type ActivityBarZone =
+  | "left_top"
+  | "left_bottom"
+  | "right_top"
+  | "right_bottom";
 
 export interface ActivityBarLayout {
   left_top: string[];
@@ -725,7 +771,13 @@ export interface ActivityBarLayout {
 /** Layout preferences: panel widths, active panels, theme. */
 export type QuickCommandViewMode = "list" | "compact" | "tile";
 export type QuickCommandSortMode = "created" | "name" | "useCount" | "custom";
-export type HeaderStatusMode = "session" | "resources" | "host" | "datetime" | "gpu" | "npu";
+export type HeaderStatusMode =
+  | "session"
+  | "resources"
+  | "host"
+  | "datetime"
+  | "gpu"
+  | "npu";
 
 export type RestorableTerminalWindowNode =
   | {
@@ -1077,7 +1129,10 @@ export interface QuickCommandsConfig {
   categories: QuickCommandCategory[];
 }
 
-export type QuickCommandImportSource = "windterm_quickbar" | "xshell_xts" | "nyaterm_json";
+export type QuickCommandImportSource =
+  | "windterm_quickbar"
+  | "xshell_xts"
+  | "nyaterm_json";
 
 export interface QuickCommandImportResult {
   imported_commands: number;
@@ -1371,7 +1426,13 @@ export type AIMode = "ask" | "agent";
 export type AIAgentCommandExecutionMode = "confirm_each" | "smart" | "auto";
 export type AIAgentKind = "nyaterm" | "codex" | "claude_code" | "opencode";
 export type AIPermissionMode = "observer" | "confirm" | "auto";
-export type AIReasoningEffort = "auto" | "none" | "low" | "medium" | "high" | "xhigh";
+export type AIReasoningEffort =
+  | "auto"
+  | "none"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh";
 export type AIModelSource = "rust-genai" | "manual";
 export type AIBackendKind = "genai" | "codex";
 export type CodexThreadMode = "persistent" | "ephemeral";
@@ -1602,7 +1663,12 @@ export interface AIStreamEventPayload {
 }
 
 export type AgentActionKind = "execute_command" | "final_answer";
-export type AgentStepStatus = "running" | "completed" | "needs_approval" | "rejected" | "failed";
+export type AgentStepStatus =
+  | "running"
+  | "completed"
+  | "needs_approval"
+  | "rejected"
+  | "failed";
 
 export interface AgentStepAction {
   kind: AgentActionKind;

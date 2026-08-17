@@ -37,7 +37,6 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "../../ui/context-menu";
-import { isKnownBinaryFile } from "./model";
 
 interface FileListItemProps {
   entry: FileEntry;
@@ -175,7 +174,7 @@ export function FileListItem({
     : `${permissions} ${fileSize} ${modifiedTime} ${owner}:${group}`;
   const isRenaming = !!inlineRename;
   const isFile = !entry.is_dir;
-  const showOpenInternal = isFile && editorType === "external" && !isKnownBinaryFile(entry.name);
+  const showOpenInternal = isFile && editorType === "external";
   const showOpenExternal = isFile && editorType === "internal";
   const peerTransferLabel =
     peerTransferAction === "upload"
