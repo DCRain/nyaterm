@@ -104,6 +104,7 @@ import { FileExplorerToolbar } from "./FileExplorerToolbar";
 import { FileListItem } from "./FileListItem";
 import {
   buildRemoteUploadPath,
+  buildMoveSuccessRefreshPlan,
   buildSessionCacheSnapshot,
   compareFileEntries,
   DEFAULT_FILE_LIST_COLUMN_WIDTHS,
@@ -126,6 +127,7 @@ import {
   type LoadDirectoryOptions,
   MIN_FILE_LIST_COLUMN_WIDTHS,
   matchesFileSearch,
+  type MoveDialogItem,
   normalizeDirectoryPath,
   normalizeExplorerPath,
   PARENT_DIRECTORY_ENTRY,
@@ -2406,6 +2408,15 @@ function FileExplorerPane({
     }));
   };
 
+  const buildMoveItems = (entries: FileEntry[]): MoveDialogItem[] => {
+    return entries.map((entry) => ({
+      oldPath: getEntryFullPath(entry),
+      oldRawPathToken: entry.raw_path_token,
+      name: entry.name,
+      isDirectory: entry.is_dir,
+    }));
+  };
+
   const getContextMenuEntries = useCallback(
     (entry: FileEntry) => {
       if (isParentDirectoryEntry(entry)) {
@@ -2492,6 +2503,48 @@ function FileExplorerPane({
       backend: explorerBackend,
       items: buildDeleteItems(entries),
     });
+  };
+
+  const openMoveDialog = (entries: FileEntry[]) => {
+    if (!activeSessionId || entries.length === 0) return;
+    setMoveDialogData({
+      sessionId: activeSessionId,
+      backend: explorerBackend,
+      sourceDirectory: currentPath,
+      initialTargetDirectory: currentPath,
+      items: buildMoveItems(entries),
+    });
+  };
+
+  const handleMoveFromContextMenu = (entry: FileEntry) => {
+    openMoveDialog(getContextMenuEntries(entry));
+  };
+
+  const handleMoveSuccess = (targetDirectory: string) => {
+    const backend = explorerBackendRef.current;
+    const sourceDirectory =
+      normalizeExplorerPath(currentPathRef.current, backend) ||
+      normalizeExplorerPath(homeDirRef.current, backend);
+    const refreshPlan = buildMoveSuccessRefreshPlan(
+      sourceDirectory,
+      targetDirectory,
+      backend,
+    );
+    setSelectedFiles(new Set());
+    lastSelectedRef.current = null;
+    if (refreshPlan?.shouldClearSelection) {
+      clearDirectoryChildrenCacheForPath(
+        activeSessionIdRef.current,
+        backend,
+        refreshPlan.sourceDirectory,
+      );
+      clearDirectoryChildrenCacheForPath(
+        activeSessionIdRef.current,
+        backend,
+        refreshPlan.targetDirectory,
+      );
+      void loadDirectory(refreshPlan.sourceDirectory, { history: "preserve" });
+    }
   };
 
   const handleDeleteFromContextMenu = (entry: FileEntry) => {
@@ -3149,16 +3202,7 @@ function FileExplorerPane({
                           sendTargetOptions={sendTargetOptions}
                           onSendToTarget={handleSendToTarget}
                           onRename={beginInlineRename}
-                          onMove={(entry) => {
-                            if (activeSessionId)
-                              setMoveDialogData({
-                                sessionId: activeSessionId,
-                                backend: explorerBackend,
-                                oldPath: getEntryFullPath(entry),
-                                oldRawPathToken: entry.raw_path_token,
-                                name: entry.name,
-                              });
-                          }}
+                          onMove={handleMoveFromContextMenu}
                           onDelete={handleDeleteFromContextMenu}
                           onAddToFavorites={handleAddEntryToFavorites}
                           onCopyPath={handleCopyPath}
@@ -3378,6 +3422,7 @@ function FileExplorerPane({
           lastSelectedRef.current = null;
           void refreshCurrentDirectory();
         }}
+        onMoveSuccess={handleMoveSuccess}
         onRefresh={refreshCurrentDirectory}
         onOpenDirectoryEntry={handleItemClick}
         onOpenDefault={(entry) => void handleOpenDefault(entry)}

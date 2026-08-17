@@ -27,6 +27,7 @@ interface FileExplorerDialogsProps {
   onNewSymlinkClose: () => void;
   onPropertiesClose: () => void;
   onDeleteSuccess: () => void;
+  onMoveSuccess: (targetDirectory: string) => void;
   onRefresh: () => Promise<unknown> | unknown;
   onOpenDirectoryEntry: (entry: FileEntry) => void;
   onOpenDefault: (entry: FileEntry) => void;
@@ -44,6 +45,7 @@ export function FileExplorerDialogs({
   onNewSymlinkClose,
   onPropertiesClose,
   onDeleteSuccess,
+  onMoveSuccess,
   onRefresh,
   onOpenDirectoryEntry,
   onOpenDefault,
@@ -62,7 +64,7 @@ export function FileExplorerDialogs({
         <MoveDialog
           data={moveDialogData}
           onClose={onMoveClose}
-          onSuccess={() => void onRefresh()}
+          onSuccess={onMoveSuccess}
         />
       )}
 

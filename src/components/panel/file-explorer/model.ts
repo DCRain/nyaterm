@@ -73,6 +73,32 @@ export type InlineRenameState = {
   isSubmitting: boolean;
 };
 
+export type MoveDialogItem = {
+  oldPath: string;
+  oldRawPathToken?: string;
+  name: string;
+  isDirectory: boolean;
+};
+
+export type MoveOperation = {
+  oldPath: string;
+  oldRawPathToken?: string;
+  newPath: string;
+  name: string;
+  isDirectory: boolean;
+};
+
+export type MoveOperationData = {
+  backend: FileExplorerBackendKind;
+  items: MoveDialogItem[];
+};
+
+export type MoveSuccessRefreshPlan = {
+  sourceDirectory: string;
+  targetDirectory: string;
+  shouldClearSelection: true;
+};
+
 export const fileExplorerSessionCacheStore = new Map<
   string,
   FileExplorerSessionCache
@@ -614,6 +640,77 @@ export function joinExplorerPath(
     return `${normalizedBase}${name}`;
   }
   return `${normalizedBase}${separator}${name}`;
+}
+
+function isLocalWindowsStylePath(path: string) {
+  return (
+    /^[a-zA-Z]:[\\/]/.test(path) ||
+    path.startsWith("\\\\") ||
+    path.includes("\\")
+  );
+}
+
+export function buildMoveTargetPath(
+  targetDirectory: string,
+  entryName: string,
+  backend: FileExplorerBackendKind,
+) {
+  const normalizedTargetDirectory = normalizeExplorerPath(
+    targetDirectory,
+    backend,
+  );
+  return joinExplorerPath(normalizedTargetDirectory, entryName, backend);
+}
+
+export function buildMoveOperations(
+  data: MoveOperationData,
+  targetDirectory: string,
+): MoveOperation[] {
+  return data.items.map((item) => ({
+    ...item,
+    newPath: buildMoveTargetPath(targetDirectory, item.name, data.backend),
+  }));
+}
+
+export function isMoveToSameDirectory(
+  sourceDirectory: string,
+  targetDirectory: string,
+  backend: FileExplorerBackendKind,
+) {
+  const normalizedSourceDirectory = normalizeExplorerPath(
+    sourceDirectory,
+    backend,
+  );
+  const normalizedTargetDirectory = normalizeExplorerPath(
+    targetDirectory,
+    backend,
+  );
+  if (!normalizedSourceDirectory || !normalizedTargetDirectory) return false;
+  if (backend === "remote") {
+    return normalizedSourceDirectory === normalizedTargetDirectory;
+  }
+  return isLocalWindowsStylePath(normalizedSourceDirectory) ||
+    isLocalWindowsStylePath(normalizedTargetDirectory)
+    ? normalizedSourceDirectory.toLocaleLowerCase() ===
+        normalizedTargetDirectory.toLocaleLowerCase()
+    : normalizedSourceDirectory === normalizedTargetDirectory;
+}
+
+export function buildMoveSuccessRefreshPlan(
+  sourceDirectory: string,
+  targetDirectory: string,
+  backend: FileExplorerBackendKind,
+): MoveSuccessRefreshPlan | null {
+  const normalizedSourceDirectory = normalizeExplorerPath(
+    sourceDirectory,
+    backend,
+  );
+  if (!normalizedSourceDirectory) return null;
+  return {
+    sourceDirectory: normalizedSourceDirectory,
+    targetDirectory: normalizeExplorerPath(targetDirectory, backend),
+    shouldClearSelection: true,
+  };
 }
 
 export function pathStartsWithDirectory(
