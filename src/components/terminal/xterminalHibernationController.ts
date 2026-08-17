@@ -1,0 +1,305 @@
+import type { Terminal } from "@xterm/xterm";
+import { invoke } from "@/lib/invoke";
+import type { TerminalReconnectSnapshot } from "@/lib/terminalReconnectHistory";
+import { XTERM_PERFORMANCE_CONFIG } from "@/lib/xtermPerformance";
+import type { SessionType } from "@/types/global";
+import type { TerminalOutputDrain } from "./terminalOutputDrain";
+import type {
+  HibernationLogEvent,
+  HibernationPhase,
+} from "./xterminalInternalTypes";
+
+interface MutableRef<T> {
+  current: T;
+}
+
+interface CreateXTerminalHibernationControllerParams {
+  sessionId: string;
+  terminal: Terminal;
+  outputDrain: TerminalOutputDrain<{ beforeLine: number; ts: number }>;
+  visibleRef: MutableRef<boolean>;
+  sessionTypeRef: MutableRef<SessionType>;
+  aiCapturingRef: MutableRef<boolean>;
+  zmodemActiveRef: MutableRef<boolean>;
+  syncPeerSessionIdsRef: MutableRef<readonly string[] | undefined>;
+  outputDrainRef: MutableRef<TerminalOutputDrain<{
+    beforeLine: number;
+    ts: number;
+  }> | null>;
+  disconnectedRef: MutableRef<boolean>;
+  reconnectingRef: MutableRef<boolean>;
+  hibernateTimerRef: MutableRef<number | null>;
+  hibernationEpochRef: MutableRef<number>;
+  hibernationPendingRef: MutableRef<boolean>;
+  hibernationPhaseRef: MutableRef<HibernationPhase>;
+  detachedHibernateEpochRef: MutableRef<number | null>;
+  hibernationSnapshotRef: MutableRef<TerminalReconnectSnapshot | null>;
+  hibernationCleanupRef: MutableRef<boolean>;
+  hibernatedRef: MutableRef<boolean>;
+  showSearchBar: boolean;
+  activeMode: "buffer" | "history";
+  isTerminalAlive: () => boolean;
+  logHibernation: (
+    event: HibernationLogEvent,
+    message: string,
+    data?: Record<string, unknown>,
+    error?: unknown,
+  ) => void;
+  clearHibernateTimer: () => void;
+  enterDisconnectedStateIfAttachSessionMissing: (error: unknown) => boolean;
+  updateOutputDrainMode: () => void;
+  flushFrameGateAndDrain: (reason: string) => Promise<boolean>;
+  captureReconnectSnapshot: () => TerminalReconnectSnapshot | null;
+  setTerminalReady: (ready: boolean) => void;
+  setHibernated: (hibernated: boolean) => void;
+  setTerminalGeneration: (updater: (generation: number) => number) => void;
+  maybeRecoverPerformanceMode: () => void;
+  refreshOutputPressureMode: () => void;
+  repaintVisibleTerminal: () => void;
+}
+
+export function createXTerminalHibernationController({
+  sessionId,
+  terminal,
+  outputDrain,
+  visibleRef,
+  sessionTypeRef,
+  aiCapturingRef,
+  zmodemActiveRef,
+  syncPeerSessionIdsRef,
+  outputDrainRef,
+  disconnectedRef,
+  reconnectingRef,
+  hibernateTimerRef,
+  hibernationEpochRef,
+  hibernationPendingRef,
+  hibernationPhaseRef,
+  detachedHibernateEpochRef,
+  hibernationSnapshotRef,
+  hibernationCleanupRef,
+  hibernatedRef,
+  showSearchBar,
+  activeMode,
+  isTerminalAlive,
+  logHibernation,
+  clearHibernateTimer,
+  enterDisconnectedStateIfAttachSessionMissing,
+  updateOutputDrainMode,
+  flushFrameGateAndDrain,
+  captureReconnectSnapshot,
+  setTerminalReady,
+  setHibernated,
+  setTerminalGeneration,
+  maybeRecoverPerformanceMode,
+  refreshOutputPressureMode,
+  repaintVisibleTerminal,
+}: CreateXTerminalHibernationControllerParams) {
+  const canHibernateRenderer = (options: { allowPending?: boolean } = {}) => {
+    const phase = hibernationPhaseRef.current;
+    if (
+      !isTerminalAlive() ||
+      visibleRef.current ||
+      (!options.allowPending && hibernationPendingRef.current) ||
+      (phase !== "idle" &&
+        !(
+          options.allowPending &&
+          (phase === "preparing" || phase === "detached")
+        ))
+    ) {
+      return false;
+    }
+    if (sessionTypeRef.current === "Local") return false;
+    if (!["SSH", "Telnet", "Serial"].includes(sessionTypeRef.current))
+      return false;
+    if (terminal.buffer.active.type === "alternate") return false;
+    if (showSearchBar || activeMode === "history") return false;
+    if (aiCapturingRef.current || zmodemActiveRef.current) return false;
+    if (syncPeerSessionIdsRef.current?.length) return false;
+    if (outputDrainRef.current?.isWriteInFlight()) return false;
+    if (disconnectedRef.current || reconnectingRef.current) return false;
+    return true;
+  };
+
+  const restoreDetachedRenderer = async (epoch: number, reason: string) => {
+    if (detachedHibernateEpochRef.current !== epoch) return;
+    try {
+      await invoke("attach_session", { sessionId });
+      detachedHibernateEpochRef.current = null;
+      hibernationPhaseRef.current = "idle";
+      logHibernation("rollback", "Rolled back detached terminal renderer", {
+        reason,
+        epoch,
+      });
+    } catch (error) {
+      if (enterDisconnectedStateIfAttachSessionMissing(error)) return;
+      hibernationPhaseRef.current = "failed";
+      logHibernation(
+        "fail",
+        "Failed to roll back detached terminal renderer",
+        { reason, epoch },
+        error,
+      );
+    }
+  };
+
+  const hibernateRenderer = async (epoch: number) => {
+    clearHibernateTimer();
+    if (epoch !== hibernationEpochRef.current) return;
+    if (!canHibernateRenderer()) {
+      hibernationPhaseRef.current = "idle";
+      logHibernation(
+        "cancel",
+        "Skipped terminal hibernation after eligibility check",
+        { epoch },
+      );
+      return;
+    }
+
+    hibernationPhaseRef.current = "preparing";
+    hibernationPendingRef.current = true;
+    logHibernation("start", "Starting terminal renderer hibernation", {
+      epoch,
+    });
+
+    try {
+      updateOutputDrainMode();
+      logHibernation(
+        "drain_start",
+        "Draining terminal output before hibernation",
+        { epoch },
+      );
+      const drainedBeforeDetach =
+        await flushFrameGateAndDrain("hibernate_before_detach");
+      if (!drainedBeforeDetach) {
+        hibernationPhaseRef.current = "idle";
+        logHibernation(
+          "drain_timeout",
+          "Timed out draining terminal output before hibernation",
+          {
+            epoch,
+            queue_bytes: outputDrain.getQueueBytes(),
+            pending_bytes: outputDrain.getPendingBytes(),
+          },
+        );
+        return;
+      }
+      logHibernation(
+        "drain_complete",
+        "Drained terminal output before backend detach",
+        {
+          epoch,
+        },
+      );
+
+      await invoke("detach_session_renderer", { sessionId });
+      detachedHibernateEpochRef.current = epoch;
+      hibernationPhaseRef.current = "detached";
+      updateOutputDrainMode();
+      logHibernation(
+        "detached",
+        "Detached terminal renderer from backend output",
+        { epoch },
+      );
+
+      if (
+        epoch !== hibernationEpochRef.current ||
+        !isTerminalAlive() ||
+        !canHibernateRenderer({ allowPending: true })
+      ) {
+        await restoreDetachedRenderer(epoch, "eligibility_changed");
+        return;
+      }
+
+      const drainedAfterDetach =
+        await flushFrameGateAndDrain("hibernate_after_detach");
+      if (!drainedAfterDetach) {
+        logHibernation(
+          "drain_timeout",
+          "Timed out draining terminal output after backend detach",
+          {
+            epoch,
+            queue_bytes: outputDrain.getQueueBytes(),
+            pending_bytes: outputDrain.getPendingBytes(),
+          },
+        );
+        await restoreDetachedRenderer(epoch, "drain_timeout");
+        return;
+      }
+
+      hibernationSnapshotRef.current = captureReconnectSnapshot();
+      hibernationCleanupRef.current = true;
+      hibernationPhaseRef.current = "hibernated";
+      outputDrain.setMode("hibernated");
+      logHibernation("success", "Terminal renderer hibernated", { epoch });
+      hibernatedRef.current = true;
+      setTerminalReady(false);
+      setHibernated(true);
+      setTerminalGeneration((generation) => generation + 1);
+    } catch (error) {
+      hibernationSnapshotRef.current = null;
+      hibernationPhaseRef.current = "failed";
+      logHibernation(
+        "fail",
+        "Failed to hibernate terminal renderer",
+        { epoch },
+        error,
+      );
+      await restoreDetachedRenderer(epoch, "error");
+    } finally {
+      hibernationPendingRef.current = false;
+      if (
+        hibernationPhaseRef.current === "preparing" ||
+        (hibernationPhaseRef.current === "detached" &&
+          detachedHibernateEpochRef.current !== epoch) ||
+        (hibernationPhaseRef.current === "failed" &&
+          detachedHibernateEpochRef.current === null)
+      ) {
+        hibernationPhaseRef.current = "idle";
+      }
+    }
+  };
+
+  const scheduleHibernate = () => {
+    if (
+      visibleRef.current ||
+      hibernateTimerRef.current !== null ||
+      hibernationPhaseRef.current !== "idle"
+    ) {
+      return;
+    }
+    const epoch = hibernationEpochRef.current + 1;
+    hibernationEpochRef.current = epoch;
+    logHibernation("scheduled", "Scheduled terminal renderer hibernation", {
+      epoch,
+    });
+    hibernateTimerRef.current = window.setTimeout(() => {
+      hibernateTimerRef.current = null;
+      void hibernateRenderer(epoch);
+    }, XTERM_PERFORMANCE_CONFIG.lifecycle.deepHibernateDelayMs);
+  };
+
+  const applyVisibilityPolicy = () => {
+    if (!isTerminalAlive()) return;
+
+    if (visibleRef.current) {
+      clearHibernateTimer();
+    }
+
+    updateOutputDrainMode();
+    maybeRecoverPerformanceMode();
+    refreshOutputPressureMode();
+
+    if (visibleRef.current) {
+      repaintVisibleTerminal();
+    } else {
+      scheduleHibernate();
+    }
+  };
+
+  return {
+    restoreDetachedRenderer,
+    hibernateRenderer,
+    scheduleHibernate,
+    applyVisibilityPolicy,
+  };
+}
