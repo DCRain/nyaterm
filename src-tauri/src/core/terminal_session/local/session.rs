@@ -145,23 +145,20 @@ fn pty_session_thread(
 
     if let Some(ref cfg) = config {
         if let Some(ref dir) = cfg.working_dir {
-            if !dir.is_empty() {
-                let working_dir = Path::new(dir);
-                if working_dir.is_dir() {
-                    cmd.cwd(dir);
-                } else {
-                    tracing::warn!(
-                        working_dir = %dir,
-                        "Configured local terminal working directory does not exist; using default working directory"
-                    );
-                    let _ = app.emit(
-                        &format!("session-warning-{}", session_id),
-                        format!(
-                            "Configured working directory '{}' does not exist; using the default working directory.",
-                            dir
-                        ),
-                    );
-                }
+            if apply_working_dir_to_command(&mut cmd, dir)
+                == WorkingDirectoryOutcome::MissingLocalDirectory
+            {
+                tracing::warn!(
+                    working_dir = %dir,
+                    "Configured local terminal working directory does not exist; using default working directory"
+                );
+                let _ = app.emit(
+                    &format!("session-warning-{}", session_id),
+                    format!(
+                        "Configured working directory '{}' does not exist; using the default working directory.",
+                        dir
+                    ),
+                );
             }
         }
     }
@@ -622,4 +619,67 @@ fn pty_session_thread(
         manager.remove_session(&session_id).await;
     });
     let _ = app.emit(&format!("session-closed-{}", session_id), ());
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkingDirectoryOutcome {
+    Skipped,
+    AppliedLocalCwd,
+    AppliedWslCd,
+    WslCdAlreadyConfigured,
+    MissingLocalDirectory,
+}
+
+fn apply_working_dir_to_command(
+    cmd: &mut CommandBuilder,
+    working_dir: &str,
+) -> WorkingDirectoryOutcome {
+    let working_dir = working_dir.trim();
+    if working_dir.is_empty() {
+        return WorkingDirectoryOutcome::Skipped;
+    }
+
+    if command_uses_wsl(cmd) {
+        if command_has_wsl_cd_arg(cmd) {
+            return WorkingDirectoryOutcome::WslCdAlreadyConfigured;
+        }
+
+        let argv = cmd.get_argv_mut();
+        argv.insert(1, working_dir.into());
+        argv.insert(1, "--cd".into());
+        return WorkingDirectoryOutcome::AppliedWslCd;
+    }
+
+    if Path::new(working_dir).is_dir() {
+        cmd.cwd(working_dir);
+        WorkingDirectoryOutcome::AppliedLocalCwd
+    } else {
+        WorkingDirectoryOutcome::MissingLocalDirectory
+    }
+}
+
+fn command_uses_wsl(cmd: &CommandBuilder) -> bool {
+    let Some(program) = cmd.get_argv().first() else {
+        return false;
+    };
+
+    let program = program.to_string_lossy();
+    let normalized = program.replace('\\', "/");
+    let file_name = normalized
+        .rsplit('/')
+        .next()
+        .unwrap_or(normalized.as_str())
+        .to_ascii_lowercase();
+
+    matches!(file_name.as_str(), "wsl" | "wsl.exe")
+}
+
+fn command_has_wsl_cd_arg(cmd: &CommandBuilder) -> bool {
+    cmd.get_argv()
+        .iter()
+        .skip(1)
+        .any(|arg| {
+            let arg = arg.to_string_lossy();
+            arg == "--cd" || arg.starts_with("--cd=")
+        })
 }
