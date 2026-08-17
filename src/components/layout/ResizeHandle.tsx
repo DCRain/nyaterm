@@ -5,10 +5,20 @@ interface ResizeHandleProps {
   direction: "horizontal" | "vertical";
   onResize: (delta: number) => void;
   className?: string;
+  /**
+   * Extra grab area around the 1px line.
+   * `end` sits on the trailing side so a left pane scrollbar stays clickable.
+   */
+  hitAlign?: "center" | "end";
 }
 
 /** Draggable handle for horizontal or vertical resize. Calls onResize(delta) on drag. */
-export default function ResizeHandle({ direction, onResize, className = "" }: ResizeHandleProps) {
+export default function ResizeHandle({
+  direction,
+  onResize,
+  className = "",
+  hitAlign = "center",
+}: ResizeHandleProps) {
   const startPos = useRef(0);
   const onResizeRef = useRef(onResize);
   const draggingRef = useRef(false);
@@ -82,8 +92,12 @@ export default function ResizeHandle({ direction, onResize, className = "" }: Re
         className={cn(
           "absolute z-10 touch-none",
           isHorizontal
-            ? "-left-[6px] inset-y-0 w-[13px] cursor-col-resize"
-            : "-top-[6px] inset-x-0 h-[13px] cursor-row-resize",
+            ? hitAlign === "end"
+              ? "left-0 inset-y-0 w-[12px] cursor-col-resize"
+              : "-left-[6px] inset-y-0 w-[13px] cursor-col-resize"
+            : hitAlign === "end"
+              ? "top-0 inset-x-0 h-[12px] cursor-row-resize"
+              : "-top-[6px] inset-x-0 h-[13px] cursor-row-resize",
         )}
         onPointerDown={handlePointerDown}
       />

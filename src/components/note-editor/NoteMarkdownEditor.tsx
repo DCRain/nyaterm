@@ -37,8 +37,11 @@ const MIN_HOST_HEIGHT = 48;
 const GUTTER_WIDTH_PX = 44;
 const GUTTER_DIVIDER_CLASS = "nyaterm-gutter-divider";
 const LINE_NUMBER_FONT_PX = 11;
-/** Content inset — forced via theme + iframe CSS + inline (release WebView2). */
-const EDITOR_CONTENT_PADDING = "16px 20px";
+const EDITOR_PADDING_Y_PX = 16;
+const EDITOR_PADDING_X_PX = 20;
+/** Vertical inset on `.cm-content`. Horizontal padding lives on `.cm-line` so active-line fill can span scroll width. */
+const EDITOR_CONTENT_PADDING = `${EDITOR_PADDING_Y_PX}px 0`;
+const EDITOR_LINE_PADDING_X = `${EDITOR_PADDING_X_PX}px`;
 
 /** Stroke aligned with the rest of note chrome (`--df-border`). */
 function noteStrokeColor(colors: NoteColors): string {
@@ -81,7 +84,36 @@ function styleLineNumberElements(root: ParentNode) {
     el.style.setProperty("min-width", "1.25rem", "important");
     el.style.setProperty("text-align", "right", "important");
     el.style.setProperty("font-size", `${LINE_NUMBER_FONT_PX}px`, "important");
-    el.style.setProperty("line-height", "1", "important");
+    el.style.setProperty("line-height", "1.65", "important");
+  }
+}
+
+function styleActiveLines(root: ParentNode, hoverColor: string) {
+  for (const node of root.querySelectorAll(".cm-line")) {
+    const el = node as HTMLElement;
+    el.style.setProperty("display", "block", "important");
+    el.style.setProperty("box-sizing", "border-box", "important");
+    el.style.setProperty("min-width", "100%", "important");
+    el.style.setProperty("width", "max-content", "important");
+    el.style.setProperty("padding-left", EDITOR_LINE_PADDING_X, "important");
+    el.style.setProperty("padding-right", EDITOR_LINE_PADDING_X, "important");
+    el.style.setProperty("margin-left", "0", "important");
+    el.style.setProperty("margin-right", "0", "important");
+    if (el.classList.contains("cm-activeLine")) {
+      el.style.setProperty("background-color", hoverColor, "important");
+    } else {
+      el.style.setProperty("background-color", "transparent", "important");
+    }
+  }
+  for (const node of root.querySelectorAll(".cm-lineNumbers .cm-gutterElement")) {
+    const el = node as HTMLElement;
+    el.style.setProperty("width", "100%", "important");
+    el.style.setProperty("box-sizing", "border-box", "important");
+    if (el.classList.contains("cm-activeLineGutter")) {
+      el.style.setProperty("background-color", hoverColor, "important");
+    } else {
+      el.style.setProperty("background-color", "transparent", "important");
+    }
   }
 }
 
@@ -200,6 +232,9 @@ function noteEditorTheme(colors: NoteColors) {
           border: "none",
           outline: "none",
           boxShadow: "none",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
         },
         "&.cm-focused": {
           outline: "none",
@@ -211,8 +246,9 @@ function noteEditorTheme(colors: NoteColors) {
           backgroundColor: surface,
           color: text,
           overflow: "auto",
-          height: "100%",
-          maxHeight: "100%",
+          flex: "1 1 auto",
+          minHeight: "0",
+          minWidth: "0",
           boxSizing: "border-box",
           display: "flex",
           flexDirection: "row",
@@ -223,6 +259,7 @@ function noteEditorTheme(colors: NoteColors) {
         },
         ".cm-gutters": {
           flex: `0 0 ${GUTTER_WIDTH_PX}px`,
+          alignSelf: "stretch",
           width: `${GUTTER_WIDTH_PX}px`,
           minWidth: `${GUTTER_WIDTH_PX}px`,
           maxWidth: `${GUTTER_WIDTH_PX}px`,
@@ -251,7 +288,8 @@ function noteEditorTheme(colors: NoteColors) {
           minWidth: "1.25rem",
           textAlign: "right",
           fontSize: `${LINE_NUMBER_FONT_PX}px`,
-          lineHeight: "1",
+          lineHeight: "1.65",
+          boxSizing: "border-box",
         },
         ".cm-activeLineGutter": {
           backgroundColor: colors.bgHover,
@@ -264,13 +302,19 @@ function noteEditorTheme(colors: NoteColors) {
           backgroundColor: surface,
           fontSize: "14px",
           minHeight: "0px",
-          flex: "1 1 auto",
-          minWidth: "0",
+          flex: "1 0 auto",
+          minWidth: "min-content",
           outline: "none",
           border: "none",
         },
         ".cm-line": {
           color: text,
+          display: "block",
+          boxSizing: "border-box",
+          minWidth: "100%",
+          width: "max-content",
+          paddingLeft: EDITOR_LINE_PADDING_X,
+          paddingRight: EDITOR_LINE_PADDING_X,
         },
         ".cm-content ::selection": {
           backgroundColor: selection,
@@ -289,6 +333,7 @@ function noteEditorTheme(colors: NoteColors) {
 
 /** Keep CM gutters at a fixed pixel width — release WebView2 otherwise stretches them. */
 const gutterDividerColorRef = { current: "transparent" };
+const gutterHoverColorRef = { current: "transparent" };
 
 const clampNativeGutters = ViewPlugin.fromClass(
   class {
@@ -303,7 +348,12 @@ const clampNativeGutters = ViewPlugin.fromClass(
 
     update(update: ViewUpdate) {
       this.view = update.view;
-      if (update.geometryChanged || update.viewportChanged || update.docChanged) {
+      if (
+        update.geometryChanged ||
+        update.viewportChanged ||
+        update.docChanged ||
+        update.selectionSet
+      ) {
         this.schedule();
       }
     }
@@ -332,20 +382,25 @@ const clampNativeGutters = ViewPlugin.fromClass(
         el.style.setProperty("box-shadow", "none", "important");
         el.style.setProperty("z-index", "200", "important");
         el.style.setProperty("overflow", "visible", "important");
+        el.style.setProperty("align-self", "stretch", "important");
         el.style.setProperty("font-size", `${LINE_NUMBER_FONT_PX}px`, "important");
         ensureGutterDivider(el, stroke);
       }
       styleLineNumberElements(view.scrollDOM);
+      styleActiveLines(view.scrollDOM, gutterHoverColorRef.current);
       const scroller = view.scrollDOM;
       scroller.style.setProperty("display", "flex", "important");
       scroller.style.setProperty("flex-direction", "row", "important");
       scroller.style.setProperty("align-items", "flex-start", "important");
+      scroller.style.setProperty("flex", "1 1 auto", "important");
+      scroller.style.setProperty("min-height", "0", "important");
+      scroller.style.setProperty("min-width", "0", "important");
       scroller.style.setProperty("overflow", "auto", "important");
-      scroller.style.setProperty("height", "100%", "important");
-      scroller.style.setProperty("max-height", "100%", "important");
+      scroller.style.setProperty("height", "auto", "important");
+      scroller.style.setProperty("max-height", "none", "important");
       const content = view.contentDOM;
-      content.style.setProperty("flex", "1 1 auto", "important");
-      content.style.setProperty("min-width", "0", "important");
+      content.style.setProperty("flex", "1 0 auto", "important");
+      content.style.setProperty("min-width", "min-content", "important");
       content.style.setProperty("padding", EDITOR_CONTENT_PADDING, "important");
       content.style.setProperty("box-sizing", "border-box", "important");
       content.style.setProperty("outline", "none", "important");
@@ -407,6 +462,7 @@ const NoteMarkdownEditor = forwardRef<NoteMarkdownEditorHandle, NoteMarkdownEdit
     const colorsRef = useRef(colors);
     colorsRef.current = colors;
     gutterDividerColorRef.current = noteStrokeColor(colors);
+    gutterHoverColorRef.current = colors.bgHover;
 
     useEffect(() => {
       onChangeRef.current = onChange;
@@ -501,6 +557,7 @@ const NoteMarkdownEditor = forwardRef<NoteMarkdownEditorHandle, NoteMarkdownEdit
         const muted = palette.textMuted;
         const border = noteStrokeColor(palette);
         gutterDividerColorRef.current = border;
+        gutterHoverColorRef.current = palette.bgHover;
         const scheme = isDarkColor(surface) ? "dark" : "light";
 
         iframe = document.createElement("iframe");
@@ -565,6 +622,9 @@ const NoteMarkdownEditor = forwardRef<NoteMarkdownEditorHandle, NoteMarkdownEdit
     height: 100% !important;
     width: 100% !important;
     max-height: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
     border: none !important;
     outline: none !important;
     box-shadow: none !important;
@@ -586,15 +646,19 @@ const NoteMarkdownEditor = forwardRef<NoteMarkdownEditorHandle, NoteMarkdownEdit
     display: flex !important;
     flex-direction: row !important;
     align-items: flex-start !important;
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    min-width: 0 !important;
+    height: auto !important;
+    max-height: none !important;
     box-sizing: border-box !important;
-    height: 100% !important;
-    max-height: 100% !important;
     overflow: auto !important;
     border: none !important;
     outline: none !important;
   }
   .cm-gutters {
     flex: 0 0 ${GUTTER_WIDTH_PX}px !important;
+    align-self: stretch !important;
     width: ${GUTTER_WIDTH_PX}px !important;
     min-width: ${GUTTER_WIDTH_PX}px !important;
     max-width: ${GUTTER_WIDTH_PX}px !important;
@@ -634,26 +698,56 @@ const NoteMarkdownEditor = forwardRef<NoteMarkdownEditorHandle, NoteMarkdownEdit
     min-width: 1.25rem !important;
     text-align: right !important;
     font-size: ${LINE_NUMBER_FONT_PX}px !important;
-    line-height: 1 !important;
+    line-height: 1.65 !important;
+  }
+  .cm-activeLine {
+    background: ${palette.bgHover} !important;
+  }
+  .cm-activeLineGutter {
+    width: 100% !important;
+    box-sizing: border-box !important;
+    background: ${palette.bgHover} !important;
   }
   .cm-content {
-    flex: 1 1 auto !important;
-    min-width: 0 !important;
+    flex: 1 0 auto !important;
+    min-width: min-content !important;
     padding: ${EDITOR_CONTENT_PADDING} !important;
     box-sizing: border-box !important;
     outline: none !important;
     border: none !important;
   }
+  .cm-line {
+    display: block !important;
+    box-sizing: border-box !important;
+    min-width: 100% !important;
+    width: max-content !important;
+    padding-left: ${EDITOR_LINE_PADDING_X} !important;
+    padding-right: ${EDITOR_LINE_PADDING_X} !important;
+  }
   .cm-scroller::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+    width: 6px;
+    height: 6px;
+  }
+  .cm-scroller::-webkit-scrollbar-button,
+  .cm-scroller::-webkit-scrollbar-button:single-button,
+  .cm-scroller::-webkit-scrollbar-button:vertical:decrement,
+  .cm-scroller::-webkit-scrollbar-button:vertical:increment,
+  .cm-scroller::-webkit-scrollbar-corner {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+    background: transparent !important;
   }
   .cm-scroller::-webkit-scrollbar-thumb {
     background: color-mix(in srgb, ${text} 28%, transparent);
-    border-radius: 6px;
+    border-radius: 999px;
   }
   .cm-scroller::-webkit-scrollbar-track {
     background: transparent;
+  }
+  .cm-scroller {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, ${text} 28%, transparent) transparent;
   }
 </style>
 </head>
@@ -684,6 +778,9 @@ const NoteMarkdownEditor = forwardRef<NoteMarkdownEditorHandle, NoteMarkdownEdit
         view.dom.style.setProperty("border", "none", "important");
         view.dom.style.setProperty("outline", "none", "important");
         view.dom.style.setProperty("box-shadow", "none", "important");
+        view.dom.style.setProperty("overflow", "hidden", "important");
+        view.dom.style.setProperty("display", "flex", "important");
+        view.dom.style.setProperty("flex-direction", "column", "important");
         view.scrollDOM.style.setProperty("border", "none", "important");
         view.scrollDOM.style.setProperty("outline", "none", "important");
         view.scrollDOM.style.setProperty("box-shadow", "none", "important");
@@ -754,6 +851,7 @@ const NoteMarkdownEditor = forwardRef<NoteMarkdownEditorHandle, NoteMarkdownEdit
       if (!view) return;
 
       gutterDividerColorRef.current = noteStrokeColor(colors);
+      gutterHoverColorRef.current = colors.bgHover;
       view.dispatch({
         effects: [
           themeCompartmentRef.current.reconfigure(noteEditorTheme(colors)),
@@ -766,6 +864,7 @@ const NoteMarkdownEditor = forwardRef<NoteMarkdownEditorHandle, NoteMarkdownEdit
         ensureGutterDivider(node as HTMLElement, gutterDividerColorRef.current);
       }
       styleLineNumberElements(view.scrollDOM);
+      styleActiveLines(view.scrollDOM, gutterHoverColorRef.current);
 
       const surface = colors.bgPanel;
       const text = colors.text;

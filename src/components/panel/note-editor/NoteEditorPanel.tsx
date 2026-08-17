@@ -555,6 +555,7 @@ export default function NoteEditorPanel({ noteId, filePath, tabId }: NoteEditorP
               <ResizeHandle
                 direction="horizontal"
                 onResize={handleOutlineResize}
+                hitAlign="end"
                 className="nyaterm-note-region-handle"
               />
             </>
@@ -596,6 +597,7 @@ export default function NoteEditorPanel({ noteId, filePath, tabId }: NoteEditorP
               <ResizeHandle
                 direction="horizontal"
                 onResize={handleSplitResize}
+                hitAlign="end"
                 className="nyaterm-note-region-handle"
               />
             ) : null}
