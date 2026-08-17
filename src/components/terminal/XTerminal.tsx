@@ -770,6 +770,22 @@ export default function XTerminal({
     commandSuggestionMaxChars,
   );
 
+  const canDetectCredentialPrompt = useCallback(() => {
+    const terminal = terminalRef.current;
+    if (terminal?.buffer.active.type === "alternate") {
+      return false;
+    }
+
+    const inputState = inputStateRef.current;
+    return (
+      inputState.value.length === 0 &&
+      !inputState.desynced &&
+      !inputState.lineRewriteRequired &&
+      !inputState.multiline &&
+      !inputState.pasteMode
+    );
+  }, []);
+
   const {
     panelState: credentialPanelState,
     selectedIndex: credentialSelectedIndex,
@@ -788,6 +804,7 @@ export default function XTerminal({
     activeRef,
     visibleRef,
     performanceModeRef,
+    canDetectCredentialPrompt,
   );
 
   // Create and setup terminal

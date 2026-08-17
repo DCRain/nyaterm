@@ -58,6 +58,7 @@ export function useCredentialAutofill(
   activeRef: React.RefObject<boolean>,
   visibleRef: React.RefObject<boolean>,
   performanceModeRef: React.RefObject<string>,
+  canDetectPrompt?: () => boolean,
 ) {
   const [panelState, setPanelState] = useState<CredentialPanelState | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(-1);
@@ -378,6 +379,12 @@ export function useCredentialAutofill(
     (payload: string) => {
       if (performanceModeRef.current !== "normal") return;
       if (!activeRef.current || !visibleRef.current) return;
+      if (canDetectPrompt && !canDetectPrompt()) {
+        outputBufferRef.current = "";
+        recentPromptsRef.current.clear();
+        detectionPendingRef.current = false;
+        return;
+      }
 
       const visible = stripTerminalControlSequences(payload);
       if (!visible) return;
@@ -386,7 +393,7 @@ export function useCredentialAutofill(
       if (panelStateRef.current || sendingRef.current) return;
       void detectPrompt(outputBufferRef.current);
     },
-    [activeRef, visibleRef, performanceModeRef, detectPrompt],
+    [activeRef, visibleRef, performanceModeRef, canDetectPrompt, detectPrompt],
   );
 
   useEffect(() => {
