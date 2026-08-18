@@ -39,6 +39,7 @@ export type LoadDirectoryOptions = {
   history?: "push" | "preserve";
   selectEntryName?: string;
   rawPathToken?: string;
+  silent?: boolean;
 };
 
 export type FileExplorerBackendKind = "remote" | "local";
@@ -832,6 +833,44 @@ export function buildBreadcrumbSegments(
 
 export function isParentDirectoryEntry(entry: FileEntry) {
   return entry.name === PARENT_DIRECTORY_ENTRY_NAME;
+}
+
+export interface SyncExplorerDirectoryToTerminalCwdOptions {
+  enabled: boolean;
+  canBrowseFiles: boolean;
+  sessionId: string | null;
+  backend: FileExplorerBackendKind;
+  currentPath: string;
+  readTerminalCwd: (sessionId: string) => Promise<string | null>;
+  loadDirectory: (
+    path: string,
+    options?: LoadDirectoryOptions,
+  ) => Promise<boolean>;
+}
+
+export async function syncExplorerDirectoryToTerminalCwd({
+  enabled,
+  canBrowseFiles,
+  sessionId,
+  backend,
+  currentPath,
+  readTerminalCwd,
+  loadDirectory,
+}: SyncExplorerDirectoryToTerminalCwdOptions) {
+  if (!enabled || !canBrowseFiles || !sessionId) return false;
+
+  try {
+    const cwd = normalizeExplorerPath(
+      (await readTerminalCwd(sessionId)) ?? "",
+      backend,
+    );
+    if (!cwd || cwd === normalizeExplorerPath(currentPath, backend)) {
+      return false;
+    }
+    return loadDirectory(cwd, { silent: true });
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -135,6 +135,7 @@ import {
   pushVisitedHistory,
   type RemoteTextFile,
   type ResolvedLocalDropPathEntry,
+  syncExplorerDirectoryToTerminalCwd,
   type TextFileOpenResult,
 } from "./model";
 import { useExternalFileDrop } from "./useExternalFileDrop";
@@ -775,6 +776,7 @@ function FileExplorerPane({
 
   const sessionCacheRef = useRef(fileExplorerSessionCacheStore);
   const prevSessionIdRef = useRef<string | null>(null);
+  const autoSyncCwdMountSyncKeyRef = useRef<string | null>(null);
   const [isExternalDropActive, setIsExternalDropActive] = useState(false);
   const [listScrollTop, setListScrollTop] = useState(0);
   const [listViewportHeight, setListViewportHeight] = useState(0);
@@ -1218,6 +1220,9 @@ function FileExplorerPane({
         }
         return true;
       } catch (e) {
+        if (options?.silent) {
+          return false;
+        }
         const msg = String(e);
         if (filesRef.current.length > 0) {
           toast.error(msg);
@@ -1441,6 +1446,53 @@ function FileExplorerPane({
       cancelled = true;
     };
   }, [activeSessionId, canBrowseFiles, loadDirectory, resetExternalDropHover]);
+
+  useEffect(() => {
+    if (!activeSessionId) {
+      autoSyncCwdMountSyncKeyRef.current = null;
+      return;
+    }
+
+    if (!autoSyncCwd) {
+      autoSyncCwdMountSyncKeyRef.current = null;
+      return;
+    }
+
+    if (!canBrowseFiles || !currentPath) {
+      return;
+    }
+
+    const syncKey = `${activeSessionId}:${autoSyncScopeId ?? ""}:${explorerBackend}`;
+    if (autoSyncCwdMountSyncKeyRef.current === syncKey) {
+      return;
+    }
+
+    let cancelled = false;
+    autoSyncCwdMountSyncKeyRef.current = syncKey;
+    void syncExplorerDirectoryToTerminalCwd({
+      enabled: autoSyncCwd,
+      canBrowseFiles,
+      sessionId: activeSessionId,
+      backend: explorerBackend,
+      currentPath,
+      readTerminalCwd: (sessionId) =>
+        invoke<string | null>("try_get_terminal_cwd", { sessionId }),
+      loadDirectory: (path, options) =>
+        cancelled ? Promise.resolve(false) : loadDirectory(path, options),
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeSessionId,
+    autoSyncCwd,
+    autoSyncScopeId,
+    canBrowseFiles,
+    currentPath,
+    explorerBackend,
+    loadDirectory,
+  ]);
 
   useEffect(() => {
     if (isEditingPath) {
