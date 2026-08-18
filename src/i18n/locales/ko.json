@@ -1682,6 +1682,7 @@
     "allWindowSessions": "모든 창의 세션",
     "byteByByte": "바이트 단위",
     "characterByCharacter": "문자 단위",
+    "clearAfterSend": "전송 후 지우기",
     "count": "횟수",
     "currentSession": "현재 세션",
     "currentWindowSessions": "현재 창의 세션",

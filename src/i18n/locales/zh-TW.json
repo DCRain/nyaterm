@@ -1679,6 +1679,7 @@
     "allWindowSessions": "所有視窗工作階段",
     "byteByByte": "逐位元組傳送",
     "characterByCharacter": "按字元傳送",
+    "clearAfterSend": "傳送後清除",
     "count": "傳送次數",
     "currentSession": "目前工作階段",
     "currentWindowSessions": "目前視窗工作階段",

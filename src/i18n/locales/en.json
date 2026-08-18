@@ -1683,6 +1683,7 @@
     "allWindowSessions": "All window sessions",
     "byteByByte": "Byte by byte",
     "characterByCharacter": "Character by character",
+    "clearAfterSend": "Clear after send",
     "count": "Count",
     "currentSession": "Current session",
     "currentWindowSessions": "Current window sessions",

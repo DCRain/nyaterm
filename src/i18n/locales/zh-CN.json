@@ -1682,6 +1682,7 @@
     "allWindowSessions": "所有窗口会话",
     "byteByByte": "逐字节发送",
     "characterByCharacter": "按字符发送",
+    "clearAfterSend": "发送后清除",
     "count": "发送次数",
     "currentSession": "当前会话",
     "currentWindowSessions": "当前窗口会话",
