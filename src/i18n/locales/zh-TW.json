@@ -1676,10 +1676,12 @@
   "serialSend": {
     "addHexByte": "新增位元組",
     "allSessions": "所有工作階段",
+    "allWindowSessions": "所有視窗工作階段",
     "byteByByte": "逐位元組傳送",
     "characterByCharacter": "按字元傳送",
     "count": "傳送次數",
     "currentSession": "目前工作階段",
+    "currentWindowSessions": "目前視窗工作階段",
     "dataType": "資料類型",
     "groupSession": "分組：{{name}}（{{count}}）",
     "hex": "十六進位",
@@ -1724,7 +1726,9 @@
     "textPlaceholder": "輸入要傳送的文字...",
     "title": "命令傳送",
     "unavailable": "沒有可用的活動工作階段",
-    "unavailableDesc": "切換到已連線的序列埠、SSH、本機終端或 Telnet 標籤頁後即可傳送資料。"
+    "unavailableDesc": "切換到已連線的序列埠、SSH、本機終端或 Telnet 標籤頁後即可傳送資料。",
+    "unknownWindow": "未知視窗",
+    "windowGroup": "視窗：{{label}}"
   },
   "sessionQuickSwitcher": {
     "active": "目前",

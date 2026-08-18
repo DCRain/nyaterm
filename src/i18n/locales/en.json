@@ -1680,10 +1680,12 @@
   "serialSend": {
     "addHexByte": "Add byte",
     "allSessions": "All sessions",
+    "allWindowSessions": "All window sessions",
     "byteByByte": "Byte by byte",
     "characterByCharacter": "Character by character",
     "count": "Count",
     "currentSession": "Current session",
+    "currentWindowSessions": "Current window sessions",
     "dataType": "Data Type",
     "groupSession": "Group: {{name}} ({{count}})",
     "hex": "Hex",
@@ -1730,7 +1732,9 @@
     "textPlaceholder": "Enter text to send...",
     "title": "Command Send",
     "unavailable": "No active session available",
-    "unavailableDesc": "Switch to a connected serial, SSH, local terminal, or Telnet tab to send data."
+    "unavailableDesc": "Switch to a connected serial, SSH, local terminal, or Telnet tab to send data.",
+    "unknownWindow": "Unknown window",
+    "windowGroup": "Window: {{label}}"
   },
   "sessionQuickSwitcher": {
     "active": "Active",

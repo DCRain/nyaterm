@@ -1679,10 +1679,12 @@
   "serialSend": {
     "addHexByte": "바이트 추가",
     "allSessions": "모든 세션",
+    "allWindowSessions": "모든 창의 세션",
     "byteByByte": "바이트 단위",
     "characterByCharacter": "문자 단위",
     "count": "횟수",
     "currentSession": "현재 세션",
+    "currentWindowSessions": "현재 창의 세션",
     "dataType": "데이터 유형",
     "groupSession": "그룹: {{name}} ({{count}})",
     "hex": "16진수",
@@ -1729,7 +1731,9 @@
     "textPlaceholder": "전송할 텍스트 입력...",
     "title": "명령 전송",
     "unavailable": "사용 가능한 활성 세션이 없습니다",
-    "unavailableDesc": "데이터를 전송하려면 연결된 시리얼, SSH, 로컬 터미널, Telnet 탭으로 전환하세요."
+    "unavailableDesc": "데이터를 전송하려면 연결된 시리얼, SSH, 로컬 터미널, Telnet 탭으로 전환하세요.",
+    "unknownWindow": "알 수 없는 창",
+    "windowGroup": "창: {{label}}"
   },
   "sessionQuickSwitcher": {
     "active": "활성",
