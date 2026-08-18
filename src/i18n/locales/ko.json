@@ -2771,6 +2771,7 @@
     "failed": "ZMODEM 전송 실패: {{reason}}",
     "multipleFiles": "파일 {{count}}개",
     "preparingUpload": "파일 {{count}}개 업로드 준비 중...",
+    "remoteRefusedUpload": "원격 수신기가 파일을 거부했습니다. 현재 디렉터리의 쓰기 권한을 확인하세요.",
     "selectFiles": "ZMODEM으로 업로드할 파일 선택",
     "selectSaveDir": "ZMODEM 다운로드를 저장할 폴더 선택",
     "sftpProbeSkipped": "SFTP 채널이 사용 중이라 충돌 감지를 건너뛰고 ZMODEM으로 업로드합니다",

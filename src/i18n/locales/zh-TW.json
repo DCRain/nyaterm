@@ -2774,6 +2774,7 @@
     "failed": "ZMODEM 傳輸失敗: {{reason}}",
     "multipleFiles": "{{count}} 個檔案",
     "preparingUpload": "正在準備上傳 {{count}} 個檔案…",
+    "remoteRefusedUpload": "遠端接收端拒絕了該檔案。請檢查目前目錄是否有寫入權限。",
     "selectFiles": "選擇要透過 ZMODEM 上傳的檔案",
     "selectSaveDir": "選擇 ZMODEM 下載儲存資料夾",
     "sftpProbeSkipped": "SFTP 通道繁忙，跳過同名檔案偵測，直接上傳",

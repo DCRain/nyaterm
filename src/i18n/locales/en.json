@@ -2780,6 +2780,7 @@
     "failed": "ZMODEM transfer failed: {{reason}}",
     "multipleFiles": "{{count}} files",
     "preparingUpload": "Preparing to upload {{count}} file(s)...",
+    "remoteRefusedUpload": "The remote receiver refused the file. Check write permission for the current directory.",
     "selectFiles": "Select files to upload via ZMODEM",
     "selectSaveDir": "Select folder to save ZMODEM downloads",
     "sftpProbeSkipped": "SFTP channel busy, skipping conflict detection; uploading via ZMODEM",
