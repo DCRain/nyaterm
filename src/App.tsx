@@ -1,37 +1,23 @@
-import { invoke as tauriInvoke } from "@tauri-apps/api/core";
-import { emit, listen } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import { downloadDir } from "@tauri-apps/api/path";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import AppLayout from "./components/app/AppLayout";
+import AppOverlayDialogs from "./components/app/AppOverlayDialogs";
 import AppPanelContent from "./components/app/AppPanelContent";
-import ExternalConnectionMatchDialog from "./components/dialog/connections/ExternalConnectionMatchDialog";
 import type { HostKeyVerifyRequest } from "./components/dialog/connections/HostKeyVerifyDialog";
 import type { OtpRequest } from "./components/dialog/connections/OtpDialog";
 import type { RdpCertificateVerifyRequest } from "./components/dialog/connections/RdpCertificateVerifyDialog";
 import type { SshAgentAuthRequest } from "./components/dialog/connections/SshAgentAuthDialog";
 import type { SshAuthRequest } from "./components/dialog/connections/SshAuthDialog";
-import TemporarySshLinkDialog from "./components/dialog/connections/TemporarySshLinkDialog";
 import type { DockerSudoPasswordRequest } from "./components/dialog/docker/DockerSudoPasswordDialog";
-import UnsavedChangesDialog from "./components/dialog/remote-file-editor/UnsavedChangesDialog";
-import SessionQuickSwitcher, {
-  type QuickSwitcherSession,
-} from "./components/dialog/terminal/SessionQuickSwitcherDialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "./components/ui/alert-dialog";
+import type { QuickSwitcherSession } from "./components/dialog/terminal/SessionQuickSwitcherDialog";
 import { useApp } from "./context/AppContext";
 import { TransferProvider } from "./context/TransferContext";
 import { useActivityBarController } from "./hooks/useActivityBarController";
 import { type ExternalOpenRequest, useExternalOpenRequests } from "./hooks/useExternalOpenRequests";
+import { useFileDocumentCloseGuard } from "./hooks/useFileDocumentCloseGuard";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts";
 import { useIdleLock } from "./hooks/useIdleLock";
 import { useMacSelectionGuard } from "./hooks/useMacSelectionGuard";
@@ -39,48 +25,33 @@ import { useModalChildWindows } from "./hooks/useModalChildWindows";
 import { useRemoteGpuOverview } from "./hooks/useRemoteGpuOverview";
 import { useRemoteNpuOverview } from "./hooks/useRemoteNpuOverview";
 import { useRemoteStats } from "./hooks/useRemoteStats";
+import { useSessionRuntimeState } from "./hooks/useSessionRuntimeState";
 import { resolveDisplayKeys } from "./hooks/useShortcutMap";
 import { useTerminalZoom } from "./hooks/useTerminalZoom";
 import { useTabStatusIndicators } from "./hooks/useUnreadTabs";
-
-interface PendingFileDocumentClose {
-  paneIds: string[];
-  action: () => Promise<void>;
-}
-
-function collectFileDocumentPaneIds(tabs: Tab[]) {
-  return tabs.flatMap((tab) =>
-    collectSessionPanes(tab.root)
-      .filter((pane) => pane.paneKind === "file")
-      .map((pane) => pane.id),
-  );
-}
-
-function removePaneFromTabs(tabs: Tab[], tabId: string, paneId: string) {
-  return tabs.flatMap((tab) => {
-    if (tab.id !== tabId) return [tab];
-    const root = removeSessionPane(tab.root, paneId);
-    return root ? [{ ...tab, root }] : [];
-  });
-}
-
-type SecurityPrompt =
-  | { kind: "host-key"; request: HostKeyVerifyRequest }
-  | { kind: "ssh-agent"; request: SshAgentAuthRequest }
-  | { kind: "otp"; request: OtpRequest }
-  | { kind: "ssh-auth"; request: SshAuthRequest };
-
-function upsertSecurityPrompt(current: SecurityPrompt[], prompt: SecurityPrompt): SecurityPrompt[] {
-  const index = current.findIndex((item) => item.request.requestId === prompt.request.requestId);
-  if (index < 0) return [...current, prompt];
-  const next = [...current];
-  next[index] = prompt;
-  return next;
-}
-
 import { AI_OPEN_EVENT, type AIOpenIntent } from "./lib/aiEvents";
+import type {
+  ExternalConnectionChoice,
+  ExternalMatchDialogState,
+  PostLoginConfirmState,
+} from "./lib/appExternalDialogs";
 import {
-  assertMatchingTemporaryConfig,
+  attachSessionBeforeClose,
+  buildStartupCommandPayload,
+  capturePaneReconnectContent,
+  closeStaleCreatedSession,
+  createSessionForConnection,
+  createSessionForPane,
+  createTemporarySession,
+  focusTerminalSession,
+  getConnectionSessionType,
+  getRemoteDesktopPaneDisplay,
+  getTemporaryLinkSessionType,
+  isSessionCreationCancelled,
+  sendStartupCommandToSession,
+  type StartupCommandRequest,
+} from "./lib/appSessionFactory";
+import {
   buildPanelOpenUpdate,
   canCreateSessionFromPane,
   collectActiveNonSerialSessionIds,
@@ -94,6 +65,7 @@ import {
   NON_PANEL_IDS,
   type TrayAction,
 } from "./lib/appWorkspace";
+import { collectFileDocumentPaneIds, removePaneFromTabs } from "./lib/appWorkspaceClose";
 import {
   type AssetMonitoringCacheEntry,
   buildAssetPatchFromGpuOverview,
@@ -108,11 +80,6 @@ import {
   findExternalConnectionMatches,
   parseExternalOpenUrl,
 } from "./lib/externalOpen";
-import {
-  discardFileDocuments,
-  getDirtyFileDocumentIds,
-  saveFileDocuments,
-} from "./lib/fileDocumentRegistry";
 import { normalizeHeaderStatusMode } from "./lib/headerStatus";
 import { invoke } from "./lib/invoke";
 import { logger } from "./lib/logger";
@@ -147,10 +114,7 @@ import {
   updateTerminalWindowSplitRatio,
 } from "./lib/tabWindows";
 import type { TemporaryLinkConfig } from "./lib/temporaryLink";
-import {
-  captureTerminalReconnectContent,
-  preserveTerminalReconnectContent,
-} from "./lib/terminalReconnectHistory";
+import { preserveTerminalReconnectContent } from "./lib/terminalReconnectHistory";
 import { setBackendTransferDuplicatePrompt } from "./lib/transferDuplicatePrompt";
 import { checkForUpdate, type UpdateInfo } from "./lib/updater";
 import {
@@ -169,7 +133,6 @@ import {
   getActivePane,
   getReleasedSessionIds,
   getTabDisplayName,
-  removeSessionPane,
 } from "./lib/workspaceTabs";
 import type {
   AppSettings,
@@ -177,7 +140,6 @@ import type {
   CloudConflictPreview,
   PaneSplitDirection,
   RecordingMode,
-  RecordingStatus,
   SavedConnection,
   SessionInfo,
   SessionPane,
@@ -186,200 +148,18 @@ import type {
   WorkspaceSessionType,
 } from "./types/global";
 
-const CONNECTION_SESSION_TYPES: Record<SavedConnection["type"], WorkspaceSessionType> = {
-  ssh: "SSH",
-  local_terminal: "Local",
-  telnet: "Telnet",
-  serial: "Serial",
-  rdp: "RDP",
-  vnc: "VNC",
-};
+type SecurityPrompt =
+  | { kind: "host-key"; request: HostKeyVerifyRequest }
+  | { kind: "ssh-agent"; request: SshAgentAuthRequest }
+  | { kind: "otp"; request: OtpRequest }
+  | { kind: "ssh-auth"; request: SshAuthRequest };
 
-function getConnectionSessionType(
-  connection: Pick<SavedConnection, "type"> | null | undefined,
-): WorkspaceSessionType {
-  return connection ? CONNECTION_SESSION_TYPES[connection.type] : "SSH";
-}
-
-function getRemoteDesktopPaneDisplay(connection: SavedConnection | null | undefined) {
-  if (connection?.type === "rdp") {
-    return {
-      remoteWidth: connection.display?.width ?? 1920,
-      remoteHeight: connection.display?.height ?? 1080,
-      scaleMode: connection.display?.mode === "fit-window" ? "fit" : "actual",
-    } as const;
-  }
-  if (connection?.type === "vnc") {
-    return {
-      scaleMode: connection.display?.scale_mode ?? "fit",
-      viewOnly: connection.view_only ?? false,
-      clipboardEnabled: connection.clipboard?.enabled ?? true,
-    } as const;
-  }
-  return undefined;
-}
-
-function isSessionCreationCancelled(error: unknown) {
-  return getErrorMessage(error).toLowerCase().includes("session creation cancelled");
-}
-
-async function attachSessionBeforeClose(sessionId: string) {
-  await tauriInvoke("attach_session", { sessionId }).catch((error) => {
-    logger.debug({
-      domain: "session.lifecycle",
-      event: "session.attach_before_close_failed",
-      message: "Best-effort attach before close failed",
-      ids: { session_id: sessionId },
-      error,
-    });
-  });
-}
-
-async function closeStaleCreatedSession(sessionId: string) {
-  try {
-    await attachSessionBeforeClose(sessionId);
-    await invoke("close_session", { sessionId });
-    clearSessionCommandHistory(sessionId);
-  } catch (error) {
-    logger.error({
-      domain: "session.lifecycle",
-      event: "session.stale_close_failed",
-      message: "Failed to close stale created session",
-      ids: { session_id: sessionId },
-      error,
-    });
-  }
-}
-
-type StartupCommandRequest = {
-  command: string;
-  delayMs: number;
-};
-
-type ExternalConnectionChoice =
-  | { kind: "saved"; connection: SavedConnection }
-  | { kind: "temporary"; config: TemporaryLinkConfig }
-  | { kind: "cancelled" };
-
-type ExternalMatchDialogState = {
-  connections: SavedConnection[];
-  temporary: TemporaryLinkConfig;
-  resolve: (choice: ExternalConnectionChoice) => void;
-};
-
-type PostLoginConfirmState = {
-  connection: SavedConnection;
-  command: string;
-  resolve: (confirmed: boolean) => void;
-};
-
-async function createSessionForConnection(
-  connection: Pick<SavedConnection, "id" | "type">,
-  createRequestId?: string,
-  startupCommand?: StartupCommandRequest,
-) {
-  switch (connection.type) {
-    case "local_terminal":
-      return invoke<string>("create_local_session", {
-        connectionId: connection.id,
-        createRequestId,
-      });
-    case "telnet":
-      return invoke<string>("create_telnet_session", {
-        connectionId: connection.id,
-        createRequestId,
-        startupCommand: buildStartupCommandPayload(startupCommand),
-      });
-    case "serial":
-      return invoke<string>("create_serial_session", {
-        connectionId: connection.id,
-        createRequestId,
-      });
-    case "vnc":
-      return invoke<string>("create_vnc_session", {
-        connectionId: connection.id,
-        createRequestId,
-      });
-    case "rdp":
-      return invoke<string>("create_rdp_session", {
-        connectionId: connection.id,
-        createRequestId,
-      });
-    default:
-      return invoke<string>("create_ssh_session", {
-        connectionId: connection.id,
-        createRequestId,
-        startupCommand: buildStartupCommandPayload(startupCommand),
-      });
-  }
-}
-
-async function createTemporarySession(
-  config: TemporaryLinkConfig,
-  createRequestId?: string,
-  startupCommand?: StartupCommandRequest,
-) {
-  switch (config.protocol) {
-    case "telnet":
-      return invoke<string>("create_telnet_session", {
-        connectionId: null,
-        host: config.host,
-        port: config.port,
-        name: config.name,
-        createRequestId,
-        startupCommand: buildStartupCommandPayload(startupCommand),
-      });
-    case "serial":
-      return invoke<string>("create_serial_session", {
-        connectionId: null,
-        portName: config.portName,
-        baudRate: config.baudRate,
-        name: config.name,
-        createRequestId,
-      });
-    default: {
-      const { protocol: _protocol, ...sshConfig } = config;
-      return invoke<string>("create_temporary_ssh_session", {
-        config: sshConfig,
-        createRequestId,
-        startupCommand: buildStartupCommandPayload(startupCommand),
-      });
-    }
-  }
-}
-
-function getTemporaryLinkSessionType(config: TemporaryLinkConfig): SessionType {
-  switch (config.protocol) {
-    case "telnet":
-      return "Telnet";
-    case "serial":
-      return "Serial";
-    default:
-      return "SSH";
-  }
-}
-
-function buildStartupCommandPayload(startupCommand?: StartupCommandRequest) {
-  if (!startupCommand || !startupCommand.command.trim()) return null;
-  return {
-    command: startupCommand.command,
-    delayMs: Math.max(0, Math.min(60000, Math.round(startupCommand.delayMs))),
-  };
-}
-
-async function sendStartupCommandToSession(
-  sessionId: string,
-  startupCommand: StartupCommandRequest,
-) {
-  const delayMs = Math.max(0, Math.min(60000, Math.round(startupCommand.delayMs)));
-  if (delayMs > 0) {
-    await new Promise((resolve) => window.setTimeout(resolve, delayMs));
-  }
-  await sendSessionInput(sessionId, buildTerminalCommandInput(startupCommand.command), {
-    preview: { kind: "reset" },
-    registerSubmission: startupCommand.command,
-    origin: "startup_command",
-  });
+function upsertSecurityPrompt(current: SecurityPrompt[], prompt: SecurityPrompt): SecurityPrompt[] {
+  const index = current.findIndex((item) => item.request.requestId === prompt.request.requestId);
+  if (index < 0) return [...current, prompt];
+  const next = [...current];
+  next[index] = prompt;
+  return next;
 }
 
 function safeRecordingName(name: string) {
@@ -392,18 +172,6 @@ function joinPath(dir: string, fileName: string) {
 
 function eventTargetsCurrentWindow(targetWindowLabel?: string | null) {
   return !targetWindowLabel || targetWindowLabel === getOwnerMainWindowLabel();
-}
-
-function focusTerminalSession(sessionId?: string | null) {
-  if (!sessionId) return;
-  requestAnimationFrame(() => {
-    void emit(`focus-terminal-${sessionId}`);
-  });
-}
-
-function capturePaneReconnectContent(pane: SessionPane) {
-  if (pane.connecting || pane.connectError) return null;
-  return captureTerminalReconnectContent(pane.sessionId);
 }
 
 /** Root layout: header, activity bars, sidebars, terminal area, dialogs. */
@@ -485,9 +253,14 @@ function App() {
   const [showUpdateDialog, setShowUpdateDialog] = useState(false);
   const [showSyncGroupDialog, setShowSyncGroupDialog] = useState(false);
   const [showQuitConfirm, setShowQuitConfirm] = useState(false);
-  const [pendingFileDocumentClose, setPendingFileDocumentClose] =
-    useState<PendingFileDocumentClose | null>(null);
-  const [savingFileDocuments, setSavingFileDocuments] = useState(false);
+  const {
+    pendingFileDocumentClose,
+    savingFileDocuments,
+    requestFileDocumentClose,
+    handleSaveFileDocumentsAndClose,
+    handleDiscardFileDocumentsAndClose,
+    handlePendingFileDocumentCloseOpenChange,
+  } = useFileDocumentCloseGuard();
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [helpDotVisible, setHelpDotVisible] = useState(false);
   const [sendCommandDraft, setSendCommandDraft] = useState<SendCommandPanelDraft | null>(null);
@@ -498,43 +271,6 @@ function App() {
   );
   const [postLoginConfirm, setPostLoginConfirm] = useState<PostLoginConfirmState | null>(null);
   const allowProgrammaticWindowCloseRef = useRef(false);
-
-  const requestFileDocumentClose = useCallback(
-    async (paneIds: string[], action: () => Promise<void>) => {
-      const dirtyPaneIds = getDirtyFileDocumentIds(new Set(paneIds));
-      if (dirtyPaneIds.length === 0) {
-        await action();
-        return;
-      }
-      setPendingFileDocumentClose({ paneIds: dirtyPaneIds, action });
-    },
-    [],
-  );
-
-  const handleSaveFileDocumentsAndClose = useCallback(async () => {
-    const pending = pendingFileDocumentClose;
-    if (!pending || savingFileDocuments) return;
-
-    setSavingFileDocuments(true);
-    try {
-      if (!(await saveFileDocuments(pending.paneIds))) {
-        setPendingFileDocumentClose(null);
-        return;
-      }
-      setPendingFileDocumentClose(null);
-      await pending.action();
-    } finally {
-      setSavingFileDocuments(false);
-    }
-  }, [pendingFileDocumentClose, savingFileDocuments]);
-
-  const handleDiscardFileDocumentsAndClose = useCallback(() => {
-    const pending = pendingFileDocumentClose;
-    if (!pending) return;
-    discardFileDocuments(pending.paneIds);
-    setPendingFileDocumentClose(null);
-    void pending.action();
-  }, [pendingFileDocumentClose]);
 
   const handleSendCommandDraftConsumed = useCallback(() => {
     setSendCommandDraft(null);
@@ -547,89 +283,15 @@ function App() {
     });
   }, [updateUi]);
 
-  // Recording state: active file recording statuses reported by the backend.
-  const [recordingStatuses, setRecordingStatuses] = useState<RecordingStatus[]>([]);
-  const recordingSessions = useMemo(
-    () => new Set(recordingStatuses.map((status) => status.sessionId)),
-    [recordingStatuses],
-  );
-  const [liveSessionIds, setLiveSessionIds] = useState<Set<string> | null>(null);
-  const [liveSessionsById, setLiveSessionsById] = useState<Map<string, SessionInfo> | null>(null);
+  const {
+    recordingStatuses,
+    recordingSessions,
+    liveSessionIds,
+    liveSessionsById,
+    refreshRecordingStatuses,
+  } = useSessionRuntimeState(appSettings.recording.memory_limit_bytes, settingsLoaded);
   const assetMonitoringCacheRef = useRef<Map<string, AssetMonitoringCacheEntry>>(new Map());
   const assetMonitoringFlushesRef = useRef<Set<string>>(new Set());
-
-  const refreshRecordingStatuses = useCallback(async () => {
-    try {
-      const statuses = await invoke<RecordingStatus[]>("list_recording_statuses");
-      setRecordingStatuses(statuses);
-    } catch (error) {
-      logger.error({
-        domain: "session.lifecycle",
-        event: "recording.list_failed",
-        message: "Failed to list recording sessions",
-        error,
-      });
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshRecordingStatuses();
-    const unlistenSessions = listen("sessions-changed", () => {
-      void refreshRecordingStatuses();
-    });
-    const unlistenRecording = listen<RecordingStatus>("recording-status-changed", () => {
-      void refreshRecordingStatuses();
-    });
-    return () => {
-      unlistenSessions.then((dispose) => dispose());
-      unlistenRecording.then((dispose) => dispose());
-    };
-  }, [refreshRecordingStatuses]);
-
-  useEffect(() => {
-    let disposed = false;
-
-    const refreshLiveSessions = async () => {
-      try {
-        const sessions = await invoke<SessionInfo[]>("list_sessions");
-        if (!disposed) {
-          setLiveSessionIds(new Set(sessions.map((session) => session.id)));
-          setLiveSessionsById(new Map(sessions.map((session) => [session.id, session])));
-        }
-      } catch (error) {
-        logger.error({
-          domain: "session.lifecycle",
-          event: "session.live_list_failed",
-          message: "Failed to refresh live session ids",
-          error,
-        });
-      }
-    };
-
-    void refreshLiveSessions();
-    const unlisten = listen("sessions-changed", () => {
-      void refreshLiveSessions();
-    });
-
-    return () => {
-      disposed = true;
-      unlisten.then((dispose) => dispose());
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!settingsLoaded) return;
-    void invoke("set_recording_memory_limit", {
-      maxBytes: Math.max(1, appSettings.recording.memory_limit_bytes || 5 * 1024 * 1024),
-    }).catch((error) => {
-      logger.error({
-        domain: "settings.persistence",
-        event: "recording.memory_limit_sync_failed",
-        message: "Failed to sync recording memory limit",
-        error,
-      });
-    });
-  }, [appSettings.recording.memory_limit_bytes, settingsLoaded]);
 
   const [securityPromptQueue, setSecurityPromptQueue] = useState<SecurityPrompt[]>([]);
   const [dockerSudoPasswordRequest, setDockerSudoPasswordRequest] =
@@ -1680,91 +1342,6 @@ function App() {
     [updateSplitRatio],
   );
 
-  const createSessionForPane = useCallback(
-    async (
-      pane: Pick<SessionPane, "type" | "connectionId" | "temporaryConfig">,
-      createRequestId?: string,
-      startupCommand?: StartupCommandRequest,
-    ) => {
-      switch (pane.type) {
-        case "Local":
-          return invoke<string>("create_local_session", {
-            connectionId: pane.connectionId || null,
-            createRequestId,
-          });
-        case "Telnet":
-          if (pane.connectionId) {
-            return invoke<string>("create_telnet_session", {
-              connectionId: pane.connectionId,
-              createRequestId,
-              startupCommand: buildStartupCommandPayload(startupCommand),
-            });
-          }
-          assertMatchingTemporaryConfig(pane);
-          if (pane.temporaryConfig?.protocol === "telnet") {
-            return invoke<string>("create_telnet_session", {
-              connectionId: null,
-              host: pane.temporaryConfig.host,
-              port: pane.temporaryConfig.port,
-              name: pane.temporaryConfig.name,
-              createRequestId,
-              startupCommand: buildStartupCommandPayload(startupCommand),
-            });
-          }
-          throw new Error("Missing Telnet connection id");
-        case "Serial":
-          if (pane.connectionId) {
-            return invoke<string>("create_serial_session", {
-              connectionId: pane.connectionId,
-              createRequestId,
-            });
-          }
-          assertMatchingTemporaryConfig(pane);
-          if (pane.temporaryConfig?.protocol === "serial") {
-            return invoke<string>("create_serial_session", {
-              connectionId: null,
-              portName: pane.temporaryConfig.portName,
-              baudRate: pane.temporaryConfig.baudRate,
-              name: pane.temporaryConfig.name,
-              createRequestId,
-            });
-          }
-          throw new Error("Missing Serial connection id");
-        case "VNC":
-          if (!pane.connectionId) throw new Error("Missing VNC connection id");
-          return invoke<string>("create_vnc_session", {
-            connectionId: pane.connectionId,
-            createRequestId,
-          });
-        case "RDP":
-          if (!pane.connectionId) throw new Error("Missing RDP connection id");
-          return invoke<string>("create_rdp_session", {
-            connectionId: pane.connectionId,
-            createRequestId,
-          });
-        default:
-          if (pane.connectionId) {
-            return invoke<string>("create_ssh_session", {
-              connectionId: pane.connectionId,
-              createRequestId,
-              startupCommand: buildStartupCommandPayload(startupCommand),
-            });
-          }
-          assertMatchingTemporaryConfig(pane);
-          if (pane.temporaryConfig?.protocol === "ssh") {
-            const { protocol: _protocol, ...sshConfig } = pane.temporaryConfig;
-            return invoke<string>("create_temporary_ssh_session", {
-              config: sshConfig,
-              createRequestId,
-              startupCommand: buildStartupCommandPayload(startupCommand),
-            });
-          }
-          throw new Error("Missing SSH connection id");
-      }
-    },
-    [],
-  );
-
   const closePaneBackendSession = useCallback(
     async (
       pane: Pick<
@@ -1891,15 +1468,10 @@ function App() {
   );
 
   const requestCloseTabs = useCallback(
-    async (
-      tabsToClose: Tab[],
-      options?: { nextActiveTabId?: string | null },
-    ) => {
+    async (tabsToClose: Tab[], options?: { nextActiveTabId?: string | null }) => {
       const tabIds = tabsToClose.map((tab) => tab.id);
       const paneIds = collectFileDocumentPaneIds(tabsToClose);
-      await requestFileDocumentClose(paneIds, () =>
-        executeCloseTabs(tabIds, options),
-      );
+      await requestFileDocumentClose(paneIds, () => executeCloseTabs(tabIds, options));
     },
     [executeCloseTabs, requestFileDocumentClose],
   );
@@ -1921,9 +1493,7 @@ function App() {
   const requestClosePane = useCallback(
     async (tab: Tab, pane: SessionPane) => {
       const paneIds = pane.paneKind === "file" ? [pane.id] : [];
-      await requestFileDocumentClose(paneIds, () =>
-        executeClosePane(tab.id, pane.id),
-      );
+      await requestFileDocumentClose(paneIds, () => executeClosePane(tab.id, pane.id));
     },
     [executeClosePane, requestFileDocumentClose],
   );
@@ -1978,8 +1548,7 @@ function App() {
 
   const handleHistoryCommand = useCallback(
     (command: string, execute: boolean = true) => {
-      if (activePane?.paneKind !== "terminal" || !hasLiveSession(activePane))
-        return;
+      if (activePane?.paneKind !== "terminal" || !hasLiveSession(activePane)) return;
 
       const { sessionId } = activePane;
       const data = buildTerminalCommandInput(command, execute);
@@ -2032,7 +1601,7 @@ function App() {
       const pane = tab ? findPaneBySessionId(tab, oldSessionId) : null;
       if (!pane) return;
       replaceSessionReferences(oldSessionId, newSessionId);
-        updateAutoIconForSessionStart(pane.connectionId, newSessionId);
+      updateAutoIconForSessionStart(pane.connectionId, newSessionId);
     },
     [replaceSessionReferences, tabs, updateAutoIconForSessionStart],
   );
@@ -2185,13 +1754,8 @@ function App() {
     const terminalWindowLayout =
       appSettings.general.startup_restore_window_layout === false
         ? null
-        : serializeTerminalWindowLayout(
-            terminalWindowsRef.current,
-            restorableTabs,
-          );
-    lastPersistedTerminalWindowLayoutKeyRef.current = JSON.stringify(
-      terminalWindowLayout ?? null,
-    );
+        : serializeTerminalWindowLayout(terminalWindowsRef.current, restorableTabs);
+    lastPersistedTerminalWindowLayoutKeyRef.current = JSON.stringify(terminalWindowLayout ?? null);
     await persistTabsNow({ terminal_window_layout: terminalWindowLayout });
   }, [
     appSettings.general.startup_restore_window_layout,
@@ -2202,20 +1766,17 @@ function App() {
 
   const handleQuitApplication = useCallback(() => {
     setShowQuitConfirm(false);
-    void requestFileDocumentClose(
-      collectFileDocumentPaneIds(tabs),
-      async () => {
-        await persistWorkspaceLayoutNow().catch((error) => {
-          logger.error({
-            domain: "settings.persistence",
-            event: "workspace_layout.persist_before_quit_failed",
-            message: "Failed to persist workspace layout before quit",
-            error,
-          });
+    void requestFileDocumentClose(collectFileDocumentPaneIds(tabs), async () => {
+      await persistWorkspaceLayoutNow().catch((error) => {
+        logger.error({
+          domain: "settings.persistence",
+          event: "workspace_layout.persist_before_quit_failed",
+          message: "Failed to persist workspace layout before quit",
+          error,
         });
-        await invoke<void>("quit_application");
-      },
-    );
+      });
+      await invoke<void>("quit_application");
+    });
   }, [persistWorkspaceLayoutNow, requestFileDocumentClose, tabs]);
 
   useEffect(() => {
@@ -2243,34 +1804,28 @@ function App() {
             return;
           }
 
-          if (
-            tabs.length > 0 &&
-            appSettings.general.confirm_on_close !== false
-          ) {
+          if (tabs.length > 0 && appSettings.general.confirm_on_close !== false) {
             setShowQuitConfirm(true);
             return;
           }
 
-          await requestFileDocumentClose(
-            collectFileDocumentPaneIds(tabs),
-            async () => {
-              await persistWorkspaceLayoutNow().catch((error) => {
-                logger.error({
-                  domain: "settings.persistence",
-                  event: "workspace_layout.persist_before_close_failed",
-                  message: "Failed to persist workspace layout before close",
-                  error,
-                });
+          await requestFileDocumentClose(collectFileDocumentPaneIds(tabs), async () => {
+            await persistWorkspaceLayoutNow().catch((error) => {
+              logger.error({
+                domain: "settings.persistence",
+                event: "workspace_layout.persist_before_close_failed",
+                message: "Failed to persist workspace layout before close",
+                error,
               });
-              allowProgrammaticWindowCloseRef.current = true;
-              await currentWindow.close().catch(() => {
-                allowProgrammaticWindowCloseRef.current = false;
-              });
-              window.setTimeout(() => {
-                allowProgrammaticWindowCloseRef.current = false;
-              }, 1000);
-            },
-          );
+            });
+            allowProgrammaticWindowCloseRef.current = true;
+            await currentWindow.close().catch(() => {
+              allowProgrammaticWindowCloseRef.current = false;
+            });
+            window.setTimeout(() => {
+              allowProgrammaticWindowCloseRef.current = false;
+            }, 1000);
+          });
         });
       })
       .then((unlisten) => {
@@ -2312,11 +1867,7 @@ function App() {
     void import("@tauri-apps/api/window").then(({ getCurrentWindow }) =>
       getCurrentWindow().close(),
     );
-  }, [
-    appSettings.general.confirm_on_close,
-    appSettings.general.minimize_to_tray,
-    tabs.length,
-  ]);
+  }, [appSettings.general.confirm_on_close, appSettings.general.minimize_to_tray, tabs.length]);
 
   useEffect(() => {
     const unlisten = listen<TrayAction>("tray-action", ({ payload }) => {
@@ -2436,7 +1987,6 @@ function App() {
     },
     [
       addPendingTab,
-      createSessionForPane,
       hasTab,
       markTabConnectionFailed,
       maybePromptConnectionEdit,
@@ -2642,7 +2192,6 @@ function App() {
     },
     [
       closePaneBackendSession,
-      createSessionForPane,
       hasFileDocumentDependency,
       hasPane,
       maybePromptConnectionEdit,
@@ -2657,13 +2206,7 @@ function App() {
   const handleDisconnectSession = useCallback(
     async (tab: Tab) => {
       const pane = getActivePane(tab);
-      if (
-        !pane ||
-        pane.connecting ||
-        pane.connectError ||
-        pane.paneKind === "file"
-      )
-        return;
+      if (!pane || pane.connecting || pane.connectError || pane.paneKind === "file") return;
       if (hasFileDocumentDependency(pane.sessionId)) {
         notifyFileDocumentDependency();
         return;
@@ -2677,20 +2220,14 @@ function App() {
 
       toast.success(t("tabCtx.disconnectSuccess"));
     },
-    [
-      closePaneBackendSession,
-      hasFileDocumentDependency,
-      notifyFileDocumentDependency,
-      t,
-    ],
+    [closePaneBackendSession, hasFileDocumentDependency, notifyFileDocumentDependency, t],
   );
 
   const handleReconnectSessionById = useCallback(
     async (sessionId: string) => {
       const tab = findTabBySessionId(tabs, sessionId);
       const pane = tab ? findPaneBySessionId(tab, sessionId) : null;
-      if (!tab || !pane || pane.connecting || !canCreateSessionFromPane(pane))
-        return;
+      if (!tab || !pane || pane.connecting || !canCreateSessionFromPane(pane)) return;
       if (hasFileDocumentDependency(pane.sessionId)) {
         notifyFileDocumentDependency();
         return;
@@ -2748,7 +2285,6 @@ function App() {
     },
     [
       closePaneBackendSession,
-      createSessionForPane,
       hasFileDocumentDependency,
       hasPane,
       maybePromptConnectionEdit,
@@ -2764,11 +2300,8 @@ function App() {
   const handleSplitSession = useCallback(
     async (tab: Tab, direction: PaneSplitDirection) => {
       const pane = getActivePane(tab);
-      if (!pane || pane.paneKind === "file" || !canCreateSessionFromPane(pane))
-        return;
-      const leaf = terminalWindows
-        ? findTerminalWindowLeafByTabId(terminalWindows, tab.id)
-        : null;
+      if (!pane || pane.paneKind === "file" || !canCreateSessionFromPane(pane)) return;
+      const leaf = terminalWindows ? findTerminalWindowLeafByTabId(terminalWindows, tab.id) : null;
       if (!leaf) {
         toast.error(t("tabCtx.splitFailed"));
         return;
@@ -2836,7 +2369,6 @@ function App() {
     },
     [
       addPendingTab,
-      createSessionForPane,
       hasTab,
       markTabConnectionFailed,
       maybePromptConnectionEdit,
@@ -2926,7 +2458,6 @@ function App() {
     },
     [
       closePaneBackendSession,
-      createSessionForPane,
       hasFileDocumentDependency,
       hasPane,
       markPaneConnectionFailed,
@@ -2983,13 +2514,7 @@ function App() {
 
       await requestClosePane(tab, pane);
     },
-    [
-      hasFileDocumentDependency,
-      notifyFileDocumentDependency,
-      requestClosePane,
-      t,
-      tabs,
-    ],
+    [hasFileDocumentDependency, notifyFileDocumentDependency, requestClosePane, t, tabs],
   );
 
   const canReconnectSessionById = useCallback(
@@ -3857,8 +3382,7 @@ function App() {
           onSendCommandDraftConsumed: handleSendCommandDraftConsumed,
           onQuickCmdResize: handleQuickCmdResize,
           onSerialSendResize: handleSerialSendResize,
-          onClearAfterSendChange: (enabled) =>
-            updateUi({ serial_send_clear_after_send: enabled }),
+          onClearAfterSendChange: (enabled) => updateUi({ serial_send_clear_after_send: enabled }),
           onCommandSend: handleHistoryCommand,
           onSendToAllSessions: handleSendToAllSessions,
         }}
@@ -3898,65 +3422,33 @@ function App() {
           onRequestClose: handleRequestWindowClose,
         }}
       />
-      <SessionQuickSwitcher
-        open={showSessionQuickSwitcher}
+      <AppOverlayDialogs
+        t={t}
+        showSessionQuickSwitcher={showSessionQuickSwitcher}
         activeSessionId={activeSessionId}
-        workspaceSessions={quickSwitcherSessions}
+        quickSwitcherSessions={quickSwitcherSessions}
         savedConnections={savedConnections}
-        onClose={handleCloseSessionQuickSwitcher}
-        onSelectSession={handleQuickSwitchSession}
-        onOpenConnection={handleQuickOpenConnection}
-        onNewSshSession={handleQuickSwitcherNewSshSession}
+        onCloseSessionQuickSwitcher={handleCloseSessionQuickSwitcher}
+        onQuickSwitchSession={handleQuickSwitchSession}
+        onQuickOpenConnection={handleQuickOpenConnection}
+        onQuickSwitcherNewSshSession={handleQuickSwitcherNewSshSession}
+        showTemporarySshLink={showTemporarySshLink}
+        onTemporarySshLinkOpenChange={setShowTemporarySshLink}
+        onTemporarySshConnect={handleTemporarySshConnect}
+        externalMatchDialog={externalMatchDialog}
+        savedGroups={savedGroups}
+        onExternalMatchOpenChange={handleExternalMatchOpenChange}
+        onExternalMatchConnection={handleExternalMatchConnection}
+        onExternalMatchTemporary={handleExternalMatchTemporary}
+        pendingFileDocumentClose={pendingFileDocumentClose}
+        savingFileDocuments={savingFileDocuments}
+        onPendingFileDocumentCloseOpenChange={handlePendingFileDocumentCloseOpenChange}
+        onSaveFileDocumentsAndClose={handleSaveFileDocumentsAndClose}
+        onDiscardFileDocumentsAndClose={handleDiscardFileDocumentsAndClose}
+        postLoginConfirm={postLoginConfirm}
+        onPostLoginConfirmOpenChange={handlePostLoginConfirmOpenChange}
+        onPostLoginContinue={handlePostLoginContinue}
       />
-      <TemporarySshLinkDialog
-        open={showTemporarySshLink}
-        onOpenChange={setShowTemporarySshLink}
-        onConnect={handleTemporarySshConnect}
-      />
-      <ExternalConnectionMatchDialog
-        open={externalMatchDialog !== null}
-        connections={externalMatchDialog?.connections ?? []}
-        groups={savedGroups}
-        temporary={externalMatchDialog?.temporary ?? null}
-        onOpenChange={handleExternalMatchOpenChange}
-        onSelectConnection={handleExternalMatchConnection}
-        onUseTemporary={handleExternalMatchTemporary}
-      />
-      <UnsavedChangesDialog
-        open={pendingFileDocumentClose !== null}
-        dirtyCount={pendingFileDocumentClose?.paneIds.length ?? 0}
-        hasPendingTab={false}
-        saving={savingFileDocuments}
-        onOpenChange={(open) => {
-          if (!open && !savingFileDocuments) setPendingFileDocumentClose(null);
-        }}
-        onSaveAndClose={handleSaveFileDocumentsAndClose}
-        onDiscard={handleDiscardFileDocumentsAndClose}
-      />
-      <AlertDialog
-        open={postLoginConfirm !== null}
-        onOpenChange={handlePostLoginConfirmOpenChange}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("externalOpen.postLoginConfirmTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t("externalOpen.postLoginConfirmDescription", {
-                name: postLoginConfirm?.connection.name ?? "",
-              })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <pre className="max-h-40 overflow-auto rounded-md border bg-muted p-3 font-mono text-xs whitespace-pre-wrap">
-            {postLoginConfirm?.command ?? ""}
-          </pre>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
-            <AlertDialogAction onClick={handlePostLoginContinue}>
-              {t("externalOpen.continueConnection")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </TransferProvider>
   );
 }
