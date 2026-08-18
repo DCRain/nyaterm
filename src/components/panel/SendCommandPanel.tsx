@@ -1,5 +1,6 @@
 import {
   type ChangeEvent,
+  Fragment,
   type KeyboardEvent,
   type ReactNode,
   type UIEvent,
@@ -17,6 +18,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
@@ -49,6 +52,7 @@ interface SendCommandPanelProps {
   currentShellSessionId: string | null;
   shellSessionIds: string[];
   syncGroups: SyncGroup[];
+  currentWindowLabel: string;
   sessionTargets: SendCommandSessionTarget[];
   draft?: SendCommandPanelDraft | null;
   onDraftConsumed?: () => void;
@@ -71,6 +75,7 @@ interface SendCommandSessionTarget {
   name: string;
   tabName: string;
   type: SessionType;
+  ownerWindowLabel?: string | null;
 }
 
 interface SendUnit {
@@ -261,6 +266,7 @@ export default function SendCommandPanel({
   currentShellSessionId,
   shellSessionIds,
   syncGroups,
+  currentWindowLabel,
   sessionTargets,
   draft,
   onDraftConsumed,
@@ -331,6 +337,47 @@ export default function SendCommandPanel({
     [sessionTargetOptions],
   );
 
+  const allWindowSessionIds = useMemo(
+    () => sessionTargetOptions.map((option) => option.session.id),
+    [sessionTargetOptions],
+  );
+
+  const sessionTargetGroups = useMemo(() => {
+    const groups = new Map<
+      string,
+      {
+        key: string;
+        ownerWindowLabel: string | null;
+        label: string;
+        options: typeof sessionTargetOptions;
+      }
+    >();
+
+    for (const option of sessionTargetOptions) {
+      const ownerWindowLabel = option.session.ownerWindowLabel ?? null;
+      const isCurrentWindow = ownerWindowLabel === currentWindowLabel;
+      const key = isCurrentWindow ? "__current__" : (ownerWindowLabel ?? "__unknown__");
+      const label = isCurrentWindow
+        ? t("serialSend.currentWindowSessions", "Current window sessions")
+        : t("serialSend.windowGroup", "Window: {{label}}", {
+            label: ownerWindowLabel ?? t("serialSend.unknownWindow", "Unknown window"),
+          });
+
+      const group = groups.get(key);
+      if (group) {
+        group.options.push(option);
+      } else {
+        groups.set(key, { key, ownerWindowLabel, label, options: [option] });
+      }
+    }
+
+    return [...groups.values()].sort((a, b) => {
+      if (a.ownerWindowLabel === currentWindowLabel) return -1;
+      if (b.ownerWindowLabel === currentWindowLabel) return 1;
+      return a.label.localeCompare(b.label);
+    });
+  }, [currentWindowLabel, sessionTargetOptions, t]);
+
   const groupTargetOptions = useMemo(() => {
     return syncGroups
       .filter((group) => group.enabled)
@@ -388,6 +435,10 @@ export default function SendCommandPanel({
       return session ? getSessionTargetLabel(session) : t("serialSend.targetSessions", "Sessions");
     }
 
+    if (target === "allWindows") {
+      return t("serialSend.allWindowSessions", "All window sessions");
+    }
+
     return target === "all"
       ? t("serialSend.allSessions", "All sessions")
       : t("serialSend.currentSession", "Current session");
@@ -402,6 +453,10 @@ export default function SendCommandPanel({
       return sessionTargetByValue.has(target) ? [getSessionTargetId(target)] : [];
     }
 
+    if (target === "allWindows") {
+      return allWindowSessionIds;
+    }
+
     if (targetKind === "serial") {
       return serialSessionId ? [serialSessionId] : [];
     }
@@ -412,6 +467,7 @@ export default function SendCommandPanel({
         : []
       : shellSessionIds;
   }, [
+    allWindowSessionIds,
     currentTargetSessionId,
     groupTargetByValue,
     serialSessionId,
@@ -460,6 +516,11 @@ export default function SendCommandPanel({
       return;
     }
 
+    if (target === "allWindows" && allWindowSessionIds.length === 0) {
+      setTarget(fallbackTarget);
+      return;
+    }
+
     if (targetKind === "serial" && target === "all") {
       setTarget("current");
       return;
@@ -471,6 +532,7 @@ export default function SendCommandPanel({
       setTarget("all");
     }
   }, [
+    allWindowSessionIds.length,
     currentTargetSessionId,
     groupTargetByValue,
     sessionTargetByValue,
@@ -906,6 +968,13 @@ export default function SendCommandPanel({
                   {t("serialSend.allSessions", "All sessions")}
                 </TargetMenuItem>
               )}
+              <TargetMenuItem
+                checked={target === "allWindows"}
+                disabled={allWindowSessionIds.length === 0}
+                onSelect={() => setTarget("allWindows")}
+              >
+                {t("serialSend.allWindowSessions", "All window sessions")}
+              </TargetMenuItem>
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger
                   disabled={sessionTargetOptions.length === 0}
@@ -914,14 +983,22 @@ export default function SendCommandPanel({
                   <span className="truncate">{t("serialSend.targetSessions", "Sessions")}</span>
                 </DropdownMenuSubTrigger>
                 <DropdownMenuSubContent className="max-h-[70vh] min-w-[14rem] max-w-[22rem] overflow-y-auto">
-                  {sessionTargetOptions.map((option) => (
-                    <TargetMenuItem
-                      key={option.session.id}
-                      checked={target === option.value}
-                      onSelect={() => setTarget(option.value)}
-                    >
-                      {getSessionTargetLabel(option.session)}
-                    </TargetMenuItem>
+                  {sessionTargetGroups.map((group, groupIndex) => (
+                    <Fragment key={group.key}>
+                      {groupIndex > 0 && <DropdownMenuSeparator />}
+                      <DropdownMenuLabel className="max-w-[20rem] truncate text-[0.625rem] text-muted-foreground">
+                        {group.label}
+                      </DropdownMenuLabel>
+                      {group.options.map((option) => (
+                        <TargetMenuItem
+                          key={option.session.id}
+                          checked={target === option.value}
+                          onSelect={() => setTarget(option.value)}
+                        >
+                          {getSessionTargetLabel(option.session)}
+                        </TargetMenuItem>
+                      ))}
+                    </Fragment>
                   ))}
                 </DropdownMenuSubContent>
               </DropdownMenuSub>

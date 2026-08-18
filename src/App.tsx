@@ -3403,45 +3403,62 @@ function App() {
     [tabsById, terminalWindows],
   );
   const sendCommandSessionTargets = useMemo(() => {
-    if (!terminalWindows) return [];
-
-    const targets: {
-      id: string;
-      name: string;
-      tabName: string;
-      type: SessionType;
-    }[] = [];
-    const seen = new Set<string>();
-
-    const visit = (node: TerminalWindowNode) => {
-      if (node.kind === "split") {
-        visit(node.first);
-        visit(node.second);
-        return;
+    const currentWindowLabel = getOwnerMainWindowLabel();
+    const targetsById = new Map<
+      string,
+      {
+        id: string;
+        name: string;
+        tabName: string;
+        type: SessionType;
+        ownerWindowLabel?: string | null;
       }
+    >();
 
-      for (const tabId of node.tabIds) {
-        const tab = tabsById.get(tabId);
-        if (!tab) continue;
-
-        for (const pane of collectSessionPanes(tab.root)) {
-          if (pane.paneKind !== "terminal" || !hasLiveSession(pane) || seen.has(pane.sessionId)) {
-            continue;
-          }
-          seen.add(pane.sessionId);
-          targets.push({
-            id: pane.sessionId,
-            name: pane.name,
-            tabName: getTabDisplayName(tab),
-            type: pane.type,
-          });
+    if (terminalWindows) {
+      const visit = (node: TerminalWindowNode) => {
+        if (node.kind === "split") {
+          visit(node.first);
+          visit(node.second);
+          return;
         }
-      }
-    };
 
-    visit(terminalWindows);
-    return targets;
-  }, [tabsById, terminalWindows]);
+        for (const tabId of node.tabIds) {
+          const tab = tabsById.get(tabId);
+          if (!tab) continue;
+
+          for (const pane of collectSessionPanes(tab.root)) {
+            if (pane.paneKind !== "terminal" || !hasLiveSession(pane)) {
+              continue;
+            }
+            targetsById.set(pane.sessionId, {
+              id: pane.sessionId,
+              name: pane.name,
+              tabName: getTabDisplayName(tab),
+              type: pane.type,
+              ownerWindowLabel: currentWindowLabel,
+            });
+          }
+        }
+      };
+
+      visit(terminalWindows);
+    }
+
+    for (const session of liveSessionsById?.values() ?? []) {
+      if (!["SSH", "Local", "Telnet", "Serial"].includes(session.session_type)) continue;
+      if (targetsById.has(session.id)) continue;
+      targetsById.set(session.id, {
+        id: session.id,
+        name: session.name,
+        tabName: session.name,
+        type: session.session_type as SessionType,
+        ownerWindowLabel: session.owner_window_label ?? null,
+      });
+    }
+
+    return [...targetsById.values()];
+  }, [liveSessionsById, tabsById, terminalWindows]);
 
   const activeBottomPanel = uiConfig.show_serial_send_panel
     ? "serialSend"
@@ -3833,6 +3850,7 @@ function App() {
           activeNonSerialSessionId,
           activeNonSerialSessionIds,
           syncGroups,
+          currentWindowLabel: getOwnerMainWindowLabel(),
           sessionTargets: sendCommandSessionTargets,
           sendCommandDraft,
           onSendCommandDraftConsumed: handleSendCommandDraftConsumed,

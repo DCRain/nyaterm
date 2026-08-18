@@ -110,11 +110,13 @@ interface AppLayoutProps {
     activeNonSerialSessionId: string | null;
     activeNonSerialSessionIds: string[];
     syncGroups: SyncGroup[];
+    currentWindowLabel: string;
     sessionTargets: {
       id: string;
       name: string;
       tabName: string;
       type: SessionType;
+      ownerWindowLabel?: string | null;
     }[];
     sendCommandDraft: SendCommandPanelDraft | null;
     onSendCommandDraftConsumed: () => void;
@@ -470,6 +472,7 @@ export default function AppLayout({
                     currentShellSessionId={bottomPanel.activeNonSerialSessionId}
                     shellSessionIds={bottomPanel.activeNonSerialSessionIds}
                     syncGroups={bottomPanel.syncGroups}
+                    currentWindowLabel={bottomPanel.currentWindowLabel}
                     sessionTargets={bottomPanel.sessionTargets}
                     draft={bottomPanel.sendCommandDraft}
                     onDraftConsumed={bottomPanel.onSendCommandDraftConsumed}
