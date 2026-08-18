@@ -277,6 +277,8 @@ pub struct UiConfig {
     pub show_serial_send_panel: bool,
     #[serde(default = "default_serial_send_height")]
     pub serial_send_height: f64,
+    #[serde(default = "default_false")]
+    pub serial_send_clear_after_send: bool,
     #[serde(default = "default_zoom")]
     pub zoom_level: f64,
     #[serde(default = "default_language")]
@@ -466,6 +468,7 @@ impl Default for UiConfig {
             show_quick_cmd_bar: true,
             show_serial_send_panel: false,
             serial_send_height: default_serial_send_height(),
+            serial_send_clear_after_send: false,
             zoom_level: default_zoom(),
             language: default_language(),
             header_status_mode: default_header_status_mode(),

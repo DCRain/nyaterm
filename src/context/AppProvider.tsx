@@ -228,6 +228,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     show_quick_cmd_bar: true,
     show_serial_send_panel: false,
     serial_send_height: 180,
+    serial_send_clear_after_send: false,
     zoom_level: 1.0,
     language: "en",
     header_status_mode: "session",

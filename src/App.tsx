@@ -3846,6 +3846,7 @@ function App() {
           activePanel: activeBottomPanel,
           quickCmdHeight: uiConfig.quick_cmd_height || 180,
           serialSendHeight: uiConfig.serial_send_height || 180,
+          clearAfterSend: uiConfig.serial_send_clear_after_send ?? false,
           activeSerialSessionId,
           activeNonSerialSessionId,
           activeNonSerialSessionIds,
@@ -3856,6 +3857,8 @@ function App() {
           onSendCommandDraftConsumed: handleSendCommandDraftConsumed,
           onQuickCmdResize: handleQuickCmdResize,
           onSerialSendResize: handleSerialSendResize,
+          onClearAfterSendChange: (enabled) =>
+            updateUi({ serial_send_clear_after_send: enabled }),
           onCommandSend: handleHistoryCommand,
           onSendToAllSessions: handleSendToAllSessions,
         }}

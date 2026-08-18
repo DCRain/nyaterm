@@ -766,6 +766,7 @@ export interface UiConfig {
   show_quick_cmd_bar: boolean;
   show_serial_send_panel: boolean;
   serial_send_height: number;
+  serial_send_clear_after_send: boolean;
   zoom_level: number;
   language?: string;
   header_status_mode?: HeaderStatusMode;

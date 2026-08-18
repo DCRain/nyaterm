@@ -245,6 +245,8 @@ struct LegacySnapshotRawHashInput<'a> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PortableUiSettings {
     pub language: Option<String>,
+    #[serde(default)]
+    pub serial_send_clear_after_send: bool,
     #[serde(default = "default_portable_true")]
     pub header_status_visible: bool,
     pub show_remote_stats: bool,
@@ -333,6 +335,7 @@ impl PortableAppSettings {
             ai: settings.ai.clone(),
             ui: PortableUiSettings {
                 language: settings.ui.language.clone(),
+                serial_send_clear_after_send: settings.ui.serial_send_clear_after_send,
                 header_status_visible: settings.ui.header_status_visible,
                 show_remote_stats: settings.ui.show_remote_stats,
                 remote_stats_interval: settings.ui.remote_stats_interval,
@@ -384,6 +387,7 @@ impl PortableAppSettings {
         current.ai = self.ai;
         config::normalize_ai_settings(&mut current.ai);
         current.ui.language = self.ui.language;
+        current.ui.serial_send_clear_after_send = self.ui.serial_send_clear_after_send;
         current.ui.header_status_visible = self.ui.header_status_visible;
         current.ui.show_remote_stats = self.ui.show_remote_stats;
         current.ui.remote_stats_interval = self.ui.remote_stats_interval;

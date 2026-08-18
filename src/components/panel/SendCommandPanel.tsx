@@ -6,6 +6,7 @@ import {
   type UIEvent,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -35,6 +36,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { invoke } from "@/lib/invoke";
 import type {
@@ -54,9 +56,11 @@ interface SendCommandPanelProps {
   syncGroups: SyncGroup[];
   currentWindowLabel: string;
   sessionTargets: SendCommandSessionTarget[];
+  clearAfterSend: boolean;
   draft?: SendCommandPanelDraft | null;
   onDraftConsumed?: () => void;
   onSendingChange?: (isSending: boolean) => void;
+  onClearAfterSendChange: (enabled: boolean) => void;
 }
 
 interface SendProgress {
@@ -268,11 +272,14 @@ export default function SendCommandPanel({
   syncGroups,
   currentWindowLabel,
   sessionTargets,
+  clearAfterSend,
   draft,
   onDraftConsumed,
   onSendingChange,
+  onClearAfterSendChange,
 }: SendCommandPanelProps) {
   const { t } = useTranslation();
+  const clearAfterSendId = useId();
   const [dataType, setDataType] = useState<SendCommandDataType>("text");
   const [commandText, setCommandText] = useState("");
   const [hexText, setHexText] = useState("");
@@ -651,6 +658,7 @@ export default function SendCommandPanel({
     let completedUnits = 0;
     let firstUnit = true;
     let cancelled = false;
+    let completedSuccessfully = false;
 
     try {
       let round = 0;
@@ -690,7 +698,9 @@ export default function SendCommandPanel({
         }
         if (failedCount > 0) {
           toast.error(t("serialSend.sendPartial", "Some sessions did not receive the data"));
+          return;
         }
+        completedSuccessfully = sendCount > 0;
       }
     } finally {
       if (timerRef.current !== null) {
@@ -703,14 +713,24 @@ export default function SendCommandPanel({
       setIsSending(false);
       onSendingChange?.(false);
       setProgress(null);
-      if (dataType === "hex") {
-        hexInputRef.current?.focus();
-      } else {
-        textInputRef.current?.focus();
+      if (completedSuccessfully && clearAfterSend) {
+        if (dataType === "hex") {
+          setHexText("");
+        } else {
+          setCommandText("");
+        }
       }
+      requestAnimationFrame(() => {
+        if (dataType === "hex") {
+          hexInputRef.current?.focus();
+        } else {
+          textInputRef.current?.focus();
+        }
+      });
     }
   }, [
     buildSendUnits,
+    clearAfterSend,
     count,
     dataType,
     getDefaultInterval,
@@ -1117,7 +1137,7 @@ export default function SendCommandPanel({
         {dataType === "text" ? (
           <Textarea
             ref={textInputRef}
-            className="min-h-0 h-full resize-none pr-12 pb-10 text-xs leading-5 md:text-xs"
+            className="min-h-0 h-full resize-none pr-36 pb-10 text-xs leading-5 md:text-xs"
             placeholder={t(
               "serialSend.shellPlaceholder",
               "Enter text to send...\nCtrl/Cmd + Enter to send",
@@ -1137,7 +1157,7 @@ export default function SendCommandPanel({
             }}
           />
         ) : (
-          <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_minmax(0,0.85fr)] gap-1.5 pr-10 pb-10">
+          <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_minmax(0,0.85fr)] gap-1.5 pr-36 pb-10">
             <div className="flex min-h-0 flex-col overflow-hidden rounded-md border border-border bg-background">
               <div className="flex h-8 shrink-0 items-center border-b border-border/70 px-2">
                 <span className="text-[0.625rem] font-medium text-muted-foreground">
@@ -1213,8 +1233,25 @@ export default function SendCommandPanel({
           </div>
         )}
 
+        <div className="absolute top-2 right-2 z-20 flex h-6 items-center gap-1.5 rounded-md border border-border/70 bg-background/95 px-2 shadow-sm backdrop-blur">
+          <Label
+            htmlFor={clearAfterSendId}
+            className="cursor-pointer whitespace-nowrap text-[0.625rem] text-muted-foreground"
+          >
+            {t("serialSend.clearAfterSend", "Clear after send")}
+          </Label>
+          <Switch
+            id={clearAfterSendId}
+            size="sm"
+            checked={clearAfterSend}
+            disabled={isSending}
+            aria-label={t("serialSend.clearAfterSend", "Clear after send")}
+            onCheckedChange={onClearAfterSendChange}
+          />
+        </div>
+
         {progress && (
-          <div className="pointer-events-none absolute inset-x-2 top-2 z-10">
+          <div className="pointer-events-none absolute inset-x-2 top-10 z-10">
             <div className="rounded-md border border-primary/25 bg-background/95 px-2.5 py-2 shadow-sm backdrop-blur">
               <div className="mb-1.5 flex min-w-0 items-center gap-2">
                 <span className="truncate text-[0.6875rem] font-medium text-foreground">
