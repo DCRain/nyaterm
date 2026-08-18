@@ -85,7 +85,7 @@ export default function NoteEditorPanel({ noteId, filePath, tabId }: NoteEditorP
   const previewScrollRef = useRef<HTMLDivElement>(null);
   const previewCaptureRef = useRef<HTMLDivElement>(null);
   const syncingScrollRef = useRef(false);
-  const [viewMode, setViewMode] = useState<NoteViewMode>("edit");
+  const [viewMode, setViewMode] = useState<NoteViewMode>("preview");
   const [splitRatio, setSplitRatio] = useState(0.5);
   const [editorKey, setEditorKey] = useState(0);
   const [editorReadyToken, setEditorReadyToken] = useState(0);
