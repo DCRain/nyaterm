@@ -930,7 +930,7 @@
     "gid": "GID",
     "goUp": "返回上级",
     "group": "组",
-    "hideHiddenFiles": "隐藏隐藏文件",
+    "hideHiddenFiles": "不显示隐藏文件",
     "loading": "加载中...",
     "loadingChildDirectories": "正在加载目录...",
     "location": "位置",
