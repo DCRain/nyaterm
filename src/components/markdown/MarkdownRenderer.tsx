@@ -211,7 +211,7 @@ function createMarkdownComponents(
       const renderPlainBlock = (text: string) => (
         <pre
           {...lineAttr}
-          className="my-3 overflow-x-auto rounded-md border p-3 font-mono text-[0.8125rem] leading-[1.45]"
+          className="nyaterm-md-code-block my-3 overflow-x-auto rounded-md border p-3 font-mono text-[0.8125rem] leading-[1.45]"
           style={{
             borderColor: colors.border,
             backgroundColor: colors.syntax.background,
@@ -227,7 +227,7 @@ function createMarkdownComponents(
       if (!isBlock) {
         return (
           <code
-            className="rounded px-1 py-0.5 font-mono text-xs"
+            className="nyaterm-md-inline-code rounded px-1 py-0.5 font-mono text-xs"
             style={{
               backgroundColor: `${colors.bgHover}cc`,
               color: colors.text,
@@ -264,6 +264,7 @@ function createMarkdownComponents(
             language={language}
             style={prismStyle}
             PreTag="div"
+            className="nyaterm-md-code-block"
             customStyle={{
               margin: "0.75rem 0",
               padding: "0.9rem 1rem",

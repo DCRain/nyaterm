@@ -877,8 +877,10 @@ html[data-window-transparency="true"] .nyaterm-note-editor-shell .nyaterm-solid-
   color: var(--df-text-muted);
 }
 
-.nyaterm-note-preview code,
-.nyaterm-note-content code {
+.nyaterm-note-preview .nyaterm-md-inline-code,
+.nyaterm-note-content .nyaterm-md-inline-code,
+.nyaterm-note-preview :not(.nyaterm-md-code-block) > code:not([class*="language-"]),
+.nyaterm-note-content :not(.nyaterm-md-code-block) > code:not([class*="language-"]) {
   border-radius: 4px;
   background: var(--df-bg-hover);
   color: var(--df-text);
@@ -886,12 +888,19 @@ html[data-window-transparency="true"] .nyaterm-note-editor-shell .nyaterm-solid-
   font-family: "JetBrains Mono", monospace;
 }
 
+.nyaterm-note-preview .nyaterm-md-code-block code,
+.nyaterm-note-content .nyaterm-md-code-block code,
 .nyaterm-note-preview pre code,
-.nyaterm-note-content pre code {
+.nyaterm-note-content pre code,
+.nyaterm-note-preview [class*="language-"] code,
+.nyaterm-note-content [class*="language-"] code {
   display: block;
   overflow-x: auto;
-  padding: 0.9rem;
+  padding: 0;
+  border-radius: 0;
   background: transparent;
+  color: inherit;
+  font-family: inherit;
 }
 
 .nyaterm-note-preview a,

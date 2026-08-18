@@ -1,4 +1,24 @@
 import type { EditorView } from "@codemirror/view";
+import {
+  buildStyledSpan,
+  type InlineTextStyleKey,
+  type InlineTextStylePatch,
+  mergeInlineStyle,
+  parseExactStyledSpan,
+  removeInlineStyleKeys,
+} from "@/lib/inlineTextStyle";
+
+/** Build a GitHub-flavored Markdown table with the given dimensions. */
+function buildTableMarkdown(rows: number, cols: number): string {
+  if (rows < 1) rows = 1;
+  if (cols < 1) cols = 1;
+  const header = `| ${Array.from({ length: cols }, (_, i) => `Column ${i + 1}`).join(" | ")} |`;
+  const delimiter = `| ${Array.from({ length: cols }, () => "---").join(" | ")} |`;
+  const bodyRows = Array.from({ length: rows - 1 }, () =>
+    `| ${Array.from({ length: cols }, () => "").join(" | ")} |`,
+  );
+  return [header, delimiter, ...bodyRows].join("\n");
+}
 
 function selectedText(view: EditorView) {
   const { from, to } = view.state.selection.main;
@@ -116,8 +136,9 @@ export function insertCodeBlock(view: EditorView) {
   replaceSelection(view, insert, selected ? insert.length : 5);
 }
 
-export function insertTable(view: EditorView) {
-  replaceSelection(view, `\n| Column 1 | Column 2 | Column 3 |\n| --- | --- | --- |\n|  |  |  |\n`);
+export function insertTable(view: EditorView, rows = 3, cols = 3) {
+  const table = buildTableMarkdown(rows, cols);
+  replaceSelection(view, `\n${table}\n`);
 }
 
 export function insertHorizontalRule(view: EditorView) {
@@ -233,4 +254,83 @@ export function insertECharts(view: EditorView) {
       2,
     ),
   );
+}
+
+/**
+ * Apply (or merge) inline HTML text styles onto the selection.
+ * Writes `<span style="...">...</span>` using the sanitized style whitelist.
+ */
+export function applyInlineTextStyle(view: EditorView, patch: InlineTextStylePatch): boolean {
+  const mergedProbe = mergeInlineStyle(undefined, patch);
+  if (!mergedProbe) return false;
+
+  const range = resolveStyledSpanRange(view);
+  const { from, to } = range;
+  const selected = view.state.sliceDoc(from, to);
+  const existing = parseExactStyledSpan(selected);
+
+  if (existing) {
+    const nextStyle = mergeInlineStyle(existing.style, patch);
+    if (!nextStyle) return false;
+    const insert = buildStyledSpan(existing.content, nextStyle);
+    view.dispatch({
+      changes: { from, to, insert },
+      selection: { anchor: from, head: from + insert.length },
+      userEvent: "input",
+    });
+    view.focus();
+    return true;
+  }
+
+  const content = selected || "text";
+  const insert = buildStyledSpan(content, mergedProbe);
+  view.dispatch({
+    changes: { from, to, insert },
+    selection: { anchor: from, head: from + insert.length },
+    userEvent: "input",
+  });
+  view.focus();
+  return true;
+}
+
+/** Remove selected inline style keys; unwrap the span when no styles remain. */
+export function clearInlineTextStyle(
+  view: EditorView,
+  keys: InlineTextStyleKey[] = ["color", "backgroundColor", "fontSize"],
+): boolean {
+  const range = resolveStyledSpanRange(view);
+  const { from, to } = range;
+  const selected = view.state.sliceDoc(from, to);
+  const existing = parseExactStyledSpan(selected);
+  if (!existing) return false;
+
+  const nextStyle = removeInlineStyleKeys(existing.style, keys);
+  const insert = nextStyle
+    ? buildStyledSpan(existing.content, nextStyle)
+    : existing.content;
+  view.dispatch({
+    changes: { from, to, insert },
+    selection: { anchor: from, head: from + insert.length },
+    userEvent: "input",
+  });
+  view.focus();
+  return true;
+}
+
+/** Prefer an exact selected span; otherwise expand to an enclosing styled span. */
+function resolveStyledSpanRange(view: EditorView): { from: number; to: number } {
+  const { from, to } = view.state.selection.main;
+  const selected = view.state.sliceDoc(from, to);
+  if (parseExactStyledSpan(selected)) return { from, to };
+
+  const doc = view.state.doc.toString();
+  const open = doc.lastIndexOf("<span", from);
+  if (open < 0) return { from, to };
+  const close = doc.indexOf("</span>", Math.max(to - 1, open));
+  if (close < 0) return { from, to };
+  const end = close + "</span>".length;
+  if (from < open || to > end) return { from, to };
+  const candidate = doc.slice(open, end);
+  if (!parseExactStyledSpan(candidate)) return { from, to };
+  return { from: open, to: end };
 }

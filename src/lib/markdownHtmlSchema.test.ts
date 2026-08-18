@@ -35,6 +35,12 @@ describe("sanitizeInlineStyle", () => {
     expect(sanitizeInlineStyle("background: url(javascript:alert(1))")).toBeUndefined();
     expect(sanitizeInlineStyle("color: expression(alert(1))")).toBeUndefined();
   });
+
+  it("keeps note toolbar inline text styles", () => {
+    expect(
+      sanitizeInlineStyle("color: #e06c75; background-color: #fef3c7; font-size: 18px"),
+    ).toBe("color: #e06c75; background-color: #fef3c7; font-size: 18px");
+  });
 });
 
 describe("sanitizeElementProperties", () => {
