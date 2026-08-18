@@ -2,18 +2,83 @@
 mod tests {
     use super::{
         ProgressThrottle, ZMODEM_FINISH_DRAIN_IDLE, ZMODEM_PROGRESS_BYTES,
-        ZMODEM_PROGRESS_INTERVAL, ZmodemDetectResult, ZmodemDetector, ZmodemDirection,
-        ZmodemDownloadOoDrain, ZmodemEvent, ZmodemUploadDrain, zmodem_mtime_from_metadata,
+        ZMODEM_PROGRESS_INTERVAL, ZmodemAction, ZmodemDetectResult, ZmodemDetector,
+        ZmodemDirection, ZmodemDownloadOoDrain, ZmodemEvent, ZmodemTransfer,
+        ZmodemUploadConflictMode, ZmodemUploadDrain, cancel_sequence, zmodem_mtime_from_metadata,
         zmodem_mtime_from_system_time,
     };
     use serde_json::json;
+    use std::path::PathBuf;
     use std::time::{Duration, Instant, UNIX_EPOCH};
+    use zmodem2::{Encoding, Frame, Header};
 
     fn detected_direction(result: ZmodemDetectResult) -> ZmodemDirection {
         match result {
             ZmodemDetectResult::Detected { direction, .. } => direction,
             ZmodemDetectResult::NoMatch { .. } => panic!("expected ZMODEM detection"),
         }
+    }
+
+    fn zhex_header(frame: Frame) -> Vec<u8> {
+        let mut wire = Vec::new();
+        Header::new(Encoding::ZHEX, frame, &[0; 4])
+            .write(&mut wire)
+            .expect("write zmodem header")
+            .expect("complete zmodem header");
+        wire
+    }
+
+    fn write_zrinit() -> Vec<u8> {
+        zhex_header(Frame::ZRINIT)
+    }
+
+    fn write_zskip() -> Vec<u8> {
+        zhex_header(Frame::ZSKIP)
+    }
+
+    fn write_zfin() -> Vec<u8> {
+        zhex_header(Frame::ZFIN)
+    }
+
+    fn temp_upload_file(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "nyaterm-zmodem-{name}-{}.tmp",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&path, b"zmodem upload test").expect("write temp upload file");
+        path
+    }
+
+    fn cleanup_temp_files(paths: &[PathBuf]) {
+        for path in paths {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    fn has_complete_event(actions: &[ZmodemAction]) -> bool {
+        actions.iter().any(|action| {
+            matches!(
+                action,
+                ZmodemAction::EmitEvent(ZmodemEvent::Complete {
+                    direction: ZmodemDirection::Upload,
+                    ..
+                })
+            )
+        })
+    }
+
+    fn failed_reason(actions: &[ZmodemAction]) -> Option<&str> {
+        actions.iter().find_map(|action| match action {
+            ZmodemAction::EmitEvent(ZmodemEvent::Failed { reason }) => Some(reason.as_str()),
+            _ => None,
+        })
+    }
+
+    fn has_cancel_sequence(actions: &[ZmodemAction]) -> bool {
+        actions.iter().any(|action| match action {
+            ZmodemAction::SendToRemote(data) => data == &cancel_sequence(),
+            _ => false,
+        })
     }
 
     #[test]
@@ -102,6 +167,80 @@ mod tests {
                 "fileCount": 1,
             })
         );
+    }
+
+    #[test]
+    fn upload_zskip_fails_overwrite_transfer() {
+        let path = temp_upload_file("overwrite-refused");
+        let mut transfer = ZmodemTransfer::new(ZmodemDirection::Upload, &write_zrinit());
+        let accept_actions =
+            transfer.accept_upload(vec![path.clone()], ZmodemUploadConflictMode::Overwrite, false);
+
+        assert!(failed_reason(&accept_actions).is_none());
+
+        let actions = transfer.feed_incoming(&write_zskip());
+
+        assert!(transfer.is_done());
+        assert_eq!(transfer.file_count, 0);
+        assert!(has_cancel_sequence(&actions));
+        assert!(!has_complete_event(&actions));
+        assert!(
+            failed_reason(&actions)
+                .expect("failed event")
+                .contains("destination may be unwritable")
+        );
+
+        cleanup_temp_files(&[path]);
+    }
+
+    #[test]
+    fn upload_zskip_fails_batch_without_counting_skipped_file() {
+        let first = temp_upload_file("batch-refused-first");
+        let second = temp_upload_file("batch-refused-second");
+        let mut transfer = ZmodemTransfer::new(ZmodemDirection::Upload, &write_zrinit());
+        let accept_actions = transfer.accept_upload(
+            vec![first.clone(), second.clone()],
+            ZmodemUploadConflictMode::Overwrite,
+            false,
+        );
+
+        assert!(failed_reason(&accept_actions).is_none());
+
+        let actions = transfer.feed_incoming(&write_zskip());
+
+        assert!(transfer.is_done());
+        assert_eq!(transfer.file_count, 0);
+        assert!(has_cancel_sequence(&actions));
+        assert!(!has_complete_event(&actions));
+        assert!(failed_reason(&actions).is_some());
+
+        cleanup_temp_files(&[first, second]);
+    }
+
+    #[test]
+    fn upload_zskip_in_skip_mode_does_not_count_file_as_uploaded() {
+        let path = temp_upload_file("intentional-skip");
+        let mut transfer = ZmodemTransfer::new(ZmodemDirection::Upload, &write_zrinit());
+        let accept_actions =
+            transfer.accept_upload(vec![path.clone()], ZmodemUploadConflictMode::Skip, false);
+
+        assert!(failed_reason(&accept_actions).is_none());
+
+        let skip_actions = transfer.feed_incoming(&write_zskip());
+
+        assert!(!transfer.is_done());
+        assert_eq!(transfer.file_count, 0);
+        assert!(failed_reason(&skip_actions).is_none());
+        assert!(!has_complete_event(&skip_actions));
+
+        let finish_actions = transfer.feed_incoming(&write_zfin());
+
+        assert!(transfer.is_done());
+        assert_eq!(transfer.file_count, 0);
+        assert!(failed_reason(&finish_actions).is_none());
+        assert!(has_complete_event(&finish_actions));
+
+        cleanup_temp_files(&[path]);
     }
 
     #[test]

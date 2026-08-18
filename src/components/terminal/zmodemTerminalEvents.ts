@@ -87,6 +87,13 @@ function normalizeZmodemPayload(payload: ZmodemEventPayload): NormalizedZmodemPa
   return { ...payload, direction };
 }
 
+function getUploadFailureDescription(reason: string, t: Translate): string {
+  if (reason.includes("destination may be unwritable")) {
+    return t("zmodem.remoteRefusedUpload");
+  }
+  return reason;
+}
+
 export function createZmodemEventHandler(
   terminal: Terminal,
   sessionId: string,
@@ -396,16 +403,19 @@ export function createZmodemEventHandler(
           if (isUpload) {
             dismissUploadToast();
             if (normalizedPayload.reason !== "cancelled") {
+              const t = getT();
               toast.error(
-                getT()("fileTransfer.uploadFailed", {
+                t("fileTransfer.uploadFailed", {
                   name: uploadFileName || "file",
                 }),
                 {
-                  description: normalizedPayload.reason,
+                  description: getUploadFailureDescription(normalizedPayload.reason, t),
                 },
               );
             }
-            failPendingZmodemUpload(sessionId, normalizedPayload.reason);
+            failPendingZmodemUpload(sessionId, normalizedPayload.reason, {
+              uiHandled: normalizedPayload.reason !== "cancelled",
+            });
           } else {
             writeTerminalStatus(
               `\r\n\x1b[31m[ZMODEM] ${getT()("zmodem.failed", {

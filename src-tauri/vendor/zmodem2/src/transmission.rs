@@ -66,6 +66,7 @@ pub struct FileRequest {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SenderEvent {
     FileComplete,
+    FileSkipped,
     SessionComplete,
 }
 
@@ -881,7 +882,7 @@ impl Sender {
                 | SendState::WaitFileDone
         ) {
             self.pending_request = None;
-            self.pending_event = Some(SenderEvent::FileComplete);
+            self.pending_event = Some(SenderEvent::FileSkipped);
             self.has_file = false;
             if self.finish_requested {
                 self.queue_zfin()?;

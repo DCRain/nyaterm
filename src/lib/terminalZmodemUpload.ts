@@ -24,6 +24,20 @@ type PendingUpload = {
 let pendingUpload: PendingUpload | null = null;
 let preparingUploadToastId: string | number | null = null;
 
+interface ZmodemUploadError extends Error {
+  zmodemUiHandled?: boolean;
+}
+
+function createZmodemUploadError(reason: string, uiHandled = false): ZmodemUploadError {
+  const error = new Error(reason) as ZmodemUploadError;
+  error.zmodemUiHandled = uiHandled;
+  return error;
+}
+
+export function isZmodemUploadErrorHandled(error: unknown): boolean {
+  return error instanceof Error && (error as ZmodemUploadError).zmodemUiHandled === true;
+}
+
 function clearWaitingTimeout() {
   if (pendingUpload?.timeoutId !== null && pendingUpload?.timeoutId !== undefined) {
     window.clearTimeout(pendingUpload.timeoutId);
@@ -100,13 +114,17 @@ export function completePendingZmodemUpload(sessionId: string) {
   resolve();
 }
 
-export function failPendingZmodemUpload(sessionId: string, reason: string) {
+export function failPendingZmodemUpload(
+  sessionId: string,
+  reason: string,
+  options?: { uiHandled?: boolean },
+) {
   if (!pendingUpload || pendingUpload.sessionId !== sessionId) {
     return;
   }
   const { reject } = pendingUpload;
   clearPendingUpload();
-  reject(new Error(reason));
+  reject(createZmodemUploadError(reason, options?.uiHandled));
 }
 
 export function cancelPendingZmodemUpload(sessionId?: string) {

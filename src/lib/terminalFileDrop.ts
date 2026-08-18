@@ -1,7 +1,10 @@
 import { toast } from "sonner";
 import type { ResolvedLocalDropPathEntry } from "@/components/panel/file-explorer/model";
 import { sendSessionInput } from "@/lib/sessionInput";
-import { uploadFilesViaZmodem } from "@/lib/terminalZmodemUpload";
+import {
+  isZmodemUploadErrorHandled,
+  uploadFilesViaZmodem,
+} from "@/lib/terminalZmodemUpload";
 import type { SessionType } from "@/types/global";
 
 function quoteLocalPath(path: string): string {
@@ -80,7 +83,9 @@ export async function handleTerminalFileDrop(params: {
     fileEntries.map((entry) => entry.path),
     duplicateStrategy,
   ).catch((error) => {
-    toast.error(t("terminal.dropUploadFailed"));
+    if (!isZmodemUploadErrorHandled(error)) {
+      toast.error(t("terminal.dropUploadFailed"));
+    }
     throw error;
   });
 }
