@@ -455,16 +455,7 @@ fn preserve_device_local_settings(
 pub fn strip_device_local_sessions(sessions: &mut config::SessionsConfig) {
     for connection in &mut sessions.connections {
         match &mut connection.config {
-            config::ConnectionType::LocalTerminal {
-                shell_path,
-                shell_args,
-                working_dir,
-                ..
-            } => {
-                shell_path.clear();
-                shell_args.clear();
-                *working_dir = None;
-            }
+            config::ConnectionType::LocalTerminal { .. } => {}
             config::ConnectionType::Serial { port_name, .. } => {
                 port_name.clear();
             }
@@ -514,9 +505,17 @@ pub fn preserve_device_local_sessions(
                     ..
                 },
             ) => {
-                *shell_path = device_shell_path.clone();
-                *shell_args = device_shell_args.clone();
-                *working_dir = device_working_dir.clone();
+                if is_empty_local_terminal_config(shell_path, shell_args, working_dir)
+                    && !is_empty_local_terminal_config(
+                        device_shell_path,
+                        device_shell_args,
+                        device_working_dir,
+                    )
+                {
+                    *shell_path = device_shell_path.clone();
+                    *shell_args = device_shell_args.clone();
+                    *working_dir = device_working_dir.clone();
+                }
             }
             (
                 config::ConnectionType::Serial { port_name, .. },
@@ -548,4 +547,16 @@ pub fn preserve_device_local_sessions(
             _ => {}
         }
     }
+}
+
+fn is_empty_local_terminal_config(
+    shell_path: &str,
+    shell_args: &str,
+    working_dir: &Option<String>,
+) -> bool {
+    shell_path.trim().is_empty()
+        && shell_args.trim().is_empty()
+        && working_dir
+            .as_deref()
+            .is_none_or(|working_dir| working_dir.trim().is_empty())
 }

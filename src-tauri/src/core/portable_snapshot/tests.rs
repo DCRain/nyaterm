@@ -264,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn sync_sessions_strip_local_terminal_and_serial_device_fields() {
+    fn sync_sessions_strip_serial_but_keep_local_terminal_fields() {
         let mut sessions = sample_sessions_with_device_local_connections();
 
         strip_device_local_sessions(&mut sessions);
@@ -283,9 +283,12 @@ mod tests {
         else {
             panic!("expected local terminal");
         };
-        assert!(shell_path.is_empty());
-        assert!(shell_args.is_empty());
-        assert!(working_dir.is_none());
+        assert_eq!(
+            shell_path,
+            "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        );
+        assert_eq!(shell_args, "-NoLogo");
+        assert_eq!(working_dir.as_deref(), Some("C:\\Users\\me"));
 
         let serial = sessions
             .connections
@@ -299,10 +302,21 @@ mod tests {
     }
 
     #[test]
-    fn applying_sync_sessions_preserves_matching_device_fields() {
-        let current = sample_sessions_with_device_local_connections();
+    fn applying_sync_sessions_uses_incoming_local_terminal_fields() {
+        let mut current = sample_sessions_with_device_local_connections();
         let mut incoming = sample_sessions_with_device_local_connections();
-        strip_device_local_sessions(&mut incoming);
+        let config::ConnectionType::LocalTerminal {
+            shell_path,
+            shell_args,
+            working_dir,
+            ..
+        } = &mut current.connections[0].config
+        else {
+            panic!("expected local terminal");
+        };
+        *shell_path = "powershell.exe".to_string();
+        *shell_args = "-NoExit".to_string();
+        *working_dir = Some("C:\\Users\\current".to_string());
 
         preserve_device_local_sessions(&mut incoming, &current);
 
@@ -327,6 +341,13 @@ mod tests {
         assert_eq!(shell_args, "-NoLogo");
         assert_eq!(working_dir.as_deref(), Some("C:\\Users\\me"));
 
+        let config::ConnectionType::Serial { port_name, .. } = &mut incoming.connections[1].config
+        else {
+            panic!("expected serial");
+        };
+        port_name.clear();
+        preserve_device_local_sessions(&mut incoming, &current);
+
         let serial = incoming
             .connections
             .iter()
@@ -336,6 +357,42 @@ mod tests {
             panic!("expected serial");
         };
         assert_eq!(port_name, "COM3");
+    }
+
+    #[test]
+    fn applying_sync_sessions_preserves_local_terminal_for_legacy_empty_snapshot() {
+        let current = sample_sessions_with_device_local_connections();
+        let mut incoming = sample_sessions_with_device_local_connections();
+        let config::ConnectionType::LocalTerminal {
+            shell_path,
+            shell_args,
+            working_dir,
+            ..
+        } = &mut incoming.connections[0].config
+        else {
+            panic!("expected local terminal");
+        };
+        shell_path.clear();
+        shell_args.clear();
+        *working_dir = None;
+
+        preserve_device_local_sessions(&mut incoming, &current);
+
+        let config::ConnectionType::LocalTerminal {
+            shell_path,
+            shell_args,
+            working_dir,
+            ..
+        } = &incoming.connections[0].config
+        else {
+            panic!("expected local terminal");
+        };
+        assert_eq!(
+            shell_path,
+            "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        );
+        assert_eq!(shell_args, "-NoLogo");
+        assert_eq!(working_dir.as_deref(), Some("C:\\Users\\me"));
     }
 
     #[test]
@@ -449,6 +506,7 @@ mod tests {
                 asset_sort_key: None,
                 asset_sort_direction: None,
                 activity_bar_layout: ActivityBarLayout::default(),
+                serial_send_clear_after_send: true,
             },
         }
     }
