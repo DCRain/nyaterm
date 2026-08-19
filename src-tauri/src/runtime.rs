@@ -9,6 +9,8 @@ use crate::error::{AppError, AppResult};
 const DEFAULT_IDENTIFIER: &str = "com.kang.nyaterm";
 const PORTABLE_MARKER_FILE: &str = "portable.flag";
 const PORTABLE_KEY_FILE: &str = "portable.key";
+#[cfg(all(windows, target_vendor = "win7"))]
+const WIN7_WEBVIEW2_FIXED_RUNTIME_DIR: &str = "webview2-fixed-runtime";
 
 #[derive(Clone, Debug)]
 pub struct AppRuntime {
@@ -112,13 +114,48 @@ pub fn apply_to_context<R: tauri::Runtime>(context: &mut tauri::Context<R>, runt
 }
 
 pub fn prepare_webview_environment(runtime: &AppRuntime) {
-    if runtime.portable {
-        #[cfg(windows)]
+    #[cfg(windows)]
+    {
         // Called during app startup before Tauri initializes WebView threads.
+        if runtime.portable {
+            unsafe {
+                std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", runtime.webview_data_dir());
+            }
+        }
+
+        #[cfg(target_vendor = "win7")]
+        prepare_win7_webview2_fixed_runtime(runtime);
+    }
+}
+
+#[cfg(all(windows, target_vendor = "win7"))]
+fn prepare_win7_webview2_fixed_runtime(runtime: &AppRuntime) {
+    if std::env::var_os("WEBVIEW2_BROWSER_EXECUTABLE_FOLDER").is_some() {
+        return;
+    }
+
+    if let Some(runtime_dir) = win7_webview2_fixed_runtime_dir(runtime) {
         unsafe {
-            std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", runtime.webview_data_dir());
+            std::env::set_var("WEBVIEW2_BROWSER_EXECUTABLE_FOLDER", runtime_dir);
         }
     }
+}
+
+#[cfg(all(windows, target_vendor = "win7"))]
+fn win7_webview2_fixed_runtime_dir(runtime: &AppRuntime) -> Option<PathBuf> {
+    let candidates = [
+        runtime
+            .executable_dir()
+            .join(WIN7_WEBVIEW2_FIXED_RUNTIME_DIR),
+        runtime
+            .executable_dir()
+            .join("resources")
+            .join(WIN7_WEBVIEW2_FIXED_RUNTIME_DIR),
+    ];
+
+    candidates
+        .into_iter()
+        .find(|path| path.join("msedgewebview2.exe").is_file())
 }
 
 pub fn log_dir(app: &tauri::AppHandle) -> AppResult<PathBuf> {
