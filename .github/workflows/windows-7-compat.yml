@@ -63,6 +63,22 @@ jobs:
         env:
           RUST_CACHE_COMPRESS: true
 
+      - name: Enable Win7-only Cargo patches
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          New-Item -ItemType Directory -Force -Path ".cargo" | Out-Null
+          @'
+          [patch.crates-io]
+          webview2-com-sys = { path = "src-tauri/vendor/webview2-com-sys" }
+          windows-core = { path = "src-tauri/vendor/windows-core" }
+          '@ | Set-Content -LiteralPath ".cargo/config.toml" -Encoding UTF8
+
+          cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 | Out-Null
+          Write-Host "Enabled Win7-only Cargo patches:"
+          Get-Content -LiteralPath ".cargo/config.toml"
+
       - name: Print build metadata
         shell: pwsh
         run: |
@@ -264,7 +280,7 @@ jobs:
             rustToolchain = $env:WIN7_RUST_TOOLCHAIN
             rustflags = $env:RUSTFLAGS
             webview2Runtime = "109.0.1518.78"
-            webview2LoaderSdk = "Microsoft.Web.WebView2 1.0.1054.31"
+            webview2LoaderSdk = "Microsoft.Web.WebView2 1.0.1020.30"
             updaterArtifacts = $false
             win7RuntimeLaunch = "NOT VERIFIED"
           }
@@ -272,6 +288,24 @@ jobs:
 
           "path=$installerPath" >> $env:GITHUB_OUTPUT
           Write-Host "Win7 installer artifact: $installerPath"
+
+      - name: Ensure 7-Zip is available
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $knownPaths = @(
+            (Join-Path $env:ProgramFiles "7-Zip\7z.exe"),
+            (Join-Path ${env:ProgramFiles(x86)} "7-Zip\7z.exe"),
+            "C:\ProgramData\chocolatey\bin\7z.exe"
+          )
+
+          if ((Get-Command 7z.exe -ErrorAction SilentlyContinue) -or ($knownPaths | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1)) {
+            Write-Host "7-Zip is available."
+            return
+          }
+
+          choco install 7zip -y --no-progress
 
       - name: Verify Win7 installer content
         shell: pwsh
@@ -283,3 +317,40 @@ jobs:
           name: nyaterm-windows-7-x64
           path: win7-artifacts/*
           if-no-files-found: error
+
+  modern-windows-regression:
+    name: Modern Windows x64 regression
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 9
+          run_install: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            ./src-tauri -> target
+          key: windows-2022-x86_64-pc-windows-msvc
+
+      - name: Build modern Windows target without bundle
+        run: pnpm tauri build --target x86_64-pc-windows-msvc --no-bundle --ci

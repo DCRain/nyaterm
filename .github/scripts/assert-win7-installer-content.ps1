@@ -15,7 +15,8 @@ function Find-7Zip {
 
   $commonPaths = @(
     (Join-Path $env:ProgramFiles "7-Zip\7z.exe"),
-    (Join-Path ${env:ProgramFiles(x86)} "7-Zip\7z.exe")
+    (Join-Path ${env:ProgramFiles(x86)} "7-Zip\7z.exe"),
+    "C:\ProgramData\chocolatey\bin\7z.exe"
   )
 
   foreach ($path in $commonPaths) {
