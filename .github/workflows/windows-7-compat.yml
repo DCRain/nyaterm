@@ -283,36 +283,3 @@ jobs:
           name: nyaterm-windows-7-x64
           path: win7-artifacts/*
           if-no-files-found: error
-
-  modern-windows-regression:
-    name: Modern Windows x64 regression
-    runs-on: windows-2022
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v5
-        with:
-          version: 9
-          run_install: false
-
-      - name: Install Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "20"
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-
-      - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build frontend
-        run: pnpm build
-
-      - name: Build modern Windows executable
-        run: pnpm tauri build --target x86_64-pc-windows-msvc --no-bundle --ci
