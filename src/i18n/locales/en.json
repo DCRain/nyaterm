@@ -1897,6 +1897,7 @@
     "exportSuccess": "Configuration exported.",
     "followUiTheme": "Follow UI Theme",
     "fontBuiltIn": "Built-in",
+    "fontDragToSort": "Drag to reorder",
     "fontFallback": "Fallback",
     "fontFamily": "Font Family",
     "fontFamilyDesc": "The font family used in the terminal and app UI. Topmost font has highest priority.",

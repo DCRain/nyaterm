@@ -1896,6 +1896,7 @@
     "exportSuccess": "配置已成功导出。",
     "followUiTheme": "跟随界面主题",
     "fontBuiltIn": "内置",
+    "fontDragToSort": "拖动排序",
     "fontFallback": "备选字体",
     "fontFamily": "字体系列",
     "fontFamilyDesc": "终端和应用程序 UI 中使用的字体系列。最顶部的字体优先级最高。",
