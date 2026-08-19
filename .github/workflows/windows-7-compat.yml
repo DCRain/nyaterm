@@ -119,6 +119,7 @@ jobs:
             --locked `
             --release `
             --target $env:WIN7_TARGET `
+            --features tauri/custom-protocol `
             -Z build-std=std,panic_abort
           if ($LASTEXITCODE -ne 0) {
             throw "Raw Windows 7 cargo probe failed. Patch the first reported dependency blocker before enabling later stages."
@@ -193,6 +194,7 @@ jobs:
             --locked `
             --release `
             --target $env:WIN7_TARGET `
+            --features tauri/custom-protocol `
             -Z build-std=std,panic_abort
           if ($LASTEXITCODE -ne 0) {
             throw "Windows 7 cargo build failed after WebView2 preparation."
