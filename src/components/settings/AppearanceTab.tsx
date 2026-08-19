@@ -1,5 +1,17 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { GripVertical } from "lucide-react";
+import { motion, Reorder, useDragControls } from "motion/react";
+import {
+  memo,
+  type PointerEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { MdAdd, MdClose, MdDeleteOutline, MdFolderOpen, MdImage, MdPalette } from "react-icons/md";
 import { ThemeDesignerDialog } from "@/components/dialog/theme/ThemeDesignerDialog";
@@ -12,6 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useApp } from "@/context/AppContext";
 import { useTheme } from "@/context/ThemeContext";
 import {
@@ -343,7 +356,247 @@ interface FontStackSectionProps {
   onChange: (value: string) => void;
 }
 
-function FontStackSection({
+type SortableFontItem = {
+  id: string;
+  font: string;
+};
+
+const FONT_REORDER_TRANSITION = {
+  layout: { type: "spring", stiffness: 620, damping: 42, mass: 0.72 },
+} as const;
+const FONT_DRAG_ACTIVE_ANIMATION = {
+  scale: 1.015,
+  boxShadow: "0 14px 30px rgb(0 0 0 / 0.18)",
+} as const;
+const FONT_DRAG_IDLE_ANIMATION = {
+  scale: 1,
+  boxShadow: "0 0 0 rgb(0 0 0 / 0)",
+} as const;
+const FONT_DRAG_TRANSITION = { duration: 0.12, ease: "easeOut" } as const;
+const FONT_WHILE_DRAG = { zIndex: 20 } as const;
+
+function haveSameFontOrder(items: SortableFontItem[], fonts: string[]) {
+  return items.length === fonts.length && items.every((item, index) => item.font === fonts[index]);
+}
+
+function reconcileFontItems(
+  currentItems: SortableFontItem[],
+  fonts: string[],
+  createItem: (font: string) => SortableFontItem,
+) {
+  const remainingItems = [...currentItems];
+  return fonts.map((font) => {
+    const existingIndex = remainingItems.findIndex((item) => item.font === font);
+    if (existingIndex === -1) return createItem(font);
+    return remainingItems.splice(existingIndex, 1)[0];
+  });
+}
+
+interface SortableFontRowProps {
+  item: SortableFontItem;
+  index: number;
+  itemCount: number;
+  fontOptionLookup: ReadonlyMap<string, string>;
+  fontOptionItems: ReactNode;
+  previewFallback: "sans-serif" | "monospace";
+  isLoadingOptions: boolean;
+  hasLoadedOptions: boolean;
+  isSelectOpen: boolean;
+  isDragging: boolean;
+  onRequestOptions: () => void;
+  onSelectOpenChange: (id: string, open: boolean) => void;
+  onFontChange: (id: string, font: string) => void;
+  onRemove: (id: string) => void;
+  onDragStart: (id: string) => void;
+  onDragEnd: (id: string) => void;
+}
+
+interface FontSelectControlProps {
+  item: SortableFontItem;
+  fontOptionLookup: ReadonlyMap<string, string>;
+  fontOptionItems: ReactNode;
+  previewFallback: "sans-serif" | "monospace";
+  isLoadingOptions: boolean;
+  hasLoadedOptions: boolean;
+  isSelectOpen: boolean;
+  onRequestOptions: () => void;
+  onSelectOpenChange: (id: string, open: boolean) => void;
+  onFontChange: (id: string, font: string) => void;
+}
+
+const FontSelectControl = memo(function FontSelectControl({
+  item,
+  fontOptionLookup,
+  fontOptionItems,
+  previewFallback,
+  isLoadingOptions,
+  hasLoadedOptions,
+  isSelectOpen,
+  onRequestOptions,
+  onSelectOpenChange,
+  onFontChange,
+}: FontSelectControlProps) {
+  const { t } = useTranslation();
+  const selectedFont = fontOptionLookup.get(item.font.toLowerCase());
+  const selectValue = selectedFont ?? item.font;
+  const isKnownFont = selectedFont !== undefined;
+  const showLoading = isSelectOpen && isLoadingOptions;
+  const showUnknownMarker = isSelectOpen && hasLoadedOptions && !isKnownFont;
+  const handleOpenChange = useCallback(
+    (open: boolean) => {
+      onSelectOpenChange(item.id, open);
+      if (open) onRequestOptions();
+    },
+    [item.id, onRequestOptions, onSelectOpenChange],
+  );
+  const handleValueChange = useCallback(
+    (font: string) => onFontChange(item.id, font),
+    [item.id, onFontChange],
+  );
+
+  return (
+    <Select value={selectValue} onOpenChange={handleOpenChange} onValueChange={handleValueChange}>
+      <SelectTrigger
+        className="h-9 min-w-0 w-full flex-1 px-3 text-sm shadow-xs focus:ring-1 focus:ring-ring focus:outline-none"
+        style={{ fontFamily: previewFontFamily(item.font, previewFallback) }}
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent position="popper">
+        {showLoading && (
+          <output
+            aria-live="polite"
+            className="flex items-center gap-2 px-2 py-2 text-xs text-muted-foreground"
+          >
+            <InlineSpinner />
+            {t("settings.loadingSystemFonts")}
+          </output>
+        )}
+        {!isKnownFont && (
+          <SelectItem
+            value={item.font}
+            disabled
+            style={{ fontFamily: previewFontFamily(item.font, previewFallback) }}
+          >
+            {item.font}
+            {showUnknownMarker && " (Custom/Missing)"}
+          </SelectItem>
+        )}
+        {fontOptionItems}
+      </SelectContent>
+    </Select>
+  );
+});
+
+const SortableFontRow = memo(function SortableFontRow({
+  item,
+  index,
+  itemCount,
+  fontOptionLookup,
+  fontOptionItems,
+  previewFallback,
+  isLoadingOptions,
+  hasLoadedOptions,
+  isSelectOpen,
+  isDragging,
+  onRequestOptions,
+  onSelectOpenChange,
+  onFontChange,
+  onRemove,
+  onDragStart,
+  onDragEnd,
+}: SortableFontRowProps) {
+  const { t } = useTranslation();
+  const dragControls = useDragControls();
+  const handleDragStart = useCallback(() => onDragStart(item.id), [item.id, onDragStart]);
+  const handleDragEnd = useCallback(() => onDragEnd(item.id), [item.id, onDragEnd]);
+  const handlePointerDown = useCallback(
+    (event: PointerEvent<HTMLButtonElement>) => {
+      if (itemCount < 2) return;
+      event.preventDefault();
+      dragControls.start(event);
+    },
+    [dragControls, itemCount],
+  );
+  const handleRemove = useCallback(() => onRemove(item.id), [item.id, onRemove]);
+
+  return (
+    <Reorder.Item
+      as="div"
+      value={item}
+      layout="position"
+      dragListener={false}
+      dragControls={dragControls}
+      dragMomentum={false}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      whileDrag={FONT_WHILE_DRAG}
+      transition={FONT_REORDER_TRANSITION}
+      className="relative will-change-transform"
+    >
+      <motion.div
+        animate={isDragging ? FONT_DRAG_ACTIVE_ANIMATION : FONT_DRAG_IDLE_ANIMATION}
+        transition={FONT_DRAG_TRANSITION}
+        className={`rounded-lg border bg-background/70 p-3 ${
+          isDragging
+            ? "border-primary/60 bg-background cursor-grabbing will-change-transform"
+            : "border-border/70"
+        }`}
+      >
+        <div className="flex items-center gap-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex shrink-0">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="touch-none cursor-grab text-muted-foreground hover:text-foreground active:cursor-grabbing"
+                  disabled={itemCount < 2}
+                  aria-label={t("settings.fontDragToSort")}
+                  onPointerDown={handlePointerDown}
+                >
+                  <GripVertical className="size-4" />
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top">{t("settings.fontDragToSort")}</TooltipContent>
+          </Tooltip>
+          <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="min-w-0 sm:w-32 sm:shrink-0">
+              <p className="text-xs font-medium text-muted-foreground">
+                {index === 0 ? t("settings.fontPrimary") : `${t("settings.fontFallback")} ${index}`}
+              </p>
+            </div>
+            <FontSelectControl
+              item={item}
+              fontOptionLookup={fontOptionLookup}
+              fontOptionItems={fontOptionItems}
+              previewFallback={previewFallback}
+              isLoadingOptions={isLoadingOptions}
+              hasLoadedOptions={hasLoadedOptions}
+              isSelectOpen={isSelectOpen}
+              onRequestOptions={onRequestOptions}
+              onSelectOpenChange={onSelectOpenChange}
+              onFontChange={onFontChange}
+            />
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className="self-end text-destructive hover:bg-destructive/10 sm:self-auto"
+              title={t("common.remove")}
+              onClick={handleRemove}
+            >
+              <MdClose className="text-[1rem]" />
+            </Button>
+          </div>
+        </div>
+      </motion.div>
+    </Reorder.Item>
+  );
+});
+
+const FontStackSection = memo(function FontStackSection({
   title,
   desc,
   value,
@@ -357,8 +610,173 @@ function FontStackSection({
   onChange,
 }: FontStackSectionProps) {
   const { t } = useTranslation();
-  const [openFontIndex, setOpenFontIndex] = useState<number | null>(null);
-  const fonts = splitFontStack(value);
+  const fontOptionLookup = useMemo(
+    () => new Map(options.map((option) => [option.toLowerCase(), option])),
+    [options],
+  );
+  const fontOptionItems = useMemo(
+    () =>
+      options.map((option) => (
+        <SelectItem
+          key={option}
+          value={option}
+          style={{ fontFamily: previewFontFamily(option, previewFallback) }}
+        >
+          {option} {builtInFonts.has(option.toLowerCase()) && `(${t("settings.fontBuiltIn")})`}
+        </SelectItem>
+      )),
+    [builtInFonts, options, previewFallback, t],
+  );
+  const itemIdPrefix = useId();
+  const nextItemIdRef = useRef(0);
+  const createFontItem = useCallback(
+    (font: string): SortableFontItem => ({
+      id: `${itemIdPrefix}-${nextItemIdRef.current++}`,
+      font,
+    }),
+    [itemIdPrefix],
+  );
+  const [fontItems, setFontItems] = useState<SortableFontItem[]>(() => {
+    const fonts = splitFontStack(value);
+    return (fonts.length > 0 ? fonts : [fallbackFont]).map(createFontItem);
+  });
+  const fontItemsRef = useRef(fontItems);
+  const [openFontId, setOpenFontId] = useState<string | null>(null);
+  const [draggingFontId, setDraggingFontId] = useState<string | null>(null);
+  const draggingFontIdRef = useRef<string | null>(null);
+  const pendingFontChangeFrameRef = useRef<number | null>(null);
+  const pendingFontChangeSecondFrameRef = useRef<number | null>(null);
+  const pendingFontChangeValueRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (draggingFontIdRef.current !== null || pendingFontChangeValueRef.current !== null) {
+      return;
+    }
+
+    const fonts = splitFontStack(value);
+    const normalizedFonts = fonts.length > 0 ? fonts : [fallbackFont];
+    // fontItemsRef is kept in sync with the fontItems state by every mutation
+    // path (applyFontItems, handleReorder, and this effect), so reading it in
+    // the effect body is safe and keeps the setState updater pure.
+    const currentItems = fontItemsRef.current;
+    if (haveSameFontOrder(currentItems, normalizedFonts)) return;
+
+    const nextItems = reconcileFontItems(currentItems, normalizedFonts, createFontItem);
+    fontItemsRef.current = nextItems;
+    setFontItems(nextItems);
+  }, [createFontItem, fallbackFont, value]);
+
+  useEffect(() => {
+    if (draggingFontId === null) return;
+
+    const previousCursor = document.documentElement.style.cursor;
+    const previousUserSelect = document.documentElement.style.userSelect;
+    document.documentElement.style.cursor = "grabbing";
+    document.documentElement.style.userSelect = "none";
+    return () => {
+      document.documentElement.style.cursor = previousCursor;
+      document.documentElement.style.userSelect = previousUserSelect;
+    };
+  }, [draggingFontId]);
+
+  const cancelPendingFontChange = useCallback(() => {
+    if (pendingFontChangeFrameRef.current !== null) {
+      window.cancelAnimationFrame(pendingFontChangeFrameRef.current);
+      pendingFontChangeFrameRef.current = null;
+    }
+    if (pendingFontChangeSecondFrameRef.current !== null) {
+      window.cancelAnimationFrame(pendingFontChangeSecondFrameRef.current);
+      pendingFontChangeSecondFrameRef.current = null;
+    }
+    pendingFontChangeValueRef.current = null;
+  }, []);
+
+  const scheduleFontChange = useCallback(
+    (nextItems: SortableFontItem[]) => {
+      cancelPendingFontChange();
+      pendingFontChangeValueRef.current = nextItems.map((item) => item.font).join(", ");
+
+      // Let Motion finish the release and the last layout reorder before updating
+      // the settings draft. The second frame prevents both updates from landing
+      // in the same rendering cycle when the pointer is released during a reorder.
+      pendingFontChangeFrameRef.current = window.requestAnimationFrame(() => {
+        pendingFontChangeFrameRef.current = null;
+        pendingFontChangeSecondFrameRef.current = window.requestAnimationFrame(() => {
+          pendingFontChangeSecondFrameRef.current = null;
+          const nextValue = pendingFontChangeValueRef.current;
+          pendingFontChangeValueRef.current = null;
+          if (nextValue !== null) onChange(nextValue);
+        });
+      });
+    },
+    [cancelPendingFontChange, onChange],
+  );
+
+  useEffect(() => cancelPendingFontChange, [cancelPendingFontChange]);
+
+  const applyFontItems = useCallback(
+    (nextItems: SortableFontItem[]) => {
+      cancelPendingFontChange();
+      fontItemsRef.current = nextItems;
+      setFontItems(nextItems);
+      onChange(nextItems.map((item) => item.font).join(", "));
+    },
+    [cancelPendingFontChange, onChange],
+  );
+
+  const handleReorder = useCallback((nextItems: SortableFontItem[]) => {
+    fontItemsRef.current = nextItems;
+    setFontItems(nextItems);
+  }, []);
+
+  const handleFontDragStart = useCallback((id: string) => {
+    draggingFontIdRef.current = id;
+    setDraggingFontId(id);
+    setOpenFontId(null);
+  }, []);
+
+  const handleFontDragEnd = useCallback(
+    (id: string) => {
+      if (draggingFontIdRef.current !== id) return;
+
+      draggingFontIdRef.current = null;
+      setDraggingFontId(null);
+
+      const nextItems = fontItemsRef.current;
+      const fonts = splitFontStack(value);
+      const normalizedFonts = fonts.length > 0 ? fonts : [fallbackFont];
+      if (!haveSameFontOrder(nextItems, normalizedFonts)) {
+        scheduleFontChange(nextItems);
+      }
+    },
+    [fallbackFont, scheduleFontChange, value],
+  );
+
+  const updateFont = useCallback(
+    (id: string, font: string) => {
+      applyFontItems(
+        fontItemsRef.current.map((item) => (item.id === id ? { ...item, font } : item)),
+      );
+    },
+    [applyFontItems],
+  );
+
+  const removeFont = useCallback(
+    (id: string) => {
+      let nextItems = fontItemsRef.current.filter((item) => item.id !== id);
+      if (nextItems.length === 0) nextItems = [createFontItem(fallbackFont)];
+      setOpenFontId((current) => (current === id ? null : current));
+      applyFontItems(nextItems);
+    },
+    [applyFontItems, createFontItem, fallbackFont],
+  );
+
+  const handleSelectOpenChange = useCallback((id: string, open: boolean) => {
+    setOpenFontId((current) => {
+      if (open) return id;
+      return current === id ? null : current;
+    });
+  }, []);
 
   return (
     <SettingSection
@@ -370,107 +788,47 @@ function FontStackSection({
           size="xs"
           className="text-primary"
           onClick={() => {
-            const nextFonts = [...fonts, options[0] || fallbackFont];
-            onChange(nextFonts.join(", "));
+            applyFontItems([...fontItemsRef.current, createFontItem(options[0] || fallbackFont)]);
           }}
         >
           <MdAdd className="text-[0.875rem]" />
           {t("settings.addFallbackFont")}
         </Button>
       }
-      contentClassName="space-y-3"
+      contentClassName="space-y-0"
     >
-      {(fonts.length > 0 ? fonts : [fallbackFont]).map((font, idx, arr) => {
-        const selectedFont = options.find((option) => option.toLowerCase() === font.toLowerCase());
-        const selectValue = selectedFont ?? font;
-        const isKnownFont = Boolean(selectedFont);
-        const showLoading = openFontIndex === idx && isLoadingOptions;
-        const showUnknownMarker = openFontIndex === idx && hasLoadedOptions && !isKnownFont;
-
-        return (
-          <div
-            key={`${font}-${idx === 0 ? "primary" : `fallback-${idx}`}`}
-            className="rounded-lg border border-border/70 bg-background/70 p-3"
-          >
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-              <div className="min-w-0 sm:w-32 sm:shrink-0">
-                <p className="text-xs font-medium text-muted-foreground">
-                  {idx === 0 ? t("settings.fontPrimary") : `${t("settings.fontFallback")} ${idx}`}
-                </p>
-              </div>
-              <Select
-                value={selectValue}
-                onOpenChange={(open) => {
-                  setOpenFontIndex((current) => {
-                    if (open) return idx;
-                    return current === idx ? null : current;
-                  });
-                  if (open) onRequestOptions();
-                }}
-                onValueChange={(nextFont) => {
-                  const nextFonts = [...arr];
-                  nextFonts[idx] = nextFont;
-                  onChange(nextFonts.filter(Boolean).join(", "));
-                }}
-              >
-                <SelectTrigger
-                  className="h-9 min-w-0 w-full flex-1 px-3 text-sm shadow-xs focus:ring-1 focus:ring-ring focus:outline-none"
-                  style={{ fontFamily: previewFontFamily(font, previewFallback) }}
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent position="popper">
-                  {showLoading && (
-                    <output
-                      aria-live="polite"
-                      className="flex items-center gap-2 px-2 py-2 text-xs text-muted-foreground"
-                    >
-                      <InlineSpinner />
-                      {t("settings.loadingSystemFonts")}
-                    </output>
-                  )}
-                  {!isKnownFont && (
-                    <SelectItem
-                      value={font}
-                      disabled
-                      style={{ fontFamily: previewFontFamily(font, previewFallback) }}
-                    >
-                      {font}
-                      {showUnknownMarker && " (Custom/Missing)"}
-                    </SelectItem>
-                  )}
-                  {options.map((option) => (
-                    <SelectItem
-                      key={option}
-                      value={option}
-                      style={{ fontFamily: previewFontFamily(option, previewFallback) }}
-                    >
-                      {option}{" "}
-                      {builtInFonts.has(option.toLowerCase()) && `(${t("settings.fontBuiltIn")})`}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                className="self-end text-destructive hover:bg-destructive/10 sm:self-auto"
-                title={t("common.remove")}
-                onClick={() => {
-                  const nextFonts = arr.filter((_, i) => i !== idx);
-                  if (nextFonts.length === 0) nextFonts.push(fallbackFont);
-                  onChange(nextFonts.join(", "));
-                }}
-              >
-                <MdClose className="text-[1rem]" />
-              </Button>
-            </div>
-          </div>
-        );
-      })}
+      <Reorder.Group
+        as="div"
+        axis="y"
+        values={fontItems}
+        onReorder={handleReorder}
+        className="flex flex-col gap-3"
+      >
+        {fontItems.map((item, index) => (
+          <SortableFontRow
+            key={item.id}
+            item={item}
+            index={index}
+            itemCount={fontItems.length}
+            fontOptionLookup={fontOptionLookup}
+            fontOptionItems={fontOptionItems}
+            previewFallback={previewFallback}
+            isLoadingOptions={isLoadingOptions}
+            hasLoadedOptions={hasLoadedOptions}
+            isSelectOpen={openFontId === item.id}
+            isDragging={draggingFontId === item.id}
+            onRequestOptions={onRequestOptions}
+            onSelectOpenChange={handleSelectOpenChange}
+            onFontChange={updateFont}
+            onRemove={removeFont}
+            onDragStart={handleFontDragStart}
+            onDragEnd={handleFontDragEnd}
+          />
+        ))}
+      </Reorder.Group>
     </SettingSection>
   );
-}
+});
 
 export function AppearanceTab() {
   const { t } = useTranslation();
@@ -527,8 +885,22 @@ export function AppearanceTab() {
     });
   }, []);
 
-  const updateAppearance = (patch: Partial<AppearanceSettings>) =>
-    updateAppSettings({ appearance: { ...appearance, ...patch } });
+  const updateAppearance = useCallback(
+    (patch: Partial<AppearanceSettings>) => {
+      updateAppSettings((prev) => ({
+        appearance: { ...prev.appearance, ...patch },
+      }));
+    },
+    [updateAppSettings],
+  );
+  const updateUiFontFamily = useCallback(
+    (uiFontFamily: string) => updateAppearance({ ui_font_family: uiFontFamily }),
+    [updateAppearance],
+  );
+  const updateTerminalFontFamily = useCallback(
+    (fontFamily: string) => updateAppearance({ font_family: fontFamily }),
+    [updateAppearance],
+  );
 
   return (
     <div className="space-y-5">
@@ -641,11 +1013,7 @@ export function AppearanceTab() {
         isLoadingOptions={systemFontInfosLoading}
         hasLoadedOptions={hasLoadedSystemFontInfos}
         onRequestOptions={loadSystemFontInfos}
-        onChange={(uiFontFamily) =>
-          updateAppearance({
-            ui_font_family: uiFontFamily,
-          })
-        }
+        onChange={updateUiFontFamily}
       />
 
       <FontStackSection
@@ -659,11 +1027,7 @@ export function AppearanceTab() {
         isLoadingOptions={systemFontInfosLoading}
         hasLoadedOptions={hasLoadedSystemFontInfos}
         onRequestOptions={loadSystemFontInfos}
-        onChange={(terminalFontFamily) =>
-          updateAppearance({
-            font_family: terminalFontFamily,
-          })
-        }
+        onChange={updateTerminalFontFamily}
       />
 
       <SettingSection contentClassName="space-y-5">
