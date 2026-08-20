@@ -259,6 +259,7 @@
     "thoughtComplete": "생각 완료",
     "timeoutMs": "제한 시간(ms)",
     "title": "AI",
+    "useCodexDefaultModel": "Codex 기본 모델 사용",
     "useModelPicker": "모델 선택기 사용"
   },
   "app": {
@@ -1710,10 +1711,8 @@
     "sendMode": "전송 모드",
     "sendPartial": "일부 세션이 데이터를 받지 못했습니다",
     "sendShortcut": "Ctrl/Cmd + Enter로 전송",
-    "serialData": "시리얼 데이터",
     "serialUnavailable": "시리얼 전송에는 활성 시리얼 세션이 필요합니다",
     "serialUnavailableDesc": "여기서 텍스트나 16진수 데이터를 보내려면 시리얼 탭으로 전환하세요.",
-    "shellCommand": "셸 명령",
     "shellPlaceholder": "전송할 텍스트 입력...\nCtrl/Cmd + Enter로 전송",
     "shellProgressCompleted": "{{count}}개 전송됨",
     "shellProgressInfinite": "{{current}}회차 전송 중",
@@ -1730,7 +1729,6 @@
     "targetSessions": "대상 세션",
     "text": "텍스트",
     "textPlaceholder": "전송할 텍스트 입력...",
-    "title": "명령 전송",
     "unavailable": "사용 가능한 활성 세션이 없습니다",
     "unavailableDesc": "데이터를 전송하려면 연결된 시리얼, SSH, 로컬 터미널, Telnet 탭으로 전환하세요.",
     "unknownWindow": "알 수 없는 창",

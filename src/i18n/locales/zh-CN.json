@@ -259,6 +259,7 @@
     "thoughtComplete": "已思考",
     "timeoutMs": "请求超时时间 ms",
     "title": "AI",
+    "useCodexDefaultModel": "使用 Codex 默认模型",
     "useModelPicker": "使用模型选择器"
   },
   "app": {
@@ -1710,10 +1711,8 @@
     "sendMode": "发送方式",
     "sendPartial": "部分会话未收到数据",
     "sendShortcut": "Ctrl/Cmd + Enter 发送",
-    "serialData": "串口数据",
     "serialUnavailable": "串口数据发送仅适用于当前激活的串口会话",
     "serialUnavailableDesc": "切换到串口标签页后即可在这里发送文本或十六进制数据。",
-    "shellCommand": "Shell 命令",
     "shellPlaceholder": "输入要发送的文本...\nCtrl/Cmd + Enter 发送",
     "shellProgressCompleted": "已发送 {{count}} 个",
     "shellProgressInfinite": "正在发送第 {{current}} 轮",
@@ -1730,7 +1729,6 @@
     "targetSessions": "目标会话",
     "text": "文本",
     "textPlaceholder": "输入要发送的文本...",
-    "title": "命令发送",
     "unavailable": "没有可用的活动会话",
     "unavailableDesc": "切换到已连接的串口、SSH、本地终端或 Telnet 标签页后即可发送数据。",
     "unknownWindow": "未知窗口",

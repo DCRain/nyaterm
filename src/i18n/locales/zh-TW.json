@@ -259,6 +259,7 @@
     "thoughtComplete": "已思考",
     "timeoutMs": "請求逾時時間 ms",
     "title": "AI",
+    "useCodexDefaultModel": "使用 Codex 預設模型",
     "useModelPicker": "使用模型選擇器"
   },
   "app": {
@@ -1707,10 +1708,8 @@
     "sendMode": "傳送方式",
     "sendPartial": "部分工作階段未收到資料",
     "sendShortcut": "Ctrl/Cmd + Enter 傳送",
-    "serialData": "序列埠資料",
     "serialUnavailable": "序列埠資料傳送僅適用於目前啟用的序列埠工作階段",
     "serialUnavailableDesc": "切換到序列埠標籤頁後即可在這裡傳送文字或十六進位資料。",
-    "shellCommand": "Shell 命令",
     "shellPlaceholder": "輸入要傳送的文字...\nCtrl/Cmd + Enter 傳送",
     "shellProgressCompleted": "已傳送 {{count}} 個",
     "shellProgressInfinite": "正在傳送第 {{current}} 輪",
@@ -1725,7 +1724,6 @@
     "target": "目標工作階段",
     "text": "文字",
     "textPlaceholder": "輸入要傳送的文字...",
-    "title": "命令傳送",
     "unavailable": "沒有可用的活動工作階段",
     "unavailableDesc": "切換到已連線的序列埠、SSH、本機終端或 Telnet 標籤頁後即可傳送資料。",
     "unknownWindow": "未知視窗",

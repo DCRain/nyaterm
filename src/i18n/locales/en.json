@@ -259,6 +259,7 @@
     "thoughtComplete": "Thought",
     "timeoutMs": "Timeout (ms)",
     "title": "AI",
+    "useCodexDefaultModel": "Use Codex default model",
     "useModelPicker": "Use model picker"
   },
   "app": {
@@ -1711,10 +1712,8 @@
     "sendMode": "Send Mode",
     "sendPartial": "Some sessions did not receive the data",
     "sendShortcut": "Ctrl/Cmd + Enter to send",
-    "serialData": "Serial Data",
     "serialUnavailable": "Serial send needs the active serial session",
     "serialUnavailableDesc": "Switch to a serial tab to send text or hex data here.",
-    "shellCommand": "Shell Command",
     "shellPlaceholder": "Enter text to send...\nCtrl/Cmd + Enter to send",
     "shellProgressCompleted": "{{count}} sent",
     "shellProgressInfinite": "Sending round {{current}}",
@@ -1731,7 +1730,6 @@
     "targetSessions": "Sessions",
     "text": "Text",
     "textPlaceholder": "Enter text to send...",
-    "title": "Command Send",
     "unavailable": "No active session available",
     "unavailableDesc": "Switch to a connected serial, SSH, local terminal, or Telnet tab to send data.",
     "unknownWindow": "Unknown window",
