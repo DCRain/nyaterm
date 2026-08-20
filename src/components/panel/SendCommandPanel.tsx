@@ -887,17 +887,6 @@ export default function SendCommandPanel({
 
   return (
     <div className="h-full flex flex-col overflow-hidden px-2 py-1.5 gap-2">
-      <div className="flex items-center gap-2 shrink-0">
-        <span className="text-[0.6875rem] font-medium text-foreground">
-          {t("serialSend.title", "Command Send")}
-        </span>
-        <span className="ml-auto text-[0.625rem] text-muted-foreground select-none">
-          {targetKind === "serial"
-            ? t("serialSend.serialData", "Serial Data")
-            : t("serialSend.shellCommand", "Shell Command")}
-        </span>
-      </div>
-
       <div className="flex shrink-0 flex-wrap items-center gap-1.5">
         <div className="flex h-8 min-w-[8.5rem] flex-[1_1_10rem] items-center overflow-hidden rounded-md border border-border/70 bg-background/60">
           <Label className="shrink-0 px-2 text-[0.625rem] text-muted-foreground">

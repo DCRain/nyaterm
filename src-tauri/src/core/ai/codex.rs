@@ -24,7 +24,6 @@ use super::history::{
     append_message, get_session_backend_metadata, save_user_message, set_session_backend_metadata,
     set_session_external_session_id,
 };
-use super::model::resolve_request_model_config;
 use super::prompt::build_agent_prompt;
 use super::redaction::{redact_context, redact_marker_values, redact_sensitive_text};
 use super::stream::{active_streams, emit_stream_event};
@@ -797,17 +796,12 @@ async fn run_codex_stream_inner(
     settings: AiSettings,
     cancel_rx: &mut oneshot::Receiver<()>,
 ) -> AppResult<()> {
-    let selected_model = resolve_request_model_config(&settings, request)?;
-    if selected_model.backend != AiBackendKind::Codex {
-        return Err(AppError::Config(
-            "Selected model is not a Codex model".to_string(),
-        ));
-    }
     if !settings.codex.enabled {
         return Err(AppError::Config(
             "Codex integration is disabled".to_string(),
         ));
     }
+    let selected_model_name = resolve_codex_model_name(&settings, request);
 
     manager
         .ensure_started(settings.codex.executable_path.clone())
@@ -847,7 +841,7 @@ async fn run_codex_stream_inner(
         thread_id
     } else {
         let params = codex_thread_start_params(
-            &selected_model.name,
+            selected_model_name.as_deref(),
             settings.codex.thread_mode == CodexThreadMode::Ephemeral,
         );
         let response = manager.request("thread/start", params).await?;
@@ -882,12 +876,7 @@ async fn run_codex_stream_inner(
     let response = manager
         .request(
             "turn/start",
-            json!({
-                "threadId": thread_id,
-                "clientUserMessageId": format!("msg-{}", uuid()),
-                "input": [{ "type": "text", "text": prompt, "text_elements": [] }],
-                "model": selected_model.name,
-            }),
+            codex_turn_start_params(&thread_id, &prompt, selected_model_name.as_deref()),
         )
         .await?;
     let turn_id = response
@@ -1168,9 +1157,25 @@ fn reusable_codex_thread_id(metadata: Option<&AiSessionBackendMetadata>) -> Opti
     metadata.external_thread_id.clone()
 }
 
-fn codex_thread_start_params(model: &str, ephemeral: bool) -> Value {
-    json!({
-        "model": model,
+fn resolve_codex_model_name(settings: &AiSettings, request: &AiChatRequest) -> Option<String> {
+    request
+        .model_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .or_else(|| {
+            settings
+                .codex
+                .default_model
+                .as_deref()
+                .map(str::trim)
+                .filter(|model| !model.is_empty())
+        })
+        .map(ToOwned::to_owned)
+}
+
+fn codex_thread_start_params(model: Option<&str>, ephemeral: bool) -> Value {
+    let mut params = json!({
         "cwd": null,
         "ephemeral": ephemeral,
         "approvalPolicy": {
@@ -1185,7 +1190,23 @@ fn codex_thread_start_params(model: &str, ephemeral: bool) -> Value {
         "sandbox": "read-only",
         "developerInstructions": codex_developer_instructions(),
         "dynamicTools": [terminal_tool_namespace()]
-    })
+    });
+    if let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) {
+        params["model"] = json!(model);
+    }
+    params
+}
+
+fn codex_turn_start_params(thread_id: &str, prompt: &str, model: Option<&str>) -> Value {
+    let mut params = json!({
+        "threadId": thread_id,
+        "clientUserMessageId": format!("msg-{}", uuid()),
+        "input": [{ "type": "text", "text": prompt, "text_elements": [] }],
+    });
+    if let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) {
+        params["model"] = json!(model);
+    }
+    params
 }
 
 fn terminal_tool_namespace() -> Value {
@@ -1340,7 +1361,7 @@ mod tests {
 
     #[test]
     fn thread_start_params_register_nyaterm_terminal_tools() {
-        let params = codex_thread_start_params("gpt-5-codex", false);
+        let params = codex_thread_start_params(Some("gpt-5-codex"), false);
 
         let namespace = params
             .get("dynamicTools")
@@ -1366,6 +1387,27 @@ mod tests {
                 .get("developerInstructions")
                 .and_then(Value::as_str)
                 .is_some_and(|value| value.contains("nyaterm_terminal.execute_command"))
+        );
+    }
+
+    #[test]
+    fn codex_model_is_optional_in_app_server_payloads() {
+        let thread_params = codex_thread_start_params(None, false);
+        let turn_params = codex_turn_start_params("thread-1", "hello", None);
+
+        assert!(thread_params.get("model").is_none());
+        assert!(turn_params.get("model").is_none());
+
+        let thread_params = codex_thread_start_params(Some("gpt-5-codex"), false);
+        let turn_params = codex_turn_start_params("thread-1", "hello", Some("gpt-5-codex"));
+
+        assert_eq!(
+            thread_params.get("model").and_then(Value::as_str),
+            Some("gpt-5-codex")
+        );
+        assert_eq!(
+            turn_params.get("model").and_then(Value::as_str),
+            Some("gpt-5-codex")
         );
     }
 
