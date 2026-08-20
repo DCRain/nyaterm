@@ -282,7 +282,7 @@ export const BUILTIN_PROVIDERS: Partial<Record<AIProviderKind, BuiltinProviderIn
   },
   ollama: {
     label: "Ollama",
-    defaultBaseUrl: "http://localhost:11434/v1/",
+    defaultBaseUrl: "http://localhost:11434/",
     models: ["llama3-7b"],
   },
   xai: {
@@ -484,7 +484,7 @@ const DEFAULT_PROVIDER_PROFILES: AIProviderProfile[] = [
     name: "Ollama",
     provider_kind: "ollama",
     model: "llama3-7b",
-    base_url: "http://localhost:11434/v1/",
+    base_url: "http://localhost:11434/",
     api_key: null,
     enabled: false,
   },

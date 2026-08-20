@@ -496,7 +496,7 @@ mod tests {
             id: id.to_string(),
             name: "Test Provider".to_string(),
             provider_kind: kind,
-            base_url: Some("http://localhost:11434/v1/".to_string()),
+            base_url: Some("https://api.example.com/v1/".to_string()),
             api_key: api_key.map(str::to_string),
             enabled: true,
         }
@@ -599,7 +599,7 @@ mod tests {
         let target = apply_service_target_overrides(
             test_service_target(AuthData::from_env("OPENAI_API_KEY")),
             None,
-            Some("http://localhost:11434/v1/".to_string()),
+            Some("https://api.example.com/v1/".to_string()),
             true,
         );
 
@@ -611,7 +611,7 @@ mod tests {
         let target = apply_service_target_overrides(
             test_service_target(AuthData::from_env("OPENAI_API_KEY")),
             Some("configured-key".to_string()),
-            Some("http://localhost:11434/v1/".to_string()),
+            Some("https://api.example.com/v1/".to_string()),
             true,
         );
 
@@ -637,6 +637,15 @@ mod tests {
             AdapterKind::Anthropic
         );
         assert_eq!(adapter_kind(&AiProviderKind::Gemini), AdapterKind::Gemini);
+    }
+
+    #[test]
+    fn ollama_uses_native_adapter_and_preserves_model_tag() {
+        assert_eq!(adapter_kind(&AiProviderKind::Ollama), AdapterKind::Ollama);
+        assert_eq!(
+            genai_model_name(&AiProviderKind::Ollama, "qwen2.5:7b-instruct"),
+            "qwen2.5:7b-instruct"
+        );
     }
 
     #[test]

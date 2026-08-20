@@ -6,6 +6,9 @@ use std::collections::HashSet;
 
 pub const AI_REQUEST_USER_AGENT_DEFAULT: &str =
     "codex-tui/0.125.0 (Ubuntu 22.4.0; x86_64) xterm-256color (codex-tui; 0.125.0)";
+const OLLAMA_PROVIDER_ID: &str = "ollama";
+const OLLAMA_DEFAULT_BASE_URL: &str = "http://localhost:11434/";
+const OLLAMA_LEGACY_DEFAULT_BASE_URL: &str = "http://localhost:11434/v1/";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -404,11 +407,11 @@ fn default_provider_profiles() -> Vec<AiProviderProfile> {
             enabled: false,
         },
         AiProviderProfile {
-            id: "ollama".to_string(),
+            id: OLLAMA_PROVIDER_ID.to_string(),
             name: "Ollama".to_string(),
             provider_kind: AiProviderKind::Ollama,
             model: "llama3-7b".to_string(),
-            base_url: Some("http://localhost:11434/v1/".to_string()),
+            base_url: Some(OLLAMA_DEFAULT_BASE_URL.to_string()),
             api_key: None,
             enabled: false,
         },
@@ -664,12 +667,24 @@ pub fn normalize_ai_settings(settings: &mut AiSettings) -> bool {
         settings.request_user_agent = default_request_user_agent();
     }
 
+    for profile in &mut settings.provider_profiles {
+        if is_builtin_ollama_provider(&profile.id, &profile.provider_kind) {
+            migrate_legacy_ollama_base_url(&mut profile.base_url);
+        }
+    }
+
     if settings.provider_credentials.is_empty() {
         settings.provider_credentials = settings
             .provider_profiles
             .iter()
             .map(credential_from_profile)
             .collect();
+    }
+
+    for credential in &mut settings.provider_credentials {
+        if is_builtin_ollama_provider(&credential.id, &credential.provider_kind) {
+            migrate_legacy_ollama_base_url(&mut credential.base_url);
+        }
     }
 
     if settings.models.is_empty() {
@@ -773,9 +788,51 @@ fn merge_secret(current: Option<&String>, incoming: Option<&String>) -> Option<S
     }
 }
 
+fn is_builtin_ollama_provider(id: &str, provider_kind: &AiProviderKind) -> bool {
+    id == OLLAMA_PROVIDER_ID && provider_kind == &AiProviderKind::Ollama
+}
+
+fn migrate_legacy_ollama_base_url(base_url: &mut Option<String>) {
+    if base_url.as_deref() == Some(OLLAMA_LEGACY_DEFAULT_BASE_URL) {
+        *base_url = Some(OLLAMA_DEFAULT_BASE_URL.to_string());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ollama_profile(settings: &AiSettings) -> &AiProviderProfile {
+        settings
+            .provider_profiles
+            .iter()
+            .find(|profile| profile.id == OLLAMA_PROVIDER_ID)
+            .expect("ollama profile")
+    }
+
+    fn ollama_profile_mut(settings: &mut AiSettings) -> &mut AiProviderProfile {
+        settings
+            .provider_profiles
+            .iter_mut()
+            .find(|profile| profile.id == OLLAMA_PROVIDER_ID)
+            .expect("ollama profile")
+    }
+
+    fn ollama_credential(settings: &AiSettings) -> &AiProviderCredential {
+        settings
+            .provider_credentials
+            .iter()
+            .find(|credential| credential.id == OLLAMA_PROVIDER_ID)
+            .expect("ollama credential")
+    }
+
+    fn ollama_credential_mut(settings: &mut AiSettings) -> &mut AiProviderCredential {
+        settings
+            .provider_credentials
+            .iter_mut()
+            .find(|credential| credential.id == OLLAMA_PROVIDER_ID)
+            .expect("ollama credential")
+    }
 
     #[test]
     fn merge_preserves_masked_api_key() {
@@ -914,6 +971,108 @@ mod tests {
         assert_eq!(
             settings.request_user_agent.as_str(),
             AI_REQUEST_USER_AGENT_DEFAULT
+        );
+    }
+
+    #[test]
+    fn default_ai_settings_use_ollama_native_base_url() {
+        let settings = AiSettings::default();
+
+        assert_eq!(
+            ollama_profile(&settings).base_url.as_deref(),
+            Some(OLLAMA_DEFAULT_BASE_URL)
+        );
+        assert_eq!(
+            ollama_credential(&settings).base_url.as_deref(),
+            Some(OLLAMA_DEFAULT_BASE_URL)
+        );
+    }
+
+    #[test]
+    fn normalize_migrates_legacy_builtin_ollama_profile_base_url() {
+        let mut settings = AiSettings::default();
+        ollama_profile_mut(&mut settings).base_url =
+            Some(OLLAMA_LEGACY_DEFAULT_BASE_URL.to_string());
+
+        assert!(normalize_ai_settings(&mut settings));
+
+        assert_eq!(
+            ollama_profile(&settings).base_url.as_deref(),
+            Some(OLLAMA_DEFAULT_BASE_URL)
+        );
+    }
+
+    #[test]
+    fn normalize_migrates_legacy_builtin_ollama_credential_base_url() {
+        let mut settings = AiSettings::default();
+        ollama_credential_mut(&mut settings).base_url =
+            Some(OLLAMA_LEGACY_DEFAULT_BASE_URL.to_string());
+
+        assert!(normalize_ai_settings(&mut settings));
+
+        assert_eq!(
+            ollama_credential(&settings).base_url.as_deref(),
+            Some(OLLAMA_DEFAULT_BASE_URL)
+        );
+    }
+
+    #[test]
+    fn normalize_keeps_custom_ollama_base_url() {
+        let mut settings = AiSettings::default();
+        ollama_profile_mut(&mut settings).base_url = Some("http://192.168.1.10:11434/".to_string());
+        ollama_credential_mut(&mut settings).base_url =
+            Some("http://192.168.1.10:11434/".to_string());
+
+        normalize_ai_settings(&mut settings);
+
+        assert_eq!(
+            ollama_profile(&settings).base_url.as_deref(),
+            Some("http://192.168.1.10:11434/")
+        );
+        assert_eq!(
+            ollama_credential(&settings).base_url.as_deref(),
+            Some("http://192.168.1.10:11434/")
+        );
+    }
+
+    #[test]
+    fn normalize_keeps_openai_compatible_v1_base_url() {
+        let mut settings = AiSettings {
+            provider_credentials: vec![AiProviderCredential {
+                id: "credential-openai-compatible".to_string(),
+                name: "OpenAI Compatible".to_string(),
+                provider_kind: AiProviderKind::OpenaiCompatible,
+                base_url: Some(OLLAMA_LEGACY_DEFAULT_BASE_URL.to_string()),
+                api_key: None,
+                enabled: true,
+            }],
+            ..AiSettings::default()
+        };
+
+        normalize_ai_settings(&mut settings);
+
+        assert_eq!(
+            settings.provider_credentials[0].base_url.as_deref(),
+            Some(OLLAMA_LEGACY_DEFAULT_BASE_URL)
+        );
+    }
+
+    #[test]
+    fn normalize_legacy_ollama_base_url_is_idempotent() {
+        let mut settings = AiSettings::default();
+        normalize_ai_settings(&mut settings);
+        ollama_profile_mut(&mut settings).base_url =
+            Some(OLLAMA_LEGACY_DEFAULT_BASE_URL.to_string());
+        ollama_credential_mut(&mut settings).base_url =
+            Some(OLLAMA_LEGACY_DEFAULT_BASE_URL.to_string());
+
+        assert!(normalize_ai_settings(&mut settings));
+        let normalized = serde_json::to_string(&settings).expect("serialize settings");
+
+        assert!(!normalize_ai_settings(&mut settings));
+        assert_eq!(
+            serde_json::to_string(&settings).expect("serialize settings"),
+            normalized
         );
     }
 
