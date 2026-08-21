@@ -1,15 +1,40 @@
 use std::fs;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use opendal::services::S3;
+use opendal::Operator;
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
+use crate::config::{ConnectionType, SavedConnection};
 use crate::core::ssh::{DraftSshTestInput, build_test_ssh_config, test_authenticated_ssh};
 use crate::error::{AppError, AppResult};
+use crate::utils::url::normalize_storage_endpoint;
 
 const TCP_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestS3Input {
+    #[serde(default)]
+    pub endpoint: String,
+    #[serde(default)]
+    pub bucket: String,
+    #[serde(default)]
+    pub region: String,
+    #[serde(default)]
+    pub root: String,
+    #[serde(default)]
+    pub access_key_id: Option<String>,
+    #[serde(default)]
+    pub secret_access_key: Option<String>,
+    #[serde(default)]
+    pub session_token: Option<String>,
+    #[serde(default)]
+    pub virtual_host_style: bool,
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,6 +59,8 @@ pub struct TestConnectionEndpointRequest {
     pub jump_host_id: Option<String>,
     pub connection_id: Option<String>,
     pub use_stored_password: Option<bool>,
+    #[serde(default)]
+    pub s3: Option<TestS3Input>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -87,10 +114,144 @@ pub async fn test_connection_endpoint(
             request.parity.as_deref().unwrap_or("none"),
             request.stop_bits.as_deref().unwrap_or("1"),
         )),
+        "s3" => Ok(test_s3(request.s3.as_ref(), request.connection_id.as_deref()).await),
         other => Err(AppError::Config(format!(
             "Unsupported protocol for connectivity test: {other}"
         ))),
     }
+}
+
+async fn test_s3(
+    input: Option<&TestS3Input>,
+    connection_id: Option<&str>,
+) -> TestConnectionEndpointResult {
+    let bucket = input
+        .map(|i| i.bucket.trim().to_string())
+        .unwrap_or_default();
+    if bucket.is_empty() {
+        return result(
+            false,
+            "s3_bucket_required",
+            TestConnectionEndpointParams::default(),
+        );
+    }
+
+    let operator = match build_s3_test_operator(input, connection_id) {
+        Ok(op) => op,
+        Err(err) => {
+            return result(
+                false,
+                "s3_config_invalid",
+                TestConnectionEndpointParams {
+                    detail: Some(err.to_string()),
+                    ..Default::default()
+                },
+            );
+        }
+    };
+
+    // Probe the bucket with a cheap listing. Credentials and bucket reachability
+    // are the most important signals here; an empty bucket is still a success.
+    run_s3_probe(operator, &bucket).await
+}
+
+async fn run_s3_probe(operator: Operator, bucket: &str) -> TestConnectionEndpointResult {
+    let started = Instant::now();
+    let probe = operator.list("/").await;
+    match probe {
+        Ok(entries) => {
+            let _ = bucket; // bucket is exercised by the operator config
+            tracing::debug!(
+                target: "user_action",
+                action = "test",
+                entity = "s3_connection",
+                bucket = %bucket,
+                entry_count = entries.len(),
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "S3 connectivity test succeeded"
+            );
+            result(
+                true,
+                "ok",
+                TestConnectionEndpointParams {
+                    host: Some(bucket.to_string()),
+                    ..Default::default()
+                },
+            )
+        }
+        Err(err) => result(
+            false,
+            "s3_fail",
+            TestConnectionEndpointParams {
+                host: Some(bucket.to_string()),
+                detail: Some(err.to_string()),
+                ..Default::default()
+            },
+        ),
+    }
+}
+
+fn build_s3_test_operator(
+    input: Option<&TestS3Input>,
+    connection_id: Option<&str>,
+) -> AppResult<Operator> {
+    if let Some(id) = connection_id.filter(|value| !value.is_empty()) {
+        // Use the saved connection (decrypts secrets) for stable testing.
+        let mut conn: SavedConnection = crate::storage::get_connection(id)?
+            .ok_or_else(|| AppError::SessionNotFound(format!("Connection '{id}' not found")))?;
+        if let ConnectionType::S3 { .. } = &conn.config {
+            crate::core::s3::decrypt_s3_secrets_in_place(&mut conn)?;
+            return crate::core::s3::build_operator_from_connection(&conn);
+        }
+        return Err(AppError::Config(format!(
+            "Connection '{id}' is not an S3 connection"
+        )));
+    }
+
+    let input = input.ok_or_else(|| {
+        AppError::Config("S3 test requires either saved connection id or live fields".into())
+    })?;
+
+    let mut builder = S3::default().bucket(&input.bucket);
+    let normalized_endpoint = normalize_storage_endpoint(&input.endpoint);
+    if !normalized_endpoint.is_empty() {
+        builder = builder.endpoint(&normalized_endpoint);
+    }
+    if !input.region.trim().is_empty() {
+        builder = builder.region(&input.region);
+    }
+    if !input.root.trim().is_empty() {
+        builder = builder.root(&input.root);
+    }
+    if let Some(key) = input
+        .access_key_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        builder = builder.access_key_id(key);
+    }
+    if let Some(secret) = input
+        .secret_access_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        builder = builder.secret_access_key(secret);
+    }
+    if let Some(token) = input
+        .session_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        builder = builder.session_token(token);
+    }
+    if input.virtual_host_style {
+        builder = builder.enable_virtual_host_style();
+    }
+
+    Ok(Operator::new(builder).map_err(|err| AppError::Config(format!("S3 error: {err}")))?)
 }
 
 async fn test_ssh(

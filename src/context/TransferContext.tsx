@@ -45,7 +45,7 @@ export interface EnqueueDownloadRequest {
 
 export interface CopyEndpointRequest {
   sessionId: string;
-  kind: "local" | "remote";
+  kind: "local" | "remote" | "s3";
   path: string;
 }
 
@@ -90,10 +90,10 @@ export interface TransferItem {
   direction: TransferDirection;
   kind: TransferKind;
   sourceSessionId?: string;
-  sourceKind?: "local" | "remote";
+  sourceKind?: "local" | "remote" | "s3";
   sourcePath?: string;
   targetSessionId?: string;
-  targetKind?: "local" | "remote";
+  targetKind?: "local" | "remote" | "s3";
   targetPath?: string;
   parentId?: string;
   status: TransferStatus;
@@ -541,16 +541,100 @@ export function TransferProvider({ children }: { children: ReactNode }) {
             if (!request.sourceEndpoint || !request.targetEndpoint) {
               throw new Error("Copy transfer is missing source or target endpoint");
             }
-            await invoke("copy_file_entry", {
-              request: {
-                source: request.sourceEndpoint,
-                target: request.targetEndpoint,
-                fileName: request.fileName,
-                isDirectory: request.kind === "directory",
+            const source = request.sourceEndpoint;
+            const target = request.targetEndpoint;
+            const joinPosix = (dir: string, name: string) =>
+              !dir || dir === "/" ? `/${name}` : `${dir.replace(/\/+$/, "")}/${name}`;
+            const joinLocal = (dir: string, name: string) => {
+              const trimmed = dir.replace(/[\\/]+$/, "");
+              const sep = dir.includes("\\") ? "\\" : "/";
+              return trimmed ? `${trimmed}${sep}${name}` : name;
+            };
+
+            if (source.kind === "local" && target.kind === "s3") {
+              const remotePath = joinPosix(target.path, request.fileName);
+              if (request.kind === "directory") {
+                await invoke("upload_local_directory_to_s3", {
+                  sessionId: target.sessionId,
+                  localPath: source.path,
+                  remotePath,
+                  transferId: nextQueued.id,
+                });
+              } else {
+                await invoke("upload_local_file_to_s3", {
+                  sessionId: target.sessionId,
+                  localPath: source.path,
+                  remotePath,
+                  transferId: nextQueued.id,
+                });
+              }
+            } else if (source.kind === "s3" && target.kind === "local") {
+              const localPath = joinLocal(target.path, request.fileName);
+              if (request.kind === "directory") {
+                await invoke("download_s3_directory", {
+                  sessionId: source.sessionId,
+                  remotePath: source.path,
+                  localPath,
+                  transferId: nextQueued.id,
+                });
+              } else {
+                await invoke("download_s3_file", {
+                  sessionId: source.sessionId,
+                  remotePath: source.path,
+                  localPath,
+                  transferId: nextQueued.id,
+                });
+              }
+            } else {
+              await invoke("copy_file_entry", {
+                request: {
+                  source,
+                  target,
+                  fileName: request.fileName,
+                  isDirectory: request.kind === "directory",
+                  transferId: nextQueued.id,
+                  duplicateStrategyOverride: request.duplicateStrategyOverride,
+                },
+              });
+            }
+          } else if (
+            request.direction === "upload" &&
+            request.sessionId.startsWith("s3:")
+          ) {
+            if (request.kind === "directory") {
+              await invoke("upload_local_directory_to_s3", {
+                sessionId: request.sessionId,
+                localPath: request.localPath,
+                remotePath: request.remotePath,
                 transferId: nextQueued.id,
-                duplicateStrategyOverride: request.duplicateStrategyOverride,
-              },
-            });
+              });
+            } else {
+              await invoke("upload_local_file_to_s3", {
+                sessionId: request.sessionId,
+                localPath: request.localPath,
+                remotePath: request.remotePath,
+                transferId: nextQueued.id,
+              });
+            }
+          } else if (
+            request.direction === "download" &&
+            request.sessionId.startsWith("s3:")
+          ) {
+            if (request.kind === "directory") {
+              await invoke("download_s3_directory", {
+                sessionId: request.sessionId,
+                remotePath: request.remotePath,
+                localPath: request.localPath,
+                transferId: nextQueued.id,
+              });
+            } else {
+              await invoke("download_s3_file", {
+                sessionId: request.sessionId,
+                remotePath: request.remotePath,
+                localPath: request.localPath,
+                transferId: nextQueued.id,
+              });
+            }
           } else if (request.direction === "upload" && request.kind === "directory") {
             await invoke("upload_local_directory", {
               sessionId: request.sessionId,
@@ -927,7 +1011,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
           sessionId: copy.target.sessionId,
           fileName: copy.fileName,
           localPath: copy.target.kind === "local" ? copy.target.path : copy.source.path,
-          remotePath: copy.target.kind === "remote" ? copy.target.path : copy.source.path,
+          remotePath: copy.target.kind !== "local" ? copy.target.path : copy.source.path,
           kind: copy.kind,
           direction: "copy" as const,
           sourceEndpoint: copy.source,

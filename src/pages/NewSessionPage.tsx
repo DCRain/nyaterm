@@ -2,7 +2,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type ComponentType, useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { MdAdd, MdChevronLeft, MdExpandMore, MdLan, MdMonitor, MdTerminal } from "react-icons/md";
+import { MdAdd, MdChevronLeft, MdCloud, MdExpandMore, MdLan, MdMonitor, MdTerminal } from "react-icons/md";
 import { TbNetwork, TbPlugConnected, TbServer } from "react-icons/tb";
 import { toast } from "sonner";
 import {
@@ -15,6 +15,7 @@ import {
 import ChildWindowHeader from "@/components/layout/ChildWindowHeader";
 import { buildGroupPath, type ConnectionOption, sortLabel } from "@/components/network/shared";
 import { LocalTerminal } from "@/components/sessions/LocalTerminal";
+import { S3Form } from "@/components/sessions/S3Form";
 import {
   DEFAULT_RDP_HEIGHT,
   DEFAULT_RDP_USERNAME,
@@ -149,65 +150,73 @@ const isValidSftpShellDetectionTimeout = (value: number) =>
   value <= MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS;
 
 type WizardStep = "pick" | "form";
-type ProtocolTab = "ssh" | "local" | "telnet" | "serial" | "rdp" | "vnc";
+  type ProtocolTab = "ssh" | "local" | "telnet" | "serial" | "rdp" | "vnc" | "s3";
 
-const PROTOCOL_OPTIONS: Array<{
-  id: ProtocolTab;
-  titleKey: string;
-  titleFallback: string;
-  descKey: string;
-  descFallback: string;
-  icon: ComponentType<{ className?: string }>;
-}> = [
-  {
-    id: "ssh",
-    titleKey: "dialog.protocolSsh",
-    titleFallback: "SSH",
-    descKey: "dialog.protocolSshDesc",
-    descFallback: "Secure shell sessions with password or key auth",
-    icon: MdTerminal,
-  },
-  {
-    id: "local",
-    titleKey: "dialog.protocolLocal",
-    titleFallback: "Local terminal",
-    descKey: "dialog.protocolLocalDesc",
-    descFallback: "Launch a local shell on this computer",
-    icon: MdMonitor,
-  },
-  {
-    id: "telnet",
-    titleKey: "dialog.protocolTelnet",
-    titleFallback: "Telnet",
-    descKey: "dialog.protocolTelnetDesc",
-    descFallback: "Plain Telnet or raw TCP CLI sessions",
-    icon: TbNetwork,
-  },
-  {
-    id: "serial",
-    titleKey: "dialog.protocolSerial",
-    titleFallback: "Serial",
-    descKey: "dialog.protocolSerialDesc",
-    descFallback: "Connect to a local serial / COM port",
-    icon: TbPlugConnected,
-  },
-  {
-    id: "rdp",
-    titleKey: "dialog.protocolRdp",
-    titleFallback: "RDP",
-    descKey: "dialog.protocolRdpDesc",
-    descFallback: "Connect to a remote Windows desktop inside NyaTerm",
-    icon: TbServer,
-  },
-  {
-    id: "vnc",
-    titleKey: "dialog.protocolVnc",
-    titleFallback: "VNC",
-    descKey: "dialog.protocolVncDesc",
-    descFallback: "Open an external VNC viewer",
-    icon: MdLan,
-  },
-];
+  const PROTOCOL_OPTIONS: Array<{
+    id: ProtocolTab;
+    titleKey: string;
+    titleFallback: string;
+    descKey: string;
+    descFallback: string;
+    icon: ComponentType<{ className?: string }>;
+  }> = [
+    {
+      id: "ssh",
+      titleKey: "dialog.protocolSsh",
+      titleFallback: "SSH",
+      descKey: "dialog.protocolSshDesc",
+      descFallback: "Secure shell sessions with password or key auth",
+      icon: MdTerminal,
+    },
+    {
+      id: "local",
+      titleKey: "dialog.protocolLocal",
+      titleFallback: "Local terminal",
+      descKey: "dialog.protocolLocalDesc",
+      descFallback: "Launch a local shell on this computer",
+      icon: MdMonitor,
+    },
+    {
+      id: "telnet",
+      titleKey: "dialog.protocolTelnet",
+      titleFallback: "Telnet",
+      descKey: "dialog.protocolTelnetDesc",
+      descFallback: "Plain Telnet or raw TCP CLI sessions",
+      icon: TbNetwork,
+    },
+    {
+      id: "serial",
+      titleKey: "dialog.protocolSerial",
+      titleFallback: "Serial",
+      descKey: "dialog.protocolSerialDesc",
+      descFallback: "Connect to a local serial / COM port",
+      icon: TbPlugConnected,
+    },
+    {
+      id: "rdp",
+      titleKey: "dialog.protocolRdp",
+      titleFallback: "RDP",
+      descKey: "dialog.protocolRdpDesc",
+      descFallback: "Connect to a remote Windows desktop inside NyaTerm",
+      icon: TbServer,
+    },
+    {
+      id: "vnc",
+      titleKey: "dialog.protocolVnc",
+      titleFallback: "VNC",
+      descKey: "dialog.protocolVncDesc",
+      descFallback: "Open an external VNC viewer",
+      icon: MdLan,
+    },
+    {
+      id: "s3",
+      titleKey: "dialog.protocolS3",
+      titleFallback: "S3",
+      descKey: "dialog.protocolS3Desc",
+      descFallback: "Browse and transfer files with an S3-compatible bucket",
+      icon: MdCloud,
+    },
+  ];
 
 export default function NewSessionPage() {
   const { t } = useTranslation();
@@ -285,6 +294,17 @@ export default function NewSessionPage() {
   const [vncClipboardEnabled, setVncClipboardEnabled] = useState(true);
   const [vncReconnectEnabled, setVncReconnectEnabled] = useState(true);
   const [vncReconnectMaxAttempts, setVncReconnectMaxAttempts] = useState(5);
+
+  // S3
+  const [s3Endpoint, setS3Endpoint] = useState("");
+  const [s3Bucket, setS3Bucket] = useState("");
+  const [s3Region, setS3Region] = useState("");
+  const [s3Root, setS3Root] = useState("");
+  const [s3AccessKeyId, setS3AccessKeyId] = useState("");
+  const [s3SecretAccessKey, setS3SecretAccessKey] = useState("");
+  const [s3SessionToken, setS3SessionToken] = useState("");
+  const [s3HasSecretAccessKey, setS3HasSecretAccessKey] = useState(false);
+  const [s3VirtualHostStyle, setS3VirtualHostStyle] = useState(false);
 
   // Proxy
   const [proxyId, setProxyId] = useState("");
@@ -382,6 +402,7 @@ export default function NewSessionPage() {
           serial: "serial",
           rdp: "rdp",
           vnc: "vnc",
+          s3: "s3",
         };
         setCurrentTab(tabMap[found.type] || "ssh");
         setWizardStep("form");
@@ -479,6 +500,25 @@ export default function NewSessionPage() {
           setParity(found.parity || "none");
           setStopBits(found.stop_bits || "1");
           setSerialBackspaceMode(found.backspace_mode || "ctrl_h");
+        } else if (found.type === "s3") {
+          const masked = "__SET__";
+          setS3Endpoint(found.endpoint || "");
+          setS3Bucket(found.bucket || "");
+          setS3Region(found.region || "");
+          setS3Root(found.root || "");
+          setS3AccessKeyId(
+            found.access_key_id && found.access_key_id !== masked
+              ? found.access_key_id
+              : "",
+          );
+          setS3SecretAccessKey("");
+          setS3SessionToken(
+            found.session_token && found.session_token !== masked
+              ? found.session_token
+              : "",
+          );
+          setS3HasSecretAccessKey(Boolean(found.has_secret_access_key));
+          setS3VirtualHostStyle(Boolean(found.virtual_host_style));
         }
       })
       .catch((e) => setError(getErrorMessage(e)));
@@ -853,6 +893,12 @@ export default function NewSessionPage() {
       }
     }
 
+    if (currentTab === "s3") {
+      if (!s3Bucket.trim()) {
+        return t("dialog.s3BucketRequired", "S3 bucket is required.");
+      }
+    }
+
     if (currentTab === "serial") {
       if (!serialPortName.trim()) {
         return t("dialog.serialPortRequired", "Serial port is required");
@@ -894,6 +940,7 @@ export default function NewSessionPage() {
     shellPath,
     sshPort,
     sftpSettings.shell_detection_timeout_ms,
+    s3Bucket,
     telnetPort,
     t,
     username,
@@ -947,7 +994,9 @@ export default function NewSessionPage() {
                 ? `${normalizedHost}:${rdpPort}`
                 : currentTab === "vnc"
                   ? `${normalizedHost}:${vncPort}`
-                  : normalizedHost;
+                  : currentTab === "s3"
+                    ? s3Bucket.trim() || t("dialog.protocolS3", "S3")
+                    : normalizedHost;
 
       const typeTag =
         currentTab === "ssh"
@@ -960,7 +1009,9 @@ export default function NewSessionPage() {
                 ? "rdp"
                 : currentTab === "vnc"
                   ? "vnc"
-                  : "serial";
+                  : currentTab === "s3"
+                    ? "s3"
+                    : "serial";
       const network =
         currentTab === "ssh"
           ? (() => {
@@ -1064,7 +1115,10 @@ export default function NewSessionPage() {
         group_id: finalGroupId || undefined,
         description: normalizedDescription || undefined,
         sort_order: sortOrder,
-        open_on_startup: currentTab === "rdp" || currentTab === "vnc" ? false : openOnStartup,
+        open_on_startup:
+          currentTab === "rdp" || currentTab === "vnc" || currentTab === "s3"
+            ? false
+            : openOnStartup,
         icon: iconKey || undefined,
         icon_auto_detect: currentTab === "ssh" ? iconAutoDetect : false,
         encoding: encoding === "global" ? undefined : encoding,
@@ -1182,6 +1236,30 @@ export default function NewSessionPage() {
               parity,
               stop_bits: stopBits,
               backspace_mode: serialBackspaceMode,
+            }
+          : {}),
+        ...(currentTab === "s3"
+          ? {
+              endpoint: s3Endpoint.trim(),
+              bucket: s3Bucket.trim(),
+              region: s3Region.trim(),
+              root: s3Root.trim(),
+              access_key_id: s3AccessKeyId.trim()
+                ? s3AccessKeyId.trim()
+                : editId
+                  ? "__SET__"
+                  : undefined,
+              secret_access_key: s3SecretAccessKey
+                ? s3SecretAccessKey
+                : s3HasSecretAccessKey
+                  ? undefined
+                  : "",
+              session_token: s3SessionToken.trim()
+                ? s3SessionToken.trim()
+                : editId
+                  ? "__SET__"
+                  : undefined,
+              virtual_host_style: s3VirtualHostStyle,
             }
           : {}),
       };
@@ -1354,6 +1432,19 @@ export default function NewSessionPage() {
             !password.trim() &&
             !passwordId &&
             Boolean(editId && hasPassword),
+          s3:
+            currentTab === "s3"
+              ? {
+                  endpoint: s3Endpoint.trim(),
+                  bucket: s3Bucket.trim(),
+                  region: s3Region.trim(),
+                  root: s3Root.trim(),
+                  accessKeyId: s3AccessKeyId.trim() || undefined,
+                  secretAccessKey: s3SecretAccessKey || undefined,
+                  sessionToken: s3SessionToken.trim() || undefined,
+                  virtualHostStyle: s3VirtualHostStyle,
+                }
+              : undefined,
         },
       });
 
@@ -1940,6 +2031,29 @@ export default function NewSessionPage() {
                 reconnectMaxAttempts={vncReconnectMaxAttempts}
                 setReconnectMaxAttempts={setVncReconnectMaxAttempts}
                 connectionId={initialData?.id || editId}
+              />
+            </TabsContent>
+
+            <TabsContent value="s3" className="space-y-3 m-0 border-0 outline-none w-full">
+              <S3Form
+                endpoint={s3Endpoint}
+                setEndpoint={setS3Endpoint}
+                bucket={s3Bucket}
+                setBucket={setS3Bucket}
+                region={s3Region}
+                setRegion={setS3Region}
+                root={s3Root}
+                setRoot={setS3Root}
+                accessKeyId={s3AccessKeyId}
+                setAccessKeyId={setS3AccessKeyId}
+                secretAccessKey={s3SecretAccessKey}
+                setSecretAccessKey={setS3SecretAccessKey}
+                sessionToken={s3SessionToken}
+                setSessionToken={setS3SessionToken}
+                hasSecretAccessKey={s3HasSecretAccessKey}
+                setHasSecretAccessKey={setS3HasSecretAccessKey}
+                virtualHostStyle={s3VirtualHostStyle}
+                setVirtualHostStyle={setS3VirtualHostStyle}
               />
             </TabsContent>
 
