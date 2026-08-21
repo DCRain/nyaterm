@@ -121,7 +121,7 @@ export function useTerminalExternalDrop({
   useEffect(() => {
     const pasteExplorerPaths = (payload: {
       paths: string[];
-      backend: "local" | "remote";
+      backend: "local" | "remote" | "s3";
     }) => {
       const text = formatExplorerPathsForTerminal(payload.paths, payload.backend);
       if (!text) {
@@ -161,7 +161,7 @@ export function useTerminalExternalDrop({
     };
 
     const handlePointerDrop = (
-      payload: { paths: string[]; backend: "local" | "remote" },
+      payload: { paths: string[]; backend: "local" | "remote" | "s3" },
       x: number,
       y: number,
     ) => {

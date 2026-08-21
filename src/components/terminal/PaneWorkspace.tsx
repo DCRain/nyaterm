@@ -5,6 +5,7 @@ import { MdErrorOutline } from "react-icons/md";
 import StartWorkspace from "@/components/app/start-workspace/StartWorkspace";
 import ResizeHandle from "@/components/layout/ResizeHandle";
 import SftpWorkspace from "@/components/panel/file-explorer/SftpWorkspace";
+import S3Workspace from "@/components/panel/file-explorer/S3Workspace";
 import { FilePreviewContent } from "@/components/panel/file-explorer/FilePreviewContent";
 import NoteEditorPanel from "@/components/panel/note-editor/NoteEditorPanel";
 import RdpPaneHost from "@/components/rdp/RdpPaneHost";
@@ -25,6 +26,7 @@ import type {
   PaneNode,
   RecordingMode,
   RecordingStatus,
+  SessionType,
   SplitPane,
   Tab,
   TerminalSessionPane,
@@ -289,6 +291,23 @@ function PaneNodeView({
     );
   }
 
+  if (node.view === "s3") {
+    return (
+      <div
+        className={`relative h-full w-full overflow-hidden ${
+          showChrome ? "rounded-sm border" : ""
+        } ${showChrome && isActive ? "ring-1 ring-primary/60" : ""}`}
+        style={{
+          borderColor: showChrome ? "var(--df-border)" : undefined,
+          backgroundColor: "var(--df-bg)",
+        }}
+        onMouseDown={() => onActivatePane(node.id)}
+      >
+        <S3Workspace pane={node} visible={visible} />
+      </div>
+    );
+  }
+
   return (
     <div
       className={`nyaterm-wallpaper-terminal-surface relative h-full w-full overflow-hidden ${
@@ -416,7 +435,7 @@ function PaneNodeView({
             }
           />
         )
-      ) : (
+      ) : node.type === "S3" ? null : (
         <PaneXTerminal
           sessionId={node.sessionId}
           sessionName={node.name}
@@ -464,7 +483,7 @@ function PaneXTerminal({
   sessionName: string;
   active: boolean;
   visible: boolean;
-  sessionType: TerminalSessionPane["type"];
+  sessionType: SessionType;
   connectionId?: string;
   temporaryConfig?: TerminalSessionPane["temporaryConfig"];
   onReconnected?: (oldSessionId: string, newSessionId: string) => void;

@@ -1,6 +1,6 @@
 /** Type of terminal session. */
 export type SessionType = "SSH" | "Local" | "Telnet" | "Serial";
-export type WorkspaceSessionType = SessionType | "RDP" | "VNC";
+export type WorkspaceSessionType = SessionType | "RDP" | "VNC" | "S3";
 export type WorkspacePaneKind = "terminal" | "remote-desktop" | "file";
 export type PersistedWorkspacePaneKind = WorkspacePaneKind | "rdp";
 export type { TemporaryLinkConfig } from "@/types/temporaryConnection";
@@ -54,7 +54,14 @@ export interface SyncGroup {
 export type PaneSplitDirection = "horizontal" | "vertical";
 
 /** Connection type discriminator matching Rust ConnectionType. */
-export type ConnectionTypeTag = "ssh" | "local_terminal" | "telnet" | "serial" | "rdp" | "vnc";
+export type ConnectionTypeTag =
+  | "ssh"
+  | "local_terminal"
+  | "telnet"
+  | "serial"
+  | "rdp"
+  | "vnc"
+  | "s3";
 
 /** Metadata for a connected or disconnected session. */
 export interface SessionInfo {
@@ -77,7 +84,13 @@ export interface SessionInfo {
 }
 
 /** Workspace leaf content mode. Default / omitted is the terminal. */
-export type SessionPaneView = "terminal" | "sftp" | "workbench" | "note" | "externalMarkdown";
+export type SessionPaneView =
+  | "terminal"
+  | "sftp"
+  | "s3"
+  | "workbench"
+  | "note"
+  | "externalMarkdown";
 
 /** Shared fields for one session-like leaf inside a workspace tab. */
 export interface WorkspacePaneBase {
@@ -107,7 +120,7 @@ export interface WorkspacePaneBase {
 /** Leaf node representing one terminal session inside a workspace tab. */
 export interface TerminalSessionPane extends WorkspacePaneBase {
   paneKind: "terminal";
-  type: SessionType;
+  type: SessionType | "S3";
 }
 
 export type RemoteDesktopScaleMode = "fit" | "actual" | "stretch";
@@ -571,6 +584,16 @@ export interface SavedConnection {
   shared?: boolean;
   /** VNC-only local input policy. */
   view_only?: boolean;
+  /** S3-specific fields (present when type === "s3"). */
+  endpoint?: string;
+  bucket?: string;
+  region?: string;
+  root?: string;
+  access_key_id?: string;
+  secret_access_key?: string;
+  session_token?: string;
+  has_secret_access_key?: boolean;
+  virtual_host_style?: boolean;
 }
 
 export type RdpCertificatePolicy = "strict" | "prompt" | "accept-temporarily";
@@ -1802,7 +1825,7 @@ export interface FileProperties {
 
 export interface FileExplorerProps {
   activeSessionId: string | null;
-  activeSessionType: SessionType | null;
+  activeSessionType: WorkspaceSessionType | null;
   activeConnectionId?: string | null;
   activeSessionName?: string | null;
 }

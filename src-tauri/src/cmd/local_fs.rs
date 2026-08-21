@@ -420,6 +420,11 @@ async fn write_user_path_bytes(path: &str, contents: &[u8]) -> AppResult<()> {
 }
 
 async fn ensure_local_session(manager: &SessionManager, session_id: &str) -> AppResult<()> {
+    // S3 workspace uses synthetic session ids (`s3:<connectionId>`) with no
+    // SessionManager entry; local host FS still needs to work in that pane.
+    if session_id.starts_with("s3:") {
+        return Ok(());
+    }
     let sessions = manager.sessions.lock().await;
     // Local host FS ops don't depend on session type; any live session can
     // anchor browsing (e.g. dual-pane SFTP workspace backed only by SSH).

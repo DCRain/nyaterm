@@ -22,6 +22,7 @@ import { invoke } from "@/lib/invoke";
 
 export interface NewItemDialogData {
   sessionId: string;
+  connectionId?: string;
   backend: FileExplorerBackendKind;
   currentDirPath: string;
   /** "file" or "folder" */
@@ -56,9 +57,13 @@ export default function NewItemDialog({ data, onClose, onSuccess }: NewItemDialo
       ? isFile
         ? "create_local_file"
         : "create_local_dir"
-      : isFile
-        ? "create_remote_file"
-        : "create_remote_dir";
+      : data.backend === "s3"
+        ? isFile
+          ? "create_s3_file"
+          : "create_s3_dir"
+        : isFile
+          ? "create_remote_file"
+          : "create_remote_dir";
 
   const updateBit = (index: number, bit: number, checked: boolean) => {
     const chars = octal.padStart(4, "0").split("");
@@ -86,7 +91,19 @@ export default function NewItemDialog({ data, onClose, onSuccess }: NewItemDialo
     try {
       setIsSubmitting(true);
       const path = joinExplorerPath(data.currentDirPath, trimmed, data.backend);
-      await invoke(command, { sessionId: data.sessionId, path, mode: canEditMode ? octal : null });
+      if (data.backend === "s3") {
+        await invoke(command, {
+          sessionId: data.sessionId,
+          connectionId: data.connectionId,
+          path,
+        });
+      } else {
+        await invoke(command, {
+          sessionId: data.sessionId,
+          path,
+          mode: canEditMode ? octal : null,
+        });
+      }
       onSuccess({ name: trimmed, openAfterCreate, is_dir: !isFile });
       onClose();
     } catch (e) {

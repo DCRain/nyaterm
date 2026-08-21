@@ -80,6 +80,7 @@ interface SavedConnectionsProps {
   ) => void;
   onConnectConnection: (connection: SavedConnection) => Promise<void> | void;
   onOpenSftp?: (connection: SavedConnection) => Promise<void> | void;
+  onOpenS3?: (connection: SavedConnection) => Promise<void> | void;
 }
 
 type HeaderActionButtonProps = ComponentProps<typeof Button> & {
@@ -100,6 +101,7 @@ const CONNECTION_TYPE_FILTERS: {
   { id: "serial", labelKey: "savedConnections.filterSerial", labelFallback: "Serial" },
   { id: "rdp", labelKey: "savedConnections.filterRdp", labelFallback: "RDP" },
   { id: "vnc", labelKey: "savedConnections.filterVnc", labelFallback: "VNC" },
+  { id: "s3", labelKey: "savedConnections.filterS3", labelFallback: "S3" },
 ];
 
 type ConnectionTypeFilter = "all" | ConnectionTypeTag;
@@ -174,6 +176,7 @@ export default function SavedConnections({
   onEditConnection,
   onConnectConnection,
   onOpenSftp,
+  onOpenS3,
 }: SavedConnectionsProps) {
   const { savedConnections, savedGroups, refreshConnections, appSettings, updateUi } = useApp();
   const { t } = useTranslation();
@@ -738,6 +741,17 @@ export default function SavedConnections({
     void (async () => {
       try {
         await onOpenSftp(conn);
+      } catch (e) {
+        toast.error(t("savedConnections.connectionFailed", { error: getErrorMessage(e) }));
+      }
+    })();
+  };
+
+  const handleOpenS3 = (conn: SavedConnection) => {
+    if (!onOpenS3) return;
+    void (async () => {
+      try {
+        await onOpenS3(conn);
       } catch (e) {
         toast.error(t("savedConnections.connectionFailed", { error: getErrorMessage(e) }));
       }
@@ -1509,6 +1523,7 @@ export default function SavedConnections({
     handleConnectOnly,
     handleConnectSelected,
     handleOpenSftp,
+    handleOpenS3,
     handleCopyConnection,
     handleToggleOpenOnStartup,
     requestMoveConnectionToGroup,

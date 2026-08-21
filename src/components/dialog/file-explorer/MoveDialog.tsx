@@ -24,6 +24,7 @@ import { invoke } from "@/lib/invoke";
 
 export interface MoveDialogData {
   sessionId: string;
+  connectionId?: string;
   backend: FileExplorerBackendKind;
   sourceDirectory: string;
   initialTargetDirectory: string;
@@ -73,12 +74,19 @@ export default function MoveDialog({ data, onClose, onSuccess }: MoveDialogProps
                 oldPath: operation.oldPath,
                 newPath: operation.newPath,
               })
-            : invoke("rename_remote_file", {
-                sessionId: data.sessionId,
-                oldPath: operation.oldPath,
-                newPath: operation.newPath,
-                oldRawPathToken: operation.oldRawPathToken,
-              }),
+            : data.backend === "s3"
+              ? invoke("rename_s3_object", {
+                  sessionId: data.sessionId,
+                  connectionId: data.connectionId,
+                  oldPath: operation.oldPath,
+                  newPath: operation.newPath,
+                })
+              : invoke("rename_remote_file", {
+                  sessionId: data.sessionId,
+                  oldPath: operation.oldPath,
+                  newPath: operation.newPath,
+                  oldRawPathToken: operation.oldRawPathToken,
+                }),
         ),
       );
       const failedCount = results.filter(

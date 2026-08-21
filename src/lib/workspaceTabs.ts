@@ -54,8 +54,17 @@ export function isExternalMarkdownPane(node: PaneNode): node is SessionPane {
   return isSessionPane(node) && node.view === "externalMarkdown";
 }
 
+export function isS3WorkspacePane(node: PaneNode): node is SessionPane {
+  return isSessionPane(node) && node.view === "s3";
+}
+
 export function isSessionlessWorkspacePane(node: PaneNode): node is SessionPane {
-  return isWorkbenchPane(node) || isNotePane(node) || isExternalMarkdownPane(node);
+  return (
+    isWorkbenchPane(node) ||
+    isNotePane(node) ||
+    isExternalMarkdownPane(node) ||
+    isS3WorkspacePane(node)
+  );
 }
 
 export function isRdpPane(node: PaneNode): node is Extract<SessionPane, { type: "RDP" }> {
@@ -439,7 +448,10 @@ function serializePane(node: PaneNode): RestorablePaneNode | null {
       session_type: node.type,
       connection_id: node.connectionId,
       view:
-        node.view === "sftp" || node.view === "workbench" || node.view === "note"
+        node.view === "sftp" ||
+        node.view === "s3" ||
+        node.view === "workbench" ||
+        node.view === "note"
           ? node.view
           : undefined,
       note_id: node.view === "note" ? node.noteId : undefined,
@@ -536,6 +548,9 @@ export function normalizeSessionType(
     case "VNC":
     case "vnc":
       return "VNC";
+    case "S3":
+    case "s3":
+      return "S3";
     default:
       return null;
   }
@@ -553,17 +568,24 @@ function restorePane(node: RestorablePaneNode): PaneNode | null {
         : (persistedPaneKind ?? (remoteDesktop ? "remote-desktop" : "terminal"));
     if ((paneKind === "remote-desktop") !== remoteDesktop) return null;
     const view =
-      node.view === "sftp" || node.view === "workbench" || node.view === "note"
+      node.view === "sftp" ||
+      node.view === "s3" ||
+      node.view === "workbench" ||
+      node.view === "note"
         ? node.view
         : undefined;
-    const isSessionless = view === "workbench" || view === "note";
+    const isSessionless =
+      view === "workbench" || view === "note" || view === "s3";
     return {
       id: node.id || createWorkspaceId("pane"),
       kind: "leaf",
       paneKind,
-      sessionId: createWorkspaceId(
-        view === "note" ? "note" : view === "workbench" ? "workbench" : "pending",
-      ),
+      sessionId:
+        view === "s3" && node.connection_id
+          ? `s3:${node.connection_id}`
+          : createWorkspaceId(
+              view === "note" ? "note" : view === "workbench" ? "workbench" : "pending",
+            ),
       name: node.title,
       type,
       connectionId: node.connection_id,

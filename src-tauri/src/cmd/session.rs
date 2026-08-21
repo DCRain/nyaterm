@@ -629,6 +629,16 @@ fn build_recording_context(
         Some(config::ConnectionType::Vnc { host, port, .. }) => {
             ("vnc".to_string(), Some(host.clone()), Some(*port), None)
         }
+        Some(config::ConnectionType::S3 { endpoint, bucket, .. }) => (
+            "s3".to_string(),
+            Some(if endpoint.is_empty() {
+                bucket.clone()
+            } else {
+                endpoint.clone()
+            }),
+            None,
+            None,
+        ),
         Some(config::ConnectionType::Serial { port_name, .. }) => {
             ("serial".to_string(), Some(port_name.clone()), None, None)
         }

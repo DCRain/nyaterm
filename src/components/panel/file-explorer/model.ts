@@ -45,7 +45,11 @@ export type LoadDirectoryOptions = {
   silent?: boolean;
 };
 
-export type FileExplorerBackendKind = "remote" | "local";
+export type FileExplorerBackendKind = "remote" | "local" | "s3";
+
+export function isPosixExplorerBackend(backend: FileExplorerBackendKind): boolean {
+  return backend === "remote" || backend === "s3";
+}
 
 export type BreadcrumbSegment = {
   id: string;
@@ -88,7 +92,11 @@ export function fileExplorerSessionCacheKey(
 }
 
 export function getSessionIdFromFileExplorerSessionCacheKey(cacheKey: string): string {
-  if (cacheKey.endsWith(":local") || cacheKey.endsWith(":remote")) {
+  if (
+    cacheKey.endsWith(":local") ||
+    cacheKey.endsWith(":remote") ||
+    cacheKey.endsWith(":s3")
+  ) {
     return cacheKey.slice(0, cacheKey.lastIndexOf(":"));
   }
   return cacheKey;
@@ -597,7 +605,7 @@ export function normalizeExplorerPath(
   path: string,
   backend: FileExplorerBackendKind,
 ) {
-  if (backend === "remote") return normalizeDirectoryPath(path);
+  if (isPosixExplorerBackend(backend)) return normalizeDirectoryPath(path);
   const trimmed = path.trim();
   if (!trimmed) return "";
   if (trimmed === "/" || trimmed === "\\") return trimmed;
@@ -618,7 +626,7 @@ export function getExplorerParentDirectory(
   path: string,
   backend: FileExplorerBackendKind,
 ) {
-  if (backend === "remote") return getRemoteParentDirectory(path);
+  if (isPosixExplorerBackend(backend)) return getRemoteParentDirectory(path);
 
   const normalized = normalizeExplorerPath(path, backend);
   if (
@@ -647,7 +655,7 @@ export function joinExplorerPath(
   name: string,
   backend: FileExplorerBackendKind,
 ) {
-  if (backend === "remote") {
+  if (isPosixExplorerBackend(backend)) {
     return basePath === "/" ? `/${name}` : `${basePath}/${name}`;
   }
   const normalizedBase = normalizeExplorerPath(basePath, backend);
@@ -703,7 +711,7 @@ export function isMoveToSameDirectory(
     backend,
   );
   if (!normalizedSourceDirectory || !normalizedTargetDirectory) return false;
-  if (backend === "remote") {
+  if (isPosixExplorerBackend(backend)) {
     return normalizedSourceDirectory === normalizedTargetDirectory;
   }
   return isLocalWindowsStylePath(normalizedSourceDirectory) ||
@@ -743,8 +751,8 @@ export function pathStartsWithDirectory(
   const prefix =
     normalizedDirectory.endsWith("/") || normalizedDirectory.endsWith("\\")
       ? normalizedDirectory
-      : `${normalizedDirectory}${backend === "remote" ? "/" : separator}`;
-  if (backend === "remote") return normalizedPath.startsWith(prefix);
+      : `${normalizedDirectory}${isPosixExplorerBackend(backend) ? "/" : separator}`;
+  if (isPosixExplorerBackend(backend)) return normalizedPath.startsWith(prefix);
 
   const isWindowsStylePath =
     /^[a-zA-Z]:[\\/]/.test(normalizedPath) ||
@@ -781,7 +789,7 @@ export function buildBreadcrumbSegments(
     };
   };
 
-  if (backend === "remote") {
+  if (isPosixExplorerBackend(backend)) {
     const rootPath = "/";
     const segments = [makeSegment("/", rootPath, true)];
     const suffix =

@@ -6,3 +6,4 @@ export {
   type FileExplorerSendTargetOption,
 } from "./FileExplorer";
 export { default as SftpWorkspace } from "./SftpWorkspace";
+export { default as S3Workspace } from "./S3Workspace";

@@ -158,7 +158,7 @@ export default MemoizedFileExplorer;
 
 type FileExplorerPaneEndpoint = {
   sessionId: string;
-  kind: "local" | "remote";
+  kind: "local" | "remote" | "s3";
   currentPath: string;
 };
 
@@ -741,13 +741,14 @@ export function FileExplorerPane({
   const explorerBackend: FileExplorerBackendKind =
     forceBackend ?? (hasLocalSession ? "local" : "remote");
   const [remoteFileBrowserEnabled, setRemoteFileBrowserEnabled] = useState<boolean | null>(
-    explorerBackend === "local" ? true : null,
+    explorerBackend === "local" || explorerBackend === "s3" ? true : null,
   );
   const canBrowseFiles =
-    explorerBackend === "local"
+    explorerBackend === "local" || explorerBackend === "s3"
       ? !!activeSessionId
       : hasSshSession && remoteFileBrowserEnabled === true;
-  const canUseRemoteTransfer = explorerBackend === "remote" && canBrowseFiles;
+  const canUseRemoteTransfer =
+    (explorerBackend === "remote" || explorerBackend === "s3") && canBrowseFiles;
   const hasUnsupportedSession =
     !forceBackend &&
     !!activeSessionId &&
@@ -1093,40 +1094,30 @@ export function FileExplorerPane({
 
   // Resolve whether backend terminal-path tracking is available for this session.
   useEffect(() => {
-    if (explorerBackend === "local") {
+    if (explorerBackend === "local" || explorerBackend === "s3") {
       setRemoteFileBrowserEnabled(true);
-      if (!activeSessionId) {
-        setCwdTrackingActive(false);
-        return;
-      }
+      setCwdTrackingActive(false);
+      return;
     }
 
     if ((!hasSshSession && !hasLocalSession) || !activeSessionId) {
       setCwdTrackingActive(false);
-      if (explorerBackend !== "local") {
-        setRemoteFileBrowserEnabled(null);
-      }
+      setRemoteFileBrowserEnabled(null);
       return;
     }
-    if (explorerBackend !== "local") {
-      setRemoteFileBrowserEnabled(hasLocalSession ? true : null);
-    }
+    setRemoteFileBrowserEnabled(hasLocalSession ? true : null);
     invoke<SessionInfo[]>("list_sessions")
       .then((sessions) => {
         const s = sessions.find((s) => s.id === activeSessionId);
         const active = s?.injection_active ?? false;
         setCwdTrackingActive(active);
-        if (explorerBackend !== "local") {
-          setRemoteFileBrowserEnabled(
-            hasLocalSession ? true : (s?.remote_file_browser_enabled ?? true),
-          );
-        }
+        setRemoteFileBrowserEnabled(
+          hasLocalSession ? true : (s?.remote_file_browser_enabled ?? true),
+        );
       })
       .catch(() => {
         setCwdTrackingActive(false);
-        if (explorerBackend !== "local") {
-          setRemoteFileBrowserEnabled(true);
-        }
+        setRemoteFileBrowserEnabled(true);
       });
   }, [activeSessionId, explorerBackend, hasLocalSession, hasSshSession]);
 
@@ -1236,11 +1227,17 @@ export function FileExplorerPane({
                 sessionId: activeSessionId,
                 path: normalizedPath,
               })
-            : await invoke<FileEntry[]>("list_remote_dir", {
-                sessionId: activeSessionId,
-                path: normalizedPath,
-                rawPathToken,
-              });
+            : backend === "s3"
+              ? await invoke<FileEntry[]>("list_s3_dir", {
+                  sessionId: activeSessionId,
+                  connectionId: activeConnectionId ?? undefined,
+                  path: normalizedPath,
+                })
+              : await invoke<FileEntry[]>("list_remote_dir", {
+                  sessionId: activeSessionId,
+                  path: normalizedPath,
+                  rawPathToken,
+                });
 
         const pathChanged = !pathUnchanged;
         if (historyMode === "push") {
@@ -1326,7 +1323,7 @@ export function FileExplorerPane({
         }
       }
     },
-    [activeSessionId, canBrowseFiles, pushDirectoryHistory],
+    [activeConnectionId, activeSessionId, canBrowseFiles, pushDirectoryHistory],
   );
 
   const refreshCurrentDirectory = useCallback(
@@ -1530,12 +1527,14 @@ export function FileExplorerPane({
 
       try {
         const home = normalizeExplorerPath(
-          await invoke<string>(
-            backend === "local" ? "get_local_home_dir" : "get_home_dir",
-            {
-            sessionId: activeSessionId,
-            },
-          ),
+          backend === "s3"
+            ? "/"
+            : await invoke<string>(
+                backend === "local" ? "get_local_home_dir" : "get_home_dir",
+                {
+                  sessionId: activeSessionId,
+                },
+              ),
           backend,
         );
         if (cancelled) return;
@@ -1957,18 +1956,25 @@ export function FileExplorerPane({
             path: normalizedPath,
             showHiddenFiles,
           })
-        : await invoke<DirectoryChild[]>("list_remote_child_directories", {
-            sessionId: activeSessionId,
-            path: normalizedPath,
-            rawPathToken:
-              normalizedPath ===
-              normalizeExplorerPath(currentPathRef.current, backend)
-                ? currentPathRawTokenRef.current
-                : undefined,
-            showHiddenFiles,
-          });
+        : backend === "s3"
+          ? await invoke<DirectoryChild[]>("list_s3_child_directories", {
+              sessionId: activeSessionId,
+              connectionId: activeConnectionId ?? undefined,
+              path: normalizedPath,
+              showHiddenFiles,
+            })
+          : await invoke<DirectoryChild[]>("list_remote_child_directories", {
+              sessionId: activeSessionId,
+              path: normalizedPath,
+              rawPathToken:
+                normalizedPath ===
+                normalizeExplorerPath(currentPathRef.current, backend)
+                  ? currentPathRawTokenRef.current
+                  : undefined,
+              showHiddenFiles,
+            });
     },
-    [activeSessionId, showHiddenFiles],
+    [activeConnectionId, activeSessionId, showHiddenFiles],
   );
 
   const handleItemClick = (entry: FileEntry) => {
@@ -1994,6 +2000,7 @@ export function FileExplorerPane({
     if (!activeSessionId) return;
     setNewItemDialogData({
       sessionId: activeSessionId,
+      connectionId: activeConnectionId ?? undefined,
       backend: explorerBackend,
       currentDirPath: currentPath,
       type: "file",
@@ -2004,6 +2011,7 @@ export function FileExplorerPane({
     if (!activeSessionId) return;
     setNewItemDialogData({
       sessionId: activeSessionId,
+      connectionId: activeConnectionId ?? undefined,
       backend: explorerBackend,
       currentDirPath: currentPath,
       type: "folder",
@@ -2121,11 +2129,11 @@ export function FileExplorerPane({
   };
 
   const handlePreview = async (entry: FileEntry) => {
-    if (!activeSessionId || entry.is_dir) return;
+    if (!activeSessionId || entry.is_dir || explorerBackend === "s3") return;
     try {
       await openFilePreview({
         sessionId: activeSessionId,
-        backend: explorerBackendRef.current,
+        backend: explorerBackend,
         path: getEntryFullPath(entry),
         name: entry.name,
         size: entry.size,
@@ -2485,6 +2493,13 @@ export function FileExplorerPane({
           oldPath: inlineRenameState.oldPath,
           newPath,
         });
+      } else if (backend === "s3") {
+        await invoke("rename_s3_object", {
+          sessionId: activeSessionId,
+          connectionId: activeConnectionId ?? undefined,
+          oldPath: inlineRenameState.oldPath,
+          newPath,
+        });
       } else {
         await invoke("rename_remote_file", {
           sessionId: activeSessionId,
@@ -2508,6 +2523,7 @@ export function FileExplorerPane({
       );
     }
   }, [
+    activeConnectionId,
     activeSessionId,
     inlineRenameState,
     invalidateDirectoryChildrenCache,
@@ -2584,6 +2600,7 @@ export function FileExplorerPane({
       path: getEntryFullPath(entry),
       name: entry.name,
       rawPathToken: entry.raw_path_token,
+      isDirectory: entry.is_dir,
     }));
   };
 
@@ -2798,6 +2815,7 @@ export function FileExplorerPane({
     if (!activeSessionId || entries.length === 0) return;
     setDeleteDialogData({
       sessionId: activeSessionId,
+      connectionId: activeConnectionId ?? undefined,
       backend: explorerBackend,
       items: buildDeleteItems(entries),
     });
@@ -2807,6 +2825,7 @@ export function FileExplorerPane({
     if (!activeSessionId || entries.length === 0) return;
     setMoveDialogData({
       sessionId: activeSessionId,
+      connectionId: activeConnectionId ?? undefined,
       backend: explorerBackend,
       sourceDirectory: currentPath,
       initialTargetDirectory: currentPath,
@@ -3080,15 +3099,16 @@ export function FileExplorerPane({
   };
 
   const handleOpenInternal = async (entry: FileEntry) => {
+    const backend = explorerBackendRef.current;
     if (
       !activeSessionId ||
       entry.is_dir ||
+      backend === "s3" ||
       (activeSessionType !== "SSH" && activeSessionType !== "Local")
     ) {
       return;
     }
 
-    const backend = explorerBackendRef.current;
     const path = getEntryFullPath(entry);
     const existing = findOpenFileDocument(tabs, {
       backend,

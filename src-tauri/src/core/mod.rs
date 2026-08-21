@@ -21,6 +21,7 @@ pub(crate) mod rdp_keyboard_capture;
 mod recording;
 pub mod remote_desktop;
 pub mod remote_exec;
+pub mod s3;
 mod session;
 pub mod sftp;
 pub mod ssh;

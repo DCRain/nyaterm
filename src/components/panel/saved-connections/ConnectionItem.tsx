@@ -229,6 +229,30 @@ function getConnectionDetailRows(
       });
       return rows;
     }
+    case "s3": {
+      const rows: ConnectionDetailRow[] = [
+        {
+          label: t("dialog.s3Endpoint", "Endpoint"),
+          value: formatRequiredDetailValue(conn.endpoint, t),
+          copyValue: getCopyDetailValue(conn.endpoint),
+        },
+        {
+          label: t("dialog.s3Bucket", "Bucket"),
+          value: formatRequiredDetailValue(conn.bucket, t),
+          copyValue: getCopyDetailValue(conn.bucket),
+        },
+      ];
+      const region = formatOptionalDetailValue(conn.region);
+      const root = formatOptionalDetailValue(conn.root);
+      if (region) rows.push({ label: t("dialog.s3Region", "Region"), value: region });
+      if (root) rows.push({ label: t("dialog.s3Root", "Root prefix"), value: root });
+      rows.push({
+        label: t("savedConnections.description"),
+        value: description,
+        multiline: true,
+      });
+      return rows;
+    }
     default: {
       const rows: ConnectionDetailRow[] = [
         {
@@ -356,6 +380,7 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
     handleConnectOnly,
     handleConnectSelected,
     handleOpenSftp,
+    handleOpenS3,
     handleCopyConnection,
     handleToggleOpenOnStartup,
     requestMoveConnectionToGroup,
@@ -686,6 +711,17 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
             {t("savedConnections.openSftp")}
           </ContextMenuItem>
         ) : null}
+        {conn.type === "s3" ? (
+          <ContextMenuItem
+            onClick={() => {
+              closeAndSuppressDetails();
+              handleOpenS3(conn);
+            }}
+          >
+            <MdFolderOpen className="text-[0.875rem] text-muted-foreground mr-2" />
+            {t("savedConnections.openS3")}
+          </ContextMenuItem>
+        ) : null}
         <ContextMenuItem
           onClick={() => {
             closeAndSuppressDetails();
@@ -715,7 +751,7 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
           <MdContentCopy className="text-[0.875rem] text-muted-foreground mr-2" />
           {t("savedConnections.copy")}
         </ContextMenuItem>
-        {conn.type !== "rdp" && conn.type !== "vnc" ? (
+        {conn.type !== "rdp" && conn.type !== "vnc" && conn.type !== "s3" ? (
           <ContextMenuItem
             onClick={() => {
               closeAndSuppressDetails();

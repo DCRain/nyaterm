@@ -25,6 +25,24 @@ pub fn get_saved_connections(app: tauri::AppHandle) -> AppResult<Vec<SavedConnec
             auth.has_password = auth.password.is_some();
             auth.password = None;
         }
+        if let config::ConnectionType::S3 {
+            access_key_id,
+            secret_access_key,
+            session_token,
+            has_secret_access_key,
+            ..
+        } = &mut conn.config
+        {
+            *has_secret_access_key = secret_access_key.is_some();
+            *secret_access_key = None;
+            // Keep access_key_id / session_token masked presence only when set.
+            if access_key_id.as_ref().is_some_and(|v| !v.is_empty()) {
+                *access_key_id = Some(config::MASKED_SECRET_VALUE.to_string());
+            }
+            if session_token.as_ref().is_some_and(|v| !v.is_empty()) {
+                *session_token = Some(config::MASKED_SECRET_VALUE.to_string());
+            }
+        }
     }
     Ok(connections)
 }
@@ -83,6 +101,8 @@ pub fn save_connection(
     validate_sftp_settings_config(&connection)?;
     validate_rdp_config(&connection)?;
     validate_vnc_config(&connection)?;
+    validate_s3_config(&connection)?;
+    merge_s3_secrets_for_save(&mut connection, existing.as_ref())?;
 
     if let Some(ref mut auth) = connection.auth {
         // password_id: Some("") means explicitly cleared, None means preserve existing
@@ -452,6 +472,78 @@ fn validate_vnc_config(connection: &SavedConnection) -> AppResult<()> {
         ));
     }
 
+    Ok(())
+}
+
+fn validate_s3_config(connection: &SavedConnection) -> AppResult<()> {
+    let config::ConnectionType::S3 {
+        endpoint,
+        bucket,
+        region,
+        ..
+    } = &connection.config
+    else {
+        return Ok(());
+    };
+
+    if bucket.trim().is_empty() {
+        return Err(AppError::Config("S3 bucket is required".to_string()));
+    }
+    let _ = (endpoint, region);
+    Ok(())
+}
+
+fn merge_s3_secrets_for_save(
+    connection: &mut SavedConnection,
+    existing: Option<&SavedConnection>,
+) -> AppResult<()> {
+    let config::ConnectionType::S3 {
+        access_key_id,
+        secret_access_key,
+        session_token,
+        has_secret_access_key,
+        ..
+    } = &mut connection.config
+    else {
+        return Ok(());
+    };
+
+    let existing_s3 = existing.and_then(|conn| match &conn.config {
+        config::ConnectionType::S3 {
+            access_key_id,
+            secret_access_key,
+            session_token,
+            ..
+        } => Some((
+            access_key_id.clone(),
+            secret_access_key.clone(),
+            session_token.clone(),
+        )),
+        _ => None,
+    });
+
+    *access_key_id = match access_key_id.as_deref() {
+        Some(config::MASKED_SECRET_VALUE) | None => {
+            existing_s3.as_ref().and_then(|(id, _, _)| id.clone())
+        }
+        Some("") => None,
+        Some(plain) => Some(crypto::encrypt(plain)?),
+    };
+    *secret_access_key = match secret_access_key.as_deref() {
+        Some(config::MASKED_SECRET_VALUE) | None => {
+            existing_s3.as_ref().and_then(|(_, secret, _)| secret.clone())
+        }
+        Some("") => None,
+        Some(plain) => Some(crypto::encrypt(plain)?),
+    };
+    *session_token = match session_token.as_deref() {
+        Some(config::MASKED_SECRET_VALUE) | None => {
+            existing_s3.as_ref().and_then(|(_, _, token)| token.clone())
+        }
+        Some("") => None,
+        Some(plain) => Some(crypto::encrypt(plain)?),
+    };
+    *has_secret_access_key = false;
     Ok(())
 }
 

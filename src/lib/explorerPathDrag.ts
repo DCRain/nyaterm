@@ -59,7 +59,7 @@ function normalizePayload(payload: ExplorerPathDragPayload): ExplorerPathDragPay
   const sessionId = payload.transfer?.sessionId?.trim();
   return {
     paths,
-    backend: payload.backend === "local" ? "local" : "remote",
+    backend: payload.backend,
     transfer:
       sessionId && transferEntries && transferEntries.length > 0
         ? { sessionId, entries: transferEntries }

@@ -17,6 +17,7 @@ import { invoke } from "@/lib/invoke";
 
 export interface DeleteDialogData {
   sessionId: string;
+  connectionId?: string;
   backend: FileExplorerBackendKind;
   items: DeleteDialogItem[];
 }
@@ -25,6 +26,7 @@ export interface DeleteDialogItem {
   path: string;
   name: string;
   rawPathToken?: string;
+  isDirectory?: boolean;
 }
 
 interface DeleteDialogProps {
@@ -50,11 +52,18 @@ export default function DeleteDialog({ data, onClose, onSuccess }: DeleteDialogP
                 sessionId: data.sessionId,
                 path: item.path,
               })
-            : invoke("delete_remote_file", {
-                sessionId: data.sessionId,
-                path: item.path,
-                rawPathToken: item.rawPathToken,
-              }),
+            : data.backend === "s3"
+              ? invoke("delete_s3_object", {
+                  sessionId: data.sessionId,
+                  connectionId: data.connectionId,
+                  path: item.path,
+                  isDirectory: item.isDirectory ?? false,
+                })
+              : invoke("delete_remote_file", {
+                  sessionId: data.sessionId,
+                  path: item.path,
+                  rawPathToken: item.rawPathToken,
+                }),
         ),
       );
 

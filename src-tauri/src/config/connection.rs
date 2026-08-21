@@ -654,6 +654,27 @@ pub enum ConnectionType {
         #[serde(default)]
         view_only: bool,
     },
+    S3 {
+        #[serde(default)]
+        endpoint: String,
+        #[serde(default)]
+        bucket: String,
+        #[serde(default)]
+        region: String,
+        #[serde(default)]
+        root: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        access_key_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret_access_key: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_token: Option<String>,
+        /// True when a secret_access_key is stored (set on load, cleared before save).
+        #[serde(default, skip_serializing_if = "is_false")]
+        has_secret_access_key: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        virtual_host_style: bool,
+    },
 }
 
 fn default_ssh_port() -> u16 {
@@ -1229,11 +1250,24 @@ pub fn save_sessions(app: &AppHandle, config: &SessionsConfig) -> AppResult<()> 
             ConnectionType::Ssh { .. } => {
                 migrate_legacy_ssh_agent_settings(conn);
             }
-            ConnectionType::Rdp { .. } | ConnectionType::Vnc { .. } => {}
+            ConnectionType::Rdp { .. } | ConnectionType::Vnc { .. } | ConnectionType::S3 { .. } => {}
         }
         validate_ssh_agent_settings(&conn.config)?;
         if let Some(auth) = &mut conn.auth {
             auth.has_password = false;
+        }
+        if let ConnectionType::S3 {
+            has_secret_access_key,
+            secret_access_key,
+            access_key_id,
+            session_token,
+            ..
+        } = &mut conn.config
+        {
+            *has_secret_access_key = false;
+            // Secrets stay encrypted in storage; strip plaintext markers for the write path
+            // handled by cmd/connection save_connection.
+            let _ = (secret_access_key, access_key_id, session_token);
         }
     }
     storage::replace_sessions(&sanitized)
@@ -1313,7 +1347,7 @@ pub fn resolve_connection_encoding(app: &AppHandle, conn: &SavedConnection) -> S
         | ConnectionType::LocalTerminal { encoding, .. }
         | ConnectionType::Telnet { encoding, .. }
         | ConnectionType::Serial { encoding, .. } => encoding.as_str(),
-        ConnectionType::Rdp { .. } | ConnectionType::Vnc { .. } => "",
+        ConnectionType::Rdp { .. } | ConnectionType::Vnc { .. } | ConnectionType::S3 { .. } => "",
     };
     if !per_conn.is_empty() {
         return per_conn.to_string();

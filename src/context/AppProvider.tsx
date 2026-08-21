@@ -688,8 +688,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const createRequestId = createSessionRequestId();
       const pane = createSessionPane(name, type, connectionId, {
         ...paneOverrides,
-        connecting: true,
-        createRequestId,
+        connecting: paneOverrides?.connecting ?? true,
+        createRequestId:
+          paneOverrides?.connecting === false
+            ? undefined
+            : (paneOverrides?.createRequestId ?? createRequestId),
         view: options?.view ?? paneOverrides?.view,
       });
       const newTab = createWorkspaceTab(pane, getNextPersistOrder(tabsRef.current), extra);
@@ -698,7 +701,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         : [...tabsRef.current, newTab];
       void commitTabs(nextTabs);
       setActiveTabId(newTab.id);
-      return { tabId: newTab.id, createRequestId };
+      return { tabId: newTab.id, createRequestId: pane.createRequestId ?? createRequestId };
     },
     [commitTabs, setActiveTabId],
   );

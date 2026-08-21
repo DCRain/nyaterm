@@ -32,6 +32,7 @@ use crate::core::{
     CloudSyncManager, QuickCommandsStore, RdpSessionManager, RecordingManager, SessionManager,
     VncSessionManager,
 };
+use crate::core::s3::S3Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -50,6 +51,7 @@ pub fn run() {
     let host_key_verify_manager = Arc::new(HostKeyVerifyManager::new());
     let quick_commands_store = Arc::new(QuickCommandsStore::new());
     let cloud_sync_manager = Arc::new(CloudSyncManager::new());
+    let s3_manager = Arc::new(S3Manager::new());
     let agent_approval_manager = Arc::new(AgentApprovalManager::new());
     let nyaterm_mcp_runtime = Arc::new(core::ai::NyaTermMcpRuntime::new());
     let codex_app_server_manager = Arc::new(core::ai::CodexAppServerManager::new());
@@ -102,6 +104,7 @@ pub fn run() {
         .manage(host_key_verify_manager.clone())
         .manage(quick_commands_store.clone())
         .manage(cloud_sync_manager.clone())
+        .manage(s3_manager.clone())
         .manage(agent_approval_manager.clone())
         .manage(nyaterm_mcp_runtime.clone())
         .manage(codex_app_server_manager.clone())
@@ -276,6 +279,17 @@ pub fn run() {
             cmd::sftp::read_remote_file_bytes,
             cmd::sftp::write_remote_file_text,
             cmd::sftp::create_remote_file,
+            cmd::s3::list_s3_dir,
+            cmd::s3::list_s3_child_directories,
+            cmd::s3::create_s3_dir,
+            cmd::s3::create_s3_file,
+            cmd::s3::delete_s3_object,
+            cmd::s3::rename_s3_object,
+            cmd::s3::upload_local_file_to_s3,
+            cmd::s3::upload_local_directory_to_s3,
+            cmd::s3::download_s3_file,
+            cmd::s3::download_s3_directory,
+            cmd::s3::invalidate_s3_connection,
             cmd::sftp::create_remote_dir,
             cmd::sftp::create_remote_symlink,
             cmd::sftp::chmod_remote_file,

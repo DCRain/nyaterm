@@ -20,6 +20,7 @@ pub mod process;
 pub mod proxy;
 pub mod remote_desktop;
 pub mod rdp;
+pub mod s3;
 pub mod session;
 pub mod settings;
 pub mod sftp;
