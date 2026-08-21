@@ -28,10 +28,11 @@ import { useApp } from "@/context/AppContext";
 import { useEncryptedNotesSession } from "@/hooks/useEncryptedNotesSession";
 import { useNotesTree } from "@/hooks/useNotesTree";
 import { invoke } from "@/lib/invoke";
-import { localizeNotePasswordError } from "@/lib/notePasswordErrors";
 import { openNoteInWorkspace } from "@/lib/noteEditorEvents";
+import { localizeNotePasswordError } from "@/lib/notePasswordErrors";
 import { collectSessionPanes } from "@/lib/workspaceTabs";
 import type { NoteFolder, NoteTreeNode } from "@/types/notes";
+import MoveOutChoiceDialog, { type MoveOutChoice } from "./MoveOutChoiceDialog";
 import NotesPanelHeader from "./NotesPanelHeader";
 import NoteTree from "./NoteTree";
 import {
@@ -65,12 +66,61 @@ function encryptionRootId(node: NoteTreeNode): string {
   return node.rootFolderId || node.id;
 }
 
+/** Encryption root of the destination parent folder, or null if outside any encrypted tree. */
+function encryptionRootForParent(folders: NoteFolder[], parentId: string | null): string | null {
+  if (!parentId) return null;
+  const byId = new Map(folders.map((folder) => [folder.id, folder]));
+  let current = byId.get(parentId);
+  while (current) {
+    if (current.encrypted) {
+      return current.encryption?.root_folder_id || current.id;
+    }
+    current = current.parent_id ? byId.get(current.parent_id) : undefined;
+  }
+  return null;
+}
+
+/** Folder-bound encryption root for a node; null if plaintext or standalone-encrypted. */
+function sourceBoundEncryptionRoot(node: NoteTreeNode): string | null {
+  if (!node.encrypted) return null;
+  if (node.kind === "folder") {
+    return node.rootFolderId || node.id;
+  }
+  return node.rootFolderId ?? null;
+}
+
+function isStandaloneEncrypted(node: NoteTreeNode): boolean {
+  return Boolean(node.encrypted && node.kind === "note" && !node.rootFolderId);
+}
+
+type MoveOutPending = {
+  node: NoteTreeNode;
+  parentId: string | null;
+  sourceRootId: string;
+};
+
 type PasswordAction =
   | { kind: "unlock-folder"; node: NoteTreeNode; expandAfter: boolean }
   | { kind: "encrypt"; node: NoteTreeNode }
   | { kind: "decrypt"; node: NoteTreeNode }
   | { kind: "change"; node: NoteTreeNode }
-  | { kind: "create-note"; parentId: string };
+  | { kind: "create-note"; parentId: string }
+  | {
+      kind: "move-out";
+      node: NoteTreeNode;
+      parentId: string | null;
+      action: MoveOutChoice;
+      sourceRootId: string;
+    }
+  | {
+      kind: "move-rebind";
+      node: NoteTreeNode;
+      parentId: string | null;
+      sourceRootId: string | null;
+      targetRootId: string;
+      needsSourcePassword: boolean;
+      cachedSourcePassword?: string;
+    };
 
 export default function NotesPanel() {
   const { t } = useTranslation();
@@ -92,7 +142,8 @@ export default function NotesPanel() {
     deleteNode,
     runAction,
   } = useNotesTree();
-  const { isFolderUnlocked, unlockFolder, lockFolder } = useEncryptedNotesSession();
+  const { isFolderUnlocked, unlockFolder, lockFolder, getFolderPassword } =
+    useEncryptedNotesSession();
   const [search, setSearch] = useState("");
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<NoteTreeNode | null>(null);
@@ -100,6 +151,7 @@ export default function NotesPanel() {
   const [passwordAction, setPasswordAction] = useState<PasswordAction | null>(null);
   const [passwordError, setPasswordError] = useState("");
   const [passwordSubmitting, setPasswordSubmitting] = useState(false);
+  const [moveOutPending, setMoveOutPending] = useState<MoveOutPending | null>(null);
   const dragSourceRef = useRef<NoteTreeNode | null>(null);
   const deferredSearch = useDeferredValue(search);
 
@@ -219,6 +271,24 @@ export default function NotesPanel() {
     void runAction(() => renameNode(node.kind, node.id, name));
   };
 
+  const executeMove = (
+    node: NoteTreeNode,
+    parentId: string | null,
+    options?: {
+      encryptionAction?: "plain" | "keep" | "decrypt" | "rebind" | null;
+      sourcePassword?: string | null;
+      targetPassword?: string | null;
+    },
+  ) => {
+    void runAction(() =>
+      moveNode(node.kind, node.id, parentId, Date.now(), {
+        encryptionAction: options?.encryptionAction ?? null,
+        sourcePassword: options?.sourcePassword ?? null,
+        targetPassword: options?.targetPassword ?? null,
+      }),
+    );
+  };
+
   const moveToParent = (node: NoteTreeNode, parentId: string | null) => {
     if (
       node.kind === "folder" &&
@@ -227,7 +297,113 @@ export default function NotesPanel() {
     ) {
       return;
     }
-    void runAction(() => moveNode(node.kind, node.id, parentId, Date.now()));
+
+    const sourceRoot = sourceBoundEncryptionRoot(node);
+    const targetRoot = encryptionRootForParent(folders, parentId);
+    const standalone = isStandaloneEncrypted(node);
+
+    // Same encrypted tree or both outside encryption → plain move.
+    if (sourceRoot && targetRoot && sourceRoot === targetRoot) {
+      executeMove(node, parentId, { encryptionAction: "plain" });
+      return;
+    }
+    if (!sourceRoot && !standalone && !targetRoot) {
+      executeMove(node, parentId, { encryptionAction: "plain" });
+      return;
+    }
+    // Standalone encrypted note staying outside encrypted trees.
+    if (standalone && !targetRoot) {
+      executeMove(node, parentId, { encryptionAction: "plain" });
+      return;
+    }
+
+    // Leaving an encrypted folder tree → ask keep / decrypt / cancel.
+    if (sourceRoot && !targetRoot) {
+      setMoveOutPending({ node, parentId, sourceRootId: sourceRoot });
+      return;
+    }
+
+    // Entering / switching into an encrypted folder.
+    if (targetRoot) {
+      const needsSource = Boolean(sourceRoot || standalone);
+      const sourcePwd = sourceRoot ? getFolderPassword(sourceRoot) : null;
+      const targetPwd = getFolderPassword(targetRoot);
+
+      if (needsSource && sourceRoot && sourcePwd && targetPwd) {
+        executeMove(node, parentId, {
+          encryptionAction: "rebind",
+          sourcePassword: sourcePwd,
+          targetPassword: targetPwd,
+        });
+        return;
+      }
+      if (!needsSource && targetPwd) {
+        executeMove(node, parentId, {
+          encryptionAction: "rebind",
+          targetPassword: targetPwd,
+        });
+        return;
+      }
+      // Source password known from session; only need target password.
+      if (needsSource && sourceRoot && sourcePwd && !targetPwd) {
+        setPasswordError("");
+        setPasswordAction({
+          kind: "move-rebind",
+          node,
+          parentId,
+          sourceRootId: sourceRoot,
+          targetRootId: targetRoot,
+          needsSourcePassword: false,
+          cachedSourcePassword: sourcePwd,
+        });
+        return;
+      }
+
+      setPasswordError("");
+      setPasswordAction({
+        kind: "move-rebind",
+        node,
+        parentId,
+        sourceRootId: sourceRoot,
+        targetRootId: targetRoot,
+        needsSourcePassword: needsSource,
+      });
+      return;
+    }
+
+    executeMove(node, parentId, { encryptionAction: "plain" });
+  };
+
+  const handleMoveOutChoice = (choice: MoveOutChoice) => {
+    const pending = moveOutPending;
+    if (!pending) return;
+    setMoveOutPending(null);
+
+    const isEncRoot =
+      pending.node.kind === "folder" && pending.node.encrypted && !pending.node.rootFolderId;
+
+    if (choice === "keep" && isEncRoot) {
+      executeMove(pending.node, pending.parentId, { encryptionAction: "keep" });
+      return;
+    }
+
+    const cached = getFolderPassword(pending.sourceRootId);
+    if (cached) {
+      executeMove(pending.node, pending.parentId, {
+        encryptionAction: choice === "keep" ? "keep" : "decrypt",
+        sourcePassword: cached,
+      });
+      return;
+    }
+
+    setPasswordError("");
+    setPasswordAction({
+      kind: "move-out",
+      node: pending.node,
+      parentId: pending.parentId,
+      action: choice,
+      sourceRootId: pending.sourceRootId,
+    });
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -300,7 +476,9 @@ export default function NotesPanel() {
         ? "decrypt"
         : passwordAction?.kind === "change"
           ? "change"
-          : "unlock";
+          : passwordAction?.kind === "move-rebind" && passwordAction.needsSourcePassword
+            ? "cross-move"
+            : "unlock";
 
   const passwordTargetName =
     passwordAction && "node" in passwordAction
@@ -320,6 +498,48 @@ export default function NotesPanel() {
         setEditingNodeId(note.id);
         setPasswordAction(null);
         await refresh();
+        return;
+      }
+      if (kind === "move-out") {
+        await moveNode(
+          passwordAction.node.kind,
+          passwordAction.node.id,
+          passwordAction.parentId,
+          Date.now(),
+          {
+            encryptionAction: passwordAction.action === "keep" ? "keep" : "decrypt",
+            sourcePassword: password,
+          },
+        );
+        unlockFolder(passwordAction.sourceRootId, password);
+        setPasswordAction(null);
+        return;
+      }
+      if (kind === "move-rebind") {
+        const sourcePassword = passwordAction.needsSourcePassword
+          ? password
+          : passwordAction.cachedSourcePassword || null;
+        const targetPassword = passwordAction.needsSourcePassword ? newPassword || "" : password;
+        if (!targetPassword) {
+          setPasswordError(t("notes.password.required"));
+          return;
+        }
+        await moveNode(
+          passwordAction.node.kind,
+          passwordAction.node.id,
+          passwordAction.parentId,
+          Date.now(),
+          {
+            encryptionAction: "rebind",
+            sourcePassword,
+            targetPassword,
+          },
+        );
+        if (passwordAction.sourceRootId && sourcePassword) {
+          unlockFolder(passwordAction.sourceRootId, sourcePassword);
+        }
+        unlockFolder(passwordAction.targetRootId, targetPassword);
+        setPasswordAction(null);
         return;
       }
       const { node } = passwordAction;
@@ -567,6 +787,12 @@ export default function NotesPanel() {
           setPasswordAction(null);
           setPasswordError("");
         }}
+      />
+      <MoveOutChoiceDialog
+        open={!!moveOutPending}
+        targetName={moveOutPending?.node.name ?? ""}
+        onChoose={handleMoveOutChoice}
+        onCancel={() => setMoveOutPending(null)}
       />
     </div>
   );

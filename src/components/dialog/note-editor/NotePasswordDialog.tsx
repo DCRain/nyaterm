@@ -13,7 +13,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-export type NotePasswordMode = "unlock" | "encrypt" | "decrypt" | "change";
+export type NotePasswordMode = "unlock" | "encrypt" | "decrypt" | "change" | "cross-move";
 
 export interface NotePasswordDialogProps {
   open: boolean;
@@ -60,7 +60,9 @@ export default function NotePasswordDialog({
         ? "notes.password.encryptTitle"
         : mode === "decrypt"
           ? "notes.password.decryptTitle"
-          : "notes.password.changeTitle";
+          : mode === "cross-move"
+            ? "notes.move.crossMoveTitle"
+            : "notes.password.changeTitle";
 
   const descriptionKey =
     mode === "unlock"
@@ -69,7 +71,9 @@ export default function NotePasswordDialog({
         ? "notes.password.encryptDescription"
         : mode === "decrypt"
           ? "notes.password.decryptDescription"
-          : "notes.password.changeDescription";
+          : mode === "cross-move"
+            ? "notes.move.crossMoveDescription"
+            : "notes.password.changeDescription";
 
   const handleSubmit = () => {
     if (submitting) return;
@@ -100,6 +104,14 @@ export default function NotePasswordDialog({
       }
       if (newPassword.length < 4) {
         setLocalError(t("notes.password.tooShort"));
+        return;
+      }
+      onSubmit(password, newPassword);
+      return;
+    }
+    if (mode === "cross-move") {
+      if (!newPassword.trim()) {
+        setLocalError(t("notes.password.required"));
         return;
       }
       onSubmit(password, newPassword);
@@ -139,7 +151,9 @@ export default function NotePasswordDialog({
             <Label htmlFor="note-password" className="text-xs">
               {mode === "change"
                 ? t("notes.password.currentPassword")
-                : t("notes.password.enterPassword")}
+                : mode === "cross-move"
+                  ? t("notes.move.sourcePassword")
+                  : t("notes.password.enterPassword")}
             </Label>
             <div className="relative">
               <Input
@@ -167,10 +181,12 @@ export default function NotePasswordDialog({
             </div>
           </div>
 
-          {mode === "change" ? (
+          {mode === "change" || mode === "cross-move" ? (
             <div className="grid gap-1.5">
               <Label htmlFor="note-new-password" className="text-xs">
-                {t("notes.password.newPassword")}
+                {mode === "cross-move"
+                  ? t("notes.move.targetPassword")
+                  : t("notes.password.newPassword")}
               </Label>
               <Input
                 id="note-new-password"
@@ -185,7 +201,7 @@ export default function NotePasswordDialog({
             </div>
           ) : null}
 
-          {mode === "encrypt" || mode === "change" ? (
+          {mode === "change" || mode === "encrypt" ? (
             <div className="grid gap-1.5">
               <Label htmlFor="note-confirm-password" className="text-xs">
                 {t("notes.password.confirmPassword")}
@@ -207,9 +223,7 @@ export default function NotePasswordDialog({
             <p className="text-[11px] text-muted-foreground">{t("notes.password.lostWarning")}</p>
           ) : null}
 
-          {displayError ? (
-            <p className="text-xs text-destructive">{displayError}</p>
-          ) : null}
+          {displayError ? <p className="text-xs text-destructive">{displayError}</p> : null}
         </div>
 
         <DialogFooter>

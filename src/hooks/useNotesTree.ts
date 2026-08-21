@@ -180,16 +180,31 @@ export function useNotesTree() {
     [expandedFolderIds, setExpandedFolderIds, setSelectedNodeId],
   );
 
-  const renameNode = useCallback(
-    async (nodeKind: NoteNodeKind, nodeId: string, name: string) => {
-      await invoke("rename_note_node", { nodeKind, nodeId, name });
-    },
-    [],
-  );
+  const renameNode = useCallback(async (nodeKind: NoteNodeKind, nodeId: string, name: string) => {
+    await invoke("rename_note_node", { nodeKind, nodeId, name });
+  }, []);
 
   const moveNode = useCallback(
-    async (nodeKind: NoteNodeKind, nodeId: string, parentId: string | null, sortOrder: number) => {
-      await invoke("move_note_node", { nodeKind, nodeId, parentId, sortOrder });
+    async (
+      nodeKind: NoteNodeKind,
+      nodeId: string,
+      parentId: string | null,
+      sortOrder: number,
+      options?: {
+        encryptionAction?: "plain" | "keep" | "decrypt" | "rebind" | null;
+        sourcePassword?: string | null;
+        targetPassword?: string | null;
+      },
+    ) => {
+      await invoke("move_note_node", {
+        nodeKind,
+        nodeId,
+        parentId,
+        sortOrder,
+        encryptionAction: options?.encryptionAction ?? null,
+        sourcePassword: options?.sourcePassword ?? null,
+        targetPassword: options?.targetPassword ?? null,
+      });
       if (parentId) setExpandedFolderIds(new Set([...expandedFolderIds, parentId]));
     },
     [expandedFolderIds, setExpandedFolderIds],

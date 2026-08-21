@@ -281,8 +281,19 @@ pub fn move_note_node(
     node_id: String,
     parent_id: Option<String>,
     sort_order: i64,
+    encryption_action: Option<String>,
+    source_password: Option<String>,
+    target_password: Option<String>,
 ) -> AppResult<()> {
-    let result = crate::storage::move_note_node(&node_kind, &node_id, parent_id, sort_order)?;
+    let result = crate::storage::move_note_node(
+        &node_kind,
+        &node_id,
+        parent_id,
+        sort_order,
+        encryption_action.as_deref(),
+        source_password.as_deref(),
+        target_password.as_deref(),
+    )?;
     if result.changed {
         emit_notes_changed(
             &app,

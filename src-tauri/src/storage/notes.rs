@@ -321,12 +321,17 @@ impl Storage {
         node_id: &str,
         parent_id: Option<String>,
         sort_order: i64,
+        encryption_action: Option<&str>,
+        source_password: Option<&str>,
+        target_password: Option<&str>,
     ) -> AppResult<NoteNodeChange> {
         self.ensure_note_summary_index()?;
         let txn = self.db.begin_write().map_err(storage_error)?;
         let folders = read_note_folders_in_txn(&txn)?;
         let notes = read_note_summaries_in_txn(&txn)?;
         validate_parent_exists(&folders, parent_id.as_deref())?;
+        let action = parse_move_encryption_action(encryption_action)?;
+        let target_root = encryption_root_id_for_parent(&folders, parent_id.as_deref());
 
         let change = match node_kind {
             "folder" => {
@@ -351,16 +356,32 @@ impl Storage {
                     &folder.name,
                     Some(("folder", node_id)),
                 )?;
-                let changed = folder.parent_id != parent_id || folder.sort_order != sort_order;
-                if changed {
+
+                let source_root = folder_encryption_root_id(&folder);
+                let encryption_changed = apply_folder_move_encryption(
+                    &txn,
+                    &folders,
+                    &mut folder,
+                    source_root.as_deref(),
+                    target_root.as_deref(),
+                    action,
+                    source_password,
+                    target_password,
+                )?;
+
+                let location_changed =
+                    folder.parent_id != parent_id || folder.sort_order != sort_order;
+                if location_changed {
                     folder.parent_id = parent_id;
                     folder.sort_order = sort_order;
                     folder.updated_at_ms = current_time_ms();
+                }
+                if location_changed || encryption_changed {
                     write_note_folder_in_txn(&txn, &folder)?;
                 }
                 NoteNodeChange {
-                    changed,
-                    tree_changed: changed,
+                    changed: location_changed || encryption_changed,
+                    tree_changed: location_changed || encryption_changed,
                     folder: Some(folder),
                     note: None,
                 }
@@ -379,18 +400,32 @@ impl Storage {
                 )?;
                 let mut note = read_note_in_txn(&txn, node_id)?
                     .ok_or_else(|| AppError::Config(format!("Note '{node_id}' does not exist")))?;
-                let changed = note.parent_id != parent_id || note.sort_order != sort_order;
-                if changed {
+                let source_root = note
+                    .encryption
+                    .as_ref()
+                    .and_then(|meta| meta.root_folder_id.clone());
+                let encryption_changed = apply_note_move_encryption(
+                    &mut note,
+                    source_root.as_deref(),
+                    target_root.as_deref(),
+                    action,
+                    source_password,
+                    target_password,
+                )?;
+                let location_changed = note.parent_id != parent_id || note.sort_order != sort_order;
+                if location_changed {
                     note.parent_id = parent_id;
                     note.sort_order = sort_order;
+                }
+                if location_changed || encryption_changed {
                     note.revision = note.revision.saturating_add(1);
                     note.updated_at_ms = current_time_ms();
                     write_note_in_txn(&txn, &note)?;
                     write_note_summary_in_txn(&txn, &NoteSummary::from(note.clone()))?;
                 }
                 NoteNodeChange {
-                    changed,
-                    tree_changed: changed,
+                    changed: location_changed || encryption_changed,
+                    tree_changed: location_changed || encryption_changed,
                     folder: None,
                     note: Some(NoteSummary::from(note)),
                 }
@@ -603,7 +638,12 @@ impl Storage {
         let meta = note.encryption.as_ref().ok_or_else(|| {
             AppError::Config("Encrypted note is missing encryption metadata".to_string())
         })?;
-        let next = crate::core::note_crypto::reencrypt_markdown(meta, old_password, new_password)?;
+        let next = crate::core::note_crypto::reencrypt_markdown(
+            meta,
+            old_password,
+            new_password,
+            meta.root_folder_id.clone(),
+        )?;
         note.encryption = Some(next);
         note.revision = note.revision.saturating_add(1);
         note.updated_at_ms = current_time_ms();
@@ -666,7 +706,7 @@ impl Storage {
             if !belongs {
                 continue;
             }
-            if (note.encrypted) {
+            if note.encrypted {
                 // Already encrypted independently — cannot re-bind without old password.
                 return Err(AppError::Config(format!(
                     "note_already_encrypted:{}",
@@ -800,8 +840,12 @@ impl Storage {
             let meta = note.encryption.as_ref().ok_or_else(|| {
                 AppError::Config("Encrypted note is missing encryption metadata".to_string())
             })?;
-            let next =
-                crate::core::note_crypto::reencrypt_markdown(meta, old_password, new_password)?;
+            let next = crate::core::note_crypto::reencrypt_markdown(
+                meta,
+                old_password,
+                new_password,
+                meta.root_folder_id.clone(),
+            )?;
             let mut note = note;
             note.encryption = Some(next);
             note.revision = note.revision.saturating_add(1);
@@ -1200,6 +1244,578 @@ fn collect_descendant_folder_ids(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MoveEncryptionAction {
+    None,
+    KeepStandalone,
+    Decrypt,
+    Rebind,
+}
+
+fn parse_move_encryption_action(raw: Option<&str>) -> AppResult<MoveEncryptionAction> {
+    match raw {
+        None | Some("") | Some("plain") | Some("none") => Ok(MoveEncryptionAction::None),
+        Some("keep") => Ok(MoveEncryptionAction::KeepStandalone),
+        Some("decrypt") => Ok(MoveEncryptionAction::Decrypt),
+        Some("rebind") => Ok(MoveEncryptionAction::Rebind),
+        Some(other) => Err(AppError::Config(format!(
+            "Invalid move encryption action '{other}'"
+        ))),
+    }
+}
+
+fn folder_encryption_root_id(folder: &NoteFolder) -> Option<String> {
+    if !folder.encrypted {
+        return None;
+    }
+    folder
+        .encryption
+        .as_ref()
+        .and_then(|meta| meta.root_folder_id.clone())
+        .or_else(|| Some(folder.id.clone()))
+}
+
+fn require_password<'a>(password: Option<&'a str>, label: &str) -> AppResult<&'a str> {
+    password
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::Config(format!("password_required:{label}")))
+}
+
+fn apply_note_move_encryption(
+    note: &mut NoteDocument,
+    source_root: Option<&str>,
+    target_root: Option<&str>,
+    action: MoveEncryptionAction,
+    source_password: Option<&str>,
+    target_password: Option<&str>,
+) -> AppResult<bool> {
+    // Standalone encrypted note moving between non-encrypted parents: no crypto change.
+    if note.encrypted && source_root.is_none() && target_root.is_none() {
+        return Ok(false);
+    }
+
+    // Unencrypted note staying outside encrypted trees.
+    if !note.encrypted && target_root.is_none() {
+        return Ok(false);
+    }
+
+    // Same encrypted tree: only relocate.
+    if note.encrypted
+        && source_root.is_some()
+        && target_root.is_some()
+        && source_root == target_root
+    {
+        return Ok(false);
+    }
+
+    // Leaving an encrypted folder tree → keep standalone or decrypt.
+    if note.encrypted && source_root.is_some() && target_root.is_none() {
+        let password = require_password(source_password, "source")?;
+        let meta = note.encryption.as_ref().ok_or_else(|| {
+            AppError::Config("Encrypted note is missing encryption metadata".to_string())
+        })?;
+        match action {
+            MoveEncryptionAction::KeepStandalone => {
+                let plaintext = crate::core::note_crypto::decrypt_markdown(meta, password)?;
+                let next =
+                    crate::core::note_crypto::encrypt_markdown(&plaintext, password, None)?;
+                note.markdown = String::new();
+                note.encryption = Some(next);
+                return Ok(true);
+            }
+            MoveEncryptionAction::Decrypt => {
+                let plaintext = crate::core::note_crypto::decrypt_markdown(meta, password)?;
+                note.markdown = plaintext;
+                note.encrypted = false;
+                note.encryption = None;
+                return Ok(true);
+            }
+            _ => {
+                return Err(AppError::Config(
+                    "encryption_action_required:keep_or_decrypt".to_string(),
+                ));
+            }
+        }
+    }
+
+    // Entering / switching into an encrypted folder tree.
+    if let Some(target_id) = target_root {
+        let target_pwd = require_password(target_password, "target")?;
+        if !note.encrypted {
+            let meta = crate::core::note_crypto::encrypt_markdown(
+                &note.markdown,
+                target_pwd,
+                Some(target_id.to_string()),
+            )?;
+            note.markdown = String::new();
+            note.encrypted = true;
+            note.encryption = Some(meta);
+            return Ok(true);
+        }
+
+        let source_pwd = require_password(source_password, "source")?;
+        let meta = note.encryption.as_ref().ok_or_else(|| {
+            AppError::Config("Encrypted note is missing encryption metadata".to_string())
+        })?;
+        let next = crate::core::note_crypto::reencrypt_markdown(
+            meta,
+            source_pwd,
+            target_pwd,
+            Some(target_id.to_string()),
+        )?;
+        note.encryption = Some(next);
+        note.markdown = String::new();
+        note.encrypted = true;
+        return Ok(true);
+    }
+
+    Err(AppError::Config("encryption_action_required".to_string()))
+}
+
+fn apply_folder_move_encryption(
+    txn: &redb::WriteTransaction,
+    folders: &[NoteFolder],
+    folder: &mut NoteFolder,
+    source_root: Option<&str>,
+    target_root: Option<&str>,
+    action: MoveEncryptionAction,
+    source_password: Option<&str>,
+    target_password: Option<&str>,
+) -> AppResult<bool> {
+    let folder_id = folder.id.clone();
+    let is_enc_root = folder.encrypted
+        && folder
+            .encryption
+            .as_ref()
+            .and_then(|meta| meta.root_folder_id.as_ref())
+            .is_none();
+
+    // Unencrypted folder staying outside encrypted trees.
+    if !folder.encrypted && target_root.is_none() {
+        return Ok(false);
+    }
+
+    // Same encrypted tree relocate (child stays bound to same root).
+    if let (Some(src), Some(tgt)) = (source_root, target_root) {
+        if src == tgt {
+            return Ok(false);
+        }
+    }
+
+    // Encrypted root moving to a non-encrypted parent: keep = plain relocate; decrypt = unlock tree.
+    if is_enc_root && target_root.is_none() {
+        match action {
+            MoveEncryptionAction::None | MoveEncryptionAction::KeepStandalone => {
+                return Ok(false);
+            }
+            MoveEncryptionAction::Decrypt => {
+                let password = require_password(source_password, "source")?;
+                decrypt_folder_tree_in_txn(txn, folders, &folder_id, password)?;
+                folder.encrypted = false;
+                folder.encryption = None;
+                return Ok(true);
+            }
+            MoveEncryptionAction::Rebind => {
+                return Err(AppError::Config(
+                    "Cannot rebind encrypted folder root without a target encrypted folder"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+
+    // Child of encrypted tree moving outside.
+    if folder.encrypted && source_root.is_some() && !is_enc_root && target_root.is_none() {
+        let password = require_password(source_password, "source")?;
+        match action {
+            MoveEncryptionAction::KeepStandalone => {
+                promote_folder_to_encryption_root_in_txn(
+                    txn, folders, folder, password,
+                )?;
+                return Ok(true);
+            }
+            MoveEncryptionAction::Decrypt => {
+                decrypt_folder_subtree_notes_in_txn(txn, folders, &folder_id, password)?;
+                clear_folder_subtree_encryption_in_txn(txn, folders, &folder_id)?;
+                folder.encrypted = false;
+                folder.encryption = None;
+                return Ok(true);
+            }
+            _ => {
+                return Err(AppError::Config(
+                    "encryption_action_required:keep_or_decrypt".to_string(),
+                ));
+            }
+        }
+    }
+
+    // Entering / switching into a target encrypted tree.
+    if let Some(target_id) = target_root {
+        let target_pwd = require_password(target_password, "target")?;
+        if !folder.encrypted {
+            bind_plain_folder_to_encrypted_root_in_txn(
+                txn, folders, folder, target_id, target_pwd,
+            )?;
+            return Ok(true);
+        }
+
+        let source_pwd = require_password(source_password, "source")?;
+        let source_root_id = source_root
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| folder.id.clone());
+        // Moving encrypted folder (root or child) into another encrypted tree.
+        rebind_encrypted_folder_to_target_in_txn(
+            txn,
+            folders,
+            folder,
+            &source_root_id,
+            target_id,
+            source_pwd,
+            target_pwd,
+        )?;
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
+fn subtree_folder_ids(folders: &[NoteFolder], root_id: &str) -> HashSet<String> {
+    let mut ids = HashSet::new();
+    collect_descendant_folder_ids(folders, root_id, &mut ids);
+    ids.insert(root_id.to_string());
+    ids
+}
+
+fn decrypt_folder_tree_in_txn(
+    txn: &redb::WriteTransaction,
+    folders: &[NoteFolder],
+    folder_id: &str,
+    password: &str,
+) -> AppResult<()> {
+    let root = find_encryption_root_from_list(folders, folder_id)?;
+    if root.id != folder_id {
+        return Err(AppError::Config(
+            "Only the encrypted folder root can be decrypted".to_string(),
+        ));
+    }
+    let meta = root.encryption.as_ref().ok_or_else(|| {
+        AppError::Config("Encrypted folder is missing encryption metadata".to_string())
+    })?;
+    let verifier = meta.verifier.as_deref().ok_or_else(|| {
+        AppError::Config("Encrypted folder root is missing password verifier".to_string())
+    })?;
+    if !crate::core::note_crypto::verify_folder_password(password, verifier)? {
+        return Err(AppError::Crypto("wrong_password".into()));
+    }
+    decrypt_folder_subtree_notes_in_txn(txn, folders, folder_id, password)?;
+    clear_folder_subtree_encryption_in_txn(txn, folders, folder_id)?;
+    Ok(())
+}
+
+fn decrypt_folder_subtree_notes_in_txn(
+    txn: &redb::WriteTransaction,
+    folders: &[NoteFolder],
+    folder_id: &str,
+    password: &str,
+) -> AppResult<()> {
+    let all_folder_ids = subtree_folder_ids(folders, folder_id);
+    let notes = read_notes_in_txn(txn)?;
+    for note in notes {
+        let belongs = note
+            .parent_id
+            .as_ref()
+            .is_some_and(|parent| all_folder_ids.contains(parent));
+        if !belongs || !note.encrypted {
+            continue;
+        }
+        let meta = note.encryption.as_ref().ok_or_else(|| {
+            AppError::Config("Encrypted note is missing encryption metadata".to_string())
+        })?;
+        let plaintext = crate::core::note_crypto::decrypt_markdown(meta, password)?;
+        let mut note = note;
+        note.markdown = plaintext;
+        note.encrypted = false;
+        note.encryption = None;
+        note.revision = note.revision.saturating_add(1);
+        note.updated_at_ms = current_time_ms();
+        write_note_in_txn(txn, &note)?;
+        write_note_summary_in_txn(txn, &NoteSummary::from(note))?;
+    }
+    Ok(())
+}
+
+fn clear_folder_subtree_encryption_in_txn(
+    txn: &redb::WriteTransaction,
+    folders: &[NoteFolder],
+    folder_id: &str,
+) -> AppResult<()> {
+    let mut descendant_folder_ids = HashSet::new();
+    collect_descendant_folder_ids(folders, folder_id, &mut descendant_folder_ids);
+    for child_id in &descendant_folder_ids {
+        if let Some(mut child) = folders.iter().find(|item| &item.id == child_id).cloned() {
+            child.encrypted = false;
+            child.encryption = None;
+            child.updated_at_ms = current_time_ms();
+            write_note_folder_in_txn(txn, &child)?;
+        }
+    }
+    Ok(())
+}
+
+fn promote_folder_to_encryption_root_in_txn(
+    txn: &redb::WriteTransaction,
+    folders: &[NoteFolder],
+    folder: &mut NoteFolder,
+    password: &str,
+) -> AppResult<()> {
+    let folder_id = folder.id.clone();
+    let all_folder_ids = subtree_folder_ids(folders, &folder_id);
+    // Verify password against any note (or we could verify by decrypting one note).
+    let notes = read_notes_in_txn(txn)?;
+    let mut verified = false;
+    for note in &notes {
+        let belongs = note
+            .parent_id
+            .as_ref()
+            .is_some_and(|parent| all_folder_ids.contains(parent));
+        if !belongs || !note.encrypted {
+            continue;
+        }
+        let meta = note.encryption.as_ref().ok_or_else(|| {
+            AppError::Config("Encrypted note is missing encryption metadata".to_string())
+        })?;
+        // Validate password once.
+        let _ = crate::core::note_crypto::decrypt_markdown(meta, password)?;
+        verified = true;
+        break;
+    }
+    if !verified {
+        // Empty subtree — still require password to create verifier consistently.
+        if password.is_empty() {
+            return Err(AppError::Config("password_required:source".to_string()));
+        }
+    }
+
+    let (salt, verifier) = crate::core::note_crypto::create_folder_verifier(password)?;
+    folder.encrypted = true;
+    folder.encryption = Some(crate::config::FolderEncryptionMeta {
+        root_folder_id: None,
+        salt: Some(salt),
+        verifier: Some(verifier),
+    });
+    folder.updated_at_ms = current_time_ms();
+
+    for child in folders
+        .iter()
+        .filter(|item| all_folder_ids.contains(&item.id) && item.id != folder_id)
+    {
+        let mut child = child.clone();
+        child.encrypted = true;
+        child.encryption = Some(crate::config::FolderEncryptionMeta {
+            root_folder_id: Some(folder_id.clone()),
+            salt: None,
+            verifier: None,
+        });
+        child.updated_at_ms = current_time_ms();
+        write_note_folder_in_txn(txn, &child)?;
+    }
+
+    for note in notes {
+        let belongs = note
+            .parent_id
+            .as_ref()
+            .is_some_and(|parent| all_folder_ids.contains(parent));
+        if !belongs || !note.encrypted {
+            continue;
+        }
+        let meta = note.encryption.as_ref().ok_or_else(|| {
+            AppError::Config("Encrypted note is missing encryption metadata".to_string())
+        })?;
+        // Same password: only rebind root_folder_id.
+        let next = crate::core::note_crypto::reencrypt_markdown(
+            meta,
+            password,
+            password,
+            Some(folder_id.clone()),
+        )?;
+        let mut note = note;
+        note.encryption = Some(next);
+        note.revision = note.revision.saturating_add(1);
+        note.updated_at_ms = current_time_ms();
+        write_note_in_txn(txn, &note)?;
+        write_note_summary_in_txn(txn, &NoteSummary::from(note))?;
+    }
+    Ok(())
+}
+
+fn bind_plain_folder_to_encrypted_root_in_txn(
+    txn: &redb::WriteTransaction,
+    folders: &[NoteFolder],
+    folder: &mut NoteFolder,
+    target_root_id: &str,
+    target_password: &str,
+) -> AppResult<()> {
+    let folder_id = folder.id.clone();
+    let all_folder_ids = subtree_folder_ids(folders, &folder_id);
+
+    folder.encrypted = true;
+    folder.encryption = Some(crate::config::FolderEncryptionMeta {
+        root_folder_id: Some(target_root_id.to_string()),
+        salt: None,
+        verifier: None,
+    });
+    folder.updated_at_ms = current_time_ms();
+
+    for child in folders
+        .iter()
+        .filter(|item| all_folder_ids.contains(&item.id) && item.id != folder_id)
+    {
+        let mut child = child.clone();
+        child.encrypted = true;
+        child.encryption = Some(crate::config::FolderEncryptionMeta {
+            root_folder_id: Some(target_root_id.to_string()),
+            salt: None,
+            verifier: None,
+        });
+        child.updated_at_ms = current_time_ms();
+        write_note_folder_in_txn(txn, &child)?;
+    }
+
+    let notes = read_notes_in_txn(txn)?;
+    for note in notes {
+        let belongs = note
+            .parent_id
+            .as_ref()
+            .is_some_and(|parent| all_folder_ids.contains(parent));
+        if !belongs {
+            continue;
+        }
+        if note.encrypted {
+            return Err(AppError::Config(format!(
+                "note_already_encrypted:{}",
+                note.title
+            )));
+        }
+        let meta = crate::core::note_crypto::encrypt_markdown(
+            &note.markdown,
+            target_password,
+            Some(target_root_id.to_string()),
+        )?;
+        let mut note = note;
+        note.markdown = String::new();
+        note.encrypted = true;
+        note.encryption = Some(meta);
+        note.revision = note.revision.saturating_add(1);
+        note.updated_at_ms = current_time_ms();
+        write_note_in_txn(txn, &note)?;
+        write_note_summary_in_txn(txn, &NoteSummary::from(note))?;
+    }
+    Ok(())
+}
+
+fn rebind_encrypted_folder_to_target_in_txn(
+    txn: &redb::WriteTransaction,
+    folders: &[NoteFolder],
+    folder: &mut NoteFolder,
+    source_root_id: &str,
+    target_root_id: &str,
+    source_password: &str,
+    target_password: &str,
+) -> AppResult<()> {
+    let folder_id = folder.id.clone();
+    let all_folder_ids = subtree_folder_ids(folders, &folder_id);
+
+    // If moving an encryption root, verify against its verifier.
+    if let Some(root) = folders.iter().find(|item| item.id == source_root_id) {
+        if let Some(verifier) = root
+            .encryption
+            .as_ref()
+            .and_then(|meta| meta.verifier.as_deref())
+        {
+            if !crate::core::note_crypto::verify_folder_password(source_password, verifier)? {
+                return Err(AppError::Crypto("wrong_password".into()));
+            }
+        }
+    }
+    if let Some(target) = folders.iter().find(|item| item.id == target_root_id) {
+        if let Some(verifier) = target
+            .encryption
+            .as_ref()
+            .and_then(|meta| meta.verifier.as_deref())
+        {
+            if !crate::core::note_crypto::verify_folder_password(target_password, verifier)? {
+                return Err(AppError::Crypto("wrong_password".into()));
+            }
+        }
+    }
+
+    folder.encrypted = true;
+    folder.encryption = Some(crate::config::FolderEncryptionMeta {
+        root_folder_id: Some(target_root_id.to_string()),
+        salt: None,
+        verifier: None,
+    });
+    folder.updated_at_ms = current_time_ms();
+
+    for child in folders
+        .iter()
+        .filter(|item| all_folder_ids.contains(&item.id) && item.id != folder_id)
+    {
+        let mut child = child.clone();
+        child.encrypted = true;
+        child.encryption = Some(crate::config::FolderEncryptionMeta {
+            root_folder_id: Some(target_root_id.to_string()),
+            salt: None,
+            verifier: None,
+        });
+        child.updated_at_ms = current_time_ms();
+        write_note_folder_in_txn(txn, &child)?;
+    }
+
+    let notes = read_notes_in_txn(txn)?;
+    for note in notes {
+        let belongs = note
+            .parent_id
+            .as_ref()
+            .is_some_and(|parent| all_folder_ids.contains(parent));
+        if !belongs {
+            continue;
+        }
+        if !note.encrypted {
+            let meta = crate::core::note_crypto::encrypt_markdown(
+                &note.markdown,
+                target_password,
+                Some(target_root_id.to_string()),
+            )?;
+            let mut note = note;
+            note.markdown = String::new();
+            note.encrypted = true;
+            note.encryption = Some(meta);
+            note.revision = note.revision.saturating_add(1);
+            note.updated_at_ms = current_time_ms();
+            write_note_in_txn(txn, &note)?;
+            write_note_summary_in_txn(txn, &NoteSummary::from(note))?;
+            continue;
+        }
+        let meta = note.encryption.as_ref().ok_or_else(|| {
+            AppError::Config("Encrypted note is missing encryption metadata".to_string())
+        })?;
+        let next = crate::core::note_crypto::reencrypt_markdown(
+            meta,
+            source_password,
+            target_password,
+            Some(target_root_id.to_string()),
+        )?;
+        let mut note = note;
+        note.encryption = Some(next);
+        note.revision = note.revision.saturating_add(1);
+        note.updated_at_ms = current_time_ms();
+        write_note_in_txn(txn, &note)?;
+        write_note_summary_in_txn(txn, &NoteSummary::from(note))?;
+    }
+    Ok(())
+}
+
 fn next_sort_order_for_parent(
     folders: &[NoteFolder],
     notes: &[impl NoteListItem],
@@ -1381,12 +1997,12 @@ mod tests {
             .expect("child folder");
 
         let self_error = storage
-            .move_note_node("folder", &root.id, Some(root.id.clone()), 0)
+            .move_note_node("folder", &root.id, Some(root.id.clone()), 0, None, None, None)
             .expect_err("self move should fail");
         assert!(self_error.to_string().contains("itself"));
 
         let descendant_error = storage
-            .move_note_node("folder", &root.id, Some(child.id.clone()), 0)
+            .move_note_node("folder", &root.id, Some(child.id.clone()), 0, None, None, None)
             .expect_err("descendant move should fail");
         assert!(descendant_error.to_string().contains("descendant"));
     }
@@ -1475,7 +2091,7 @@ mod tests {
         assert_eq!(summary_titles(&storage), vec!["Published".to_string()]);
 
         let moved = storage
-            .move_note_node("note", &note.id, Some(folder.id.clone()), 42)
+            .move_note_node("note", &note.id, Some(folder.id.clone()), 42, None, None, None)
             .expect("move");
         assert!(moved.changed);
         let summary = storage
@@ -1657,5 +2273,338 @@ mod tests {
         assert!(storage.unlock_note(&note.id, "old").is_err());
         let unlocked = storage.unlock_note(&note.id, "new").expect("unlock");
         assert_eq!(unlocked.markdown, "payload");
+    }
+
+    #[test]
+    fn move_encrypted_note_out_keep_standalone() {
+        let storage = temp_storage();
+        let folder = storage
+            .create_note_folder(None, Some("Vault".to_string()))
+            .expect("folder");
+        let note = storage
+            .create_note(
+                Some(folder.id.clone()),
+                Some("Secret".to_string()),
+                Some("body".to_string()),
+                None,
+            )
+            .expect("note");
+        storage
+            .encrypt_note_folder(&folder.id, "vault-pass")
+            .expect("encrypt");
+
+        storage
+            .move_note_node(
+                "note",
+                &note.id,
+                None,
+                0,
+                Some("keep"),
+                Some("vault-pass"),
+                None,
+            )
+            .expect("move keep");
+
+        let moved = storage.get_note(&note.id).expect("get").expect("note");
+        assert!(moved.encrypted);
+        assert!(moved.parent_id.is_none());
+        assert!(
+            moved
+                .encryption
+                .as_ref()
+                .unwrap()
+                .root_folder_id
+                .is_none()
+        );
+        let unlocked = storage.unlock_note(&note.id, "vault-pass").expect("unlock");
+        assert_eq!(unlocked.markdown, "body");
+    }
+
+    #[test]
+    fn move_encrypted_note_out_decrypt() {
+        let storage = temp_storage();
+        let folder = storage
+            .create_note_folder(None, Some("Vault".to_string()))
+            .expect("folder");
+        let note = storage
+            .create_note(
+                Some(folder.id.clone()),
+                Some("Secret".to_string()),
+                Some("body".to_string()),
+                None,
+            )
+            .expect("note");
+        storage
+            .encrypt_note_folder(&folder.id, "vault-pass")
+            .expect("encrypt");
+
+        storage
+            .move_note_node(
+                "note",
+                &note.id,
+                None,
+                0,
+                Some("decrypt"),
+                Some("vault-pass"),
+                None,
+            )
+            .expect("move decrypt");
+
+        let moved = storage.get_note(&note.id).expect("get").expect("note");
+        assert!(!moved.encrypted);
+        assert_eq!(moved.markdown, "body");
+        assert!(moved.encryption.is_none());
+    }
+
+    #[test]
+    fn move_note_into_other_encrypted_folder_rebinds() {
+        let storage = temp_storage();
+        let vault_a = storage
+            .create_note_folder(None, Some("VaultA".to_string()))
+            .expect("a");
+        let vault_b = storage
+            .create_note_folder(None, Some("VaultB".to_string()))
+            .expect("b");
+        let note = storage
+            .create_note(
+                Some(vault_a.id.clone()),
+                Some("Secret".to_string()),
+                Some("cross".to_string()),
+                None,
+            )
+            .expect("note");
+        storage
+            .encrypt_note_folder(&vault_a.id, "pass-a")
+            .expect("encrypt a");
+        storage
+            .encrypt_note_folder(&vault_b.id, "pass-b")
+            .expect("encrypt b");
+
+        storage
+            .move_note_node(
+                "note",
+                &note.id,
+                Some(vault_b.id.clone()),
+                0,
+                Some("rebind"),
+                Some("pass-a"),
+                Some("pass-b"),
+            )
+            .expect("cross move");
+
+        let moved = storage.get_note(&note.id).expect("get").expect("note");
+        assert!(moved.encrypted);
+        assert_eq!(moved.parent_id.as_deref(), Some(vault_b.id.as_str()));
+        assert_eq!(
+            moved
+                .encryption
+                .as_ref()
+                .unwrap()
+                .root_folder_id
+                .as_deref(),
+            Some(vault_b.id.as_str())
+        );
+        assert!(storage.unlock_note(&note.id, "pass-a").is_err());
+        let unlocked = storage.unlock_note(&note.id, "pass-b").expect("unlock");
+        assert_eq!(unlocked.markdown, "cross");
+    }
+
+    #[test]
+    fn move_within_same_encrypted_tree_no_reencrypt() {
+        let storage = temp_storage();
+        let vault = storage
+            .create_note_folder(None, Some("Vault".to_string()))
+            .expect("vault");
+        let child = storage
+            .create_note_folder(Some(vault.id.clone()), Some("Inner".to_string()))
+            .expect("child");
+        let note = storage
+            .create_note(
+                Some(vault.id.clone()),
+                Some("N".to_string()),
+                Some("same-tree".to_string()),
+                None,
+            )
+            .expect("note");
+        storage
+            .encrypt_note_folder(&vault.id, "vault-pass")
+            .expect("encrypt");
+
+        let before = storage.get_note(&note.id).expect("get").expect("note");
+        let before_cipher = before.encryption.as_ref().unwrap().ciphertext.clone();
+
+        storage
+            .move_note_node(
+                "note",
+                &note.id,
+                Some(child.id.clone()),
+                0,
+                None,
+                None,
+                None,
+            )
+            .expect("same-tree move");
+
+        let after = storage.get_note(&note.id).expect("get").expect("note");
+        assert_eq!(after.parent_id.as_deref(), Some(child.id.as_str()));
+        assert_eq!(
+            after.encryption.as_ref().unwrap().ciphertext,
+            before_cipher
+        );
+        assert_eq!(
+            after
+                .encryption
+                .as_ref()
+                .unwrap()
+                .root_folder_id
+                .as_deref(),
+            Some(vault.id.as_str())
+        );
+    }
+
+    #[test]
+    fn move_encrypted_folder_out_keep_and_decrypt() {
+        let storage = temp_storage();
+        let vault = storage
+            .create_note_folder(None, Some("Vault".to_string()))
+            .expect("vault");
+        let child = storage
+            .create_note_folder(Some(vault.id.clone()), Some("Inner".to_string()))
+            .expect("child");
+        let note = storage
+            .create_note(
+                Some(child.id.clone()),
+                Some("N".to_string()),
+                Some("nested".to_string()),
+                None,
+            )
+            .expect("note");
+        storage
+            .encrypt_note_folder(&vault.id, "vault-pass")
+            .expect("encrypt");
+
+        // Promote child folder out as a new encrypted root.
+        storage
+            .move_note_node(
+                "folder",
+                &child.id,
+                None,
+                0,
+                Some("keep"),
+                Some("vault-pass"),
+                None,
+            )
+            .expect("promote keep");
+
+        let child_after = storage
+            .list_note_folders()
+            .expect("folders")
+            .into_iter()
+            .find(|item| item.id == child.id)
+            .expect("child");
+        assert!(child_after.encrypted);
+        assert!(child_after.parent_id.is_none());
+        assert!(
+            child_after
+                .encryption
+                .as_ref()
+                .unwrap()
+                .root_folder_id
+                .is_none()
+        );
+        assert!(
+            child_after
+                .encryption
+                .as_ref()
+                .unwrap()
+                .verifier
+                .is_some()
+        );
+
+        let note_after = storage.get_note(&note.id).expect("get").expect("note");
+        assert_eq!(
+            note_after
+                .encryption
+                .as_ref()
+                .unwrap()
+                .root_folder_id
+                .as_deref(),
+            Some(child.id.as_str())
+        );
+        assert_eq!(
+            storage
+                .unlock_note(&note.id, "vault-pass")
+                .expect("unlock")
+                .markdown,
+            "nested"
+        );
+
+        // Decrypt the promoted root while moving (already at root — decrypt in place via move to same parent).
+        storage
+            .move_note_node(
+                "folder",
+                &child.id,
+                None,
+                1,
+                Some("decrypt"),
+                Some("vault-pass"),
+                None,
+            )
+            .expect("decrypt move");
+        let child_plain = storage
+            .list_note_folders()
+            .expect("folders")
+            .into_iter()
+            .find(|item| item.id == child.id)
+            .expect("child");
+        assert!(!child_plain.encrypted);
+        let note_plain = storage.get_note(&note.id).expect("get").expect("note");
+        assert!(!note_plain.encrypted);
+        assert_eq!(note_plain.markdown, "nested");
+    }
+
+    #[test]
+    fn move_plain_note_into_encrypted_folder() {
+        let storage = temp_storage();
+        let vault = storage
+            .create_note_folder(None, Some("Vault".to_string()))
+            .expect("vault");
+        storage
+            .encrypt_note_folder(&vault.id, "vault-pass")
+            .expect("encrypt");
+        let note = storage
+            .create_note(None, Some("Plain".to_string()), Some("hello".to_string()), None)
+            .expect("note");
+
+        storage
+            .move_note_node(
+                "note",
+                &note.id,
+                Some(vault.id.clone()),
+                0,
+                Some("rebind"),
+                None,
+                Some("vault-pass"),
+            )
+            .expect("bind");
+
+        let moved = storage.get_note(&note.id).expect("get").expect("note");
+        assert!(moved.encrypted);
+        assert_eq!(
+            moved
+                .encryption
+                .as_ref()
+                .unwrap()
+                .root_folder_id
+                .as_deref(),
+            Some(vault.id.as_str())
+        );
+        assert_eq!(
+            storage
+                .unlock_note(&note.id, "vault-pass")
+                .expect("unlock")
+                .markdown,
+            "hello"
+        );
     }
 }

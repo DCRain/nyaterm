@@ -338,8 +338,19 @@ pub(crate) fn move_note_node(
     node_id: &str,
     parent_id: Option<String>,
     sort_order: i64,
+    encryption_action: Option<&str>,
+    source_password: Option<&str>,
+    target_password: Option<&str>,
 ) -> AppResult<crate::config::NoteNodeChange> {
-    storage()?.move_note_node(node_kind, node_id, parent_id, sort_order)
+    storage()?.move_note_node(
+        node_kind,
+        node_id,
+        parent_id,
+        sort_order,
+        encryption_action,
+        source_password,
+        target_password,
+    )
 }
 
 pub(crate) fn delete_note_node(

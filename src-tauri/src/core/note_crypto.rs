@@ -115,14 +115,15 @@ pub fn verify_folder_password(password: &str, verifier: &str) -> AppResult<bool>
     Ok(argon.verify_password(password.as_bytes(), &parsed).is_ok())
 }
 
-/// Re-encrypt existing ciphertext metadata under a new password (decrypt then encrypt).
+/// Re-encrypt existing ciphertext under a new password, optionally rebinding `root_folder_id`.
 pub fn reencrypt_markdown(
     meta: &NoteEncryptionMeta,
     old_password: &str,
     new_password: &str,
+    new_root_folder_id: Option<String>,
 ) -> AppResult<NoteEncryptionMeta> {
     let plaintext = decrypt_markdown(meta, old_password)?;
-    encrypt_markdown(&plaintext, new_password, meta.root_folder_id.clone())
+    encrypt_markdown(&plaintext, new_password, new_root_folder_id)
 }
 
 #[cfg(test)]
@@ -156,9 +157,13 @@ mod tests {
     #[test]
     fn reencrypt_preserves_plaintext() {
         let meta = encrypt_markdown("body", "old", None).unwrap();
-        let next = reencrypt_markdown(&meta, "old", "new").unwrap();
+        let next = reencrypt_markdown(&meta, "old", "new", None).unwrap();
         assert_eq!(decrypt_markdown(&next, "new").unwrap(), "body");
         assert!(decrypt_markdown(&next, "old").is_err());
+        assert!(next.root_folder_id.is_none());
+
+        let bound = reencrypt_markdown(&meta, "old", "new", Some("folder-1".into())).unwrap();
+        assert_eq!(bound.root_folder_id.as_deref(), Some("folder-1"));
     }
 
     #[test]
