@@ -11,6 +11,7 @@ pub mod history;
 pub mod importer;
 pub(crate) mod input;
 pub mod monitoring;
+pub mod note_crypto;
 mod output;
 pub mod portable_snapshot;
 mod quick_commands;

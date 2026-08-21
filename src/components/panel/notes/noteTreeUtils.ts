@@ -17,6 +17,8 @@ export function buildNoteTree(folders: NoteFolder[], notes: NoteSummary[]): Note
       name: folder.name,
       sortOrder: folder.sort_order,
       updatedAtMs: folder.updated_at_ms,
+      encrypted: Boolean(folder.encrypted),
+      rootFolderId: folder.encryption?.root_folder_id ?? null,
       children: [],
     });
   }
@@ -30,6 +32,8 @@ export function buildNoteTree(folders: NoteFolder[], notes: NoteSummary[]): Note
       sortOrder: note.sort_order,
       revision: note.revision,
       updatedAtMs: note.updated_at_ms,
+      encrypted: Boolean(note.encrypted),
+      rootFolderId: note.root_folder_id ?? null,
       children: [],
     });
   }
@@ -156,4 +160,42 @@ export function collectSiblingNames(
     }
   }
   return names;
+}
+
+/** Root folder id plus all descendant folder ids. */
+export function collectDescendantFolderIds(folders: NoteFolder[], rootId: string): Set<string> {
+  const ids = new Set<string>([rootId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const folder of folders) {
+      const parentId = folder.parent_id ?? null;
+      if (parentId && ids.has(parentId) && !ids.has(folder.id)) {
+        ids.add(folder.id);
+        changed = true;
+      }
+    }
+  }
+  return ids;
+}
+
+/** Note ids under a folder tree (by parent path or root_folder_id). */
+export function collectNoteIdsInFolderTree(
+  folders: NoteFolder[],
+  notes: NoteSummary[],
+  rootId: string,
+): Set<string> {
+  const folderIds = collectDescendantFolderIds(folders, rootId);
+  const noteIds = new Set<string>();
+  for (const note of notes) {
+    const parentId = note.parent_id ?? null;
+    if (parentId && folderIds.has(parentId)) {
+      noteIds.add(note.id);
+      continue;
+    }
+    if (note.root_folder_id === rootId) {
+      noteIds.add(note.id);
+    }
+  }
+  return noteIds;
 }

@@ -1,5 +1,18 @@
 export type NoteNodeKind = "folder" | "note";
 
+export interface NoteEncryptionMeta {
+  root_folder_id?: string | null;
+  salt: string;
+  nonce: string;
+  ciphertext: string;
+}
+
+export interface FolderEncryptionMeta {
+  root_folder_id?: string | null;
+  salt?: string | null;
+  verifier?: string | null;
+}
+
 export interface NoteFolder {
   id: string;
   parent_id: string | null;
@@ -7,6 +20,8 @@ export interface NoteFolder {
   sort_order: number;
   created_at_ms: number;
   updated_at_ms: number;
+  encrypted?: boolean;
+  encryption?: FolderEncryptionMeta | null;
 }
 
 export interface NoteSummary {
@@ -17,10 +32,13 @@ export interface NoteSummary {
   revision: number;
   created_at_ms: number;
   updated_at_ms: number;
+  encrypted?: boolean;
+  root_folder_id?: string | null;
 }
 
 export interface NoteDocument extends NoteSummary {
   markdown: string;
+  encryption?: NoteEncryptionMeta | null;
 }
 
 export interface NoteTreePayload {
@@ -51,5 +69,7 @@ export interface NoteTreeNode {
   sortOrder: number;
   revision?: number;
   updatedAtMs: number;
+  encrypted?: boolean;
+  rootFolderId?: string | null;
   children: NoteTreeNode[];
 }

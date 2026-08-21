@@ -27,6 +27,11 @@ interface NoteTreeProps {
   onCreateFolder: (parentId: string | null) => void;
   onMove: (node: NoteTreeNode, parentId: string | null) => void;
   onDelete: (node: NoteTreeNode) => void;
+  onEncrypt: (node: NoteTreeNode) => void;
+  onDecrypt: (node: NoteTreeNode) => void;
+  onChangePassword: (node: NoteTreeNode) => void;
+  onLock: (node: NoteTreeNode) => void;
+  isFolderUnlocked: (folderId: string) => boolean;
   onRefresh: () => void;
   onDragStartNode: (node: NoteTreeNode) => void;
   onDragOverNode: (event: DragEvent<HTMLDivElement>, node: NoteTreeNode) => void;
@@ -106,12 +111,22 @@ export default function NoteTree(props: NoteTreeProps) {
         node={contextNode}
         folderTargets={props.folderTargets}
         labels={props.labels}
+        folderSessionUnlocked={Boolean(
+          contextNode?.kind === "folder" &&
+            contextNode.encrypted &&
+            !contextNode.rootFolderId &&
+            props.isFolderUnlocked(contextNode.id),
+        )}
         onOpen={props.onOpen}
         onCreateNote={props.onCreateNote}
         onCreateFolder={props.onCreateFolder}
         onRename={props.onRenameStart}
         onMove={props.onMove}
         onDelete={props.onDelete}
+        onEncrypt={props.onEncrypt}
+        onDecrypt={props.onDecrypt}
+        onChangePassword={props.onChangePassword}
+        onLock={props.onLock}
         onRefresh={props.onRefresh}
       />
     </ContextMenu>

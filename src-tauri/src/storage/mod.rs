@@ -247,8 +247,9 @@ pub(crate) fn create_note(
     parent_id: Option<String>,
     title: Option<String>,
     markdown: Option<String>,
+    password: Option<String>,
 ) -> AppResult<crate::config::NoteDocument> {
-    storage()?.create_note(parent_id, title, markdown)
+    storage()?.create_note(parent_id, title, markdown, password)
 }
 
 pub(crate) fn update_note(
@@ -257,8 +258,71 @@ pub(crate) fn update_note(
     markdown: String,
     expected_revision: u64,
     force: bool,
+    password: Option<String>,
 ) -> AppResult<crate::config::NoteUpdateResult> {
-    storage()?.update_note(note_id, title, markdown, expected_revision, force)
+    storage()?.update_note(
+        note_id,
+        title,
+        markdown,
+        expected_revision,
+        force,
+        password,
+    )
+}
+
+pub(crate) fn unlock_note(
+    note_id: &str,
+    password: &str,
+) -> AppResult<crate::config::NoteDocument> {
+    storage()?.unlock_note(note_id, password)
+}
+
+pub(crate) fn verify_folder_password(folder_id: &str, password: &str) -> AppResult<bool> {
+    storage()?.verify_folder_password(folder_id, password)
+}
+
+pub(crate) fn encrypt_note(
+    note_id: &str,
+    password: &str,
+) -> AppResult<crate::config::NoteDocument> {
+    storage()?.encrypt_note(note_id, password)
+}
+
+pub(crate) fn decrypt_note(
+    note_id: &str,
+    password: &str,
+) -> AppResult<crate::config::NoteDocument> {
+    storage()?.decrypt_note(note_id, password)
+}
+
+pub(crate) fn change_note_password(
+    note_id: &str,
+    old_password: &str,
+    new_password: &str,
+) -> AppResult<crate::config::NoteDocument> {
+    storage()?.change_note_password(note_id, old_password, new_password)
+}
+
+pub(crate) fn encrypt_note_folder(
+    folder_id: &str,
+    password: &str,
+) -> AppResult<crate::config::NoteFolder> {
+    storage()?.encrypt_note_folder(folder_id, password)
+}
+
+pub(crate) fn decrypt_note_folder(
+    folder_id: &str,
+    password: &str,
+) -> AppResult<crate::config::NoteFolder> {
+    storage()?.decrypt_note_folder(folder_id, password)
+}
+
+pub(crate) fn change_folder_password(
+    folder_id: &str,
+    old_password: &str,
+    new_password: &str,
+) -> AppResult<crate::config::NoteFolder> {
+    storage()?.change_folder_password(folder_id, old_password, new_password)
 }
 
 pub(crate) fn rename_note_node(

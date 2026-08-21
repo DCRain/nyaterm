@@ -657,6 +657,8 @@ mod tests {
             revision: 1,
             created_at_ms: 1,
             updated_at_ms: 1,
+            encrypted: false,
+            encryption: None,
         });
         right.payload_hash = calculate_payload_hash(&right).expect("right hash");
 

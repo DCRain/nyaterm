@@ -151,8 +151,13 @@ export function useNotesTree() {
   );
 
   const createNote = useCallback(
-    async (parentId: string | null, title?: string, markdown?: string) => {
-      const note = await invoke<NoteDocument>("create_note", { parentId, title, markdown });
+    async (parentId: string | null, title?: string, markdown?: string, password?: string) => {
+      const note = await invoke<NoteDocument>("create_note", {
+        parentId,
+        title,
+        markdown,
+        password,
+      });
       setNotes((current) =>
         upsertNotes(current, [
           {
@@ -163,6 +168,8 @@ export function useNotesTree() {
             revision: note.revision,
             created_at_ms: note.created_at_ms,
             updated_at_ms: note.updated_at_ms,
+            encrypted: note.encrypted,
+            root_folder_id: note.root_folder_id ?? note.encryption?.root_folder_id ?? null,
           },
         ]),
       );

@@ -53,8 +53,9 @@ pub use key::{
 pub(crate) use key::{ssh_key_change_epoch, ssh_key_read_guard};
 #[allow(unused_imports)]
 pub use note::{
-    DeleteNoteNodeResult, NoteDocument, NoteFolder, NoteNodeChange, NoteSummary, NoteTreePayload,
-    NoteUpdateResult, NotesChangedEvent, NotesSnapshot,
+    DeleteNoteNodeResult, FolderEncryptionMeta, NoteDocument, NoteEncryptionMeta, NoteFolder,
+    NoteNodeChange, NoteSummary, NoteTreePayload, NoteUpdateResult, NotesChangedEvent,
+    NotesSnapshot,
 };
 #[allow(unused_imports)]
 pub use otp::{OtpConfig, OtpEntry, load_otp_entries, load_otp_entry_by_id, save_otp_entries};

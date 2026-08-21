@@ -2,12 +2,17 @@ import {
   type DragEvent,
   type KeyboardEvent,
   useDeferredValue,
+  useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
 import { MdAdd, MdCreateNewFolder, MdDescription } from "react-icons/md";
+import { toast } from "sonner";
+import NotePasswordDialog, {
+  type NotePasswordMode,
+} from "@/components/dialog/note-editor/NotePasswordDialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,13 +24,20 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { useApp } from "@/context/AppContext";
+import { useEncryptedNotesSession } from "@/hooks/useEncryptedNotesSession";
 import { useNotesTree } from "@/hooks/useNotesTree";
+import { invoke } from "@/lib/invoke";
+import { localizeNotePasswordError } from "@/lib/notePasswordErrors";
 import { openNoteInWorkspace } from "@/lib/noteEditorEvents";
-import type { NoteTreeNode } from "@/types/notes";
+import { collectSessionPanes } from "@/lib/workspaceTabs";
+import type { NoteFolder, NoteTreeNode } from "@/types/notes";
 import NotesPanelHeader from "./NotesPanelHeader";
 import NoteTree from "./NoteTree";
 import {
   buildNoteTree,
+  collectDescendantFolderIds,
+  collectNoteIdsInFolderTree,
   collectSiblingNames,
   filterNoteTree,
   findNoteNode,
@@ -49,8 +61,20 @@ function countFolderContents(node: NoteTreeNode) {
   return { folders, notes };
 }
 
+function encryptionRootId(node: NoteTreeNode): string {
+  return node.rootFolderId || node.id;
+}
+
+type PasswordAction =
+  | { kind: "unlock-folder"; node: NoteTreeNode; expandAfter: boolean }
+  | { kind: "encrypt"; node: NoteTreeNode }
+  | { kind: "decrypt"; node: NoteTreeNode }
+  | { kind: "change"; node: NoteTreeNode }
+  | { kind: "create-note"; parentId: string };
+
 export default function NotesPanel() {
   const { t } = useTranslation();
+  const { tabs, closeTabs } = useApp();
   const {
     folders,
     notes,
@@ -68,10 +92,14 @@ export default function NotesPanel() {
     deleteNode,
     runAction,
   } = useNotesTree();
+  const { isFolderUnlocked, unlockFolder, lockFolder } = useEncryptedNotesSession();
   const [search, setSearch] = useState("");
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<NoteTreeNode | null>(null);
   const [dragOverNodeId, setDragOverNodeId] = useState<string | null>(null);
+  const [passwordAction, setPasswordAction] = useState<PasswordAction | null>(null);
+  const [passwordError, setPasswordError] = useState("");
+  const [passwordSubmitting, setPasswordSubmitting] = useState(false);
   const dragSourceRef = useRef<NoteTreeNode | null>(null);
   const deferredSearch = useDeferredValue(search);
 
@@ -87,6 +115,23 @@ export default function NotesPanel() {
   const selectedNode = useMemo(() => findNoteNode(tree, selectedNodeId), [selectedNodeId, tree]);
   const folderTargets = useMemo(() => flattenNoteFolders(tree), [tree]);
 
+  // Locked encrypted folders stay collapsed (including after restart with persisted expand ids).
+  useEffect(() => {
+    const lockedIds = new Set<string>();
+    for (const folder of folders) {
+      if (!folder.encrypted) continue;
+      const rootId = folder.encryption?.root_folder_id || folder.id;
+      if (!isFolderUnlocked(rootId)) lockedIds.add(folder.id);
+    }
+    if (lockedIds.size === 0) return;
+    let changed = false;
+    const next = new Set(expandedFolderIds);
+    for (const id of lockedIds) {
+      if (next.delete(id)) changed = true;
+    }
+    if (changed) setExpandedFolderIds(next);
+  }, [expandedFolderIds, folders, isFolderUnlocked, setExpandedFolderIds]);
+
   const labels = {
     open: t("notes.open"),
     newNote: t("notes.newNote"),
@@ -100,6 +145,11 @@ export default function NotesPanel() {
     expandAll: t("notes.expandAll"),
     collapseAll: t("notes.collapseAll"),
     more: t("common.more"),
+    encrypt: t("notes.encrypt"),
+    decrypt: t("notes.decrypt"),
+    changePassword: t("notes.changePassword"),
+    encrypted: t("notes.encrypted"),
+    lock: t("notes.lock"),
   };
 
   const creationParentId = () => {
@@ -108,6 +158,14 @@ export default function NotesPanel() {
   };
 
   const startCreateNote = (parentId = creationParentId()) => {
+    if (parentId) {
+      const parent = findNoteNode(tree, parentId);
+      if (parent?.encrypted) {
+        setPasswordError("");
+        setPasswordAction({ kind: "create-note", parentId });
+        return;
+      }
+    }
     void runAction(async () => {
       const note = await createNote(parentId);
       setEditingNodeId(note.id);
@@ -121,12 +179,29 @@ export default function NotesPanel() {
     });
   };
 
+  const expandFolder = (node: NoteTreeNode) => {
+    const next = new Set(expandedFolderIds);
+    next.add(node.id);
+    setExpandedFolderIds(next);
+  };
+
   const toggleFolder = (node: NoteTreeNode) => {
     if (node.kind !== "folder") return;
-    const next = new Set(expandedFolderIds);
-    if (next.has(node.id)) next.delete(node.id);
-    else next.add(node.id);
-    setExpandedFolderIds(next);
+    if (expandedFolderIds.has(node.id)) {
+      const next = new Set(expandedFolderIds);
+      next.delete(node.id);
+      setExpandedFolderIds(next);
+      return;
+    }
+    if (node.encrypted) {
+      const rootId = encryptionRootId(node);
+      if (!isFolderUnlocked(rootId)) {
+        setPasswordError("");
+        setPasswordAction({ kind: "unlock-folder", node, expandAfter: true });
+        return;
+      }
+    }
+    expandFolder(node);
   };
 
   const openNode = (node: NoteTreeNode) => {
@@ -216,6 +291,135 @@ export default function NotesPanel() {
     if (source) moveToParent(source, null);
   };
 
+  const passwordMode: NotePasswordMode =
+    passwordAction?.kind === "encrypt" || passwordAction?.kind === "create-note"
+      ? passwordAction.kind === "create-note"
+        ? "unlock"
+        : "encrypt"
+      : passwordAction?.kind === "decrypt"
+        ? "decrypt"
+        : passwordAction?.kind === "change"
+          ? "change"
+          : "unlock";
+
+  const passwordTargetName =
+    passwordAction && "node" in passwordAction
+      ? passwordAction.node.name
+      : passwordAction?.kind === "create-note"
+        ? findNoteNode(tree, passwordAction.parentId)?.name || t("notes.newNote")
+        : "";
+
+  const handlePasswordSubmit = async (password: string, newPassword?: string) => {
+    if (!passwordAction) return;
+    setPasswordSubmitting(true);
+    setPasswordError("");
+    try {
+      const { kind } = passwordAction;
+      if (kind === "create-note") {
+        const note = await createNote(passwordAction.parentId, undefined, undefined, password);
+        setEditingNodeId(note.id);
+        setPasswordAction(null);
+        await refresh();
+        return;
+      }
+      const { node } = passwordAction;
+      if (kind === "unlock-folder") {
+        const rootId = encryptionRootId(node);
+        const ok = await invoke<boolean>("verify_folder_password", {
+          folderId: rootId,
+          password,
+        });
+        if (!ok) {
+          setPasswordError(t("notes.password.wrongPassword"));
+          return;
+        }
+        unlockFolder(rootId, password);
+        if (passwordAction.expandAfter) expandFolder(node);
+        setPasswordAction(null);
+        return;
+      }
+      if (kind === "encrypt") {
+        if (node.kind === "folder") {
+          await invoke<NoteFolder>("encrypt_note_folder", {
+            folderId: node.id,
+            password,
+          });
+          unlockFolder(node.id, password);
+          const subtreeFolderIds = collectDescendantFolderIds(folders, node.id);
+          subtreeFolderIds.add(node.id);
+          const nextExpanded = new Set(expandedFolderIds);
+          for (const id of subtreeFolderIds) nextExpanded.delete(id);
+          setExpandedFolderIds(nextExpanded);
+        } else {
+          await invoke("encrypt_note", { noteId: node.id, password });
+        }
+        toast.success(t("notes.password.encryptSuccess"));
+        setPasswordAction(null);
+        await refresh();
+        return;
+      }
+      if (kind === "decrypt") {
+        if (node.kind === "folder") {
+          await invoke<NoteFolder>("decrypt_note_folder", {
+            folderId: node.id,
+            password,
+          });
+          lockFolder(encryptionRootId(node));
+        } else {
+          await invoke("decrypt_note", { noteId: node.id, password });
+        }
+        toast.success(t("notes.password.decryptSuccess"));
+        setPasswordAction(null);
+        await refresh();
+        return;
+      }
+      if (kind === "change" && newPassword) {
+        if (node.kind === "folder") {
+          await invoke("change_folder_password", {
+            folderId: node.id,
+            oldPassword: password,
+            newPassword,
+          });
+        } else {
+          await invoke("change_note_password", {
+            noteId: node.id,
+            oldPassword: password,
+            newPassword,
+          });
+        }
+        toast.success(t("notes.password.changeSuccess"));
+        setPasswordAction(null);
+        await refresh();
+      }
+    } catch (err) {
+      setPasswordError(localizeNotePasswordError(err, t));
+    } finally {
+      setPasswordSubmitting(false);
+    }
+  };
+
+  const lockEncryptedFolder = (node: NoteTreeNode) => {
+    if (node.kind !== "folder" || !node.encrypted || node.rootFolderId) return;
+    const rootId = node.id;
+    lockFolder(rootId);
+
+    const subtreeFolderIds = collectDescendantFolderIds(folders, rootId);
+    const nextExpanded = new Set(expandedFolderIds);
+    for (const id of subtreeFolderIds) nextExpanded.delete(id);
+    setExpandedFolderIds(nextExpanded);
+
+    const noteIds = collectNoteIdsInFolderTree(folders, notes, rootId);
+    if (noteIds.size === 0) return;
+    const tabIds: string[] = [];
+    for (const tab of tabs) {
+      const hasNote = collectSessionPanes(tab.root).some(
+        (pane) => pane.view === "note" && pane.noteId && noteIds.has(pane.noteId),
+      );
+      if (hasNote) tabIds.push(tab.id);
+    }
+    if (tabIds.length > 0) closeTabs(tabIds);
+  };
+
   const deleteDescription = deleteTarget
     ? deleteTarget.kind === "folder"
       ? t("notes.deleteFolderDescription", {
@@ -235,7 +439,18 @@ export default function NotesPanel() {
         onSearchChange={setSearch}
         onNewNote={() => startCreateNote()}
         onNewFolder={() => startCreateFolder()}
-        onExpandAll={() => setExpandedFolderIds(new Set(folders.map((folder) => folder.id)))}
+        onExpandAll={() => {
+          const next = new Set<string>();
+          for (const folder of folders) {
+            if (!folder.encrypted) {
+              next.add(folder.id);
+              continue;
+            }
+            const rootId = folder.encryption?.root_folder_id || folder.id;
+            if (isFolderUnlocked(rootId)) next.add(folder.id);
+          }
+          setExpandedFolderIds(next);
+        }}
         onCollapseAll={() => setExpandedFolderIds(new Set())}
         onRefresh={() => void refresh()}
         labels={labels}
@@ -289,6 +504,20 @@ export default function NotesPanel() {
             onCreateFolder={startCreateFolder}
             onMove={moveToParent}
             onDelete={setDeleteTarget}
+            onEncrypt={(node) => {
+              setPasswordError("");
+              setPasswordAction({ kind: "encrypt", node });
+            }}
+            onDecrypt={(node) => {
+              setPasswordError("");
+              setPasswordAction({ kind: "decrypt", node });
+            }}
+            onChangePassword={(node) => {
+              setPasswordError("");
+              setPasswordAction({ kind: "change", node });
+            }}
+            onLock={lockEncryptedFolder}
+            isFolderUnlocked={isFolderUnlocked}
             onRefresh={() => void refresh()}
             onDragStartNode={(node) => {
               dragSourceRef.current = node;
@@ -325,6 +554,20 @@ export default function NotesPanel() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <NotePasswordDialog
+        open={!!passwordAction}
+        mode={passwordMode}
+        targetName={passwordTargetName}
+        error={passwordError}
+        submitting={passwordSubmitting}
+        onSubmit={(password, newPassword) => {
+          void handlePasswordSubmit(password, newPassword);
+        }}
+        onCancel={() => {
+          setPasswordAction(null);
+          setPasswordError("");
+        }}
+      />
     </div>
   );
 }

@@ -1,6 +1,29 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NoteEncryptionMeta {
+    /// When set, this note belongs to an encrypted folder tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_folder_id: Option<String>,
+    pub salt: String,
+    pub nonce: String,
+    pub ciphertext: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FolderEncryptionMeta {
+    /// Set on child folders; `None` means this folder is the encryption root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_folder_id: Option<String>,
+    /// Present only on the encryption root folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub salt: Option<String>,
+    /// Argon2 PHC verifier string; present only on the encryption root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NoteFolder {
     pub id: String,
     pub parent_id: Option<String>,
@@ -8,6 +31,10 @@ pub struct NoteFolder {
     pub sort_order: i64,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
+    #[serde(default)]
+    pub encrypted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encryption: Option<FolderEncryptionMeta>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -20,6 +47,10 @@ pub struct NoteDocument {
     pub revision: u64,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
+    #[serde(default)]
+    pub encrypted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encryption: Option<NoteEncryptionMeta>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -39,10 +70,18 @@ pub struct NoteSummary {
     pub revision: u64,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
+    #[serde(default)]
+    pub encrypted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_folder_id: Option<String>,
 }
 
 impl From<NoteDocument> for NoteSummary {
     fn from(note: NoteDocument) -> Self {
+        let root_folder_id = note
+            .encryption
+            .as_ref()
+            .and_then(|meta| meta.root_folder_id.clone());
         Self {
             id: note.id,
             parent_id: note.parent_id,
@@ -51,6 +90,8 @@ impl From<NoteDocument> for NoteSummary {
             revision: note.revision,
             created_at_ms: note.created_at_ms,
             updated_at_ms: note.updated_at_ms,
+            encrypted: note.encrypted,
+            root_folder_id,
         }
     }
 }

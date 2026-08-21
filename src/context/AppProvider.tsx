@@ -1,6 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppLockState } from "@/hooks/useAppLockState";
+import { EncryptedNotesSessionProvider } from "@/hooks/useEncryptedNotesSession";
 import { DEFAULT_AI_SETTINGS } from "@/lib/aiSettings";
 import { DEFAULT_CLOUD_SYNC_SETTINGS } from "@/lib/cloudSync";
 import { updateConnectionAutoIconAfterSessionStart } from "@/lib/connectionAutoIcon";
@@ -1468,7 +1469,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   return (
     <AppContext.Provider value={contextValue}>
       <TerminalAppSettingsContext.Provider value={terminalAppSettingsValue}>
-        {lockStateLoaded && settingsLoaded ? children : null}
+        <EncryptedNotesSessionProvider>
+          {lockStateLoaded && settingsLoaded ? children : null}
+        </EncryptedNotesSessionProvider>
       </TerminalAppSettingsContext.Provider>
     </AppContext.Provider>
   );

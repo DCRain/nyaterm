@@ -1,5 +1,5 @@
 import { type DragEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
-import { MdChevronRight, MdDescription, MdFolder, MdFolderOpen } from "react-icons/md";
+import { MdChevronRight, MdDescription, MdFolder, MdFolderOpen, MdLock } from "react-icons/md";
 import { cn } from "@/lib/utils";
 import type { NoteTreeNode } from "@/types/notes";
 import type { NoteTreeMenuLabels } from "./NoteTreeContextMenu";
@@ -136,6 +136,13 @@ export default function NoteTreeItem({
           <MdDescription className="text-sm text-[var(--df-text-muted)]" />
         )}
       </span>
+      {node.encrypted ? (
+        <MdLock
+          className="size-3.5 shrink-0 text-[var(--df-text-dimmed)]"
+          title={labels.encrypted}
+          aria-label={labels.encrypted}
+        />
+      ) : null}
       {editing ? (
         <input
           ref={inputRef}

@@ -2,9 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import type { NoteSaveStatus } from "@/components/note-editor/NoteEditorToolbarStatus";
+import { useEncryptedNotesSession } from "@/hooks/useEncryptedNotesSession";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
+import { localizeNotePasswordError } from "@/lib/notePasswordErrors";
 import { openNoteInWorkspace } from "@/lib/noteEditorEvents";
 import { listenNotesChanged } from "@/lib/noteEvents";
 import type { NoteDocument } from "@/types/notes";
@@ -24,6 +26,7 @@ export function useNoteDocument({
   onMarkdownApplied,
 }: UseNoteDocumentOptions) {
   const { t } = useTranslation();
+  const { getFolderPassword, lockFolder, unlockFolder } = useEncryptedNotesSession();
   const latestMarkdownRef = useRef("");
   const latestTitleRef = useRef("");
   const revisionRef = useRef(0);
@@ -34,6 +37,8 @@ export function useNoteDocument({
   const debounceRef = useRef<number | null>(null);
   const deletedRef = useRef(false);
   const suppressChangeRef = useRef(false);
+  const passwordRef = useRef<string | null>(null);
+  const encryptedRef = useRef(false);
 
   const [note, setNote] = useState<NoteDocument | null>(null);
   const [title, setTitle] = useState("");
@@ -43,6 +48,10 @@ export function useNoteDocument({
   const [conflictOpen, setConflictOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [deleted, setDeleted] = useState(false);
+  const [needsPassword, setNeedsPassword] = useState(false);
+  const [unlockError, setUnlockError] = useState("");
+  const [unlocking, setUnlocking] = useState(false);
+  const [unlocked, setUnlocked] = useState(false);
 
   const statusLabels = {
     saved: t("notes.saved"),
@@ -53,6 +62,14 @@ export function useNoteDocument({
     deleted: t("notes.deletedStatus"),
   };
 
+  const clearSessionSecrets = useCallback(() => {
+    passwordRef.current = null;
+    encryptedRef.current = false;
+    setNeedsPassword(false);
+    setUnlockError("");
+    setUnlocked(false);
+  }, []);
+
   const applyLoadedNote = useCallback(
     (next: NoteDocument, applyToEditor = true) => {
       latestTitleRef.current = next.title;
@@ -61,6 +78,7 @@ export function useNoteDocument({
       parentIdRef.current = next.parent_id ?? null;
       dirtyRef.current = false;
       deletedRef.current = false;
+      encryptedRef.current = Boolean(next.encrypted);
       setDeleted(false);
       setNote(next);
       setTitle(next.title);
@@ -83,9 +101,58 @@ export function useNoteDocument({
     async (applyToEditor = true) => {
       if (!noteId) return;
       setLoading(true);
+      setUnlockError("");
       try {
         const next = await invoke<NoteDocument>("get_note", { noteId });
+        if (next.encrypted) {
+          const rootFolderId =
+            next.encryption?.root_folder_id ?? next.root_folder_id ?? null;
+          const folderPassword = rootFolderId ? getFolderPassword(rootFolderId) : null;
+
+          if (folderPassword) {
+            try {
+              const unlockedNote = await invoke<NoteDocument>("unlock_note", {
+                noteId,
+                password: folderPassword,
+              });
+              passwordRef.current = folderPassword;
+              encryptedRef.current = true;
+              setNeedsPassword(false);
+              setUnlocked(true);
+              applyLoadedNote(unlockedNote, applyToEditor);
+              return;
+            } catch {
+              if (rootFolderId) lockFolder(rootFolderId);
+              // Fall through to password prompt.
+            }
+          }
+
+          passwordRef.current = null;
+          encryptedRef.current = true;
+          setUnlocked(false);
+          setNeedsPassword(true);
+          setNote({ ...next, markdown: "" });
+          setTitle(next.title);
+          setMarkdown("");
+          latestTitleRef.current = next.title;
+          latestMarkdownRef.current = "";
+          revisionRef.current = next.revision;
+          parentIdRef.current = next.parent_id ?? null;
+          onTitleChange?.(next.title);
+          setStatus("saved");
+          setError("");
+          if (applyToEditor) {
+            suppressChangeRef.current = true;
+            onMarkdownApplied?.("");
+            window.setTimeout(() => {
+              suppressChangeRef.current = false;
+            }, 0);
+          }
+          return;
+        }
+        clearSessionSecrets();
         applyLoadedNote(next, applyToEditor);
+        setUnlocked(true);
       } catch (err) {
         setError(getErrorMessage(err));
         setStatus("failed");
@@ -93,10 +160,50 @@ export function useNoteDocument({
         setLoading(false);
       }
     },
-    [applyLoadedNote, noteId],
+    [
+      applyLoadedNote,
+      clearSessionSecrets,
+      getFolderPassword,
+      lockFolder,
+      noteId,
+      onMarkdownApplied,
+      onTitleChange,
+    ],
+  );
+
+  const unlockWithPassword = useCallback(
+    async (password: string) => {
+      if (!noteId || unlocking) return false;
+      setUnlocking(true);
+      setUnlockError("");
+      try {
+        const unlockedNote = await invoke<NoteDocument>("unlock_note", {
+          noteId,
+          password,
+        });
+        passwordRef.current = password;
+        encryptedRef.current = true;
+        setNeedsPassword(false);
+        setUnlocked(true);
+        const rootFolderId =
+          unlockedNote.encryption?.root_folder_id ?? unlockedNote.root_folder_id ?? null;
+        if (rootFolderId) {
+          unlockFolder(rootFolderId, password);
+        }
+        applyLoadedNote(unlockedNote, true);
+        return true;
+      } catch (err) {
+        setUnlockError(localizeNotePasswordError(err, t));
+        return false;
+      } finally {
+        setUnlocking(false);
+      }
+    },
+    [applyLoadedNote, noteId, t, unlockFolder, unlocking],
   );
 
   useEffect(() => {
+    clearSessionSecrets();
     if (!noteId) {
       setNote(null);
       setTitle("");
@@ -109,18 +216,28 @@ export function useNoteDocument({
       return;
     }
     void loadNote(true);
-  }, [loadNote, noteId]);
+    return () => {
+      // Closing the tab clears in-memory password (plan requirement).
+      passwordRef.current = null;
+    };
+  }, [clearSessionSecrets, loadNote, noteId]);
 
   const markDirty = useCallback(() => {
-    if (deletedRef.current) return;
+    if (deletedRef.current || needsPassword) return;
     dirtyRef.current = true;
     setStatus("unsaved");
-  }, []);
+  }, [needsPassword]);
 
   const performSave = useCallback(
     async (force = false) => {
-      if (!noteId || deletedRef.current) return false;
+      if (!noteId || deletedRef.current || needsPassword) return false;
       if (!dirtyRef.current && !force) return true;
+      if (encryptedRef.current && !passwordRef.current) {
+        setNeedsPassword(true);
+        setStatus("failed");
+        setError(t("notes.password.required"));
+        return false;
+      }
       if (savingPromiseRef.current) {
         await savingPromiseRef.current;
         if (!dirtyRef.current && !force) return true;
@@ -138,19 +255,23 @@ export function useNoteDocument({
         markdown: nextMarkdown,
         expectedRevision,
         force,
+        password: passwordRef.current ?? undefined,
       })
         .then((saved) => {
           revisionRef.current = saved.revision;
           parentIdRef.current = saved.parent_id ?? null;
+          encryptedRef.current = Boolean(saved.encrypted);
+          // Keep plaintext in memory for encrypted notes after save.
+          const displayMarkdown = nextMarkdown;
           if (
             latestMarkdownRef.current === nextMarkdown &&
             latestTitleRef.current.trim() === nextTitle
           ) {
-            setNote(saved);
+            setNote({ ...saved, markdown: displayMarkdown });
             setTitle(saved.title);
-            setMarkdown(saved.markdown);
+            setMarkdown(displayMarkdown);
             latestTitleRef.current = saved.title;
-            latestMarkdownRef.current = saved.markdown;
+            latestMarkdownRef.current = displayMarkdown;
             onTitleChange?.(saved.title);
             setStatus("saved");
           } else {
@@ -161,7 +282,7 @@ export function useNoteDocument({
                     title: latestTitleRef.current,
                     markdown: latestMarkdownRef.current,
                   }
-                : saved,
+                : { ...saved, markdown: displayMarkdown },
             );
             dirtyRef.current = true;
             setStatus("unsaved");
@@ -196,7 +317,7 @@ export function useNoteDocument({
       savingPromiseRef.current = promise;
       return promise;
     },
-    [noteId, onTitleChange, t],
+    [needsPassword, noteId, onTitleChange, t],
   );
   performSaveRef.current = performSave;
 
@@ -220,24 +341,25 @@ export function useNoteDocument({
 
   const handleMarkdownChange = useCallback(
     (value: string) => {
-      if (suppressChangeRef.current) return;
+      if (suppressChangeRef.current || needsPassword) return;
       latestMarkdownRef.current = value;
       setMarkdown(value);
       markDirty();
       scheduleSave();
     },
-    [markDirty, scheduleSave],
+    [markDirty, needsPassword, scheduleSave],
   );
 
   const handleTitleChange = useCallback(
     (value: string) => {
+      if (needsPassword) return;
       setTitle(value);
       onTitleChange?.(value);
       latestTitleRef.current = value;
       markDirty();
       scheduleSave();
     },
-    [markDirty, onTitleChange, scheduleSave],
+    [markDirty, needsPassword, onTitleChange, scheduleSave],
   );
 
   useEffect(() => {
@@ -265,6 +387,14 @@ export function useNoteDocument({
         return;
       }
       if (event.kind === "updated" && savingPromiseRef.current) return;
+      // Encrypted notes: external updates require re-unlock.
+      if (encryptedRef.current) {
+        passwordRef.current = null;
+        setUnlocked(false);
+        setNeedsPassword(true);
+        void loadNote(true);
+        return;
+      }
       if (event.kind === "updated" && revisionRef.current && !dirtyRef.current) {
         void loadNote(true);
         return;
@@ -288,6 +418,7 @@ export function useNoteDocument({
   useEffect(() => {
     return () => {
       if (debounceRef.current) window.clearTimeout(debounceRef.current);
+      passwordRef.current = null;
     };
   }, []);
 
@@ -318,6 +449,11 @@ export function useNoteDocument({
     conflictOpen,
     setConflictOpen,
     deleted,
+    needsPassword,
+    unlockError,
+    unlocking,
+    unlocked,
+    unlockWithPassword,
     loadNote,
     flushSave,
     handleMarkdownChange,

@@ -44,6 +44,16 @@ pub fn get_note(note_id: String) -> AppResult<NoteDocument> {
 }
 
 #[tauri::command]
+pub fn unlock_note(note_id: String, password: String) -> AppResult<NoteDocument> {
+    crate::storage::unlock_note(&note_id, &password)
+}
+
+#[tauri::command]
+pub fn verify_folder_password(folder_id: String, password: String) -> AppResult<bool> {
+    crate::storage::verify_folder_password(&folder_id, &password)
+}
+
+#[tauri::command]
 pub fn create_note_folder(
     app: tauri::AppHandle,
     parent_id: Option<String>,
@@ -69,8 +79,9 @@ pub fn create_note(
     parent_id: Option<String>,
     title: Option<String>,
     markdown: Option<String>,
+    password: Option<String>,
 ) -> AppResult<NoteDocument> {
-    let note = crate::storage::create_note(parent_id, title, markdown)?;
+    let note = crate::storage::create_note(parent_id, title, markdown, password)?;
     emit_notes_changed(
         &app,
         "created",
@@ -92,6 +103,7 @@ pub fn update_note(
     markdown: String,
     expected_revision: u64,
     force: Option<bool>,
+    password: Option<String>,
 ) -> AppResult<NoteDocument> {
     let result = crate::storage::update_note(
         &note_id,
@@ -99,6 +111,7 @@ pub fn update_note(
         markdown,
         expected_revision,
         force.unwrap_or(false),
+        password,
     )?;
     if result.changed {
         emit_notes_changed(
@@ -113,6 +126,129 @@ pub fn update_note(
         schedule_cloud_sync_notify(app);
     }
     Ok(result.note)
+}
+
+#[tauri::command]
+pub fn encrypt_note(
+    app: tauri::AppHandle,
+    note_id: String,
+    password: String,
+) -> AppResult<NoteDocument> {
+    let note = crate::storage::encrypt_note(&note_id, &password)?;
+    emit_notes_changed(
+        &app,
+        "updated",
+        Some("note"),
+        vec![note.id.clone()],
+        Vec::new(),
+        vec![NoteSummary::from(note.clone())],
+        Some(true),
+    );
+    schedule_cloud_sync_notify(app);
+    Ok(note)
+}
+
+#[tauri::command]
+pub fn decrypt_note(
+    app: tauri::AppHandle,
+    note_id: String,
+    password: String,
+) -> AppResult<NoteDocument> {
+    let note = crate::storage::decrypt_note(&note_id, &password)?;
+    emit_notes_changed(
+        &app,
+        "updated",
+        Some("note"),
+        vec![note.id.clone()],
+        Vec::new(),
+        vec![NoteSummary::from(note.clone())],
+        Some(true),
+    );
+    schedule_cloud_sync_notify(app);
+    Ok(note)
+}
+
+#[tauri::command]
+pub fn change_note_password(
+    app: tauri::AppHandle,
+    note_id: String,
+    old_password: String,
+    new_password: String,
+) -> AppResult<NoteDocument> {
+    let note = crate::storage::change_note_password(&note_id, &old_password, &new_password)?;
+    emit_notes_changed(
+        &app,
+        "updated",
+        Some("note"),
+        vec![note.id.clone()],
+        Vec::new(),
+        vec![NoteSummary::from(note.clone())],
+        Some(false),
+    );
+    schedule_cloud_sync_notify(app);
+    Ok(note)
+}
+
+#[tauri::command]
+pub fn encrypt_note_folder(
+    app: tauri::AppHandle,
+    folder_id: String,
+    password: String,
+) -> AppResult<NoteFolder> {
+    let folder = crate::storage::encrypt_note_folder(&folder_id, &password)?;
+    emit_notes_changed(
+        &app,
+        "updated",
+        Some("folder"),
+        vec![folder.id.clone()],
+        vec![folder.clone()],
+        Vec::new(),
+        Some(true),
+    );
+    schedule_cloud_sync_notify(app);
+    Ok(folder)
+}
+
+#[tauri::command]
+pub fn decrypt_note_folder(
+    app: tauri::AppHandle,
+    folder_id: String,
+    password: String,
+) -> AppResult<NoteFolder> {
+    let folder = crate::storage::decrypt_note_folder(&folder_id, &password)?;
+    emit_notes_changed(
+        &app,
+        "updated",
+        Some("folder"),
+        vec![folder.id.clone()],
+        vec![folder.clone()],
+        Vec::new(),
+        Some(true),
+    );
+    schedule_cloud_sync_notify(app);
+    Ok(folder)
+}
+
+#[tauri::command]
+pub fn change_folder_password(
+    app: tauri::AppHandle,
+    folder_id: String,
+    old_password: String,
+    new_password: String,
+) -> AppResult<NoteFolder> {
+    let folder =
+        crate::storage::change_folder_password(&folder_id, &old_password, &new_password)?;
+    emit_notes_changed(
+        &app,
+        "updated",
+        Some("folder"),
+        vec![folder.id.clone()],
+        vec![folder.clone()],
+        Vec::new(),
+        Some(true),
+    );
+    schedule_cloud_sync_notify(app);
+    Ok(folder)
 }
 
 #[tauri::command]

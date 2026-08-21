@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import {
   MdEditNote,
   MdFormatListBulleted,
+  MdLock,
   MdNoteAdd,
   MdNotes,
   MdRefresh,
@@ -12,6 +13,7 @@ import {
   MdVisibility,
 } from "react-icons/md";
 import { toast } from "sonner";
+import NotePasswordDialog from "@/components/dialog/note-editor/NotePasswordDialog";
 import ResizeHandle from "@/components/layout/ResizeHandle";
 import MarkdownRenderer from "@/components/markdown/MarkdownRenderer";
 import NoteEditorToolbarStatus from "@/components/note-editor/NoteEditorToolbarStatus";
@@ -76,7 +78,7 @@ interface NoteEditorPanelProps {
 
 export default function NoteEditorPanel({ noteId, filePath, tabId }: NoteEditorPanelProps) {
   const { t } = useTranslation();
-  const { appSettings, updateTab, updateUi, openNoteTab } = useApp();
+  const { appSettings, updateTab, updateUi, openNoteTab, closeTab } = useApp();
   const { noteTheme } = useTheme();
   const colors = noteTheme.colors.notes;
   const noteThemeVars = noteColorsToCssVars(colors);
@@ -92,6 +94,7 @@ export default function NoteEditorPanel({ noteId, filePath, tabId }: NoteEditorP
   const [activeOutlineLine, setActiveOutlineLine] = useState<number | null>(null);
   const [exporting, setExporting] = useState(false);
   const [savingToNotes, setSavingToNotes] = useState(false);
+  const [unlockDialogOpen, setUnlockDialogOpen] = useState(true);
   const showOutline = appSettings.ui.show_note_outline ?? false;
   const outlineWidth = Math.min(
     MAX_OUTLINE_WIDTH,
@@ -150,7 +153,15 @@ export default function NoteEditorPanel({ noteId, filePath, tabId }: NoteEditorP
   const conflictOpen = isFileMode ? false : noteDoc.conflictOpen;
   const setConflictOpen = isFileMode ? () => {} : noteDoc.setConflictOpen;
   const deleted = isFileMode ? false : noteDoc.deleted;
-  const documentReady = isFileMode ? fileDoc.ready : Boolean(noteDoc.note);
+  const needsPassword = isFileMode ? false : noteDoc.needsPassword;
+  const documentReady = isFileMode
+    ? fileDoc.ready
+    : Boolean(noteDoc.note) && !noteDoc.needsPassword && noteDoc.unlocked;
+
+  useEffect(() => {
+    if (needsPassword) setUnlockDialogOpen(true);
+  }, [needsPassword, noteId]);
+
   const flushSave = isFileMode ? fileDoc.flushSave : noteDoc.flushSave;
   const handleMarkdownChange = isFileMode
     ? fileDoc.handleMarkdownChange
@@ -377,6 +388,48 @@ export default function NoteEditorPanel({ noteId, filePath, tabId }: NoteEditorP
           {t("notes.deletedDescription")}
         </div>
         <Button onClick={() => void saveCopy()}>{t("notes.saveCopy")}</Button>
+      </div>
+    );
+  }
+
+  if (needsPassword) {
+    return (
+      <div
+        className="relative flex h-full min-h-0 flex-col items-center justify-center gap-3 overflow-hidden p-6 text-center"
+        style={{
+          ...noteThemeVars,
+          backgroundColor: colors.bgPanel,
+          color: colors.text,
+        }}
+      >
+        <MdLock className="text-3xl" style={{ color: colors.textMuted }} />
+        <div className="text-base font-medium">{t("notes.password.lockedTitle")}</div>
+        <div className="max-w-md text-sm" style={{ color: colors.textMuted }}>
+          {t("notes.password.lockedDescription", { name: title || t("notes.untitled") })}
+        </div>
+        <div className="flex items-center gap-2 pt-1">
+          <Button type="button" onClick={() => setUnlockDialogOpen(true)}>
+            {t("notes.password.unlockTitle")}
+          </Button>
+          {tabId ? (
+            <Button type="button" variant="outline" onClick={() => closeTab(tabId)}>
+              {t("common.close")}
+            </Button>
+          ) : null}
+        </div>
+        <NotePasswordDialog
+          open={unlockDialogOpen}
+          mode="unlock"
+          targetName={title || t("notes.untitled")}
+          error={noteDoc.unlockError}
+          submitting={noteDoc.unlocking}
+          onSubmit={(password) => {
+            void noteDoc.unlockWithPassword(password).then((ok) => {
+              if (ok) setUnlockDialogOpen(false);
+            });
+          }}
+          onCancel={() => setUnlockDialogOpen(false)}
+        />
       </div>
     );
   }
