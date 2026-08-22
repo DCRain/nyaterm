@@ -218,12 +218,12 @@ function PaneNodeView({
 
   return (
     <div
-      className={`nyaterm-wallpaper-terminal-surface relative h-full w-full overflow-hidden ${
+      className={`nyaterm-wallpaper-terminal-surface nyaterm-terminal-surface relative h-full w-full overflow-hidden ${
         showChrome ? "rounded-sm border" : ""
       } ${showChrome && isActive ? "ring-1 ring-primary/60" : ""}`}
       style={{
         borderColor: showChrome ? "var(--df-border)" : undefined,
-        backgroundColor: "var(--df-terminal-bg, var(--df-bg-terminal))",
+        backgroundColor: "var(--df-terminal-surface-bg)",
       }}
       onMouseDown={() => onActivatePane(node.id)}
     >

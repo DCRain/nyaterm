@@ -315,14 +315,14 @@ export default function TerminalGutter({
 
   return (
     <div
-      className="nyaterm-wallpaper-transparent-surface shrink-0 select-none overflow-hidden border-r"
+      className="nyaterm-wallpaper-transparent-surface nyaterm-terminal-surface shrink-0 select-none overflow-hidden border-r"
       style={{
         boxSizing: "content-box",
         width: gutterWidth,
         paddingTop: layout.topPadding,
         borderColor:
-          "color-mix(in srgb, var(--df-terminal-fg, var(--df-text)) 18%, var(--df-terminal-bg, var(--df-bg-terminal)))",
-        backgroundColor: "var(--df-terminal-bg, var(--df-bg-terminal))",
+          "color-mix(in srgb, var(--df-terminal-fg, var(--df-text)) 18%, var(--df-terminal-surface-bg))",
+        backgroundColor: "var(--df-terminal-surface-bg)",
         fontFamily: layout.fontFamily,
         fontSize: layout.fontSize,
       }}

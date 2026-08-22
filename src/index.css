@@ -78,6 +78,7 @@
 /* ── Map shadcn CSS vars to existing --df-* theme system ───────────────── */
 :root {
   --radius: 0.5rem;
+  --df-terminal-surface-bg: var(--df-terminal-bg, var(--df-bg-terminal));
   --background: var(--df-bg);
   --foreground: var(--df-text);
   --card: var(--df-bg-panel);
@@ -359,8 +360,12 @@ body[data-window-transparency="true"] #root {
   -webkit-backdrop-filter: none;
 }
 
+.nyaterm-wallpaper-shell[data-window-transparency="true"] .nyaterm-terminal-surface {
+  background-color: transparent !important;
+}
+
 .nyaterm-wallpaper-shell[data-wallpaper-enabled="true"] .nyaterm-wallpaper-terminal-surface {
-  background-color: var(--df-bg-terminal) !important;
+  background-color: var(--df-terminal-surface-bg) !important;
 }
 
 .nyaterm-wallpaper-shell[data-wallpaper-enabled="true"] .nyaterm-wallpaper-card {

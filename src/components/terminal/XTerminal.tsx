@@ -1407,15 +1407,17 @@ export default function XTerminal({
 
         logger.debug({
           domain: "terminal.input",
-          event: "serial.remote_color_osc_blocked",
-          message: "Blocked remote color OSC for serial session",
+          event: "terminal.remote_color_osc_blocked",
+          message: "Blocked remote color OSC",
           ids: { session_id: sessionId },
           data: {
             session_type: sessionTypeRef.current,
+            terminal_transparency_enabled: terminalTransparencyEnabled,
             osc_id: oscId,
           },
         });
       },
+      { blockDefaultBackground: terminalTransparencyEnabled },
     );
 
     const oscDisposable = terminal.parser.registerOscHandler(133, (data) => {
@@ -2376,11 +2378,11 @@ export default function XTerminal({
     duplicateStrategy: terminalAppSettings.transfer.duplicate_strategy,
   });
 
-  const terminalBackground = "var(--df-terminal-bg, var(--df-bg-terminal))";
+  const terminalBackground = "var(--df-terminal-surface-bg)";
 
   return (
     <div
-      className="nyaterm-wallpaper-transparent-surface h-full w-full relative flex"
+      className="nyaterm-wallpaper-transparent-surface nyaterm-terminal-surface h-full w-full relative flex"
       style={{
         display: visible ? "flex" : "none",
         backgroundColor: terminalBackground,
@@ -2399,7 +2401,7 @@ export default function XTerminal({
         />
       )}
       <div
-        className="nyaterm-wallpaper-transparent-surface flex-1 min-w-0 h-full relative"
+        className="nyaterm-wallpaper-transparent-surface nyaterm-terminal-surface flex-1 min-w-0 h-full relative"
         style={{ backgroundColor: terminalBackground }}
       >
         <TerminalContextMenu
@@ -2415,7 +2417,7 @@ export default function XTerminal({
           onSaveTranscript={onSaveTranscript}
         >
           <div
-            className={`nyaterm-wallpaper-transparent-surface h-full w-full ${
+            className={`nyaterm-wallpaper-transparent-surface nyaterm-terminal-surface h-full w-full ${
               showContentPadding ? "pl-2" : ""
             }`}
             style={{ backgroundColor: terminalBackground }}
@@ -2423,7 +2425,7 @@ export default function XTerminal({
             <div
               ref={containerRef}
               data-terminal-root="true"
-              className="nyaterm-wallpaper-transparent-surface h-full w-full"
+              className="nyaterm-wallpaper-transparent-surface nyaterm-terminal-surface h-full w-full"
               style={{ backgroundColor: terminalBackground }}
             />
           </div>
