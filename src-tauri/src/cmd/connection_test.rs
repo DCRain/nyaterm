@@ -8,7 +8,6 @@ use opendal::Operator;
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
-use crate::config::{ConnectionType, SavedConnection};
 use crate::core::ssh::{DraftSshTestInput, build_test_ssh_config, test_authenticated_ssh};
 use crate::error::{AppError, AppResult};
 use crate::utils::url::normalize_storage_endpoint;
@@ -193,23 +192,10 @@ async fn run_s3_probe(operator: Operator, bucket: &str) -> TestConnectionEndpoin
 
 fn build_s3_test_operator(
     input: Option<&TestS3Input>,
-    connection_id: Option<&str>,
+    _connection_id: Option<&str>,
 ) -> AppResult<Operator> {
-    if let Some(id) = connection_id.filter(|value| !value.is_empty()) {
-        // Use the saved connection (decrypts secrets) for stable testing.
-        let mut conn: SavedConnection = crate::storage::get_connection(id)?
-            .ok_or_else(|| AppError::SessionNotFound(format!("Connection '{id}' not found")))?;
-        if let ConnectionType::S3 { .. } = &conn.config {
-            crate::core::s3::decrypt_s3_secrets_in_place(&mut conn)?;
-            return crate::core::s3::build_operator_from_connection(&conn);
-        }
-        return Err(AppError::Config(format!(
-            "Connection '{id}' is not an S3 connection"
-        )));
-    }
-
     let input = input.ok_or_else(|| {
-        AppError::Config("S3 test requires either saved connection id or live fields".into())
+        AppError::Config("S3 test requires form fields".into())
     })?;
 
     let mut builder = S3::default().bucket(&input.bucket);

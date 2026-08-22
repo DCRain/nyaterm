@@ -25,23 +25,22 @@ pub fn get_saved_connections(app: tauri::AppHandle) -> AppResult<Vec<SavedConnec
             auth.has_password = auth.password.is_some();
             auth.password = None;
         }
+        if matches!(conn.config, config::ConnectionType::S3 { .. }) {
+            // Stored S3 credentials are encrypted in the database; decrypt
+            // them in place so the connection editor can repopulate the form
+            // fields (and so the connection test can build a real operator
+            // from them).
+            crate::core::s3::decrypt_s3_secrets_in_place(conn)?;
+        }
         if let config::ConnectionType::S3 {
-            access_key_id,
             secret_access_key,
-            session_token,
             has_secret_access_key,
             ..
         } = &mut conn.config
         {
+            // `has_secret_access_key` is kept as a "this slot is in use" hint
+            // for the UI after the secret has been resolved.
             *has_secret_access_key = secret_access_key.is_some();
-            *secret_access_key = None;
-            // Keep access_key_id / session_token masked presence only when set.
-            if access_key_id.as_ref().is_some_and(|v| !v.is_empty()) {
-                *access_key_id = Some(config::MASKED_SECRET_VALUE.to_string());
-            }
-            if session_token.as_ref().is_some_and(|v| !v.is_empty()) {
-                *session_token = Some(config::MASKED_SECRET_VALUE.to_string());
-            }
         }
     }
     Ok(connections)

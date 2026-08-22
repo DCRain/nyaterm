@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { MdClose } from "react-icons/md";
+import { MdClose, MdVisibility, MdVisibilityOff } from "react-icons/md";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -125,7 +125,7 @@ export function S3Form({
         </Label>
         <div className="relative mt-1">
           <Input
-            className="h-8 pr-8 text-xs"
+            className="h-8 pr-16 text-xs"
             type={showSecret ? "text" : "password"}
             autoComplete="new-password"
             value={secretAccessKey}
@@ -138,22 +138,39 @@ export function S3Form({
               setSecretAccessKey(event.target.value);
               if (event.target.value) setHasSecretAccessKey(false);
             }}
-            onFocus={() => setShowSecret(true)}
           />
-          {(secretAccessKey || hasSecretAccessKey) && (
+          <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
             <button
               type="button"
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
-              title={t("dialog.clearPassword", "Clear password")}
-              onClick={() => {
-                setSecretAccessKey("");
-                setHasSecretAccessKey(false);
-                setShowSecret(false);
-              }}
+              className="rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
+              title={
+                showSecret
+                  ? t("dialog.hidePassword", "Hide password")
+                  : t("dialog.showPassword", "Show password")
+              }
+              onClick={() => setShowSecret((value) => !value)}
             >
-              <MdClose className="text-sm" />
+              {showSecret ? (
+                <MdVisibilityOff className="text-sm" />
+              ) : (
+                <MdVisibility className="text-sm" />
+              )}
             </button>
-          )}
+            {(secretAccessKey || hasSecretAccessKey) && (
+              <button
+                type="button"
+                className="rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
+                title={t("dialog.clearPassword", "Clear password")}
+                onClick={() => {
+                  setSecretAccessKey("");
+                  setHasSecretAccessKey(false);
+                  setShowSecret(false);
+                }}
+              >
+                <MdClose className="text-sm" />
+              </button>
+            )}
+          </div>
         </div>
       </div>
 

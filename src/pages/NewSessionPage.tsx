@@ -501,22 +501,13 @@ export default function NewSessionPage() {
           setStopBits(found.stop_bits || "1");
           setSerialBackspaceMode(found.backspace_mode || "ctrl_h");
         } else if (found.type === "s3") {
-          const masked = "__SET__";
           setS3Endpoint(found.endpoint || "");
           setS3Bucket(found.bucket || "");
           setS3Region(found.region || "");
           setS3Root(found.root || "");
-          setS3AccessKeyId(
-            found.access_key_id && found.access_key_id !== masked
-              ? found.access_key_id
-              : "",
-          );
-          setS3SecretAccessKey("");
-          setS3SessionToken(
-            found.session_token && found.session_token !== masked
-              ? found.session_token
-              : "",
-          );
+          setS3AccessKeyId(found.access_key_id || "");
+          setS3SecretAccessKey(found.secret_access_key || "");
+          setS3SessionToken(found.session_token || "");
           setS3HasSecretAccessKey(Boolean(found.has_secret_access_key));
           setS3VirtualHostStyle(Boolean(found.virtual_host_style));
         }
@@ -1252,7 +1243,7 @@ export default function NewSessionPage() {
               secret_access_key: s3SecretAccessKey
                 ? s3SecretAccessKey
                 : s3HasSecretAccessKey
-                  ? undefined
+                  ? "__SET__"
                   : "",
               session_token: s3SessionToken.trim()
                 ? s3SessionToken.trim()
