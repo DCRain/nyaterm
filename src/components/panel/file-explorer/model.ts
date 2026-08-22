@@ -45,10 +45,10 @@ export type LoadDirectoryOptions = {
   silent?: boolean;
 };
 
-export type FileExplorerBackendKind = "remote" | "local" | "s3";
+export type FileExplorerBackendKind = "remote" | "local" | "s3" | "ftp";
 
 export function isPosixExplorerBackend(backend: FileExplorerBackendKind): boolean {
-  return backend === "remote" || backend === "s3";
+  return backend === "remote" || backend === "s3" || backend === "ftp";
 }
 
 export type BreadcrumbSegment = {
@@ -95,7 +95,8 @@ export function getSessionIdFromFileExplorerSessionCacheKey(cacheKey: string): s
   if (
     cacheKey.endsWith(":local") ||
     cacheKey.endsWith(":remote") ||
-    cacheKey.endsWith(":s3")
+    cacheKey.endsWith(":s3") ||
+    cacheKey.endsWith(":ftp")
   ) {
     return cacheKey.slice(0, cacheKey.lastIndexOf(":"));
   }

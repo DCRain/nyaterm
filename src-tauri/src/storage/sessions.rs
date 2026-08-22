@@ -385,6 +385,7 @@ fn connection_protocol(config: &crate::config::ConnectionType) -> &'static str {
         crate::config::ConnectionType::Rdp { .. } => "rdp",
         crate::config::ConnectionType::Vnc { .. } => "vnc",
         crate::config::ConnectionType::S3 { .. } => "s3",
+        crate::config::ConnectionType::Ftp { .. } => "ftp",
     }
 }
 pub(super) fn sort_connections(connections: &mut [crate::config::SavedConnection]) {

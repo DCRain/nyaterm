@@ -639,6 +639,9 @@ fn build_recording_context(
             None,
             None,
         ),
+        Some(config::ConnectionType::Ftp { host, port, .. }) => {
+            ("ftp".to_string(), Some(host.clone()), Some(*port), None)
+        }
         Some(config::ConnectionType::Serial { port_name, .. }) => {
             ("serial".to_string(), Some(port_name.clone()), None, None)
         }

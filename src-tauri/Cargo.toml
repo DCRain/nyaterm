@@ -173,6 +173,7 @@ opendal = { version = "0.58", default-features = false, features = [
     "services-gdrive",
     "services-onedrive",
     "services-s3",
+    "services-ftp",
     "services-webdav",
     "layers-retry",
     "layers-timeout",

@@ -33,6 +33,7 @@ use crate::core::{
     VncSessionManager,
 };
 use crate::core::s3::S3Manager;
+use crate::core::ftp::FtpManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -52,6 +53,7 @@ pub fn run() {
     let quick_commands_store = Arc::new(QuickCommandsStore::new());
     let cloud_sync_manager = Arc::new(CloudSyncManager::new());
     let s3_manager = Arc::new(S3Manager::new());
+    let ftp_manager = Arc::new(FtpManager::new());
     let agent_approval_manager = Arc::new(AgentApprovalManager::new());
     let nyaterm_mcp_runtime = Arc::new(core::ai::NyaTermMcpRuntime::new());
     let codex_app_server_manager = Arc::new(core::ai::CodexAppServerManager::new());
@@ -105,6 +107,7 @@ pub fn run() {
         .manage(quick_commands_store.clone())
         .manage(cloud_sync_manager.clone())
         .manage(s3_manager.clone())
+        .manage(ftp_manager.clone())
         .manage(agent_approval_manager.clone())
         .manage(nyaterm_mcp_runtime.clone())
         .manage(codex_app_server_manager.clone())
@@ -290,6 +293,17 @@ pub fn run() {
             cmd::s3::download_s3_file,
             cmd::s3::download_s3_directory,
             cmd::s3::invalidate_s3_connection,
+            cmd::ftp::list_ftp_dir,
+            cmd::ftp::list_ftp_child_directories,
+            cmd::ftp::create_ftp_dir,
+            cmd::ftp::create_ftp_file,
+            cmd::ftp::delete_ftp_object,
+            cmd::ftp::rename_ftp_object,
+            cmd::ftp::upload_local_file_to_ftp,
+            cmd::ftp::upload_local_directory_to_ftp,
+            cmd::ftp::download_ftp_file,
+            cmd::ftp::download_ftp_directory,
+            cmd::ftp::invalidate_ftp_connection,
             cmd::sftp::create_remote_dir,
             cmd::sftp::create_remote_symlink,
             cmd::sftp::chmod_remote_file,

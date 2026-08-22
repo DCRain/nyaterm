@@ -1,6 +1,6 @@
 /** Type of terminal session. */
 export type SessionType = "SSH" | "Local" | "Telnet" | "Serial";
-export type WorkspaceSessionType = SessionType | "RDP" | "VNC" | "S3";
+export type WorkspaceSessionType = SessionType | "RDP" | "VNC" | "S3" | "FTP";
 export type WorkspacePaneKind = "terminal" | "remote-desktop" | "file";
 export type PersistedWorkspacePaneKind = WorkspacePaneKind | "rdp";
 export type { TemporaryLinkConfig } from "@/types/temporaryConnection";
@@ -61,7 +61,8 @@ export type ConnectionTypeTag =
   | "serial"
   | "rdp"
   | "vnc"
-  | "s3";
+  | "s3"
+  | "ftp";
 
 /** Metadata for a connected or disconnected session. */
 export interface SessionInfo {
@@ -88,6 +89,7 @@ export type SessionPaneView =
   | "terminal"
   | "sftp"
   | "s3"
+  | "ftp"
   | "workbench"
   | "note"
   | "externalMarkdown";
@@ -120,7 +122,7 @@ export interface WorkspacePaneBase {
 /** Leaf node representing one terminal session inside a workspace tab. */
 export interface TerminalSessionPane extends WorkspacePaneBase {
   paneKind: "terminal";
-  type: SessionType | "S3";
+  type: SessionType | "S3" | "FTP";
 }
 
 export type RemoteDesktopScaleMode = "fit" | "actual" | "stretch";
@@ -594,6 +596,10 @@ export interface SavedConnection {
   session_token?: string;
   has_secret_access_key?: boolean;
   virtual_host_style?: boolean;
+  /** FTP-specific fields (present when type === "ftp"). */
+  password?: string;
+  has_password?: boolean;
+  use_tls?: boolean;
 }
 
 export type RdpCertificatePolicy = "strict" | "prompt" | "accept-temporarily";

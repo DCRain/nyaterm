@@ -32,15 +32,24 @@ pub fn get_saved_connections(app: tauri::AppHandle) -> AppResult<Vec<SavedConnec
             // from them).
             crate::core::s3::decrypt_s3_secrets_in_place(conn)?;
         }
+        if matches!(conn.config, config::ConnectionType::Ftp { .. }) {
+            crate::core::ftp::decrypt_ftp_secrets_in_place(conn)?;
+        }
         if let config::ConnectionType::S3 {
             secret_access_key,
             has_secret_access_key,
             ..
         } = &mut conn.config
         {
-            // `has_secret_access_key` is kept as a "this slot is in use" hint
-            // for the UI after the secret has been resolved.
             *has_secret_access_key = secret_access_key.is_some();
+        }
+        if let config::ConnectionType::Ftp {
+            password,
+            has_password,
+            ..
+        } = &mut conn.config
+        {
+            *has_password = password.is_some();
         }
     }
     Ok(connections)
@@ -101,7 +110,9 @@ pub fn save_connection(
     validate_rdp_config(&connection)?;
     validate_vnc_config(&connection)?;
     validate_s3_config(&connection)?;
+    validate_ftp_config(&connection)?;
     merge_s3_secrets_for_save(&mut connection, existing.as_ref())?;
+    merge_ftp_secrets_for_save(&mut connection, existing.as_ref())?;
 
     if let Some(ref mut auth) = connection.auth {
         // password_id: Some("") means explicitly cleared, None means preserve existing
@@ -543,6 +554,58 @@ fn merge_s3_secrets_for_save(
         Some(plain) => Some(crypto::encrypt(plain)?),
     };
     *has_secret_access_key = false;
+    Ok(())
+}
+
+fn validate_ftp_config(connection: &SavedConnection) -> AppResult<()> {
+    let config::ConnectionType::Ftp { host, .. } = &connection.config else {
+        return Ok(());
+    };
+
+    if host.trim().is_empty() {
+        return Err(AppError::Config("FTP host is required".to_string()));
+    }
+    Ok(())
+}
+
+fn merge_ftp_secrets_for_save(
+    connection: &mut SavedConnection,
+    existing: Option<&SavedConnection>,
+) -> AppResult<()> {
+    let config::ConnectionType::Ftp {
+        username,
+        password,
+        has_password,
+        ..
+    } = &mut connection.config
+    else {
+        return Ok(());
+    };
+
+    let existing_ftp = existing.and_then(|conn| match &conn.config {
+        config::ConnectionType::Ftp {
+            username,
+            password,
+            ..
+        } => Some((username.clone(), password.clone())),
+        _ => None,
+    });
+
+    *username = match username.as_deref() {
+        Some(config::MASKED_SECRET_VALUE) | None => {
+            existing_ftp.as_ref().and_then(|(user, _)| user.clone())
+        }
+        Some("") => None,
+        Some(plain) => Some(crypto::encrypt(plain)?),
+    };
+    *password = match password.as_deref() {
+        Some(config::MASKED_SECRET_VALUE) | None => {
+            existing_ftp.as_ref().and_then(|(_, pass)| pass.clone())
+        }
+        Some("") => None,
+        Some(plain) => Some(crypto::encrypt(plain)?),
+    };
+    *has_password = false;
     Ok(())
 }
 

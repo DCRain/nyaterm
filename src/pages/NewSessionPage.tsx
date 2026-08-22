@@ -2,7 +2,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type ComponentType, useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { MdAdd, MdChevronLeft, MdCloud, MdExpandMore, MdLan, MdMonitor, MdTerminal } from "react-icons/md";
+import { MdAdd, MdChevronLeft, MdCloud, MdExpandMore, MdFolder, MdLan, MdMonitor, MdTerminal } from "react-icons/md";
 import { TbNetwork, TbPlugConnected, TbServer } from "react-icons/tb";
 import { toast } from "sonner";
 import {
@@ -16,6 +16,7 @@ import ChildWindowHeader from "@/components/layout/ChildWindowHeader";
 import { buildGroupPath, type ConnectionOption, sortLabel } from "@/components/network/shared";
 import { LocalTerminal } from "@/components/sessions/LocalTerminal";
 import { S3Form } from "@/components/sessions/S3Form";
+import { FtpForm } from "@/components/sessions/FtpForm";
 import {
   DEFAULT_RDP_HEIGHT,
   DEFAULT_RDP_USERNAME,
@@ -150,7 +151,7 @@ const isValidSftpShellDetectionTimeout = (value: number) =>
   value <= MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS;
 
 type WizardStep = "pick" | "form";
-  type ProtocolTab = "ssh" | "local" | "telnet" | "serial" | "rdp" | "vnc" | "s3";
+  type ProtocolTab = "ssh" | "local" | "telnet" | "serial" | "rdp" | "vnc" | "s3" | "ftp";
 
   const PROTOCOL_OPTIONS: Array<{
     id: ProtocolTab;
@@ -215,6 +216,14 @@ type WizardStep = "pick" | "form";
       descKey: "dialog.protocolS3Desc",
       descFallback: "Browse and transfer files with an S3-compatible bucket",
       icon: MdCloud,
+    },
+    {
+      id: "ftp",
+      titleKey: "dialog.protocolFtp",
+      titleFallback: "FTP",
+      descKey: "dialog.protocolFtpDesc",
+      descFallback: "Browse and transfer files over FTP or FTPS",
+      icon: MdFolder,
     },
   ];
 
@@ -305,6 +314,14 @@ export default function NewSessionPage() {
   const [s3SessionToken, setS3SessionToken] = useState("");
   const [s3HasSecretAccessKey, setS3HasSecretAccessKey] = useState(false);
   const [s3VirtualHostStyle, setS3VirtualHostStyle] = useState(false);
+  // FTP
+  const [ftpHost, setFtpHost] = useState("");
+  const [ftpPort, setFtpPort] = useState(21);
+  const [ftpRoot, setFtpRoot] = useState("/");
+  const [ftpUsername, setFtpUsername] = useState("");
+  const [ftpPassword, setFtpPassword] = useState("");
+  const [ftpHasPassword, setFtpHasPassword] = useState(false);
+  const [ftpUseTls, setFtpUseTls] = useState(false);
 
   // Proxy
   const [proxyId, setProxyId] = useState("");
@@ -403,6 +420,7 @@ export default function NewSessionPage() {
           rdp: "rdp",
           vnc: "vnc",
           s3: "s3",
+          ftp: "ftp",
         };
         setCurrentTab(tabMap[found.type] || "ssh");
         setWizardStep("form");
@@ -510,6 +528,14 @@ export default function NewSessionPage() {
           setS3SessionToken(found.session_token || "");
           setS3HasSecretAccessKey(Boolean(found.has_secret_access_key));
           setS3VirtualHostStyle(Boolean(found.virtual_host_style));
+        } else if (found.type === "ftp") {
+          setFtpHost(found.host || "");
+          setFtpPort(found.port || 21);
+          setFtpRoot(found.root || "/");
+          setFtpUsername(found.username || "");
+          setFtpPassword(found.password || "");
+          setFtpHasPassword(Boolean(found.has_password));
+          setFtpUseTls(Boolean(found.use_tls));
         }
       })
       .catch((e) => setError(getErrorMessage(e)));
@@ -890,6 +916,15 @@ export default function NewSessionPage() {
       }
     }
 
+    if (currentTab === "ftp") {
+      if (!ftpHost.trim()) {
+        return t("dialog.ftpHostRequired", "FTP host is required.");
+      }
+      if (!isValidPort(ftpPort)) {
+        return t("dialog.portInvalid", "Port must be between 1 and 65535");
+      }
+    }
+
     if (currentTab === "serial") {
       if (!serialPortName.trim()) {
         return t("dialog.serialPortRequired", "Serial port is required");
@@ -932,6 +967,8 @@ export default function NewSessionPage() {
     sshPort,
     sftpSettings.shell_detection_timeout_ms,
     s3Bucket,
+    ftpHost,
+    ftpPort,
     telnetPort,
     t,
     username,
@@ -987,7 +1024,9 @@ export default function NewSessionPage() {
                   ? `${normalizedHost}:${vncPort}`
                   : currentTab === "s3"
                     ? s3Bucket.trim() || t("dialog.protocolS3", "S3")
-                    : normalizedHost;
+                    : currentTab === "ftp"
+                      ? `${ftpHost.trim()}:${ftpPort}`
+                      : normalizedHost;
 
       const typeTag =
         currentTab === "ssh"
@@ -1002,6 +1041,8 @@ export default function NewSessionPage() {
                   ? "vnc"
                   : currentTab === "s3"
                     ? "s3"
+                    : currentTab === "ftp"
+                      ? "ftp"
                     : "serial";
       const network =
         currentTab === "ssh"
@@ -1107,7 +1148,7 @@ export default function NewSessionPage() {
         description: normalizedDescription || undefined,
         sort_order: sortOrder,
         open_on_startup:
-          currentTab === "rdp" || currentTab === "vnc" || currentTab === "s3"
+          currentTab === "rdp" || currentTab === "vnc" || currentTab === "s3" || currentTab === "ftp"
             ? false
             : openOnStartup,
         icon: iconKey || undefined,
@@ -1251,6 +1292,24 @@ export default function NewSessionPage() {
                   ? "__SET__"
                   : undefined,
               virtual_host_style: s3VirtualHostStyle,
+            }
+          : {}),
+        ...(currentTab === "ftp"
+          ? {
+              host: ftpHost.trim(),
+              port: ftpPort,
+              root: ftpRoot.trim() || "/",
+              username: ftpUsername.trim()
+                ? ftpUsername.trim()
+                : editId
+                  ? "__SET__"
+                  : undefined,
+              password: ftpPassword
+                ? ftpPassword
+                : ftpHasPassword
+                  ? "__SET__"
+                  : "",
+              use_tls: ftpUseTls,
             }
           : {}),
       };
@@ -1434,6 +1493,17 @@ export default function NewSessionPage() {
                   secretAccessKey: s3SecretAccessKey || undefined,
                   sessionToken: s3SessionToken.trim() || undefined,
                   virtualHostStyle: s3VirtualHostStyle,
+                }
+              : undefined,
+          ftp:
+            currentTab === "ftp"
+              ? {
+                  host: ftpHost.trim(),
+                  port: ftpPort,
+                  root: ftpRoot.trim() || "/",
+                  username: ftpUsername.trim() || undefined,
+                  password: ftpPassword || undefined,
+                  useTls: ftpUseTls,
                 }
               : undefined,
         },
@@ -2045,6 +2115,25 @@ export default function NewSessionPage() {
                 setHasSecretAccessKey={setS3HasSecretAccessKey}
                 virtualHostStyle={s3VirtualHostStyle}
                 setVirtualHostStyle={setS3VirtualHostStyle}
+              />
+            </TabsContent>
+
+            <TabsContent value="ftp" className="space-y-3 m-0 border-0 outline-none w-full">
+              <FtpForm
+                host={ftpHost}
+                setHost={setFtpHost}
+                port={ftpPort}
+                setPort={setFtpPort}
+                root={ftpRoot}
+                setRoot={setFtpRoot}
+                username={ftpUsername}
+                setUsername={setFtpUsername}
+                password={ftpPassword}
+                setPassword={setFtpPassword}
+                hasPassword={ftpHasPassword}
+                setHasPassword={setFtpHasPassword}
+                useTls={ftpUseTls}
+                setUseTls={setFtpUseTls}
               />
             </TabsContent>
 

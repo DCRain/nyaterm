@@ -158,7 +158,7 @@ export default MemoizedFileExplorer;
 
 type FileExplorerPaneEndpoint = {
   sessionId: string;
-  kind: "local" | "remote" | "s3";
+  kind: "local" | "remote" | "s3" | "ftp";
   currentPath: string;
 };
 
@@ -741,14 +741,14 @@ export function FileExplorerPane({
   const explorerBackend: FileExplorerBackendKind =
     forceBackend ?? (hasLocalSession ? "local" : "remote");
   const [remoteFileBrowserEnabled, setRemoteFileBrowserEnabled] = useState<boolean | null>(
-    explorerBackend === "local" || explorerBackend === "s3" ? true : null,
+    explorerBackend === "local" || explorerBackend === "s3" || explorerBackend === "ftp" ? true : null,
   );
   const canBrowseFiles =
-    explorerBackend === "local" || explorerBackend === "s3"
+    explorerBackend === "local" || explorerBackend === "s3" || explorerBackend === "ftp"
       ? !!activeSessionId
       : hasSshSession && remoteFileBrowserEnabled === true;
   const canUseRemoteTransfer =
-    (explorerBackend === "remote" || explorerBackend === "s3") && canBrowseFiles;
+    (explorerBackend === "remote" || explorerBackend === "s3" || explorerBackend === "ftp") && canBrowseFiles;
   const hasUnsupportedSession =
     !forceBackend &&
     !!activeSessionId &&
@@ -1094,7 +1094,7 @@ export function FileExplorerPane({
 
   // Resolve whether backend terminal-path tracking is available for this session.
   useEffect(() => {
-    if (explorerBackend === "local" || explorerBackend === "s3") {
+    if (explorerBackend === "local" || explorerBackend === "s3" || explorerBackend === "ftp") {
       setRemoteFileBrowserEnabled(true);
       setCwdTrackingActive(false);
       return;
@@ -1233,6 +1233,12 @@ export function FileExplorerPane({
                   connectionId: activeConnectionId ?? undefined,
                   path: normalizedPath,
                 })
+              : backend === "ftp"
+                ? await invoke<FileEntry[]>("list_ftp_dir", {
+                    sessionId: activeSessionId,
+                    connectionId: activeConnectionId ?? undefined,
+                    path: normalizedPath,
+                  })
               : await invoke<FileEntry[]>("list_remote_dir", {
                   sessionId: activeSessionId,
                   path: normalizedPath,
@@ -1527,7 +1533,7 @@ export function FileExplorerPane({
 
       try {
         const home = normalizeExplorerPath(
-          backend === "s3"
+          backend === "s3" || backend === "ftp"
             ? "/"
             : await invoke<string>(
                 backend === "local" ? "get_local_home_dir" : "get_home_dir",
@@ -1963,6 +1969,13 @@ export function FileExplorerPane({
               path: normalizedPath,
               showHiddenFiles,
             })
+          : backend === "ftp"
+            ? await invoke<DirectoryChild[]>("list_ftp_child_directories", {
+                sessionId: activeSessionId,
+                connectionId: activeConnectionId ?? undefined,
+                path: normalizedPath,
+                showHiddenFiles,
+              })
           : await invoke<DirectoryChild[]>("list_remote_child_directories", {
               sessionId: activeSessionId,
               path: normalizedPath,
@@ -2129,7 +2142,7 @@ export function FileExplorerPane({
   };
 
   const handlePreview = async (entry: FileEntry) => {
-    if (!activeSessionId || entry.is_dir || explorerBackend === "s3") return;
+    if (!activeSessionId || entry.is_dir || explorerBackend === "s3" || explorerBackend === "ftp") return;
     try {
       await openFilePreview({
         sessionId: activeSessionId,
@@ -2495,6 +2508,13 @@ export function FileExplorerPane({
         });
       } else if (backend === "s3") {
         await invoke("rename_s3_object", {
+          sessionId: activeSessionId,
+          connectionId: activeConnectionId ?? undefined,
+          oldPath: inlineRenameState.oldPath,
+          newPath,
+        });
+      } else if (backend === "ftp") {
+        await invoke("rename_ftp_object", {
           sessionId: activeSessionId,
           connectionId: activeConnectionId ?? undefined,
           oldPath: inlineRenameState.oldPath,
@@ -3104,6 +3124,7 @@ export function FileExplorerPane({
       !activeSessionId ||
       entry.is_dir ||
       backend === "s3" ||
+      backend === "ftp" ||
       (activeSessionType !== "SSH" && activeSessionType !== "Local")
     ) {
       return;

@@ -6,6 +6,7 @@ import StartWorkspace from "@/components/app/start-workspace/StartWorkspace";
 import ResizeHandle from "@/components/layout/ResizeHandle";
 import SftpWorkspace from "@/components/panel/file-explorer/SftpWorkspace";
 import S3Workspace from "@/components/panel/file-explorer/S3Workspace";
+import FtpWorkspace from "@/components/panel/file-explorer/FtpWorkspace";
 import { FilePreviewContent } from "@/components/panel/file-explorer/FilePreviewContent";
 import NoteEditorPanel from "@/components/panel/note-editor/NoteEditorPanel";
 import RdpPaneHost from "@/components/rdp/RdpPaneHost";
@@ -308,6 +309,23 @@ function PaneNodeView({
     );
   }
 
+  if (node.view === "ftp") {
+    return (
+      <div
+        className={`relative h-full w-full overflow-hidden ${
+          showChrome ? "rounded-sm border" : ""
+        } ${showChrome && isActive ? "ring-1 ring-primary/60" : ""}`}
+        style={{
+          borderColor: showChrome ? "var(--df-border)" : undefined,
+          backgroundColor: "var(--df-bg)",
+        }}
+        onMouseDown={() => onActivatePane(node.id)}
+      >
+        <FtpWorkspace pane={node} visible={visible} />
+      </div>
+    );
+  }
+
   return (
     <div
       className={`nyaterm-wallpaper-terminal-surface relative h-full w-full overflow-hidden ${
@@ -435,7 +453,7 @@ function PaneNodeView({
             }
           />
         )
-      ) : node.type === "S3" ? null : (
+      ) : node.type === "S3" || node.type === "FTP" ? null : (
         <PaneXTerminal
           sessionId={node.sessionId}
           sessionName={node.name}

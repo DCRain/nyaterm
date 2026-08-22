@@ -61,6 +61,10 @@ export default function NewItemDialog({ data, onClose, onSuccess }: NewItemDialo
         ? isFile
           ? "create_s3_file"
           : "create_s3_dir"
+        : data.backend === "ftp"
+          ? isFile
+            ? "create_ftp_file"
+            : "create_ftp_dir"
         : isFile
           ? "create_remote_file"
           : "create_remote_dir";
@@ -91,7 +95,7 @@ export default function NewItemDialog({ data, onClose, onSuccess }: NewItemDialo
     try {
       setIsSubmitting(true);
       const path = joinExplorerPath(data.currentDirPath, trimmed, data.backend);
-      if (data.backend === "s3") {
+      if (data.backend === "s3" || data.backend === "ftp") {
         await invoke(command, {
           sessionId: data.sessionId,
           connectionId: data.connectionId,

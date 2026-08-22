@@ -210,6 +210,7 @@ const CONNECTION_SESSION_TYPES: Partial<Record<SavedConnection["type"], Workspac
   rdp: "RDP",
   vnc: "VNC",
   s3: "S3",
+  ftp: "FTP",
 };
 
 const STARTUP_OPEN_CONNECTION_TYPES = new Set<SavedConnection["type"]>([
@@ -1377,10 +1378,52 @@ function App() {
     [addPendingTab, recordRecentConnection, setActiveTabId, t, updateUi],
   );
 
+  const openFtpWorkspace = useCallback(
+    (connection: SavedConnection) => {
+      if (connection.type !== "ftp") {
+        toast.error(t("savedConnections.openFtpOnly"));
+        return;
+      }
+
+      const existing = tabsRef.current.find((tab) =>
+        collectSessionPanes(tab.root).some(
+          (pane) => pane.view === "ftp" && pane.connectionId === connection.id,
+        ),
+      );
+      if (existing) {
+        setActiveTabId(existing.id);
+        recordRecentConnection(connection.id);
+        updateUi({ saved_connections_last_opened_connection_id: connection.id });
+        return;
+      }
+
+      const tabName = t("ftpWorkspace.tabTitle", { name: connection.name });
+      addPendingTab(
+        tabName,
+        "FTP",
+        connection.id,
+        undefined,
+        { view: "ftp" },
+        {
+          connecting: false,
+          sessionId: `ftp:${connection.id}`,
+        },
+      );
+      recordRecentConnection(connection.id);
+      updateUi({ saved_connections_last_opened_connection_id: connection.id });
+    },
+    [addPendingTab, recordRecentConnection, setActiveTabId, t, updateUi],
+  );
+
   const connectSavedConnection = useCallback(
     async (connection: SavedConnection, options?: { failureContext?: string }) => {
       if (connection.type === "s3") {
         openS3Workspace(connection);
+        return;
+      }
+
+      if (connection.type === "ftp") {
+        openFtpWorkspace(connection);
         return;
       }
 
@@ -1475,6 +1518,7 @@ function App() {
       markTabConnectionFailed,
       maybePromptConnectionEdit,
       openS3Workspace,
+      openFtpWorkspace,
       recordRecentConnection,
       t,
       updateAutoIconForSessionStart,
@@ -4050,7 +4094,9 @@ function App() {
           if (
             pane.paneKind !== "terminal" ||
             pane.type === "S3" ||
+            pane.type === "FTP" ||
             pane.view === "s3" ||
+            pane.view === "ftp" ||
             !hasLiveSession(pane) ||
             seen.has(pane.sessionId)
           ) {
@@ -4088,7 +4134,7 @@ function App() {
     const sessions: QuickSwitcherSession[] = [];
     for (const tab of tabs) {
       for (const pane of collectSessionPanes(tab.root)) {
-        if (pane.paneKind !== "terminal" || pane.type === "S3" || pane.view === "s3") continue;
+        if (pane.paneKind !== "terminal" || pane.type === "S3" || pane.type === "FTP" || pane.view === "s3" || pane.view === "ftp") continue;
         const connection = pane.connectionId ? connectionsById.get(pane.connectionId) : undefined;
         sessions.push({
           id: pane.sessionId,
@@ -4313,6 +4359,7 @@ function App() {
         onConnectConnection={connectSavedConnection}
         onOpenSftp={openSftpWorkspace}
         onOpenS3={openS3Workspace}
+        onOpenFtp={openFtpWorkspace}
         onSessionClick={handleSessionClick}
         onSessionReconnect={handleReconnectSessionById}
         onSessionDisconnect={handleDisconnectSessionById}
@@ -4346,6 +4393,7 @@ function App() {
       connectSavedConnection,
       openSftpWorkspace,
       openS3Workspace,
+      openFtpWorkspace,
       recordingStatuses,
       uiConfig.show_ascend_npu_monitor,
       uiConfig.show_gpu_monitor,

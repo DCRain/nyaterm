@@ -81,6 +81,13 @@ export default function MoveDialog({ data, onClose, onSuccess }: MoveDialogProps
                   oldPath: operation.oldPath,
                   newPath: operation.newPath,
                 })
+              : data.backend === "ftp"
+                ? invoke("rename_ftp_object", {
+                    sessionId: data.sessionId,
+                    connectionId: data.connectionId,
+                    oldPath: operation.oldPath,
+                    newPath: operation.newPath,
+                  })
               : invoke("rename_remote_file", {
                   sessionId: data.sessionId,
                   oldPath: operation.oldPath,

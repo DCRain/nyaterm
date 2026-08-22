@@ -113,12 +113,15 @@ export default function TabContextMenu({
   const activePane = getActivePane(tab);
   const tabIndex = tabs.findIndex((item) => item.id === tab.id);
   const isTerminalPane = activePane?.paneKind === "terminal";
-  const isS3Workspace =
-    activePane?.view === "s3" || activePane?.type === "S3";
+  const isStorageWorkspace =
+    activePane?.view === "s3" ||
+    activePane?.view === "ftp" ||
+    activePane?.type === "S3" ||
+    activePane?.type === "FTP";
   const canSpawnSession =
     !!activePane &&
     isTerminalPane &&
-    !isS3Workspace &&
+    !isStorageWorkspace &&
     activePane.view !== "sftp" &&
     (activePane.type === "Local" ||
       !!activePane.connectionId ||
@@ -126,7 +129,7 @@ export default function TabContextMenu({
   const canReconnect =
     !!activePane &&
     isTerminalPane &&
-    !isS3Workspace &&
+    !isStorageWorkspace &&
     !activePane.connecting &&
     (activePane.type === "Local" ||
       !!activePane.connectionId ||
@@ -134,7 +137,7 @@ export default function TabContextMenu({
   const canMultiplexSsh =
     !!activePane &&
     isTerminalPane &&
-    !isS3Workspace &&
+    !isStorageWorkspace &&
     activePane.type === "SSH" &&
     (!!activePane.connectionId || activePane.temporaryConfig?.protocol === "ssh") &&
     !activePane.connecting &&
@@ -147,14 +150,14 @@ export default function TabContextMenu({
   const canDisconnect =
     !!activePane &&
     isTerminalPane &&
-    !isS3Workspace &&
+    !isStorageWorkspace &&
     !activePane.connecting &&
     !activePane.connectError;
-  const canSplit = canSpawnSession && activePane?.view !== "sftp" && activePane?.view !== "s3";
+  const canSplit = canSpawnSession && activePane?.view !== "sftp" && activePane?.view !== "s3" && activePane?.view !== "ftp";
   const canUseAI =
     !!activePane &&
     isTerminalPane &&
-    !isS3Workspace &&
+    !isStorageWorkspace &&
     !activePane.connecting &&
     !activePane.connectError;
   const canCloseInactive = tabs.length > 1;

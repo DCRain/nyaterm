@@ -59,6 +59,13 @@ export default function DeleteDialog({ data, onClose, onSuccess }: DeleteDialogP
                   path: item.path,
                   isDirectory: item.isDirectory ?? false,
                 })
+              : data.backend === "ftp"
+                ? invoke("delete_ftp_object", {
+                    sessionId: data.sessionId,
+                    connectionId: data.connectionId,
+                    path: item.path,
+                    isDirectory: item.isDirectory ?? false,
+                  })
               : invoke("delete_remote_file", {
                   sessionId: data.sessionId,
                   path: item.path,

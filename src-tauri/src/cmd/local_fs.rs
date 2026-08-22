@@ -420,9 +420,9 @@ async fn write_user_path_bytes(path: &str, contents: &[u8]) -> AppResult<()> {
 }
 
 async fn ensure_local_session(manager: &SessionManager, session_id: &str) -> AppResult<()> {
-    // S3 workspace uses synthetic session ids (`s3:<connectionId>`) with no
-    // SessionManager entry; local host FS still needs to work in that pane.
-    if session_id.starts_with("s3:") {
+    // S3/FTP workspaces use synthetic session ids with no SessionManager entry;
+    // local host FS still needs to work in those panes.
+    if session_id.starts_with("s3:") || session_id.starts_with("ftp:") {
         return Ok(());
     }
     let sessions = manager.sessions.lock().await;

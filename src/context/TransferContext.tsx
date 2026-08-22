@@ -45,7 +45,7 @@ export interface EnqueueDownloadRequest {
 
 export interface CopyEndpointRequest {
   sessionId: string;
-  kind: "local" | "remote" | "s3";
+  kind: "local" | "remote" | "s3" | "ftp";
   path: string;
 }
 
@@ -90,10 +90,10 @@ export interface TransferItem {
   direction: TransferDirection;
   kind: TransferKind;
   sourceSessionId?: string;
-  sourceKind?: "local" | "remote" | "s3";
+  sourceKind?: "local" | "remote" | "s3" | "ftp";
   sourcePath?: string;
   targetSessionId?: string;
-  targetKind?: "local" | "remote" | "s3";
+  targetKind?: "local" | "remote" | "s3" | "ftp";
   targetPath?: string;
   parentId?: string;
   status: TransferStatus;
@@ -568,6 +568,23 @@ export function TransferProvider({ children }: { children: ReactNode }) {
                   transferId: nextQueued.id,
                 });
               }
+            } else if (source.kind === "local" && target.kind === "ftp") {
+              const remotePath = joinPosix(target.path, request.fileName);
+              if (request.kind === "directory") {
+                await invoke("upload_local_directory_to_ftp", {
+                  sessionId: target.sessionId,
+                  localPath: source.path,
+                  remotePath,
+                  transferId: nextQueued.id,
+                });
+              } else {
+                await invoke("upload_local_file_to_ftp", {
+                  sessionId: target.sessionId,
+                  localPath: source.path,
+                  remotePath,
+                  transferId: nextQueued.id,
+                });
+              }
             } else if (source.kind === "s3" && target.kind === "local") {
               const localPath = joinLocal(target.path, request.fileName);
               if (request.kind === "directory") {
@@ -579,6 +596,23 @@ export function TransferProvider({ children }: { children: ReactNode }) {
                 });
               } else {
                 await invoke("download_s3_file", {
+                  sessionId: source.sessionId,
+                  remotePath: source.path,
+                  localPath,
+                  transferId: nextQueued.id,
+                });
+              }
+            } else if (source.kind === "ftp" && target.kind === "local") {
+              const localPath = joinLocal(target.path, request.fileName);
+              if (request.kind === "directory") {
+                await invoke("download_ftp_directory", {
+                  sessionId: source.sessionId,
+                  remotePath: source.path,
+                  localPath,
+                  transferId: nextQueued.id,
+                });
+              } else {
+                await invoke("download_ftp_file", {
                   sessionId: source.sessionId,
                   remotePath: source.path,
                   localPath,
@@ -629,6 +663,44 @@ export function TransferProvider({ children }: { children: ReactNode }) {
               });
             } else {
               await invoke("download_s3_file", {
+                sessionId: request.sessionId,
+                remotePath: request.remotePath,
+                localPath: request.localPath,
+                transferId: nextQueued.id,
+              });
+            }
+          } else if (
+            request.direction === "upload" &&
+            request.sessionId.startsWith("ftp:")
+          ) {
+            if (request.kind === "directory") {
+              await invoke("upload_local_directory_to_ftp", {
+                sessionId: request.sessionId,
+                localPath: request.localPath,
+                remotePath: request.remotePath,
+                transferId: nextQueued.id,
+              });
+            } else {
+              await invoke("upload_local_file_to_ftp", {
+                sessionId: request.sessionId,
+                localPath: request.localPath,
+                remotePath: request.remotePath,
+                transferId: nextQueued.id,
+              });
+            }
+          } else if (
+            request.direction === "download" &&
+            request.sessionId.startsWith("ftp:")
+          ) {
+            if (request.kind === "directory") {
+              await invoke("download_ftp_directory", {
+                sessionId: request.sessionId,
+                remotePath: request.remotePath,
+                localPath: request.localPath,
+                transferId: nextQueued.id,
+              });
+            } else {
+              await invoke("download_ftp_file", {
                 sessionId: request.sessionId,
                 remotePath: request.remotePath,
                 localPath: request.localPath,

@@ -58,12 +58,17 @@ export function isS3WorkspacePane(node: PaneNode): node is SessionPane {
   return isSessionPane(node) && node.view === "s3";
 }
 
+export function isFtpWorkspacePane(node: PaneNode): node is SessionPane {
+  return isSessionPane(node) && node.view === "ftp";
+}
+
 export function isSessionlessWorkspacePane(node: PaneNode): node is SessionPane {
   return (
     isWorkbenchPane(node) ||
     isNotePane(node) ||
     isExternalMarkdownPane(node) ||
-    isS3WorkspacePane(node)
+    isS3WorkspacePane(node) ||
+    isFtpWorkspacePane(node)
   );
 }
 
@@ -450,6 +455,7 @@ function serializePane(node: PaneNode): RestorablePaneNode | null {
       view:
         node.view === "sftp" ||
         node.view === "s3" ||
+        node.view === "ftp" ||
         node.view === "workbench" ||
         node.view === "note"
           ? node.view
@@ -551,6 +557,9 @@ export function normalizeSessionType(
     case "S3":
     case "s3":
       return "S3";
+    case "FTP":
+    case "ftp":
+      return "FTP";
     default:
       return null;
   }
@@ -570,12 +579,13 @@ function restorePane(node: RestorablePaneNode): PaneNode | null {
     const view =
       node.view === "sftp" ||
       node.view === "s3" ||
+      node.view === "ftp" ||
       node.view === "workbench" ||
       node.view === "note"
         ? node.view
         : undefined;
     const isSessionless =
-      view === "workbench" || view === "note" || view === "s3";
+      view === "workbench" || view === "note" || view === "s3" || view === "ftp";
     return {
       id: node.id || createWorkspaceId("pane"),
       kind: "leaf",
@@ -583,7 +593,9 @@ function restorePane(node: RestorablePaneNode): PaneNode | null {
       sessionId:
         view === "s3" && node.connection_id
           ? `s3:${node.connection_id}`
-          : createWorkspaceId(
+          : view === "ftp" && node.connection_id
+            ? `ftp:${node.connection_id}`
+            : createWorkspaceId(
               view === "note" ? "note" : view === "workbench" ? "workbench" : "pending",
             ),
       name: node.title,

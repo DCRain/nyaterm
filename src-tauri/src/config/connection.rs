@@ -675,10 +675,32 @@ pub enum ConnectionType {
         #[serde(default, skip_serializing_if = "is_false")]
         virtual_host_style: bool,
     },
+    Ftp {
+        host: String,
+        #[serde(default = "default_ftp_port")]
+        port: u16,
+        #[serde(default = "default_ftp_root")]
+        root: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        username: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        password: Option<String>,
+        /// True when a password is stored (set on load, cleared before save).
+        #[serde(default, skip_serializing_if = "is_false")]
+        has_password: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        use_tls: bool,
+    },
 }
 
 fn default_ssh_port() -> u16 {
     22
+}
+fn default_ftp_port() -> u16 {
+    21
+}
+fn default_ftp_root() -> String {
+    "/".to_string()
 }
 fn default_ssh_user() -> String {
     "root".to_string()
@@ -1250,7 +1272,7 @@ pub fn save_sessions(app: &AppHandle, config: &SessionsConfig) -> AppResult<()> 
             ConnectionType::Ssh { .. } => {
                 migrate_legacy_ssh_agent_settings(conn);
             }
-            ConnectionType::Rdp { .. } | ConnectionType::Vnc { .. } | ConnectionType::S3 { .. } => {}
+            ConnectionType::Rdp { .. } | ConnectionType::Vnc { .. } | ConnectionType::S3 { .. } | ConnectionType::Ftp { .. } => {}
         }
         validate_ssh_agent_settings(&conn.config)?;
         if let Some(auth) = &mut conn.auth {
@@ -1265,9 +1287,17 @@ pub fn save_sessions(app: &AppHandle, config: &SessionsConfig) -> AppResult<()> 
         } = &mut conn.config
         {
             *has_secret_access_key = false;
-            // Secrets stay encrypted in storage; strip plaintext markers for the write path
-            // handled by cmd/connection save_connection.
             let _ = (secret_access_key, access_key_id, session_token);
+        }
+        if let ConnectionType::Ftp {
+            has_password,
+            password,
+            username,
+            ..
+        } = &mut conn.config
+        {
+            *has_password = false;
+            let _ = (password, username);
         }
     }
     storage::replace_sessions(&sanitized)
@@ -1347,7 +1377,7 @@ pub fn resolve_connection_encoding(app: &AppHandle, conn: &SavedConnection) -> S
         | ConnectionType::LocalTerminal { encoding, .. }
         | ConnectionType::Telnet { encoding, .. }
         | ConnectionType::Serial { encoding, .. } => encoding.as_str(),
-        ConnectionType::Rdp { .. } | ConnectionType::Vnc { .. } | ConnectionType::S3 { .. } => "",
+        ConnectionType::Rdp { .. } | ConnectionType::Vnc { .. } | ConnectionType::S3 { .. } | ConnectionType::Ftp { .. } => "",
     };
     if !per_conn.is_empty() {
         return per_conn.to_string();
