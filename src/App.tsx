@@ -9,6 +9,7 @@ import AppPanelContent from "./components/app/AppPanelContent";
 import ExternalConnectionMatchDialog from "./components/dialog/connections/ExternalConnectionMatchDialog";
 import type { HostKeyVerifyRequest } from "./components/dialog/connections/HostKeyVerifyDialog";
 import type { OtpRequest } from "./components/dialog/connections/OtpDialog";
+import type { FtpCertificateVerifyRequest } from "./components/dialog/connections/FtpCertificateVerifyDialog";
 import type { RdpCertificateVerifyRequest } from "./components/dialog/connections/RdpCertificateVerifyDialog";
 import RemoteDesktopClientMissingDialog from "./components/dialog/connections/RemoteDesktopClientMissingDialog";
 import type { SshAgentAuthRequest } from "./components/dialog/connections/SshAgentAuthDialog";
@@ -702,6 +703,9 @@ function App() {
   const [rdpCertificateRequests, setRdpCertificateRequests] = useState<
     RdpCertificateVerifyRequest[]
   >([]);
+  const [ftpCertificateRequests, setFtpCertificateRequests] = useState<
+    FtpCertificateVerifyRequest[]
+  >([]);
   const lastCloudConflictRevisionRef = useRef<string | null>(null);
   const modalChildWindowCount = useModalChildWindows();
 
@@ -879,6 +883,16 @@ function App() {
       listen<RdpCertificateVerifyRequest>("rdp-certificate-verify", (event) => {
         if (!eventTargetsCurrentWindow(event.payload.targetWindowLabel)) return;
         setRdpCertificateRequests((current) => {
+          if (current.some((item) => item.requestId === event.payload.requestId)) return current;
+          return [...current, event.payload];
+        });
+      }),
+    );
+
+    unsubs.push(
+      listen<FtpCertificateVerifyRequest>("ftp-certificate-verify", (event) => {
+        if (!eventTargetsCurrentWindow(event.payload.targetWindowLabel)) return;
+        setFtpCertificateRequests((current) => {
           if (current.some((item) => item.requestId === event.payload.requestId)) return current;
           return [...current, event.payload];
         });
@@ -4634,6 +4648,11 @@ function App() {
           rdpCertificateVerifyRequest: rdpCertificateRequests[0] ?? null,
           onRdpCertificateVerifyDone: (requestId) =>
             setRdpCertificateRequests((current) =>
+              current.filter((item) => item.requestId !== requestId),
+            ),
+          ftpCertificateVerifyRequest: ftpCertificateRequests[0] ?? null,
+          onFtpCertificateVerifyDone: (requestId) =>
+            setFtpCertificateRequests((current) =>
               current.filter((item) => item.requestId !== requestId),
             ),
           modalChildWindowCount,

@@ -17,6 +17,8 @@ import type { HostKeyVerifyRequest } from "@/components/dialog/connections/HostK
 import { HostKeyVerifyDialog } from "@/components/dialog/connections/HostKeyVerifyDialog";
 import type { OtpRequest } from "@/components/dialog/connections/OtpDialog";
 import { OtpDialog } from "@/components/dialog/connections/OtpDialog";
+import type { FtpCertificateVerifyRequest } from "@/components/dialog/connections/FtpCertificateVerifyDialog";
+import { FtpCertificateVerifyDialog } from "@/components/dialog/connections/FtpCertificateVerifyDialog";
 import type { RdpCertificateVerifyRequest } from "@/components/dialog/connections/RdpCertificateVerifyDialog";
 import { RdpCertificateVerifyDialog } from "@/components/dialog/connections/RdpCertificateVerifyDialog";
 import type { SshAgentAuthRequest } from "@/components/dialog/connections/SshAgentAuthDialog";
@@ -158,6 +160,8 @@ interface AppLayoutProps {
     onHostKeyVerifyDone: (requestId: string) => void;
     rdpCertificateVerifyRequest: RdpCertificateVerifyRequest | null;
     onRdpCertificateVerifyDone: (requestId: string) => void;
+    ftpCertificateVerifyRequest: FtpCertificateVerifyRequest | null;
+    onFtpCertificateVerifyDone: (requestId: string) => void;
     modalChildWindowCount: number;
     locked: boolean;
     hasMasterPassword: boolean;
@@ -599,6 +603,10 @@ export default function AppLayout({
         <RdpCertificateVerifyDialog
           request={dialogs.rdpCertificateVerifyRequest}
           onDone={dialogs.onRdpCertificateVerifyDone}
+        />
+        <FtpCertificateVerifyDialog
+          request={dialogs.ftpCertificateVerifyRequest}
+          onDone={dialogs.onFtpCertificateVerifyDone}
         />
         <TransferDuplicateDialog />
 

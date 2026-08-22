@@ -1,4 +1,5 @@
 use tauri::AppHandle;
+use tauri::Window;
 
 use crate::core::ftp::{connection_id_from_session, SharedFtpManager};
 use crate::core::sftp::{DirectoryChild, FileEntry};
@@ -13,19 +14,29 @@ fn resolve_connection_id(session_id: &str, connection_id: Option<&str>) -> AppRe
         .ok_or_else(|| AppError::Config("FTP connection id is required".into()))
 }
 
+fn window_label(window: &Window) -> Option<String> {
+    Some(window.label().to_string())
+}
+
 #[tauri::command]
 pub async fn list_ftp_dir(
+    app: AppHandle,
+    window: Window,
     state: tauri::State<'_, SharedFtpManager>,
     session_id: String,
     connection_id: Option<String>,
     path: String,
 ) -> AppResult<Vec<FileEntry>> {
     let id = resolve_connection_id(&session_id, connection_id.as_deref())?;
-    state.list_dir(&id, &path).await
+    state
+        .list_dir(&app, &id, &path, window_label(&window).as_deref())
+        .await
 }
 
 #[tauri::command]
 pub async fn list_ftp_child_directories(
+    app: AppHandle,
+    window: Window,
     state: tauri::State<'_, SharedFtpManager>,
     session_id: String,
     connection_id: Option<String>,
@@ -34,34 +45,50 @@ pub async fn list_ftp_child_directories(
 ) -> AppResult<Vec<DirectoryChild>> {
     let id = resolve_connection_id(&session_id, connection_id.as_deref())?;
     state
-        .list_child_directories(&id, &path, show_hidden_files)
+        .list_child_directories(
+            &app,
+            &id,
+            &path,
+            show_hidden_files,
+            window_label(&window).as_deref(),
+        )
         .await
 }
 
 #[tauri::command]
 pub async fn create_ftp_dir(
+    app: AppHandle,
+    window: Window,
     state: tauri::State<'_, SharedFtpManager>,
     session_id: String,
     connection_id: Option<String>,
     path: String,
 ) -> AppResult<()> {
     let id = resolve_connection_id(&session_id, connection_id.as_deref())?;
-    state.create_dir(&id, &path).await
+    state
+        .create_dir(&app, &id, &path, window_label(&window).as_deref())
+        .await
 }
 
 #[tauri::command]
 pub async fn create_ftp_file(
+    app: AppHandle,
+    window: Window,
     state: tauri::State<'_, SharedFtpManager>,
     session_id: String,
     connection_id: Option<String>,
     path: String,
 ) -> AppResult<()> {
     let id = resolve_connection_id(&session_id, connection_id.as_deref())?;
-    state.create_file(&id, &path).await
+    state
+        .create_file(&app, &id, &path, window_label(&window).as_deref())
+        .await
 }
 
 #[tauri::command]
 pub async fn delete_ftp_object(
+    app: AppHandle,
+    window: Window,
     state: tauri::State<'_, SharedFtpManager>,
     session_id: String,
     connection_id: Option<String>,
@@ -69,11 +96,21 @@ pub async fn delete_ftp_object(
     is_directory: bool,
 ) -> AppResult<()> {
     let id = resolve_connection_id(&session_id, connection_id.as_deref())?;
-    state.delete(&id, &path, is_directory).await
+    state
+        .delete(
+            &app,
+            &id,
+            &path,
+            is_directory,
+            window_label(&window).as_deref(),
+        )
+        .await
 }
 
 #[tauri::command]
 pub async fn rename_ftp_object(
+    app: AppHandle,
+    window: Window,
     state: tauri::State<'_, SharedFtpManager>,
     session_id: String,
     connection_id: Option<String>,
@@ -81,12 +118,21 @@ pub async fn rename_ftp_object(
     new_path: String,
 ) -> AppResult<()> {
     let id = resolve_connection_id(&session_id, connection_id.as_deref())?;
-    state.rename(&id, &old_path, &new_path).await
+    state
+        .rename(
+            &app,
+            &id,
+            &old_path,
+            &new_path,
+            window_label(&window).as_deref(),
+        )
+        .await
 }
 
 #[tauri::command]
 pub async fn upload_local_file_to_ftp(
     app: AppHandle,
+    window: Window,
     state: tauri::State<'_, SharedFtpManager>,
     session_id: String,
     connection_id: Option<String>,
@@ -102,6 +148,7 @@ pub async fn upload_local_file_to_ftp(
             &remote_path,
             Some(&app),
             transfer_id.as_deref(),
+            window_label(&window).as_deref(),
         )
         .await
 }
@@ -109,6 +156,7 @@ pub async fn upload_local_file_to_ftp(
 #[tauri::command]
 pub async fn upload_local_directory_to_ftp(
     app: AppHandle,
+    window: Window,
     state: tauri::State<'_, SharedFtpManager>,
     session_id: String,
     connection_id: Option<String>,
@@ -124,6 +172,7 @@ pub async fn upload_local_directory_to_ftp(
             &remote_path,
             Some(&app),
             transfer_id.as_deref(),
+            window_label(&window).as_deref(),
         )
         .await
 }
@@ -131,6 +180,7 @@ pub async fn upload_local_directory_to_ftp(
 #[tauri::command]
 pub async fn download_ftp_file(
     app: AppHandle,
+    window: Window,
     state: tauri::State<'_, SharedFtpManager>,
     session_id: String,
     connection_id: Option<String>,
@@ -146,6 +196,7 @@ pub async fn download_ftp_file(
             &local_path,
             Some(&app),
             transfer_id.as_deref(),
+            window_label(&window).as_deref(),
         )
         .await
 }
@@ -153,6 +204,7 @@ pub async fn download_ftp_file(
 #[tauri::command]
 pub async fn download_ftp_directory(
     app: AppHandle,
+    window: Window,
     state: tauri::State<'_, SharedFtpManager>,
     session_id: String,
     connection_id: Option<String>,
@@ -168,6 +220,7 @@ pub async fn download_ftp_directory(
             &local_path,
             Some(&app),
             transfer_id.as_deref(),
+            window_label(&window).as_deref(),
         )
         .await
 }
@@ -179,4 +232,16 @@ pub async fn invalidate_ftp_connection(
 ) -> AppResult<()> {
     state.invalidate(&connection_id).await;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn respond_ftp_certificate(
+    state: tauri::State<'_, SharedFtpManager>,
+    request_id: String,
+    accepted: bool,
+    remember: bool,
+) -> AppResult<()> {
+    state
+        .respond_certificate(&request_id, accepted, remember)
+        .await
 }

@@ -304,6 +304,7 @@ pub fn run() {
             cmd::ftp::download_ftp_file,
             cmd::ftp::download_ftp_directory,
             cmd::ftp::invalidate_ftp_connection,
+            cmd::ftp::respond_ftp_certificate,
             cmd::sftp::create_remote_dir,
             cmd::sftp::create_remote_symlink,
             cmd::sftp::chmod_remote_file,

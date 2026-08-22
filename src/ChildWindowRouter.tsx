@@ -1,6 +1,10 @@
-import { emit } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { lazy, type ReactNode, Suspense, useEffect } from "react";
+import { lazy, type ReactNode, Suspense, useEffect, useState } from "react";
+import {
+  FtpCertificateVerifyDialog,
+  type FtpCertificateVerifyRequest,
+} from "./components/dialog/connections/FtpCertificateVerifyDialog";
 import { useTranslation } from "react-i18next";
 import {
   isModalChildLabel,
@@ -49,6 +53,8 @@ function ReadyContent({ children }: { children: ReactNode }) {
 export default function ChildWindowRouter({ windowType }: { windowType: string }) {
   const { t } = useTranslation();
   const Page = PAGES[windowType];
+  const [ftpCertificateRequest, setFtpCertificateRequest] =
+    useState<FtpCertificateVerifyRequest | null>(null);
 
   useEffect(() => {
     const ownerLabel = new URLSearchParams(window.location.search).get("owner");
@@ -98,9 +104,21 @@ export default function ChildWindowRouter({ windowType }: { windowType: string }
         .catch(() => {});
     }
 
+    const currentLabel = currentWindow.label;
+    let unlistenFtp: (() => void) | undefined;
+    listen<FtpCertificateVerifyRequest>("ftp-certificate-verify", (event) => {
+      if (event.payload.targetWindowLabel !== currentLabel) return;
+      setFtpCertificateRequest(event.payload);
+    })
+      .then((unlisten) => {
+        unlistenFtp = unlisten;
+      })
+      .catch(() => {});
+
     return () => {
       unlistenCloseRequested?.();
       unlistenFocusChanged?.();
+      unlistenFtp?.();
     };
   }, [windowType]);
 
@@ -119,6 +137,14 @@ export default function ChildWindowRouter({ windowType }: { windowType: string }
       <Suspense fallback={<ChildWindowLoadingShell />}>
         <Page />
       </Suspense>
+      <FtpCertificateVerifyDialog
+        request={ftpCertificateRequest}
+        onDone={(requestId) =>
+          setFtpCertificateRequest((current) =>
+            current?.requestId === requestId ? null : current,
+          )
+        }
+      />
     </ReadyContent>
   );
 }

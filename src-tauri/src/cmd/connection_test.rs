@@ -3,10 +3,12 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use opendal::services::{Ftp, S3};
+use opendal::services::S3;
 use opendal::Operator;
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager, Window};
+
+use crate::core::ftp::{FtpConnectParams, SharedFtpManager};
 
 use crate::core::ssh::{DraftSshTestInput, build_test_ssh_config, test_authenticated_ssh};
 use crate::error::{AppError, AppResult};
@@ -127,6 +129,7 @@ fn result(
 #[tauri::command]
 pub async fn test_connection_endpoint(
     app: AppHandle,
+    window: Window,
     request: TestConnectionEndpointRequest,
 ) -> AppResult<TestConnectionEndpointResult> {
     match request.protocol.as_str() {
@@ -141,7 +144,7 @@ pub async fn test_connection_endpoint(
             request.stop_bits.as_deref().unwrap_or("1"),
         )),
         "s3" => Ok(test_s3(request.s3.as_ref(), request.connection_id.as_deref()).await),
-        "ftp" => Ok(test_ftp(request.ftp.as_ref()).await),
+        "ftp" => Ok(test_ftp(&app, window.label(), request.ftp.as_ref()).await),
         other => Err(AppError::Config(format!(
             "Unsupported protocol for connectivity test: {other}"
         ))),
@@ -182,7 +185,11 @@ async fn test_s3(
     run_s3_probe(operator, &bucket).await
 }
 
-async fn test_ftp(input: Option<&TestFtpInput>) -> TestConnectionEndpointResult {
+async fn test_ftp(
+    app: &AppHandle,
+    window_label: &str,
+    input: Option<&TestFtpInput>,
+) -> TestConnectionEndpointResult {
     let host = input
         .map(|value| value.host.trim().to_string())
         .unwrap_or_default();
@@ -193,39 +200,44 @@ async fn test_ftp(input: Option<&TestFtpInput>) -> TestConnectionEndpointResult 
             TestConnectionEndpointParams::default(),
         );
     }
-
-    let operator = match build_ftp_test_operator(input) {
-        Ok(op) => op,
-        Err(err) => {
-            return result(
-                false,
-                "ftp_config_invalid",
-                TestConnectionEndpointParams {
-                    detail: Some(err.to_string()),
-                    ..Default::default()
-                },
-            );
-        }
+    let Some(input) = input else {
+        return result(
+            false,
+            "ftp_config_invalid",
+            TestConnectionEndpointParams::default(),
+        );
     };
 
-    run_ftp_probe(operator, &host, input.map(|value| value.port).unwrap_or(21)).await
-}
-
-async fn run_ftp_probe(
-    operator: Operator,
-    host: &str,
-    port: u16,
-) -> TestConnectionEndpointResult {
+    let ftp_manager = app.state::<SharedFtpManager>().inner().clone();
+    let params = FtpConnectParams {
+        host: host.clone(),
+        port: input.port,
+        root: input.root.clone(),
+        username: input
+            .username
+            .clone()
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        password: input
+            .password
+            .clone()
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        use_tls: input.use_tls,
+    };
     let started = Instant::now();
-    let probe = operator.list("/").await;
-    match probe {
-        Ok(entries) => {
+    match ftp_manager
+        .probe(app, params, Some(window_label))
+        .await
+    {
+        Ok(()) => {
             tracing::debug!(
                 target: "user_action",
                 action = "test",
                 entity = "ftp_connection",
                 host = %host,
-                entry_count = entries.len(),
                 elapsed_ms = started.elapsed().as_millis() as u64,
                 "FTP connectivity test succeeded"
             );
@@ -233,8 +245,8 @@ async fn run_ftp_probe(
                 true,
                 "ok",
                 TestConnectionEndpointParams {
-                    host: Some(host.to_string()),
-                    port: Some(port),
+                    host: Some(host),
+                    port: Some(input.port),
                     ..Default::default()
                 },
             )
@@ -243,43 +255,13 @@ async fn run_ftp_probe(
             false,
             "ftp_fail",
             TestConnectionEndpointParams {
-                host: Some(host.to_string()),
-                port: Some(port),
+                host: Some(host),
+                port: Some(input.port),
                 detail: Some(err.to_string()),
                 ..Default::default()
             },
         ),
     }
-}
-
-fn build_ftp_test_operator(input: Option<&TestFtpInput>) -> AppResult<Operator> {
-    let input = input.ok_or_else(|| AppError::Config("FTP test requires form fields".into()))?;
-
-    let scheme = if input.use_tls { "ftps" } else { "ftp" };
-    let endpoint = format!("{scheme}://{}:{}", input.host.trim(), input.port);
-
-    let mut builder = Ftp::default().endpoint(&endpoint);
-    if !input.root.trim().is_empty() {
-        builder = builder.root(&input.root);
-    }
-    if let Some(user) = input
-        .username
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        builder = builder.user(user);
-    }
-    if let Some(password) = input
-        .password
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        builder = builder.password(password);
-    }
-
-    Operator::new(builder).map_err(|err| AppError::Config(format!("FTP error: {err}")))
 }
 
 async fn run_s3_probe(operator: Operator, bucket: &str) -> TestConnectionEndpointResult {
