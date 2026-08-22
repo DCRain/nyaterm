@@ -3,12 +3,13 @@ use crate::config::{
     SavedConnection, SavedPassword, SshKey,
 };
 use crate::core::{QuickCommandsImportResult, QuickCommandsImportSource, QuickCommandsStore};
+use crate::core::ftp::SharedFtpManager;
 use crate::error::{AppError, AppResult};
 use crate::utils::crypto;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 fn schedule_cloud_sync_notify(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
@@ -144,6 +145,8 @@ pub fn save_connection(
         connection.asset = existing_connection.asset.clone();
     }
 
+    let is_ftp = matches!(connection.config, config::ConnectionType::Ftp { .. });
+
     if let Some(ex) = cfg.connections.iter_mut().find(|c| c.id == target_id) {
         *ex = connection;
     } else {
@@ -152,6 +155,13 @@ pub fn save_connection(
     config::save_config(&app, &cfg)?;
     let _ = app.emit("connections-changed", ());
     schedule_cloud_sync_notify(app.clone());
+    if is_ftp {
+        let ftp_manager = app.state::<SharedFtpManager>().inner().clone();
+        let conn_id = target_id.clone();
+        tauri::async_runtime::spawn(async move {
+            ftp_manager.invalidate(&conn_id).await;
+        });
+    }
     Ok(target_id)
 }
 

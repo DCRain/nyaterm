@@ -1391,6 +1391,7 @@ function App() {
         ),
       );
       if (existing) {
+        void invoke("invalidate_ftp_connection", { connection_id: connection.id });
         setActiveTabId(existing.id);
         recordRecentConnection(connection.id);
         updateUi({ saved_connections_last_opened_connection_id: connection.id });
@@ -1412,7 +1413,7 @@ function App() {
       recordRecentConnection(connection.id);
       updateUi({ saved_connections_last_opened_connection_id: connection.id });
     },
-    [addPendingTab, recordRecentConnection, setActiveTabId, t, updateUi],
+    [addPendingTab, invoke, recordRecentConnection, setActiveTabId, t, updateUi],
   );
 
   const connectSavedConnection = useCallback(
