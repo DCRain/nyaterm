@@ -56,6 +56,7 @@ interface CreateXTerminalSessionEventsParams {
   }) => void;
   enterDisconnectedStateIfAttachSessionMissing: (error: unknown) => boolean;
   noteSkippedOutput: (count: number) => void;
+  noteOutputActivity: () => void;
   updateCredentialPromptInputMode: (payload: string) => void;
   feedCredentialOutput: (payload: string) => void;
   maybeRecoverPerformanceMode: () => void;
@@ -96,6 +97,7 @@ export function createXTerminalSessionEvents({
   enterDisconnectedState,
   enterDisconnectedStateIfAttachSessionMissing,
   noteSkippedOutput,
+  noteOutputActivity,
   updateCredentialPromptInputMode,
   feedCredentialOutput,
   maybeRecoverPerformanceMode,
@@ -132,6 +134,7 @@ export function createXTerminalSessionEvents({
           noteSkippedOutput(payload.droppedBytes ?? 0);
           return;
         }
+        noteOutputActivity();
 
         const recentPayload =
           payload.data.length > 4096

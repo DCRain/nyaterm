@@ -191,16 +191,19 @@ export function createXTerminalOutputController({
         },
       });
     },
-    onBackgroundDrain: (queueBytes, writingBytes, unackedBytes) => {
+    onBackgroundDrain: (stats) => {
       logger.debug({
         domain: "terminal.input",
         event: "terminal.output.background_drain",
         message: "Background terminal output drain cycle",
         ids: { session_id: sessionId },
         data: {
-          queue_bytes: queueBytes,
-          writing_bytes: writingBytes,
-          unacked_bytes: unackedBytes,
+          queue_bytes: stats.queueBytes,
+          writing_bytes: stats.writingBytes,
+          unacked_bytes: stats.unackedBytes,
+          background_catch_up: stats.backgroundCatchUp,
+          drain_chunk_bytes: stats.drainChunkBytes,
+          next_delay_ms: stats.nextDelayMs,
           frame_gate: frameGateRef.current?.snapshot(),
           performance_mode: performanceModeRef.current,
           buffer_type: terminal.buffer.active.type,

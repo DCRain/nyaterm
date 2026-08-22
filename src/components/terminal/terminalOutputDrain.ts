@@ -17,6 +17,15 @@ interface TerminalLike {
   write(data: string, callback?: () => void): void;
 }
 
+export interface TerminalOutputBackgroundDrainStats {
+  queueBytes: number;
+  writingBytes: number;
+  unackedBytes: number;
+  backgroundCatchUp: boolean;
+  drainChunkBytes: number;
+  nextDelayMs: number;
+}
+
 interface TerminalOutputDrainTimers {
   requestAnimationFrame: (callback: FrameRequestCallback) => number;
   cancelAnimationFrame: (handle: number) => void;
@@ -38,7 +47,7 @@ interface TerminalOutputDrainOptions<TWriteContext = unknown> {
   onWriteError?: (payload: QueuedOutputChunk, error: unknown) => void;
   onPressureChange?: (pendingBytes: number) => void;
   onModeChange?: (mode: TerminalOutputDrainMode) => void;
-  onBackgroundDrain?: (queueBytes: number, writingBytes: number, unackedBytes: number) => void;
+  onBackgroundDrain?: (stats: TerminalOutputBackgroundDrainStats) => void;
   timers?: Partial<TerminalOutputDrainTimers>;
 }
 
@@ -101,6 +110,8 @@ export class TerminalOutputDrain<TWriteContext = unknown> {
   private foregroundFrame: number | null = null;
   private foregroundTimer: number | null = null;
   private backgroundTimer: number | null = null;
+  private backgroundTimerCatchUp: boolean | null = null;
+  private backgroundCatchUp = false;
   private ackTimer: number | null = null;
   private microtaskPending = false;
   private foregroundTurnStartedAt: number | null = null;
@@ -125,6 +136,7 @@ export class TerminalOutputDrain<TWriteContext = unknown> {
     }
     if (mode !== "background") {
       this.cancelBackground();
+      this.backgroundCatchUp = false;
     }
 
     this.schedule();
@@ -278,11 +290,21 @@ export class TerminalOutputDrain<TWriteContext = unknown> {
   }
 
   private scheduleBackground() {
-    if (this.backgroundTimer !== null || this.disposed) return;
+    const schedule = this.resolveBackgroundSchedule();
+    if (this.disposed) return;
+    if (this.backgroundTimer !== null) {
+      if (schedule.backgroundCatchUp && this.backgroundTimerCatchUp === false) {
+        this.cancelBackground();
+      } else {
+        return;
+      }
+    }
+    this.backgroundTimerCatchUp = schedule.backgroundCatchUp;
     this.backgroundTimer = this.timers.setTimeout(() => {
       this.backgroundTimer = null;
+      this.backgroundTimerCatchUp = null;
       this.flushBackground();
-    }, XTERM_PERFORMANCE_CONFIG.output.backgroundDrainIntervalMs);
+    }, schedule.intervalMs);
   }
 
   private flushForeground() {
@@ -299,8 +321,37 @@ export class TerminalOutputDrain<TWriteContext = unknown> {
       this.schedule();
       return;
     }
-    this.options.onBackgroundDrain?.(this.queue.bytes, this.writingBytes, this.backendUnackedBytes);
-    this.flushOne(XTERM_PERFORMANCE_CONFIG.output.backgroundWriteChunkBytes);
+    const schedule = this.resolveBackgroundSchedule();
+    this.options.onBackgroundDrain?.({
+      queueBytes: this.queue.bytes,
+      writingBytes: this.writingBytes,
+      unackedBytes: this.backendUnackedBytes,
+      backgroundCatchUp: schedule.backgroundCatchUp,
+      drainChunkBytes: schedule.writeChunkBytes,
+      nextDelayMs: schedule.intervalMs,
+    });
+    this.flushOne(schedule.writeChunkBytes);
+  }
+
+  private resolveBackgroundSchedule() {
+    const { output } = XTERM_PERFORMANCE_CONFIG;
+    if (this.backgroundCatchUp) {
+      this.backgroundCatchUp = this.queue.bytes > output.lowLatencyFlushBacklogBytes;
+    } else {
+      this.backgroundCatchUp = this.queue.bytes >= output.strainedBacklogBytes;
+    }
+
+    return this.backgroundCatchUp
+      ? {
+          backgroundCatchUp: true,
+          writeChunkBytes: output.backgroundCatchUpWriteChunkBytes,
+          intervalMs: output.backgroundCatchUpIntervalMs,
+        }
+      : {
+          backgroundCatchUp: false,
+          writeChunkBytes: output.backgroundWriteChunkBytes,
+          intervalMs: output.backgroundDrainIntervalMs,
+        };
   }
 
   private flushOne(maxBytes: number) {
@@ -415,6 +466,7 @@ export class TerminalOutputDrain<TWriteContext = unknown> {
       this.timers.clearTimeout(this.backgroundTimer);
       this.backgroundTimer = null;
     }
+    this.backgroundTimerCatchUp = null;
   }
 
   private clearAckTimer() {

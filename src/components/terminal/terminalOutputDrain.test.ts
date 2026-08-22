@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { XTERM_PERFORMANCE_CONFIG } from "@/lib/xtermPerformance";
-import { TerminalOutputDrain } from "./terminalOutputDrain";
+import {
+  TerminalOutputDrain,
+  type TerminalOutputBackgroundDrainStats,
+} from "./terminalOutputDrain";
 
 const settle = async () => {
   for (let i = 0; i < 10; i += 1) {
@@ -26,6 +29,7 @@ function createHarness(
   const writes: string[] = [];
   const acks: number[] = [];
   const pressure: number[] = [];
+  const backgroundDrains: TerminalOutputBackgroundDrainStats[] = [];
 
   const terminal = {
     write: vi.fn((data: string, callback?: () => void) => {
@@ -48,6 +52,7 @@ function createHarness(
     shouldUseLowLatencyFlush: options.shouldUseLowLatencyFlush,
     onAck: (bytes) => acks.push(bytes),
     onPressureChange: (bytes) => pressure.push(bytes),
+    onBackgroundDrain: (stats) => backgroundDrains.push(stats),
     timers: {
       requestAnimationFrame: (callback) => {
         const id = nextFrameId;
@@ -94,6 +99,7 @@ function createHarness(
   return {
     acks,
     advance,
+    backgroundDrains,
     drain,
     flushFrame,
     pendingWriteCallbacks,
@@ -107,6 +113,31 @@ function createHarness(
 }
 
 describe("TerminalOutputDrain", () => {
+  it("uses normal background cadence for small hidden queues", async () => {
+    const { advance, backgroundDrains, drain, timers, writes } =
+      createHarness();
+
+    drain.setMode("background");
+    drain.enqueue({ data: "small", bytes: 5 });
+
+    expect([...timers.values()][0]?.at).toBe(
+      XTERM_PERFORMANCE_CONFIG.output.backgroundDrainIntervalMs,
+    );
+    advance(XTERM_PERFORMANCE_CONFIG.output.backgroundDrainIntervalMs - 1);
+    await settle();
+    expect(writes).toEqual([]);
+
+    advance(1);
+    await settle();
+
+    expect(writes).toEqual(["small"]);
+    expect(backgroundDrains[0]).toMatchObject({
+      backgroundCatchUp: false,
+      drainChunkBytes: XTERM_PERFORMANCE_CONFIG.output.backgroundWriteChunkBytes,
+      nextDelayMs: XTERM_PERFORMANCE_CONFIG.output.backgroundDrainIntervalMs,
+    });
+  });
+
   it("drains hidden output in original order", async () => {
     const { advance, drain, writes } = createHarness();
 
@@ -133,6 +164,90 @@ describe("TerminalOutputDrain", () => {
     await settle();
 
     expect(writes).toEqual(["A", "B"]);
+  });
+
+  it("enters background catch-up cadence when hidden backlog is strained", async () => {
+    const { advance, backgroundDrains, drain, timers, writes } =
+      createHarness();
+    const bytes = XTERM_PERFORMANCE_CONFIG.output.strainedBacklogBytes;
+
+    drain.setMode("background");
+    drain.enqueue({ data: "x".repeat(bytes), bytes });
+
+    expect([...timers.values()][0]?.at).toBe(
+      XTERM_PERFORMANCE_CONFIG.output.backgroundCatchUpIntervalMs,
+    );
+
+    advance(XTERM_PERFORMANCE_CONFIG.output.backgroundCatchUpIntervalMs);
+    await settle();
+
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toHaveLength(
+      XTERM_PERFORMANCE_CONFIG.output.backgroundCatchUpWriteChunkBytes,
+    );
+    expect(backgroundDrains[0]).toMatchObject({
+      backgroundCatchUp: true,
+      drainChunkBytes:
+        XTERM_PERFORMANCE_CONFIG.output.backgroundCatchUpWriteChunkBytes,
+      nextDelayMs: XTERM_PERFORMANCE_CONFIG.output.backgroundCatchUpIntervalMs,
+    });
+  });
+
+  it("exits background catch-up after draining to the low watermark", async () => {
+    const { advance, backgroundDrains, drain, timers } = createHarness();
+    const bytes = XTERM_PERFORMANCE_CONFIG.output.strainedBacklogBytes;
+
+    drain.setMode("background");
+    drain.enqueue({ data: "x".repeat(bytes), bytes });
+    advance(XTERM_PERFORMANCE_CONFIG.output.backgroundCatchUpIntervalMs);
+    await settle();
+
+    expect(backgroundDrains[0]?.backgroundCatchUp).toBe(true);
+    expect([...timers.values()][0]?.at).toBe(
+      XTERM_PERFORMANCE_CONFIG.output.backgroundCatchUpIntervalMs +
+        XTERM_PERFORMANCE_CONFIG.output.backgroundDrainIntervalMs,
+    );
+  });
+
+  it("uses foreground scheduling without background catch-up after reveal", async () => {
+    const { drain, flushFrame, getFrameCount, timers, writes } = createHarness({
+      writeChunkBytes: 1024,
+    });
+    const bytes = XTERM_PERFORMANCE_CONFIG.output.strainedBacklogBytes;
+
+    drain.setMode("background");
+    drain.enqueue({ data: "x".repeat(bytes), bytes });
+    expect([...timers.values()][0]?.at).toBe(
+      XTERM_PERFORMANCE_CONFIG.output.backgroundCatchUpIntervalMs,
+    );
+
+    drain.setMode("foreground");
+    expect(timers.size).toBe(0);
+    expect(getFrameCount()).toBe(1);
+
+    flushFrame();
+    await settle();
+
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toHaveLength(1024);
+  });
+
+  it("does not background write while hibernating or hibernated", async () => {
+    const { advance, drain, timers, writes } = createHarness();
+
+    drain.setMode("hibernating");
+    drain.enqueue({ data: "A", bytes: 1 });
+    advance(XTERM_PERFORMANCE_CONFIG.output.backgroundDrainIntervalMs * 10);
+    await settle();
+    expect(timers.size).toBe(0);
+    expect(writes).toEqual([]);
+
+    drain.setMode("hibernated");
+    drain.enqueue({ data: "B", bytes: 1 });
+    advance(XTERM_PERFORMANCE_CONFIG.output.backgroundDrainIntervalMs * 10);
+    await settle();
+    expect(timers.size).toBe(0);
+    expect(writes).toEqual([]);
   });
 
   it("chunks large foreground output cooperatively", async () => {
@@ -221,6 +336,35 @@ describe("TerminalOutputDrain", () => {
     await settle();
 
     expect(acks).toEqual([]);
+    pendingWriteCallbacks.shift()?.();
+    await settle();
+    expect(acks).toEqual([4]);
+  });
+
+  it("cancels background timers when switching to foreground without duplicate writes or acks", async () => {
+    const { acks, advance, drain, flushFrame, pendingWriteCallbacks, timers, writes } =
+      createHarness({
+        autoCompleteWrites: false,
+        writeChunkBytes: 4,
+      });
+
+    drain.setMode("background");
+    drain.enqueue({ data: "abcd", bytes: 4 });
+    expect(timers.size).toBe(1);
+
+    drain.setMode("foreground");
+    expect(timers.size).toBe(0);
+    flushFrame();
+    await settle();
+
+    expect(writes).toEqual(["abcd"]);
+    expect(acks).toEqual([]);
+
+    advance(XTERM_PERFORMANCE_CONFIG.output.backgroundDrainIntervalMs);
+    await settle();
+    expect(writes).toEqual(["abcd"]);
+    expect(acks).toEqual([]);
+
     pendingWriteCallbacks.shift()?.();
     await settle();
     expect(acks).toEqual([4]);

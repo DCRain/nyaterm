@@ -231,6 +231,7 @@ export default function XTerminal({
   const hibernationPhaseRef = useRef<HibernationPhase>("idle");
   const hibernationEpochRef = useRef(0);
   const detachedHibernateEpochRef = useRef<number | null>(null);
+  const lastOutputActivityAtRef = useRef(Date.now());
   const hibernatedRef = useRef(hibernated);
   const pendingWakeEventsRef = useRef<PendingWakeEvent[]>([]);
   const zmodemActiveRef = useRef(false);
@@ -1808,7 +1809,8 @@ export default function XTerminal({
       }
     };
 
-    const { applyVisibilityPolicy } = createXTerminalHibernationController({
+    const { applyVisibilityPolicy, noteOutputActivity } =
+      createXTerminalHibernationController({
       sessionId,
       terminal,
       outputDrain,
@@ -1828,6 +1830,7 @@ export default function XTerminal({
       hibernationSnapshotRef,
       hibernationCleanupRef,
       hibernatedRef,
+      lastOutputActivityAtRef,
       showSearchBar,
       activeMode,
       isTerminalAlive,
@@ -1868,6 +1871,7 @@ export default function XTerminal({
       enterDisconnectedState,
       enterDisconnectedStateIfAttachSessionMissing,
       noteSkippedOutput,
+      noteOutputActivity,
       updateCredentialPromptInputMode,
       feedCredentialOutput,
       maybeRecoverPerformanceMode,

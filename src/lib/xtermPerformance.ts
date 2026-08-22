@@ -32,6 +32,10 @@ export const XTERM_PERFORMANCE_CONFIG = {
     backgroundWriteChunkBytes: 16 * 1024,
     /** Delay between hidden background drain cycles. */
     backgroundDrainIntervalMs: 160,
+    /** Max UTF-8 bytes to write into xterm during one hidden catch-up drain. */
+    backgroundCatchUpWriteChunkBytes: 64 * 1024,
+    /** Delay between hidden catch-up drain cycles. */
+    backgroundCatchUpIntervalMs: 16,
     /** Lower per-frame write budget for repaint-heavy alternate-screen TUIs. */
     alternateScreenWriteChunkBytes: 16 * 1024,
     /** Max write rate while an alternate-screen TUI has queued repaint backlog. */
