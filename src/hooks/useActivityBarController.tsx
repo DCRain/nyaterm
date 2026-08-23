@@ -21,16 +21,23 @@ import { PiRecordFill } from "react-icons/pi";
 import { SiDocker, SiNvidia } from "react-icons/si";
 import type { ActivityBarItem } from "@/components/layout/ActivityBar";
 import {
+  ACTIVITY_BAR_ITEM_IDS,
+  ACTIVITY_LAYOUT_ZONES,
   buildMultiPanelToggleUpdate,
+  getHiddenActivityItemsForSide,
   getItemSide,
-  isActivityItemVisible,
+  hideActivityBarItem,
+  isActivityBarItemVisible,
+  isActivityItemAvailable,
+  mergeVisibleReorder,
+  resetActivityBarLayout,
+  showActivityBarItem,
+  toggleActivityBarItemVisibility,
 } from "@/lib/appWorkspace";
 import { openSettings } from "@/lib/windowManager";
 import type { ActivityBarLayout, ActivityBarZone, UiConfig } from "@/types/global";
 
 type UpdateUi = (updates: Partial<UiConfig> | ((prev: UiConfig) => Partial<UiConfig>)) => void;
-
-const ACTIVITY_LAYOUT_ZONES = ["left_top", "left_bottom", "right_top", "right_bottom"] as const;
 
 function insertAfter(ids: string[], anchorId: string, itemId: string) {
   if (ids.includes(itemId)) return ids;
@@ -69,20 +76,6 @@ function AscendIcon() {
   );
 }
 
-function mergeVisibleReorder(
-  currentIds: string[],
-  orderedVisibleIds: string[],
-  uiConfig: UiConfig,
-): string[] {
-  const orderedVisibleSet = new Set(orderedVisibleIds);
-  const nextVisibleIds = [...orderedVisibleIds];
-  const reordered = currentIds.map((id) => {
-    if (!orderedVisibleSet.has(id) || !isActivityItemVisible(id, uiConfig)) return id;
-    return nextVisibleIds.shift() ?? id;
-  });
-  return [...reordered, ...nextVisibleIds];
-}
-
 function normalizeActivityBarState(uiConfig: UiConfig): Partial<UiConfig> | null {
   const originalLeftOpenPanels = uiConfig.left_open_panels ?? [];
   const originalRightOpenPanels = uiConfig.right_open_panels ?? [];
@@ -93,6 +86,7 @@ function normalizeActivityBarState(uiConfig: UiConfig): Partial<UiConfig> | null
     left_bottom: [],
     right_top: [],
     right_bottom: [],
+    hidden_items: [],
   };
 
   for (const zone of ACTIVITY_LAYOUT_ZONES) {
@@ -154,12 +148,20 @@ function normalizeActivityBarState(uiConfig: UiConfig): Partial<UiConfig> | null
     seen.add("dockerManager");
   }
 
+  for (const id of uiConfig.activity_bar_layout.hidden_items ?? []) {
+    if (layout.hidden_items.includes(id)) continue;
+    if (!seen.has(id)) continue;
+    layout.hidden_items.push(id);
+  }
+
   const leftPanelIds = new Set(
-    [...layout.left_top, ...layout.left_bottom].filter((id) => isActivityItemVisible(id, uiConfig)),
+    [...layout.left_top, ...layout.left_bottom].filter((id) =>
+      isActivityItemAvailable(id, uiConfig),
+    ),
   );
   const rightPanelIds = new Set(
     [...layout.right_top, ...layout.right_bottom].filter((id) =>
-      isActivityItemVisible(id, uiConfig),
+      isActivityItemAvailable(id, uiConfig),
     ),
   );
   const leftOpenPanels = [...new Set(originalLeftOpenPanels)].filter((id) => leftPanelIds.has(id));
@@ -182,6 +184,10 @@ function normalizeActivityBarState(uiConfig: UiConfig): Partial<UiConfig> | null
       layout[zone].length !== uiConfig.activity_bar_layout[zone].length ||
       layout[zone].some((id, index) => id !== uiConfig.activity_bar_layout[zone][index]),
   );
+  const originalHiddenItems = uiConfig.activity_bar_layout.hidden_items ?? [];
+  const hiddenItemsChanged =
+    layout.hidden_items.length !== originalHiddenItems.length ||
+    layout.hidden_items.some((id, index) => id !== originalHiddenItems[index]);
   const leftOpenChanged =
     leftOpenPanels.length !== originalLeftOpenPanels.length ||
     leftOpenPanels.some((id, index) => id !== originalLeftOpenPanels[index]);
@@ -193,6 +199,7 @@ function normalizeActivityBarState(uiConfig: UiConfig): Partial<UiConfig> | null
 
   if (
     !layoutChanged &&
+    !hiddenItemsChanged &&
     !leftOpenChanged &&
     !rightOpenChanged &&
     !activeLeftChanged &&
@@ -202,7 +209,7 @@ function normalizeActivityBarState(uiConfig: UiConfig): Partial<UiConfig> | null
   }
 
   return {
-    ...(layoutChanged ? { activity_bar_layout: layout } : {}),
+    ...(layoutChanged || hiddenItemsChanged ? { activity_bar_layout: layout } : {}),
     ...(leftOpenChanged ? { left_open_panels: leftOpenPanels } : {}),
     ...(rightOpenChanged ? { right_open_panels: rightOpenPanels } : {}),
     ...(activeLeftChanged ? { active_left_panel: activeLeftPanel } : {}),
@@ -267,7 +274,7 @@ export function useActivityBarController({
   const buildItems = useCallback(
     (ids: string[]): ActivityBarItem[] =>
       ids
-        .filter((id) => id in itemRegistry && isActivityItemVisible(id, uiConfig))
+        .filter((id) => id in itemRegistry && isActivityBarItemVisible(id, uiConfig))
         .map((id) => ({ id, ...itemRegistry[id] })),
     [itemRegistry, uiConfig],
   );
@@ -281,6 +288,20 @@ export function useActivityBarController({
   const rightBottomItems = useMemo(
     () => buildItems(layout.right_bottom),
     [buildItems, layout.right_bottom],
+  );
+  const leftHiddenItems = useMemo(
+    () =>
+      getHiddenActivityItemsForSide(uiConfig, "left", ACTIVITY_BAR_ITEM_IDS)
+        .filter((id) => id in itemRegistry)
+        .map((id) => ({ id, ...itemRegistry[id] })),
+    [itemRegistry, uiConfig],
+  );
+  const rightHiddenItems = useMemo(
+    () =>
+      getHiddenActivityItemsForSide(uiConfig, "right", ACTIVITY_BAR_ITEM_IDS)
+        .filter((id) => id in itemRegistry)
+        .map((id) => ({ id, ...itemRegistry[id] })),
+    [itemRegistry, uiConfig],
   );
 
   const toggleActiveIds = useMemo(() => {
@@ -388,16 +409,63 @@ export function useActivityBarController({
     }));
   }, [updateUi]);
 
+  const handleHideItem = useCallback(
+    (itemId: string) => {
+      updateUi((prev) => ({
+        activity_bar_layout: hideActivityBarItem(prev.activity_bar_layout, itemId),
+      }));
+    },
+    [updateUi],
+  );
+
+  const handleShowItem = useCallback(
+    (itemId: string) => {
+      updateUi((prev) => ({
+        activity_bar_layout: showActivityBarItem(prev.activity_bar_layout, itemId),
+      }));
+    },
+    [updateUi],
+  );
+
+  const handleToggleItemVisibility = useCallback(
+    (itemId: string) => {
+      updateUi((prev) => ({
+        activity_bar_layout: toggleActivityBarItemVisibility(prev.activity_bar_layout, itemId),
+      }));
+    },
+    [updateUi],
+  );
+
+  const handleResetActivityBarLayout = useCallback(() => {
+    updateUi((prev) => {
+      const activityBarLayout = resetActivityBarLayout();
+      const next = {
+        ...prev,
+        activity_bar_layout: activityBarLayout,
+      };
+      return {
+        activity_bar_layout: activityBarLayout,
+        ...(normalizeActivityBarState(next) ?? {}),
+      };
+    });
+  }, [updateUi]);
+
   return {
     leftTopItems,
     leftBottomItems,
     rightTopItems,
     rightBottomItems,
+    leftHiddenItems,
+    rightHiddenItems,
     showLabels: layout.show_labels,
     toggleActiveIds,
     handleItemSelect,
     handleReorder,
     handleMoveItem,
     handleToggleLabel,
+    handleHideItem,
+    handleShowItem,
+    handleToggleItemVisibility,
+    handleResetActivityBarLayout,
   };
 }

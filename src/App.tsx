@@ -4,8 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import AppLayout from "./components/app/AppLayout";
-import AppOverlayDialogs from "./components/app/AppOverlayDialogs";
 import AppPanelContent from "./components/app/AppPanelContent";
+import ActivityBarResetDialog from "./components/dialog/app/ActivityBarResetDialog";
+import AppOverlayDialogs from "./components/dialog/app/AppOverlayDialogs";
 import type { HostKeyVerifyRequest } from "./components/dialog/connections/HostKeyVerifyDialog";
 import type { OtpRequest } from "./components/dialog/connections/OtpDialog";
 import type { RdpCertificateVerifyRequest } from "./components/dialog/connections/RdpCertificateVerifyDialog";
@@ -16,10 +17,7 @@ import type { QuickSwitcherSession } from "./components/dialog/terminal/SessionQ
 import { useApp } from "./context/AppContext";
 import { TransferProvider } from "./context/TransferContext";
 import { useActivityBarController } from "./hooks/useActivityBarController";
-import {
-  type ExternalOpenRequest,
-  useExternalOpenRequests,
-} from "./hooks/useExternalOpenRequests";
+import { type ExternalOpenRequest, useExternalOpenRequests } from "./hooks/useExternalOpenRequests";
 import { useFileDocumentCloseGuard } from "./hooks/useFileDocumentCloseGuard";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts";
 import { useIdleLock } from "./hooks/useIdleLock";
@@ -28,6 +26,7 @@ import { useModalChildWindows } from "./hooks/useModalChildWindows";
 import { useRemoteGpuOverview } from "./hooks/useRemoteGpuOverview";
 import { useRemoteNpuOverview } from "./hooks/useRemoteNpuOverview";
 import { useRemoteStats } from "./hooks/useRemoteStats";
+import { useSecurityPromptQueue } from "./hooks/useSecurityPromptQueue";
 import { useSessionRuntimeState } from "./hooks/useSessionRuntimeState";
 import { resolveDisplayKeys } from "./hooks/useShortcutMap";
 import { useTerminalZoom } from "./hooks/useTerminalZoom";
@@ -51,8 +50,8 @@ import {
   getRemoteDesktopPaneDisplay,
   getTemporaryLinkSessionType,
   isSessionCreationCancelled,
-  sendStartupCommandToSession,
   type StartupCommandRequest,
+  sendStartupCommandToSession,
 } from "./lib/appSessionFactory";
 import {
   buildPanelOpenUpdate,
@@ -63,15 +62,12 @@ import {
   getSideOverlayPanel,
   getVisibleActivityIds,
   hasLiveSession,
-  isActivityItemVisible,
+  isActivityItemAvailable,
   isNonSerialSessionType,
   NON_PANEL_IDS,
   type TrayAction,
 } from "./lib/appWorkspace";
-import {
-  collectFileDocumentPaneIds,
-  removePaneFromTabs,
-} from "./lib/appWorkspaceClose";
+import { collectFileDocumentPaneIds, removePaneFromTabs } from "./lib/appWorkspaceClose";
 import {
   type AssetMonitoringCacheEntry,
   buildAssetPatchFromGpuOverview,
@@ -80,10 +76,7 @@ import {
   recordAssetMonitoringPatch,
 } from "./lib/assetMonitoring";
 import { updateConnectionAutoIconAfterSessionStart } from "./lib/connectionAutoIcon";
-import {
-  getErrorMessage,
-  shouldPromptConnectionEditOnFailure,
-} from "./lib/errors";
+import { getErrorMessage, shouldPromptConnectionEditOnFailure } from "./lib/errors";
 import {
   type ExternalConnectionResolution,
   findExternalConnectionMatches,
@@ -103,10 +96,7 @@ import {
   sendSessionInputWithSync,
 } from "./lib/sessionInput";
 import { buildSmartSplitLayout, type SmartSplitMode } from "./lib/smartSplit";
-import {
-  getSessionInputPeerIds,
-  purgeSessionFromGroups,
-} from "./lib/syncInputGroups";
+import { getSessionInputPeerIds, purgeSessionFromGroups } from "./lib/syncInputGroups";
 import {
   findTerminalWindowLeafById,
   findTerminalWindowLeafByTabId,
@@ -161,29 +151,8 @@ import type {
   WorkspaceSessionType,
 } from "./types/global";
 
-type SecurityPrompt =
-  | { kind: "host-key"; request: HostKeyVerifyRequest }
-  | { kind: "ssh-agent"; request: SshAgentAuthRequest }
-  | { kind: "otp"; request: OtpRequest }
-  | { kind: "ssh-auth"; request: SshAuthRequest };
-
-function upsertSecurityPrompt(
-  current: SecurityPrompt[],
-  prompt: SecurityPrompt,
-): SecurityPrompt[] {
-  const index = current.findIndex(
-    (item) => item.request.requestId === prompt.request.requestId,
-  );
-  if (index < 0) return [...current, prompt];
-  const next = [...current];
-  next[index] = prompt;
-  return next;
-}
-
 function safeRecordingName(name: string) {
-  return (
-    name.normalize("NFC").replace(/[^\p{L}\p{M}\p{N}._-]+/gu, "_") || "session"
-  );
+  return name.normalize("NFC").replace(/[^\p{L}\p{M}\p{N}._-]+/gu, "_") || "session";
 }
 
 function joinPath(dir: string, fileName: string) {
@@ -273,6 +242,7 @@ function App() {
   const [showUpdateDialog, setShowUpdateDialog] = useState(false);
   const [showSyncGroupDialog, setShowSyncGroupDialog] = useState(false);
   const [showQuitConfirm, setShowQuitConfirm] = useState(false);
+  const [showActivityBarResetConfirm, setShowActivityBarResetConfirm] = useState(false);
   const {
     pendingFileDocumentClose,
     savingFileDocuments,
@@ -283,15 +253,13 @@ function App() {
   } = useFileDocumentCloseGuard();
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [helpDotVisible, setHelpDotVisible] = useState(false);
-  const [sendCommandDraft, setSendCommandDraft] =
-    useState<SendCommandPanelDraft | null>(null);
-  const [showSessionQuickSwitcher, setShowSessionQuickSwitcher] =
-    useState(false);
+  const [sendCommandDraft, setSendCommandDraft] = useState<SendCommandPanelDraft | null>(null);
+  const [showSessionQuickSwitcher, setShowSessionQuickSwitcher] = useState(false);
   const [showTemporarySshLink, setShowTemporarySshLink] = useState(false);
-  const [externalMatchDialog, setExternalMatchDialog] =
-    useState<ExternalMatchDialogState | null>(null);
-  const [postLoginConfirm, setPostLoginConfirm] =
-    useState<PostLoginConfirmState | null>(null);
+  const [externalMatchDialog, setExternalMatchDialog] = useState<ExternalMatchDialogState | null>(
+    null,
+  );
+  const [postLoginConfirm, setPostLoginConfirm] = useState<PostLoginConfirmState | null>(null);
   const allowProgrammaticWindowCloseRef = useRef(false);
 
   const handleSendCommandDraftConsumed = useCallback(() => {
@@ -311,18 +279,18 @@ function App() {
     liveSessionIds,
     liveSessionsById,
     refreshRecordingStatuses,
-  } = useSessionRuntimeState(
-    appSettings.recording.memory_limit_bytes,
-    settingsLoaded,
-  );
-  const assetMonitoringCacheRef = useRef<
-    Map<string, AssetMonitoringCacheEntry>
-  >(new Map());
+  } = useSessionRuntimeState(appSettings.recording.memory_limit_bytes, settingsLoaded);
+  const assetMonitoringCacheRef = useRef<Map<string, AssetMonitoringCacheEntry>>(new Map());
   const assetMonitoringFlushesRef = useRef<Set<string>>(new Set());
 
-  const [securityPromptQueue, setSecurityPromptQueue] = useState<
-    SecurityPrompt[]
-  >([]);
+  const {
+    activeHostKeyRequest,
+    activeSshAgentRequest,
+    activeOtpRequest,
+    activeSshAuthRequest,
+    queueSecurityPrompt,
+    removeSecurityPrompt,
+  } = useSecurityPromptQueue();
   const [dockerSudoPasswordRequest, setDockerSudoPasswordRequest] =
     useState<DockerSudoPasswordRequest | null>(null);
   const [rdpCertificateRequests, setRdpCertificateRequests] = useState<
@@ -333,9 +301,7 @@ function App() {
 
   // Idle auto-lock
   useIdleLock(
-    appSettings.security.enable_screen_lock
-      ? appSettings.security.idle_lock_minutes
-      : 0,
+    appSettings.security.enable_screen_lock ? appSettings.security.idle_lock_minutes : 0,
     isLocked,
     () => setIsLocked(true),
   );
@@ -419,97 +385,71 @@ function App() {
     unsubs.push(
       listen<OtpRequest>("otp-request", (event) => {
         if (!eventTargetsCurrentWindow(event.payload.targetWindowLabel)) return;
-        setSecurityPromptQueue((current) =>
-          upsertSecurityPrompt(current, {
-            kind: "otp",
-            request: event.payload,
-          }),
-        );
+        queueSecurityPrompt({
+          kind: "otp",
+          request: event.payload,
+        });
       }),
     );
 
     unsubs.push(
       listen<SshAuthRequest>("ssh-auth-request", (event) => {
         if (!eventTargetsCurrentWindow(event.payload.targetWindowLabel)) return;
-        setSecurityPromptQueue((current) =>
-          upsertSecurityPrompt(current, {
-            kind: "ssh-auth",
-            request: event.payload,
-          }),
-        );
+        queueSecurityPrompt({
+          kind: "ssh-auth",
+          request: event.payload,
+        });
       }),
     );
 
     unsubs.push(
       listen<SshAgentAuthRequest>("ssh-agent-auth-pending", (event) => {
         if (!eventTargetsCurrentWindow(event.payload.targetWindowLabel)) return;
-        setSecurityPromptQueue((current) =>
-          upsertSecurityPrompt(current, {
-            kind: "ssh-agent",
-            request: event.payload,
-          }),
-        );
+        queueSecurityPrompt({
+          kind: "ssh-agent",
+          request: event.payload,
+        });
       }),
     );
     unsubs.push(
       listen<SshAgentAuthRequest>("ssh-agent-auth-failed", (event) => {
         if (!eventTargetsCurrentWindow(event.payload.targetWindowLabel)) return;
-        setSecurityPromptQueue((current) =>
-          upsertSecurityPrompt(current, {
-            kind: "ssh-agent",
-            request: event.payload,
-          }),
-        );
+        queueSecurityPrompt({
+          kind: "ssh-agent",
+          request: event.payload,
+        });
       }),
     );
     unsubs.push(
       listen<{ requestId: string }>("ssh-agent-auth-resolved", (event) => {
-        setSecurityPromptQueue((current) =>
-          current.filter(
-            (item) => item.request.requestId !== event.payload.requestId,
-          ),
-        );
+        removeSecurityPrompt(event.payload.requestId);
       }),
     );
     unsubs.push(
       listen<{ requestId: string }>("host-key-verify-resolved", (event) => {
-        setSecurityPromptQueue((current) =>
-          current.filter(
-            (item) => item.request.requestId !== event.payload.requestId,
-          ),
-        );
+        removeSecurityPrompt(event.payload.requestId);
       }),
     );
     unsubs.push(
       listen<{ requestId: string }>("security-prompt-resolved", (event) => {
-        setSecurityPromptQueue((current) =>
-          current.filter(
-            (item) => item.request.requestId !== event.payload.requestId,
-          ),
-        );
+        removeSecurityPrompt(event.payload.requestId);
       }),
     );
 
     unsubs.push(
-      listen<DockerSudoPasswordRequest>(
-        "docker-sudo-password-request",
-        (event) => {
-          if (!eventTargetsCurrentWindow(event.payload.targetWindowLabel))
-            return;
-          setDockerSudoPasswordRequest(event.payload);
-        },
-      ),
+      listen<DockerSudoPasswordRequest>("docker-sudo-password-request", (event) => {
+        if (!eventTargetsCurrentWindow(event.payload.targetWindowLabel)) return;
+        setDockerSudoPasswordRequest(event.payload);
+      }),
     );
 
     unsubs.push(
       listen<HostKeyVerifyRequest>("host-key-verify", (event) => {
         if (!eventTargetsCurrentWindow(event.payload.targetWindowLabel)) return;
-        setSecurityPromptQueue((current) =>
-          upsertSecurityPrompt(current, {
-            kind: "host-key",
-            request: event.payload,
-          }),
-        );
+        queueSecurityPrompt({
+          kind: "host-key",
+          request: event.payload,
+        });
       }),
     );
 
@@ -517,10 +457,7 @@ function App() {
       listen<RdpCertificateVerifyRequest>("rdp-certificate-verify", (event) => {
         if (!eventTargetsCurrentWindow(event.payload.targetWindowLabel)) return;
         setRdpCertificateRequests((current) => {
-          if (
-            current.some((item) => item.requestId === event.payload.requestId)
-          )
-            return current;
+          if (current.some((item) => item.requestId === event.payload.requestId)) return current;
           return [...current, event.payload];
         });
       }),
@@ -567,9 +504,7 @@ function App() {
         } = event.payload;
         if (!eventTargetsCurrentWindow(targetWindowLabel)) return;
         try {
-          const conns = await invoke<SavedConnection[]>(
-            "get_saved_connections",
-          );
+          const conns = await invoke<SavedConnection[]>("get_saved_connections");
           const conn = conns.find((c) => c.id === connectionId);
           const connName = conn?.name ?? connectionId;
           const sessionType = getConnectionSessionType(conn);
@@ -578,9 +513,7 @@ function App() {
             : null;
           const sourcePane =
             sourceTab &&
-            ((sourcePaneId
-              ? findSessionPaneById(sourceTab.root, sourcePaneId)
-              : null) ??
+            ((sourcePaneId ? findSessionPaneById(sourceTab.root, sourcePaneId) : null) ??
               getActivePane(sourceTab));
           let tabId: string;
           let paneId: string | undefined;
@@ -705,7 +638,9 @@ function App() {
     markPaneConnecting,
     markPaneConnectionFailed,
     markTabConnectionFailed,
+    queueSecurityPrompt,
     recordRecentConnection,
+    removeSecurityPrompt,
     setActivePane,
     setActiveTabId,
     updateAutoIconForSessionStart,
@@ -715,20 +650,17 @@ function App() {
   ]);
 
   useEffect(() => {
-    const unlisten = listen<CloudConflictPreview | null>(
-      "cloud-sync-conflict",
-      (event) => {
-        const conflict = event.payload;
-        if (!conflict) return;
-        if (lastCloudConflictRevisionRef.current === conflict.remote_revision) {
-          return;
-        }
+    const unlisten = listen<CloudConflictPreview | null>("cloud-sync-conflict", (event) => {
+      const conflict = event.payload;
+      if (!conflict) return;
+      if (lastCloudConflictRevisionRef.current === conflict.remote_revision) {
+        return;
+      }
 
-        lastCloudConflictRevisionRef.current = conflict.remote_revision;
-        toast.error(conflict.message);
-        handleOpenPanel("syncBackupHistory");
-      },
-    );
+      lastCloudConflictRevisionRef.current = conflict.remote_revision;
+      toast.error(conflict.message);
+      handleOpenPanel("syncBackupHistory");
+    });
 
     return () => {
       unlisten.then((dispose) => dispose());
@@ -740,13 +672,10 @@ function App() {
   const windowTitle = activeTabName ? `${activeTabName} - NyaTerm` : "NyaTerm";
   const activePane = activeTab ? getActivePane(activeTab) : null;
   const activeConnection = activePane?.connectionId
-    ? (savedConnections.find(
-        (connection) => connection.id === activePane.connectionId,
-      ) ?? null)
+    ? (savedConnections.find((connection) => connection.id === activePane.connectionId) ?? null)
     : null;
   const [aiIntent, setAiIntent] = useState<AIOpenIntent | null>(null);
-  const [terminalWindows, setTerminalWindows] =
-    useState<TerminalWindowNode | null>(null);
+  const [terminalWindows, setTerminalWindows] = useState<TerminalWindowNode | null>(null);
   const previousActiveTabIdRef = useRef<string | null>(null);
   const terminalWindowsRef = useRef<TerminalWindowNode | null>(null);
   const terminalWindowsRestoredRef = useRef(false);
@@ -757,10 +686,7 @@ function App() {
     JSON.stringify(uiConfig.terminal_window_layout ?? null),
   );
   const tabsRef = useRef(tabs);
-  const tabsById = useMemo(
-    () => new Map(tabs.map((tab) => [tab.id, tab])),
-    [tabs],
-  );
+  const tabsById = useMemo(() => new Map(tabs.map((tab) => [tab.id, tab])), [tabs]);
   const savedSshConnectionIdBySessionId = useMemo(() => {
     const sshConnectionIds = new Set(
       savedConnections
@@ -792,12 +718,7 @@ function App() {
       const connectionId = savedSshConnectionIdBySessionId.get(sessionId);
       if (!connectionId) return;
 
-      recordAssetMonitoringPatch(
-        assetMonitoringCacheRef.current,
-        sessionId,
-        connectionId,
-        patch,
-      );
+      recordAssetMonitoringPatch(assetMonitoringCacheRef.current, sessionId, connectionId, patch);
     },
     [savedSshConnectionIdBySessionId],
   );
@@ -882,11 +803,7 @@ function App() {
   }, []);
 
   const handleEditConnection = useCallback(
-    (
-      conn: SavedConnection,
-      autoConnect?: boolean,
-      target?: NewSessionTarget,
-    ) => {
+    (conn: SavedConnection, autoConnect?: boolean, target?: NewSessionTarget) => {
       openNewSession(conn.id, autoConnect, target);
     },
     [],
@@ -899,9 +816,7 @@ function App() {
       target?: Pick<NewSessionTarget, "sourceTabId" | "sourcePaneId">,
     ) => {
       if (!connectionId) return;
-      const connection = savedConnections.find(
-        (item) => item.id === connectionId,
-      );
+      const connection = savedConnections.find((item) => item.id === connectionId);
       if (shouldPromptConnectionEditOnFailure(connection, errorMessage)) {
         openNewSession(connectionId, true, target);
       }
@@ -958,9 +873,7 @@ function App() {
         maybePromptConnectionEdit(connection.id, errorMessage, {
           sourceTabId: tabId,
         });
-        toast.error(
-          t("savedConnections.connectionFailed", { error: errorMessage }),
-        );
+        toast.error(t("savedConnections.connectionFailed", { error: errorMessage }));
       }
     },
     [
@@ -1007,18 +920,14 @@ function App() {
           error,
         });
         markTabConnectionFailed(tabId, errorMessage);
-        toast.error(
-          t("savedConnections.connectionFailed", { error: errorMessage }),
-        );
+        toast.error(t("savedConnections.connectionFailed", { error: errorMessage }));
       }
     },
     [addPendingTab, hasTab, markTabConnectionFailed, t, updateTabSession],
   );
 
   const chooseExternalConnection = useCallback(
-    (
-      resolution: Extract<ExternalConnectionResolution, { kind: "ambiguous" }>,
-    ) =>
+    (resolution: Extract<ExternalConnectionResolution, { kind: "ambiguous" }>) =>
       new Promise<ExternalConnectionChoice>((resolve) => {
         setExternalMatchDialog({
           connections: resolution.connections,
@@ -1030,18 +939,14 @@ function App() {
     [],
   );
 
-  const confirmExternalPostLogin = useCallback(
-    (connection: SavedConnection) => {
-      const command = connection.post_login?.command?.trim() ?? "";
-      if (!connection.post_login?.enabled || !command)
-        return Promise.resolve(true);
+  const confirmExternalPostLogin = useCallback((connection: SavedConnection) => {
+    const command = connection.post_login?.command?.trim() ?? "";
+    if (!connection.post_login?.enabled || !command) return Promise.resolve(true);
 
-      return new Promise<boolean>((resolve) => {
-        setPostLoginConfirm({ connection, command, resolve });
-      });
-    },
-    [],
-  );
+    return new Promise<boolean>((resolve) => {
+      setPostLoginConfirm({ connection, command, resolve });
+    });
+  }, []);
 
   const handleExternalOpenRequest = useCallback(
     async (request: ExternalOpenRequest) => {
@@ -1074,13 +979,8 @@ function App() {
         return;
       }
 
-      const latestConnections = await invoke<SavedConnection[]>(
-        "get_saved_connections",
-      );
-      const resolution = findExternalConnectionMatches(
-        latestConnections,
-        parsed.intent,
-      );
+      const latestConnections = await invoke<SavedConnection[]>("get_saved_connections");
+      const resolution = findExternalConnectionMatches(latestConnections, parsed.intent);
 
       if (resolution.kind === "saved") {
         logger.info({
@@ -1163,11 +1063,7 @@ function App() {
 
   const persistTerminalWindowLayout = useCallback(
     (layout: TerminalWindowNode | null, nextTabs: Tab[] = tabsRef.current) => {
-      if (
-        !settingsLoaded ||
-        !startupRestoreComplete ||
-        !appSettings.general.startup_restore
-      )
+      if (!settingsLoaded || !startupRestoreComplete || !appSettings.general.startup_restore)
         return;
       const terminalWindowLayout =
         appSettings.general.startup_restore_window_layout === false
@@ -1200,8 +1096,7 @@ function App() {
 
     setTerminalWindows((current) => {
       let next = current;
-      let preserveRestoredLeafActiveTabs =
-        preserveRestoredLeafActiveTabsRef.current;
+      let preserveRestoredLeafActiveTabs = preserveRestoredLeafActiveTabsRef.current;
 
       if (!terminalWindowsRestoredRef.current) {
         terminalWindowsRestoredRef.current = true;
@@ -1210,10 +1105,7 @@ function App() {
           appSettings.general.startup_restore_window_layout !== false &&
           tabs.length > 0
         ) {
-          const restored = restoreTerminalWindowLayout(
-            uiConfig.terminal_window_layout,
-            tabs,
-          );
+          const restored = restoreTerminalWindowLayout(uiConfig.terminal_window_layout, tabs);
           if (restored) {
             next = restored;
             preserveRestoredLeafActiveTabs = true;
@@ -1251,31 +1143,20 @@ function App() {
     if (!terminalWindowsHydratedRef.current) return;
     if (tabs.length > 0 && !terminalWindows) return;
     persistTerminalWindowLayout(terminalWindows, tabs);
-  }, [
-    persistTerminalWindowLayout,
-    settingsLoaded,
-    startupRestoreComplete,
-    tabs,
-    terminalWindows,
-  ]);
+  }, [persistTerminalWindowLayout, settingsLoaded, startupRestoreComplete, tabs, terminalWindows]);
 
   useEffect(() => {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<AIOpenIntent>).detail;
       if (!detail) return;
       setAiIntent(detail);
-      updateUi((prev) =>
-        buildPanelOpenUpdate(prev, "aiAssistant", multiPanelOpen, "right"),
-      );
+      updateUi((prev) => buildPanelOpenUpdate(prev, "aiAssistant", multiPanelOpen, "right"));
     };
     window.addEventListener(AI_OPEN_EVENT, handler);
     return () => window.removeEventListener(AI_OPEN_EVENT, handler);
   }, [multiPanelOpen, updateUi]);
 
-  const { unreadTabIds, disconnectedTabIds } = useTabStatusIndicators(
-    tabs,
-    activeTabId,
-  );
+  const { unreadTabIds, disconnectedTabIds } = useTabStatusIndicators(tabs, activeTabId);
 
   const handleSelectLeafTab = useCallback(
     (leafId: string, tabId: string) => {
@@ -1300,9 +1181,7 @@ function App() {
       openNewSessionWithTarget(undefined, undefined, {
         targetLeafId: leafId,
         anchorTabId:
-          targetLeaf?.activeTabId ??
-          targetLeaf?.tabIds[targetLeaf.tabIds.length - 1] ??
-          null,
+          targetLeaf?.activeTabId ?? targetLeaf?.tabIds[targetLeaf.tabIds.length - 1] ?? null,
       });
     },
     [handleSelectLeafTab, terminalWindows],
@@ -1314,9 +1193,7 @@ function App() {
         ? findTerminalWindowLeafById(terminalWindows, leafId)
         : null;
       const anchorTabId =
-        targetLeaf?.activeTabId ??
-        targetLeaf?.tabIds[targetLeaf.tabIds.length - 1] ??
-        null;
+        targetLeaf?.activeTabId ?? targetLeaf?.tabIds[targetLeaf.tabIds.length - 1] ?? null;
 
       if (targetLeaf?.activeTabId) {
         handleSelectLeafTab(leafId, targetLeaf.activeTabId);
@@ -1344,10 +1221,7 @@ function App() {
       }
 
       try {
-        const sessionId = await createSessionForConnection(
-          connection,
-          createRequestId,
-        );
+        const sessionId = await createSessionForConnection(connection, createRequestId);
         if (!hasTab(tabId)) {
           await closeStaleCreatedSession(sessionId);
           return;
@@ -1371,9 +1245,7 @@ function App() {
         maybePromptConnectionEdit(connection.id, errorMessage, {
           sourceTabId: tabId,
         });
-        toast.error(
-          t("savedConnections.connectionFailed", { error: errorMessage }),
-        );
+        toast.error(t("savedConnections.connectionFailed", { error: errorMessage }));
       }
     },
     [
@@ -1390,16 +1262,13 @@ function App() {
     ],
   );
 
-  const handleReorderTabsInLeaf = useCallback(
-    (_: string, fromTabId: string, toIndex: number) => {
-      preserveRestoredLeafActiveTabsRef.current = false;
-      restoredGlobalActiveTabIdRef.current = null;
-      setTerminalWindows((current) =>
-        current ? reorderTabsInLeaf(current, fromTabId, toIndex) : current,
-      );
-    },
-    [],
-  );
+  const handleReorderTabsInLeaf = useCallback((_: string, fromTabId: string, toIndex: number) => {
+    preserveRestoredLeafActiveTabsRef.current = false;
+    restoredGlobalActiveTabIdRef.current = null;
+    setTerminalWindows((current) =>
+      current ? reorderTabsInLeaf(current, fromTabId, toIndex) : current,
+    );
+  }, []);
 
   const handleMoveTabToLeaf = useCallback(
     (fromTabId: string, targetLeafId: string, toIndex: number) => {
@@ -1407,12 +1276,7 @@ function App() {
       restoredGlobalActiveTabIdRef.current = null;
       setTerminalWindows((current) => {
         if (!current) return current;
-        const next = moveTabBetweenLeaves(
-          current,
-          fromTabId,
-          targetLeafId,
-          toIndex,
-        );
+        const next = moveTabBetweenLeaves(current, fromTabId, targetLeafId, toIndex);
         return next ?? current;
       });
       setActiveTabId(fromTabId);
@@ -1424,21 +1288,12 @@ function App() {
   );
 
   const handleSplitTabToLeaf = useCallback(
-    (
-      fromTabId: string,
-      targetLeafId: string,
-      direction: SplitEdgeDirection,
-    ) => {
+    (fromTabId: string, targetLeafId: string, direction: SplitEdgeDirection) => {
       preserveRestoredLeafActiveTabsRef.current = false;
       restoredGlobalActiveTabIdRef.current = null;
       setTerminalWindows((current) => {
         if (!current) return current;
-        const next = splitLeafWithTab(
-          current,
-          fromTabId,
-          targetLeafId,
-          direction,
-        );
+        const next = splitLeafWithTab(current, fromTabId, targetLeafId, direction);
         return next ?? current;
       });
       setActiveTabId(fromTabId);
@@ -1461,16 +1316,11 @@ function App() {
     });
   }, [activeTabId]);
 
-  const handleUpdateWindowSplitRatio = useCallback(
-    (splitId: string, ratio: number) => {
-      setTerminalWindows((current) =>
-        current
-          ? updateTerminalWindowSplitRatio(current, splitId, ratio)
-          : current,
-      );
-    },
-    [],
-  );
+  const handleUpdateWindowSplitRatio = useCallback((splitId: string, ratio: number) => {
+    setTerminalWindows((current) =>
+      current ? updateTerminalWindowSplitRatio(current, splitId, ratio) : current,
+    );
+  }, []);
 
   const handleActivatePane = useCallback(
     (tabId: string, paneId: string) => {
@@ -1615,15 +1465,10 @@ function App() {
   );
 
   const requestCloseTabs = useCallback(
-    async (
-      tabsToClose: Tab[],
-      options?: { nextActiveTabId?: string | null },
-    ) => {
+    async (tabsToClose: Tab[], options?: { nextActiveTabId?: string | null }) => {
       const tabIds = tabsToClose.map((tab) => tab.id);
       const paneIds = collectFileDocumentPaneIds(tabsToClose);
-      await requestFileDocumentClose(paneIds, () =>
-        executeCloseTabs(tabIds, options),
-      );
+      await requestFileDocumentClose(paneIds, () => executeCloseTabs(tabIds, options));
     },
     [executeCloseTabs, requestFileDocumentClose],
   );
@@ -1645,9 +1490,7 @@ function App() {
   const requestClosePane = useCallback(
     async (tab: Tab, pane: SessionPane) => {
       const paneIds = pane.paneKind === "file" ? [pane.id] : [];
-      await requestFileDocumentClose(paneIds, () =>
-        executeClosePane(tab.id, pane.id),
-      );
+      await requestFileDocumentClose(paneIds, () => executeClosePane(tab.id, pane.id));
     },
     [executeClosePane, requestFileDocumentClose],
   );
@@ -1683,12 +1526,8 @@ function App() {
       const pane = tab ? findPaneBySessionId(tab, sessionId) : null;
       if (tab && pane) {
         setTerminalWindows((current) => {
-          const leaf = current
-            ? findTerminalWindowLeafByTabId(current, tab.id)
-            : null;
-          return current && leaf
-            ? setLeafActiveTab(current, leaf.id, tab.id)
-            : current;
+          const leaf = current ? findTerminalWindowLeafByTabId(current, tab.id) : null;
+          return current && leaf ? setLeafActiveTab(current, leaf.id, tab.id) : current;
         });
         setActiveTabId(tab.id);
         setActivePane(tab.id, pane.id);
@@ -1699,20 +1538,14 @@ function App() {
 
   const getQuickCommandPeerSessionIds = useCallback(
     (sessionId: string) => {
-      return getSessionInputPeerIds(
-        sessionId,
-        syncGroups,
-        tabs,
-        broadcastToAll,
-      );
+      return getSessionInputPeerIds(sessionId, syncGroups, tabs, broadcastToAll);
     },
     [broadcastToAll, syncGroups, tabs],
   );
 
   const handleHistoryCommand = useCallback(
     (command: string, execute: boolean = true) => {
-      if (activePane?.paneKind !== "terminal" || !hasLiveSession(activePane))
-        return;
+      if (activePane?.paneKind !== "terminal" || !hasLiveSession(activePane)) return;
 
       const { sessionId } = activePane;
       const data = buildTerminalCommandInput(command, execute);
@@ -1750,9 +1583,7 @@ function App() {
           }
           const { sessionId } = pane;
           void sendSessionInput(sessionId, data, {
-            preview: execute
-              ? { kind: "reset" }
-              : { kind: "data", data: command },
+            preview: execute ? { kind: "reset" } : { kind: "data", data: command },
             registerSubmission: execute ? command : null,
           }).catch(() => {});
         }
@@ -1838,8 +1669,7 @@ function App() {
   const handleSwitchTab = useCallback(
     (index: number) => {
       const tabIds = getActiveLeafTabIds();
-      const targetTabId =
-        index === -1 ? tabIds[tabIds.length - 1] : tabIds[index];
+      const targetTabId = index === -1 ? tabIds[tabIds.length - 1] : tabIds[index];
       if (targetTabId) setActiveTabId(targetTabId);
     },
     [getActiveLeafTabIds, setActiveTabId],
@@ -1848,17 +1678,11 @@ function App() {
   const handleToggleLeftSidebar = useCallback(() => {
     updateUi((prev) => {
       if (multiPanelOpen) {
-        if (
-          (prev.left_open_panels?.length ?? 0) > 0 ||
-          prev.active_left_panel
-        ) {
+        if ((prev.left_open_panels?.length ?? 0) > 0 || prev.active_left_panel) {
           return { left_open_panels: [], active_left_panel: null };
         }
         const first = getVisibleActivityIds(
-          [
-            ...prev.activity_bar_layout.left_top,
-            ...prev.activity_bar_layout.left_bottom,
-          ],
+          [...prev.activity_bar_layout.left_top, ...prev.activity_bar_layout.left_bottom],
           prev,
         ).find((id) => !NON_PANEL_IDS.has(id));
         if (!first) return {};
@@ -1868,10 +1692,7 @@ function App() {
       }
       if (prev.active_left_panel) return { active_left_panel: null };
       const first = getVisibleActivityIds(
-        [
-          ...prev.activity_bar_layout.left_top,
-          ...prev.activity_bar_layout.left_bottom,
-        ],
+        [...prev.activity_bar_layout.left_top, ...prev.activity_bar_layout.left_bottom],
         prev,
       ).find((id) => !NON_PANEL_IDS.has(id));
       return { active_left_panel: first ?? null };
@@ -1881,17 +1702,11 @@ function App() {
   const handleToggleRightSidebar = useCallback(() => {
     updateUi((prev) => {
       if (multiPanelOpen) {
-        if (
-          (prev.right_open_panels?.length ?? 0) > 0 ||
-          prev.active_right_panel
-        ) {
+        if ((prev.right_open_panels?.length ?? 0) > 0 || prev.active_right_panel) {
           return { right_open_panels: [], active_right_panel: null };
         }
         const first = getVisibleActivityIds(
-          [
-            ...prev.activity_bar_layout.right_top,
-            ...prev.activity_bar_layout.right_bottom,
-          ],
+          [...prev.activity_bar_layout.right_top, ...prev.activity_bar_layout.right_bottom],
           prev,
         ).find((id) => !NON_PANEL_IDS.has(id));
         if (!first) return {};
@@ -1901,10 +1716,7 @@ function App() {
       }
       if (prev.active_right_panel) return { active_right_panel: null };
       const first = getVisibleActivityIds(
-        [
-          ...prev.activity_bar_layout.right_top,
-          ...prev.activity_bar_layout.right_bottom,
-        ],
+        [...prev.activity_bar_layout.right_top, ...prev.activity_bar_layout.right_bottom],
         prev,
       ).find((id) => !NON_PANEL_IDS.has(id));
       return { active_right_panel: first ?? null };
@@ -1928,11 +1740,7 @@ function App() {
   }, [appSettings.security.enable_screen_lock, setIsLocked]);
 
   const persistWorkspaceLayoutNow = useCallback(async () => {
-    if (
-      !settingsLoaded ||
-      !startupRestoreComplete ||
-      !terminalWindowsRestoredRef.current
-    ) {
+    if (!settingsLoaded || !startupRestoreComplete || !terminalWindowsRestoredRef.current) {
       await persistTabsNow();
       return;
     }
@@ -1943,13 +1751,8 @@ function App() {
     const terminalWindowLayout =
       appSettings.general.startup_restore_window_layout === false
         ? null
-        : serializeTerminalWindowLayout(
-            terminalWindowsRef.current,
-            restorableTabs,
-          );
-    lastPersistedTerminalWindowLayoutKeyRef.current = JSON.stringify(
-      terminalWindowLayout ?? null,
-    );
+        : serializeTerminalWindowLayout(terminalWindowsRef.current, restorableTabs);
+    lastPersistedTerminalWindowLayoutKeyRef.current = JSON.stringify(terminalWindowLayout ?? null);
     await persistTabsNow({ terminal_window_layout: terminalWindowLayout });
   }, [
     appSettings.general.startup_restore_window_layout,
@@ -1960,20 +1763,17 @@ function App() {
 
   const handleQuitApplication = useCallback(() => {
     setShowQuitConfirm(false);
-    void requestFileDocumentClose(
-      collectFileDocumentPaneIds(tabs),
-      async () => {
-        await persistWorkspaceLayoutNow().catch((error) => {
-          logger.error({
-            domain: "settings.persistence",
-            event: "workspace_layout.persist_before_quit_failed",
-            message: "Failed to persist workspace layout before quit",
-            error,
-          });
+    void requestFileDocumentClose(collectFileDocumentPaneIds(tabs), async () => {
+      await persistWorkspaceLayoutNow().catch((error) => {
+        logger.error({
+          domain: "settings.persistence",
+          event: "workspace_layout.persist_before_quit_failed",
+          message: "Failed to persist workspace layout before quit",
+          error,
         });
-        await invoke<void>("quit_application");
-      },
-    );
+      });
+      await invoke<void>("quit_application");
+    });
   }, [persistWorkspaceLayoutNow, requestFileDocumentClose, tabs]);
 
   useEffect(() => {
@@ -2001,34 +1801,28 @@ function App() {
             return;
           }
 
-          if (
-            tabs.length > 0 &&
-            appSettings.general.confirm_on_close !== false
-          ) {
+          if (tabs.length > 0 && appSettings.general.confirm_on_close !== false) {
             setShowQuitConfirm(true);
             return;
           }
 
-          await requestFileDocumentClose(
-            collectFileDocumentPaneIds(tabs),
-            async () => {
-              await persistWorkspaceLayoutNow().catch((error) => {
-                logger.error({
-                  domain: "settings.persistence",
-                  event: "workspace_layout.persist_before_close_failed",
-                  message: "Failed to persist workspace layout before close",
-                  error,
-                });
+          await requestFileDocumentClose(collectFileDocumentPaneIds(tabs), async () => {
+            await persistWorkspaceLayoutNow().catch((error) => {
+              logger.error({
+                domain: "settings.persistence",
+                event: "workspace_layout.persist_before_close_failed",
+                message: "Failed to persist workspace layout before close",
+                error,
               });
-              allowProgrammaticWindowCloseRef.current = true;
-              await currentWindow.close().catch(() => {
-                allowProgrammaticWindowCloseRef.current = false;
-              });
-              window.setTimeout(() => {
-                allowProgrammaticWindowCloseRef.current = false;
-              }, 1000);
-            },
-          );
+            });
+            allowProgrammaticWindowCloseRef.current = true;
+            await currentWindow.close().catch(() => {
+              allowProgrammaticWindowCloseRef.current = false;
+            });
+            window.setTimeout(() => {
+              allowProgrammaticWindowCloseRef.current = false;
+            }, 1000);
+          });
         });
       })
       .then((unlisten) => {
@@ -2055,11 +1849,7 @@ function App() {
     }
 
     handleQuitApplication();
-  }, [
-    appSettings.general.confirm_on_close,
-    handleQuitApplication,
-    tabs.length,
-  ]);
+  }, [appSettings.general.confirm_on_close, handleQuitApplication, tabs.length]);
 
   const handleRequestWindowClose = useCallback(() => {
     if (
@@ -2074,20 +1864,12 @@ function App() {
     void import("@tauri-apps/api/window").then(({ getCurrentWindow }) =>
       getCurrentWindow().close(),
     );
-  }, [
-    appSettings.general.confirm_on_close,
-    appSettings.general.minimize_to_tray,
-    tabs.length,
-  ]);
+  }, [appSettings.general.confirm_on_close, appSettings.general.minimize_to_tray, tabs.length]);
 
   useEffect(() => {
     const unlisten = listen<TrayAction>("tray-action", ({ payload }) => {
       if (!eventTargetsCurrentWindow(payload.targetWindowLabel)) return;
-      if (
-        isLocked &&
-        payload.type !== "lock_screen" &&
-        payload.type !== "request_quit"
-      ) {
+      if (isLocked && payload.type !== "lock_screen" && payload.type !== "request_quit") {
         return;
       }
 
@@ -2147,35 +1929,26 @@ function App() {
         );
         const { tabId, createRequestId } = pending;
         setTerminalWindows((current) =>
-          current
-            ? insertTabAfterInLeaf(current, tab.id, tabId, tabId)
-            : current,
+          current ? insertTabAfterInLeaf(current, tab.id, tabId, tabId) : current,
         );
         try {
-          const sessionId = await createSessionForPane(
-            pane,
-            createRequestId,
-            startupCommand,
-          );
+          const sessionId = await createSessionForPane(pane, createRequestId, startupCommand);
           if (!hasTab(tabId)) {
             await closeStaleCreatedSession(sessionId);
             return;
           }
           updateTabSession(tabId, sessionId);
           if (startupCommand && pane.type !== "SSH" && pane.type !== "Telnet") {
-            void sendStartupCommandToSession(sessionId, startupCommand).catch(
-              (error) => {
-                logger.error({
-                  domain: "session.lifecycle",
-                  event: "session.startup_command_failed",
-                  message:
-                    "Failed to send startup command to duplicated session",
-                  ids: { session_id: sessionId },
-                  error,
-                });
-                toast.error(t("tabCtx.duplicateFailed"));
-              },
-            );
+            void sendStartupCommandToSession(sessionId, startupCommand).catch((error) => {
+              logger.error({
+                domain: "session.lifecycle",
+                event: "session.startup_command_failed",
+                message: "Failed to send startup command to duplicated session",
+                ids: { session_id: sessionId },
+                error,
+              });
+              toast.error(t("tabCtx.duplicateFailed"));
+            });
           }
           if (pane.connectionId) {
             recordRecentConnection(pane.connectionId);
@@ -2190,9 +1963,7 @@ function App() {
             domain: "session.lifecycle",
             event: "session.duplicate_failed",
             message: "Failed to duplicate session",
-            ids: pane.connectionId
-              ? { connection_id: pane.connectionId }
-              : undefined,
+            ids: pane.connectionId ? { connection_id: pane.connectionId } : undefined,
             error,
           });
           markTabConnectionFailed(tabId, errorMessage);
@@ -2249,18 +2020,13 @@ function App() {
         );
         tabId = pending.tabId;
         setTerminalWindows((current) =>
-          current && tabId
-            ? insertTabAfterInLeaf(current, tab.id, tabId, tabId)
-            : current,
+          current && tabId ? insertTabAfterInLeaf(current, tab.id, tabId, tabId) : current,
         );
 
-        const sessionId = await invoke<string>(
-          "create_multiplexed_ssh_session",
-          {
-            sourceSessionId: pane.sessionId,
-            startupCommand: buildStartupCommandPayload(startupCommand),
-          },
-        );
+        const sessionId = await invoke<string>("create_multiplexed_ssh_session", {
+          sourceSessionId: pane.sessionId,
+          startupCommand: buildStartupCommandPayload(startupCommand),
+        });
         if (!hasTab(tabId)) {
           await closeStaleCreatedSession(sessionId);
           return;
@@ -2411,9 +2177,7 @@ function App() {
           domain: "session.lifecycle",
           event: "session.reconnect_failed",
           message: "Failed to reconnect session",
-          ids: pane.connectionId
-            ? { connection_id: pane.connectionId }
-            : undefined,
+          ids: pane.connectionId ? { connection_id: pane.connectionId } : undefined,
           error,
         });
         maybePromptConnectionEdit(pane.connectionId, errorMessage, {
@@ -2439,13 +2203,7 @@ function App() {
   const handleDisconnectSession = useCallback(
     async (tab: Tab) => {
       const pane = getActivePane(tab);
-      if (
-        !pane ||
-        pane.connecting ||
-        pane.connectError ||
-        pane.paneKind === "file"
-      )
-        return;
+      if (!pane || pane.connecting || pane.connectError || pane.paneKind === "file") return;
       if (hasFileDocumentDependency(pane.sessionId)) {
         notifyFileDocumentDependency();
         return;
@@ -2459,20 +2217,14 @@ function App() {
 
       toast.success(t("tabCtx.disconnectSuccess"));
     },
-    [
-      closePaneBackendSession,
-      hasFileDocumentDependency,
-      notifyFileDocumentDependency,
-      t,
-    ],
+    [closePaneBackendSession, hasFileDocumentDependency, notifyFileDocumentDependency, t],
   );
 
   const handleReconnectSessionById = useCallback(
     async (sessionId: string) => {
       const tab = findTabBySessionId(tabs, sessionId);
       const pane = tab ? findPaneBySessionId(tab, sessionId) : null;
-      if (!tab || !pane || pane.connecting || !canCreateSessionFromPane(pane))
-        return;
+      if (!tab || !pane || pane.connecting || !canCreateSessionFromPane(pane)) return;
       if (hasFileDocumentDependency(pane.sessionId)) {
         notifyFileDocumentDependency();
         return;
@@ -2518,9 +2270,7 @@ function App() {
           domain: "session.lifecycle",
           event: "session.reconnect_failed",
           message: "Failed to reconnect session from active sessions panel",
-          ids: pane.connectionId
-            ? { connection_id: pane.connectionId }
-            : undefined,
+          ids: pane.connectionId ? { connection_id: pane.connectionId } : undefined,
           error,
         });
         maybePromptConnectionEdit(pane.connectionId, errorMessage, {
@@ -2547,11 +2297,8 @@ function App() {
   const handleSplitSession = useCallback(
     async (tab: Tab, direction: PaneSplitDirection) => {
       const pane = getActivePane(tab);
-      if (!pane || pane.paneKind === "file" || !canCreateSessionFromPane(pane))
-        return;
-      const leaf = terminalWindows
-        ? findTerminalWindowLeafByTabId(terminalWindows, tab.id)
-        : null;
+      if (!pane || pane.paneKind === "file" || !canCreateSessionFromPane(pane)) return;
+      const leaf = terminalWindows ? findTerminalWindowLeafByTabId(terminalWindows, tab.id) : null;
       if (!leaf) {
         toast.error(t("tabCtx.splitFailed"));
         return;
@@ -2559,9 +2306,7 @@ function App() {
 
       if (leaf.tabIds.length > 1) {
         setTerminalWindows((current) =>
-          current
-            ? splitTerminalWindowForTab(current, tab.id, direction)
-            : current,
+          current ? splitTerminalWindowForTab(current, tab.id, direction) : current,
         );
         setActiveTabId(tab.id);
         window.dispatchEvent(new CustomEvent("nyaterm:refresh-terminals"));
@@ -2581,14 +2326,9 @@ function App() {
         );
         newTabId = pending.tabId;
         setTerminalWindows((current) =>
-          current
-            ? splitTerminalWindowForTab(current, tab.id, direction, newTabId)
-            : current,
+          current ? splitTerminalWindowForTab(current, tab.id, direction, newTabId) : current,
         );
-        const sessionId = await createSessionForPane(
-          pane,
-          pending.createRequestId,
-        );
+        const sessionId = await createSessionForPane(pane, pending.createRequestId);
         if (newTabId) {
           if (!hasTab(newTabId)) {
             await closeStaleCreatedSession(sessionId);
@@ -2602,10 +2342,7 @@ function App() {
         }
         window.dispatchEvent(new CustomEvent("nyaterm:refresh-terminals"));
       } catch (error) {
-        if (
-          (newTabId && !hasTab(newTabId)) ||
-          isSessionCreationCancelled(error)
-        ) {
+        if ((newTabId && !hasTab(newTabId)) || isSessionCreationCancelled(error)) {
           return;
         }
         const errorMessage = getErrorMessage(error);
@@ -2613,9 +2350,7 @@ function App() {
           domain: "session.lifecycle",
           event: "session.split_failed",
           message: "Failed to create split session",
-          ids: pane.connectionId
-            ? { connection_id: pane.connectionId }
-            : undefined,
+          ids: pane.connectionId ? { connection_id: pane.connectionId } : undefined,
           error,
         });
         if (newTabId) {
@@ -2661,8 +2396,7 @@ function App() {
     async (tabId: string, paneId: string) => {
       const tab = tabs.find((item) => item.id === tabId);
       const pane = tab
-        ? (collectSessionPanes(tab.root).find((item) => item.id === paneId) ??
-          null)
+        ? (collectSessionPanes(tab.root).find((item) => item.id === paneId) ?? null)
         : null;
       if (!pane || pane.connecting || !canCreateSessionFromPane(pane)) return;
       if (hasFileDocumentDependency(pane.sessionId)) {
@@ -2707,9 +2441,7 @@ function App() {
           domain: "session.lifecycle",
           event: "session.reconnect_failed",
           message: "Failed to reconnect pane",
-          ids: pane.connectionId
-            ? { connection_id: pane.connectionId }
-            : undefined,
+          ids: pane.connectionId ? { connection_id: pane.connectionId } : undefined,
           error,
         });
         if (pane.connectError) {
@@ -2779,13 +2511,7 @@ function App() {
 
       await requestClosePane(tab, pane);
     },
-    [
-      hasFileDocumentDependency,
-      notifyFileDocumentDependency,
-      requestClosePane,
-      t,
-      tabs,
-    ],
+    [hasFileDocumentDependency, notifyFileDocumentDependency, requestClosePane, t, tabs],
   );
 
   const canReconnectSessionById = useCallback(
@@ -2835,17 +2561,13 @@ function App() {
 
   const handleCloseRightTabs = useCallback(
     async (tabId: string) => {
-      const leaf = terminalWindows
-        ? findTerminalWindowLeafByTabId(terminalWindows, tabId)
-        : null;
+      const leaf = terminalWindows ? findTerminalWindowLeafByTabId(terminalWindows, tabId) : null;
       const tabOrder = leaf?.tabIds ?? tabs.map((tab) => tab.id);
       const idx = tabOrder.indexOf(tabId);
       if (idx === -1) return;
 
       const rightTabIds = tabOrder.slice(idx + 1);
-      const targetTabsToClose = tabs.filter((tab) =>
-        rightTabIds.includes(tab.id),
-      );
+      const targetTabsToClose = tabs.filter((tab) => rightTabIds.includes(tab.id));
       const tabsToClose = targetTabsToClose.filter((tab) => !tab.locked);
       const skippedLockedCount = targetTabsToClose.length - tabsToClose.length;
 
@@ -2864,9 +2586,7 @@ function App() {
 
   const handleOpenChat = useCallback(() => {
     if (!isLocked) {
-      updateUi((prev) =>
-        buildPanelOpenUpdate(prev, "aiAssistant", multiPanelOpen, "right"),
-      );
+      updateUi((prev) => buildPanelOpenUpdate(prev, "aiAssistant", multiPanelOpen, "right"));
     }
   }, [isLocked, multiPanelOpen, updateUi]);
 
@@ -2874,9 +2594,7 @@ function App() {
     if (!isLocked) {
       updateUi((prev) => ({
         show_quick_cmd_bar: !prev.show_quick_cmd_bar,
-        ...(prev.show_serial_send_panel
-          ? { show_serial_send_panel: false }
-          : {}),
+        ...(prev.show_serial_send_panel ? { show_serial_send_panel: false } : {}),
       }));
     }
   }, [isLocked, updateUi]);
@@ -2903,14 +2621,8 @@ function App() {
   const buildRecordingFilePath = useCallback(
     async (prefix: "recording" | "session", sessionName: string) => {
       const dir = appSettings.recording.base_path || (await downloadDir());
-      const timestamp = new Date()
-        .toISOString()
-        .replace(/[:.]/g, "-")
-        .slice(0, 19);
-      return joinPath(
-        dir,
-        `${prefix}-${safeRecordingName(sessionName)}-${timestamp}.log`,
-      );
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      return joinPath(dir, `${prefix}-${safeRecordingName(sessionName)}-${timestamp}.log`);
     },
     [appSettings.recording.base_path],
   );
@@ -2971,12 +2683,7 @@ function App() {
   );
 
   const handleToggleActiveSessionRecording = useCallback(() => {
-    if (
-      isLocked ||
-      !activePane ||
-      activePane.connecting ||
-      activePane.connectError
-    ) {
+    if (isLocked || !activePane || activePane.connecting || activePane.connectError) {
       return;
     }
     void handleToggleSessionRecordingById(activePane.sessionId, "transcript");
@@ -3006,8 +2713,7 @@ function App() {
       onShowAllCommands: handleShowAllCommands,
       onLockScreen: handleLockScreen,
       onManageSyncGroups: () => setShowSyncGroupDialog(true),
-      onClearTerminal: () =>
-        window.dispatchEvent(new CustomEvent("nyaterm:clear-terminal")),
+      onClearTerminal: () => window.dispatchEvent(new CustomEvent("nyaterm:clear-terminal")),
       onToggleRecording: handleToggleActiveSessionRecording,
     },
     appSettings.keybindings,
@@ -3056,8 +2762,7 @@ function App() {
         owner_window_label: session?.owner_window_label ?? null,
         ai_execution_profile: session?.ai_execution_profile ?? "auto",
         injection_active: session?.injection_active ?? false,
-        remote_file_browser_enabled:
-          session?.remote_file_browser_enabled ?? false,
+        remote_file_browser_enabled: session?.remote_file_browser_enabled ?? false,
         remote_stats_enabled: session?.remote_stats_enabled ?? false,
         ssh_profile: session?.ssh_profile ?? null,
       });
@@ -3069,10 +2774,7 @@ function App() {
   const handleLeftResize = useCallback(
     (delta: number) => {
       updateUi((prev) => ({
-        left_width: Math.max(
-          160,
-          Math.min(720, (prev.left_width || 256) + delta),
-        ),
+        left_width: Math.max(160, Math.min(720, (prev.left_width || 256) + delta)),
       }));
     },
     [updateUi],
@@ -3081,10 +2783,7 @@ function App() {
   const handleRightResize = useCallback(
     (delta: number) => {
       updateUi((prev) => ({
-        right_width: Math.max(
-          200,
-          Math.min(720, (prev.right_width || 288) - delta),
-        ),
+        right_width: Math.max(200, Math.min(720, (prev.right_width || 288) - delta)),
       }));
     },
     [updateUi],
@@ -3093,10 +2792,7 @@ function App() {
   const handleQuickCmdResize = useCallback(
     (delta: number) => {
       updateUi((prev) => ({
-        quick_cmd_height: Math.max(
-          36,
-          Math.min(520, (prev.quick_cmd_height || 180) - delta),
-        ),
+        quick_cmd_height: Math.max(36, Math.min(520, (prev.quick_cmd_height || 180) - delta)),
       }));
     },
     [updateUi],
@@ -3105,10 +2801,7 @@ function App() {
   const handleSerialSendResize = useCallback(
     (delta: number) => {
       updateUi((prev) => ({
-        serial_send_height: Math.max(
-          60,
-          Math.min(520, (prev.serial_send_height || 180) - delta),
-        ),
+        serial_send_height: Math.max(60, Math.min(520, (prev.serial_send_height || 180) - delta)),
       }));
     },
     [updateUi],
@@ -3119,12 +2812,18 @@ function App() {
     leftBottomItems,
     rightTopItems,
     rightBottomItems,
+    leftHiddenItems,
+    rightHiddenItems,
     showLabels,
     toggleActiveIds,
     handleItemSelect,
     handleReorder,
     handleMoveItem,
     handleToggleLabel,
+    handleHideItem,
+    handleShowItem,
+    handleToggleItemVisibility,
+    handleResetActivityBarLayout,
   } = useActivityBarController({
     uiConfig,
     recordingSessions,
@@ -3152,32 +2851,26 @@ function App() {
       ? activePane.sessionId
       : null;
   const activeLiveSshSessionId =
-    activeSshSessionId &&
-    (liveSessionIds === null || liveSessionIds.has(activeSshSessionId))
+    activeSshSessionId && (liveSessionIds === null || liveSessionIds.has(activeSshSessionId))
       ? activeSshSessionId
       : null;
   const activeLiveSshSessionInfo = activeLiveSshSessionId
     ? liveSessionsById?.get(activeLiveSshSessionId)
     : null;
   const activeStatsSessionId =
-    activeLiveSshSessionId &&
-    (activeLiveSshSessionInfo?.remote_stats_enabled ?? true)
+    activeLiveSshSessionId && (activeLiveSshSessionInfo?.remote_stats_enabled ?? true)
       ? activeLiveSshSessionId
       : null;
-  const activeRemoteStatsEnabled =
-    remoteStatsEnabled && Boolean(activeStatsSessionId);
+  const activeRemoteStatsEnabled = remoteStatsEnabled && Boolean(activeStatsSessionId);
   const remoteStats = useRemoteStats(
     activeLiveSshSessionId,
     activeRemoteStatsEnabled,
     uiConfig.remote_stats_interval ?? 3,
   );
-  const headerStatusMode = normalizeHeaderStatusMode(
-    uiConfig.header_status_mode,
-  );
+  const headerStatusMode = normalizeHeaderStatusMode(uiConfig.header_status_mode);
   const headerStatusVisible = uiConfig.header_status_visible !== false;
   const gpuOverviewEnabled =
-    (uiConfig.show_gpu_monitor ?? false) ||
-    (headerStatusVisible && headerStatusMode === "gpu");
+    (uiConfig.show_gpu_monitor ?? false) || (headerStatusVisible && headerStatusMode === "gpu");
   const npuOverviewEnabled =
     (uiConfig.show_ascend_npu_monitor ?? false) ||
     (headerStatusVisible && headerStatusMode === "npu");
@@ -3207,11 +2900,7 @@ function App() {
     if (patch) {
       handleAssetMonitoringPatch(activeStatsSessionId, patch);
     }
-  }, [
-    activeStatsSessionId,
-    gpuOverviewState.overview,
-    handleAssetMonitoringPatch,
-  ]);
+  }, [activeStatsSessionId, gpuOverviewState.overview, handleAssetMonitoringPatch]);
   useEffect(() => {
     if (!activeStatsSessionId || !npuOverviewState.overview) return;
 
@@ -3219,11 +2908,7 @@ function App() {
     if (patch) {
       handleAssetMonitoringPatch(activeStatsSessionId, patch);
     }
-  }, [
-    activeStatsSessionId,
-    handleAssetMonitoringPatch,
-    npuOverviewState.overview,
-  ]);
+  }, [activeStatsSessionId, handleAssetMonitoringPatch, npuOverviewState.overview]);
 
   const activeSerialSessionId =
     activePane &&
@@ -3289,8 +2974,7 @@ function App() {
     }
 
     for (const session of liveSessionsById?.values() ?? []) {
-      if (!["SSH", "Local", "Telnet", "Serial"].includes(session.session_type))
-        continue;
+      if (!["SSH", "Local", "Telnet", "Serial"].includes(session.session_type)) continue;
       if (targetsById.has(session.id)) continue;
       targetsById.set(session.id, {
         id: session.id,
@@ -3309,22 +2993,10 @@ function App() {
     : uiConfig.show_quick_cmd_bar
       ? "quickCmdBar"
       : null;
-  const temporarySshShortcut = resolveDisplayKeys(
-    "tab.temporarySshLink",
-    appSettings.keybindings,
-  );
-  const openChatShortcut = resolveDisplayKeys(
-    "view.openChat",
-    appSettings.keybindings,
-  );
-  const showCommandsShortcut = resolveDisplayKeys(
-    "view.showAllCommands",
-    appSettings.keybindings,
-  );
-  const switchTerminalShortcut = resolveDisplayKeys(
-    "tab.quickSwitch",
-    appSettings.keybindings,
-  );
+  const temporarySshShortcut = resolveDisplayKeys("tab.temporarySshLink", appSettings.keybindings);
+  const openChatShortcut = resolveDisplayKeys("view.openChat", appSettings.keybindings);
+  const showCommandsShortcut = resolveDisplayKeys("view.showAllCommands", appSettings.keybindings);
+  const switchTerminalShortcut = resolveDisplayKeys("tab.quickSwitch", appSettings.keybindings);
 
   const quickSwitcherSessions = useMemo<QuickSwitcherSession[]>(() => {
     const connectionsById = new Map(
@@ -3334,9 +3006,7 @@ function App() {
     for (const tab of tabs) {
       for (const pane of collectSessionPanes(tab.root)) {
         if (pane.paneKind !== "terminal") continue;
-        const connection = pane.connectionId
-          ? connectionsById.get(pane.connectionId)
-          : undefined;
+        const connection = pane.connectionId ? connectionsById.get(pane.connectionId) : undefined;
         sessions.push({
           id: pane.sessionId,
           name: pane.name,
@@ -3383,10 +3053,7 @@ function App() {
   const handleTransferResize = useCallback(
     (delta: number) => {
       updateUi((prev) => ({
-        transfer_height: Math.max(
-          60,
-          Math.min(600, (prev.transfer_height || 180) - delta),
-        ),
+        transfer_height: Math.max(60, Math.min(600, (prev.transfer_height || 180) - delta)),
       }));
     },
     [updateUi],
@@ -3423,13 +3090,13 @@ function App() {
     updateUi((prev) => ({
       ...((prev.left_open_panels?.length ?? 0) === 0 &&
       prev.active_left_panel &&
-      isActivityItemVisible(prev.active_left_panel, prev) &&
+      isActivityItemAvailable(prev.active_left_panel, prev) &&
       !EXCLUSIVE_PANEL_IDS.has(prev.active_left_panel)
         ? { left_open_panels: [prev.active_left_panel] }
         : {}),
       ...((prev.right_open_panels?.length ?? 0) === 0 &&
       prev.active_right_panel &&
-      isActivityItemVisible(prev.active_right_panel, prev) &&
+      isActivityItemAvailable(prev.active_right_panel, prev) &&
       !EXCLUSIVE_PANEL_IDS.has(prev.active_right_panel)
         ? { right_open_panels: [prev.active_right_panel] }
         : {}),
@@ -3447,10 +3114,7 @@ function App() {
       updateUi((prev) => {
         const openIds = getSideOpenPanels(prev, side, true);
         const sizes = prev.panel_stack_sizes ?? {};
-        const totalWeight = openIds.reduce(
-          (sum, id) => sum + (sizes[id] ?? 1),
-          0,
-        );
+        const totalWeight = openIds.reduce((sum, id) => sum + (sizes[id] ?? 1), 0);
         if (containerHeight <= 0 || totalWeight <= 0 || delta === 0) return {};
         const pxPerWeight = containerHeight / totalWeight;
         const aboveWeight = sizes[aboveId] ?? 1;
@@ -3541,29 +3205,23 @@ function App() {
     });
   }, []);
 
-  const handleExternalMatchConnection = useCallback(
-    (connection: SavedConnection) => {
-      setExternalMatchDialog((current) => {
-        current?.resolve({
-          kind: "saved",
-          connection,
-          runtimeModeOverride: current.runtimeModeOverride,
-        });
-        return null;
+  const handleExternalMatchConnection = useCallback((connection: SavedConnection) => {
+    setExternalMatchDialog((current) => {
+      current?.resolve({
+        kind: "saved",
+        connection,
+        runtimeModeOverride: current.runtimeModeOverride,
       });
-    },
-    [],
-  );
+      return null;
+    });
+  }, []);
 
-  const handleExternalMatchTemporary = useCallback(
-    (config: TemporaryLinkConfig) => {
-      setExternalMatchDialog((current) => {
-        current?.resolve({ kind: "temporary", config });
-        return null;
-      });
-    },
-    [],
-  );
+  const handleExternalMatchTemporary = useCallback((config: TemporaryLinkConfig) => {
+    setExternalMatchDialog((current) => {
+      current?.resolve({ kind: "temporary", config });
+      return null;
+    });
+  }, []);
 
   const handlePostLoginConfirmOpenChange = useCallback((open: boolean) => {
     if (open) return;
@@ -3579,27 +3237,6 @@ function App() {
       return null;
     });
   }, []);
-
-  const activeSecurityPrompt = securityPromptQueue[0] ?? null;
-  const activeHostKeyRequest =
-    activeSecurityPrompt?.kind === "host-key"
-      ? activeSecurityPrompt.request
-      : null;
-  const activeSshAgentRequest =
-    activeSecurityPrompt?.kind === "ssh-agent"
-      ? activeSecurityPrompt.request
-      : null;
-  const activeOtpRequest =
-    activeSecurityPrompt?.kind === "otp" ? activeSecurityPrompt.request : null;
-  const activeSshAuthRequest =
-    activeSecurityPrompt?.kind === "ssh-auth"
-      ? activeSecurityPrompt.request
-      : null;
-  const removeSecurityPrompt = (requestId: string) => {
-    setSecurityPromptQueue((current) =>
-      current.filter((item) => item.request.requestId !== requestId),
-    );
-  };
 
   return (
     <TransferProvider>
@@ -3627,12 +3264,13 @@ function App() {
           onBroadcastToAll: () => setBroadcastToAll((prev) => !prev),
           broadcastToAll,
           onOpenCommandPalette: handleOpenSessionSwitcher,
-          onClearTerminal: () =>
-            window.dispatchEvent(new CustomEvent("nyaterm:clear-terminal")),
+          onClearTerminal: () => window.dispatchEvent(new CustomEvent("nyaterm:clear-terminal")),
           onRefitTerminals: () =>
             window.dispatchEvent(new CustomEvent("nyaterm:refresh-terminals")),
           locked: isLocked,
           onRequestQuit: handleRequestQuit,
+          onToggleActivityBarItemVisibility: handleToggleItemVisibility,
+          onRequestActivityBarReset: () => setShowActivityBarResetConfirm(true),
         }}
         mobile={{
           leftOpen: mobileLeftOpen,
@@ -3643,25 +3281,33 @@ function App() {
         leftActivityBar={{
           items: leftTopItems,
           bottomItems: leftBottomItems,
+          hiddenItems: leftHiddenItems,
           activeId: uiConfig.active_left_panel,
           activeIds: leftActiveIds,
           activeBottomIds: toggleActiveIds,
           onSelect: handleItemSelect,
           onReorder: (zoneKey, ids) => handleReorder("left", zoneKey, ids),
           onMoveItem: handleMoveItem,
+          onHideItem: handleHideItem,
+          onShowItem: handleShowItem,
           onToggleLabel: handleToggleLabel,
+          onRequestResetLayout: () => setShowActivityBarResetConfirm(true),
           showLabels,
         }}
         rightActivityBar={{
           items: rightTopItems,
           bottomItems: rightBottomItems,
+          hiddenItems: rightHiddenItems,
           activeId: uiConfig.active_right_panel,
           activeIds: rightActiveIds,
           activeBottomIds: toggleActiveIds,
           onSelect: handleItemSelect,
           onReorder: (zoneKey, ids) => handleReorder("right", zoneKey, ids),
           onMoveItem: handleMoveItem,
+          onHideItem: handleHideItem,
+          onShowItem: handleShowItem,
           onToggleLabel: handleToggleLabel,
+          onRequestResetLayout: () => setShowActivityBarResetConfirm(true),
           showLabels,
         }}
         onLeftResize={handleLeftResize}
@@ -3686,8 +3332,7 @@ function App() {
           onDuplicateSession: handleDuplicateSession,
           onMultiplexSshSession: handleMultiplexSshSession,
           onDuplicateSessionWithCommand: handleDuplicateSessionWithCommand,
-          onMultiplexSshSessionWithCommand:
-            handleMultiplexSshSessionWithCommand,
+          onMultiplexSshSessionWithCommand: handleMultiplexSshSessionWithCommand,
           onReconnectSession: handleReconnectSession,
           onDisconnectSession: handleDisconnectSession,
           onSplitSession: handleSplitSession,
@@ -3739,8 +3384,7 @@ function App() {
           onSendCommandDraftConsumed: handleSendCommandDraftConsumed,
           onQuickCmdResize: handleQuickCmdResize,
           onSerialSendResize: handleSerialSendResize,
-          onClearAfterSendChange: (enabled) =>
-            updateUi({ serial_send_clear_after_send: enabled }),
+          onClearAfterSendChange: (enabled) => updateUi({ serial_send_clear_after_send: enabled }),
           onCommandSend: handleHistoryCommand,
           onSendToAllSessions: handleSendToAllSessions,
         }}
@@ -3800,14 +3444,21 @@ function App() {
         onExternalMatchTemporary={handleExternalMatchTemporary}
         pendingFileDocumentClose={pendingFileDocumentClose}
         savingFileDocuments={savingFileDocuments}
-        onPendingFileDocumentCloseOpenChange={
-          handlePendingFileDocumentCloseOpenChange
-        }
+        onPendingFileDocumentCloseOpenChange={handlePendingFileDocumentCloseOpenChange}
         onSaveFileDocumentsAndClose={handleSaveFileDocumentsAndClose}
         onDiscardFileDocumentsAndClose={handleDiscardFileDocumentsAndClose}
         postLoginConfirm={postLoginConfirm}
         onPostLoginConfirmOpenChange={handlePostLoginConfirmOpenChange}
         onPostLoginContinue={handlePostLoginContinue}
+      />
+      <ActivityBarResetDialog
+        t={t}
+        open={showActivityBarResetConfirm}
+        onOpenChange={setShowActivityBarResetConfirm}
+        onConfirm={() => {
+          setShowActivityBarResetConfirm(false);
+          handleResetActivityBarLayout();
+        }}
       />
     </TransferProvider>
   );

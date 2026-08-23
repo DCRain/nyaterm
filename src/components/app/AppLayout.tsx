@@ -233,10 +233,12 @@ export default function AppLayout({
   );
   const hasLeftActivityItems =
     leftActivityBar.items.length > 0 ||
-    (leftActivityBar.bottomItems?.length ?? 0) > 0;
+    (leftActivityBar.bottomItems?.length ?? 0) > 0 ||
+    (leftActivityBar.hiddenItems?.length ?? 0) > 0;
   const hasRightActivityItems =
     rightActivityBar.items.length > 0 ||
-    (rightActivityBar.bottomItems?.length ?? 0) > 0;
+    (rightActivityBar.bottomItems?.length ?? 0) > 0 ||
+    (rightActivityBar.hiddenItems?.length ?? 0) > 0;
   const leftPanelOpen =
     hasLeftActivityItems &&
     (leftPanelIds.length > 0 || Boolean(leftOverlayPanelId));

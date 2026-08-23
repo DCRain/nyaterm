@@ -6,6 +6,7 @@ import { DEFAULT_CLOUD_SYNC_SETTINGS } from "@/lib/cloudSync";
 import { updateConnectionAutoIconAfterSessionStart } from "@/lib/connectionAutoIcon";
 import { DEFAULT_TERMINAL_FONT_FAMILY, getDefaultUiFontFamily } from "@/lib/defaultFonts";
 import { getErrorMessage } from "@/lib/errors";
+import { cloneDefaultActivityBarLayout } from "@/lib/appWorkspace";
 import {
   DEFAULT_COMMAND_SUGGESTION_MAX_CHARS,
   DEFAULT_COMMAND_SUGGESTION_MIN_CHARS,
@@ -255,23 +256,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     file_explorer_favorite_dirs_by_connection_id: {},
     notes_expanded_folder_ids: [],
     notes_last_selected_node_id: null,
-    activity_bar_layout: {
-      left_top: ["fileExplorer", "notes", "network", "securityAuth"],
-      left_bottom: ["syncBackupHistory", "settings"],
-      right_top: [
-        "savedConnections",
-        "aiAssistant",
-        "activeSessions",
-        "commandHistory",
-        "resourceMonitor",
-        "gpuMonitor",
-        "ascendNpuMonitor",
-        "processManager",
-        "dockerManager",
-      ],
-      right_bottom: ["quickCmdBar", "serialSend", "recording", "lock"],
-      show_labels: false,
-    },
+    activity_bar_layout: cloneDefaultActivityBarLayout(),
   },
   keybindings: {},
 };

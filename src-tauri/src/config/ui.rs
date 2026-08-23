@@ -184,6 +184,8 @@ pub struct ActivityBarLayout {
     pub right_bottom: Vec<String>,
     #[serde(default)]
     pub show_labels: bool,
+    #[serde(default)]
+    pub hidden_items: Vec<String>,
 }
 
 impl Default for ActivityBarLayout {
@@ -194,6 +196,7 @@ impl Default for ActivityBarLayout {
             right_top: default_right_top(),
             right_bottom: default_right_bottom(),
             show_labels: false,
+            hidden_items: Vec::new(),
         }
     }
 }
@@ -502,8 +505,37 @@ impl Default for UiConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{RestorablePaneNode, RestorableTab};
+    use super::{ActivityBarLayout, RestorablePaneNode, RestorableTab};
     use serde_json::json;
+
+    #[test]
+    fn activity_bar_layout_deserializes_legacy_shape_without_hidden_items() {
+        let raw = json!({
+            "left_top": ["fileExplorer"],
+            "left_bottom": ["settings"],
+            "right_top": ["savedConnections"],
+            "right_bottom": ["lock"],
+            "show_labels": true
+        });
+
+        let layout: ActivityBarLayout =
+            serde_json::from_value(raw).expect("legacy activity bar layout");
+
+        assert!(layout.hidden_items.is_empty());
+        assert!(layout.show_labels);
+    }
+
+    #[test]
+    fn activity_bar_layout_round_trips_hidden_items() {
+        let mut layout = ActivityBarLayout::default();
+        layout.hidden_items = vec!["gpuMonitor".to_string(), "settings".to_string()];
+
+        let encoded = serde_json::to_value(&layout).expect("activity layout json");
+        let decoded: ActivityBarLayout =
+            serde_json::from_value(encoded).expect("activity layout decode");
+
+        assert_eq!(decoded.hidden_items, layout.hidden_items);
+    }
 
     #[test]
     fn current_leaf_schema_round_trips_terminal_fields() {

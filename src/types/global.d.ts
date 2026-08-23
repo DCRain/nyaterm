@@ -731,6 +731,8 @@ export interface ActivityBarLayout {
   right_bottom: string[];
   /** When true every activity bar icon shows its name below the icon. */
   show_labels: boolean;
+  /** Activity bar item ids hidden by the user without changing their layout position. */
+  hidden_items: string[];
 }
 
 /** Layout preferences: panel widths, active panels, theme. */

@@ -167,6 +167,12 @@ pub fn load_app_settings(app: &AppHandle) -> AppResult<AppSettings> {
             migrated = true;
         }
     }
+    for item in settings.ui.activity_bar_layout.hidden_items.iter_mut() {
+        if item == "keyManagement" {
+            *item = "securityAuth".to_string();
+            migrated = true;
+        }
+    }
 
     for list in [
         &mut settings.ui.activity_bar_layout.left_top,

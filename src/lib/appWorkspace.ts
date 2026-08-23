@@ -2,11 +2,62 @@ import type { TerminalWindowNode } from "@/lib/tabWindows";
 import { collectSessionPanes } from "@/lib/workspaceTabs";
 import type {
   ActivityBarLayout,
+  ActivityBarZone,
   SessionPane,
   Tab,
   UiConfig,
   WorkspaceSessionType,
 } from "@/types/global";
+
+export const ACTIVITY_LAYOUT_ZONES = [
+  "left_top",
+  "left_bottom",
+  "right_top",
+  "right_bottom",
+] as const satisfies readonly ActivityBarZone[];
+
+export const DEFAULT_ACTIVITY_BAR_LAYOUT: ActivityBarLayout = {
+  left_top: ["fileExplorer", "notes", "network", "securityAuth"],
+  left_bottom: ["syncBackupHistory", "settings"],
+  right_top: [
+    "savedConnections",
+    "aiAssistant",
+    "activeSessions",
+    "commandHistory",
+    "resourceMonitor",
+    "gpuMonitor",
+    "ascendNpuMonitor",
+    "processManager",
+    "dockerManager",
+  ],
+  right_bottom: ["quickCmdBar", "serialSend", "recording", "lock"],
+  show_labels: false,
+  hidden_items: [],
+};
+
+export const ACTIVITY_BAR_ITEM_IDS = new Set<string>([
+  ...DEFAULT_ACTIVITY_BAR_LAYOUT.left_top,
+  ...DEFAULT_ACTIVITY_BAR_LAYOUT.left_bottom,
+  ...DEFAULT_ACTIVITY_BAR_LAYOUT.right_top,
+  ...DEFAULT_ACTIVITY_BAR_LAYOUT.right_bottom,
+]);
+
+export const ACTIVITY_BAR_PANEL_ITEM_IDS = new Set<string>([
+  "fileExplorer",
+  "notes",
+  "network",
+  "securityAuth",
+  "syncBackupHistory",
+  "savedConnections",
+  "aiAssistant",
+  "activeSessions",
+  "commandHistory",
+  "resourceMonitor",
+  "gpuMonitor",
+  "ascendNpuMonitor",
+  "processManager",
+  "dockerManager",
+]);
 
 export const NON_PANEL_IDS = new Set([
   "settings",
@@ -101,12 +152,98 @@ export function getItemSide(
   return null;
 }
 
-export function isActivityItemVisible(id: string, ui: UiConfig): boolean {
+export function isActivityItemAvailable(id: string, ui: UiConfig): boolean {
   return MONITOR_PANEL_VISIBILITY[id]?.(ui) ?? true;
 }
 
+export function isActivityItemVisible(id: string, ui: UiConfig): boolean {
+  return isActivityItemAvailable(id, ui);
+}
+
+export function isActivityItemHidden(id: string, ui: UiConfig): boolean {
+  return (ui.activity_bar_layout.hidden_items ?? []).includes(id);
+}
+
+export function isActivityBarItemVisible(id: string, ui: UiConfig): boolean {
+  return isActivityItemAvailable(id, ui) && !isActivityItemHidden(id, ui);
+}
+
 export function getVisibleActivityIds(ids: string[], ui: UiConfig): string[] {
-  return ids.filter((id) => isActivityItemVisible(id, ui));
+  return ids.filter((id) => isActivityBarItemVisible(id, ui));
+}
+
+export function cloneDefaultActivityBarLayout(): ActivityBarLayout {
+  return {
+    left_top: [...DEFAULT_ACTIVITY_BAR_LAYOUT.left_top],
+    left_bottom: [...DEFAULT_ACTIVITY_BAR_LAYOUT.left_bottom],
+    right_top: [...DEFAULT_ACTIVITY_BAR_LAYOUT.right_top],
+    right_bottom: [...DEFAULT_ACTIVITY_BAR_LAYOUT.right_bottom],
+    show_labels: DEFAULT_ACTIVITY_BAR_LAYOUT.show_labels,
+    hidden_items: [],
+  };
+}
+
+export function hideActivityBarItem(layout: ActivityBarLayout, itemId: string): ActivityBarLayout {
+  if ((layout.hidden_items ?? []).includes(itemId)) return layout;
+  return {
+    ...layout,
+    hidden_items: [...(layout.hidden_items ?? []), itemId],
+  };
+}
+
+export function showActivityBarItem(layout: ActivityBarLayout, itemId: string): ActivityBarLayout {
+  if (!(layout.hidden_items ?? []).includes(itemId)) return layout;
+  return {
+    ...layout,
+    hidden_items: (layout.hidden_items ?? []).filter((id) => id !== itemId),
+  };
+}
+
+export function toggleActivityBarItemVisibility(
+  layout: ActivityBarLayout,
+  itemId: string,
+): ActivityBarLayout {
+  return (layout.hidden_items ?? []).includes(itemId)
+    ? showActivityBarItem(layout, itemId)
+    : hideActivityBarItem(layout, itemId);
+}
+
+export function resetActivityBarLayout(): ActivityBarLayout {
+  return cloneDefaultActivityBarLayout();
+}
+
+export function getActivityBarItemIdsForSide(
+  layout: ActivityBarLayout,
+  side: "left" | "right",
+): string[] {
+  return side === "left"
+    ? [...layout.left_top, ...layout.left_bottom]
+    : [...layout.right_top, ...layout.right_bottom];
+}
+
+export function getHiddenActivityItemsForSide(
+  ui: UiConfig,
+  side: "left" | "right",
+  itemIds: Set<string> = ACTIVITY_BAR_ITEM_IDS,
+): string[] {
+  const hidden = new Set(ui.activity_bar_layout.hidden_items ?? []);
+  return getActivityBarItemIdsForSide(ui.activity_bar_layout, side).filter(
+    (id) => itemIds.has(id) && hidden.has(id) && isActivityItemAvailable(id, ui),
+  );
+}
+
+export function mergeVisibleReorder(
+  currentIds: string[],
+  orderedVisibleIds: string[],
+  uiConfig: UiConfig,
+): string[] {
+  const orderedVisibleSet = new Set(orderedVisibleIds);
+  const nextVisibleIds = [...orderedVisibleIds];
+  const reordered = currentIds.map((id) => {
+    if (!orderedVisibleSet.has(id) || !isActivityBarItemVisible(id, uiConfig)) return id;
+    return nextVisibleIds.shift() ?? id;
+  });
+  return [...reordered, ...nextVisibleIds.filter((id) => !reordered.includes(id))];
 }
 
 function getSidePanelOrder(

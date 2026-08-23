@@ -93,6 +93,7 @@ const ZONE_LABELS: { zone: ActivityBarZone; key: string; icon: ReactNode }[] = [
 interface ActivityBarProps {
   items: ActivityBarItem[];
   bottomItems?: ActivityBarItem[];
+  hiddenItems?: ActivityBarItem[];
   activeId: string | null;
   /** Additional active panel ids (multi-open panel mode). */
   activeIds?: Set<string>;
@@ -100,7 +101,10 @@ interface ActivityBarProps {
   onSelect: (id: string) => void;
   onReorder: (zone: "top" | "bottom", orderedIds: string[]) => void;
   onMoveItem: (itemId: string, targetZone: ActivityBarZone) => void;
+  onHideItem: (itemId: string) => void;
+  onShowItem: (itemId: string) => void;
   onToggleLabel: () => void;
+  onRequestResetLayout: () => void;
   showLabels: boolean;
   side: "left" | "right";
   zone: { top: ActivityBarZone; bottom: ActivityBarZone };
@@ -109,65 +113,101 @@ interface ActivityBarProps {
 export default function ActivityBar({
   items,
   bottomItems,
+  hiddenItems = [],
   activeId,
   activeIds,
   activeBottomIds,
   onSelect,
   onReorder,
   onMoveItem,
+  onHideItem,
+  onShowItem,
   onToggleLabel,
+  onRequestResetLayout,
   showLabels,
   side,
   zone,
 }: ActivityBarProps) {
+  const { t } = useTranslation();
   const indicatorSide = side === "left" ? "left-0" : "right-0";
   const tooltipSide = side === "left" ? "right" : "left";
 
   return (
     <TooltipProvider delayDuration={400}>
-      <div
-        className="flex flex-col shrink-0 w-10 select-none"
-        style={{
-          backgroundColor: "var(--df-bg-panel)",
-          borderColor: "var(--df-border)",
-          borderRightWidth: side === "left" ? 1 : 0,
-          borderLeftWidth: side === "right" ? 1 : 0,
-        }}
-      >
-        <DropZone
-          items={items}
-          zoneKey="top"
-          zoneName={zone.top}
-          activeId={activeId}
-          activeIds={activeIds}
-          onSelect={onSelect}
-          onReorder={onReorder}
-          onMoveItem={onMoveItem}
-          onToggleLabel={onToggleLabel}
-          showLabels={showLabels}
-          indicatorSide={indicatorSide}
-          tooltipSide={tooltipSide}
-          className="flex flex-col items-center gap-0.5 pt-1"
-        />
-        {bottomItems && bottomItems.length > 0 && (
-          <DropZone
-            items={bottomItems}
-            zoneKey="bottom"
-            zoneName={zone.bottom}
-            activeId={activeId}
-            activeIds={activeIds}
-            activeBottomIds={activeBottomIds}
-            onSelect={onSelect}
-            onReorder={onReorder}
-            onMoveItem={onMoveItem}
-            onToggleLabel={onToggleLabel}
-            showLabels={showLabels}
-            indicatorSide={indicatorSide}
-            tooltipSide={tooltipSide}
-            className="mt-auto flex flex-col items-center gap-0.5 pb-1"
-          />
-        )}
-      </div>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div
+            className="flex flex-col shrink-0 w-10 select-none"
+            style={{
+              backgroundColor: "var(--df-bg-panel)",
+              borderColor: "var(--df-border)",
+              borderRightWidth: side === "left" ? 1 : 0,
+              borderLeftWidth: side === "right" ? 1 : 0,
+            }}
+          >
+            <DropZone
+              items={items}
+              zoneKey="top"
+              zoneName={zone.top}
+              activeId={activeId}
+              activeIds={activeIds}
+              onSelect={onSelect}
+              onReorder={onReorder}
+              onMoveItem={onMoveItem}
+              onHideItem={onHideItem}
+              onToggleLabel={onToggleLabel}
+              showLabels={showLabels}
+              indicatorSide={indicatorSide}
+              tooltipSide={tooltipSide}
+              className="flex flex-col items-center gap-0.5 pt-1"
+            />
+            <DropZone
+              items={bottomItems ?? []}
+              zoneKey="bottom"
+              zoneName={zone.bottom}
+              activeId={activeId}
+              activeIds={activeIds}
+              activeBottomIds={activeBottomIds}
+              onSelect={onSelect}
+              onReorder={onReorder}
+              onMoveItem={onMoveItem}
+              onHideItem={onHideItem}
+              onToggleLabel={onToggleLabel}
+              showLabels={showLabels}
+              indicatorSide={indicatorSide}
+              tooltipSide={tooltipSide}
+              className="mt-auto flex flex-col items-center gap-0.5 pb-1"
+            />
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuSub>
+            <ContextMenuSubTrigger disabled={hiddenItems.length === 0}>
+              {t("activityBar.hiddenItems")}
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent>
+              {hiddenItems.length === 0 ? (
+                <ContextMenuItem disabled>{t("activityBar.noHiddenItems")}</ContextMenuItem>
+              ) : (
+                hiddenItems.map((item) => (
+                  <ContextMenuItem key={item.id} onClick={() => onShowItem(item.id)}>
+                    {item.icon}
+                    {item.tooltip}
+                  </ContextMenuItem>
+                ))
+              )}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+          <ContextMenuSeparator />
+          <ContextMenuCheckboxItem checked={showLabels} onCheckedChange={onToggleLabel}>
+            {t("activityBar.showLabel")}
+          </ContextMenuCheckboxItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem onClick={onRequestResetLayout}>
+            {t("activityBar.resetLayout")}
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
     </TooltipProvider>
   );
 }
@@ -182,6 +222,7 @@ interface DropZoneProps {
   onSelect: (id: string) => void;
   onReorder: (zone: "top" | "bottom", orderedIds: string[]) => void;
   onMoveItem: (itemId: string, targetZone: ActivityBarZone) => void;
+  onHideItem: (itemId: string) => void;
   onToggleLabel: () => void;
   showLabels: boolean;
   indicatorSide: string;
@@ -199,6 +240,7 @@ function DropZone({
   onSelect,
   onReorder,
   onMoveItem,
+  onHideItem,
   onToggleLabel,
   showLabels,
   indicatorSide,
@@ -408,6 +450,7 @@ function DropZone({
           tooltipSide={tooltipSide}
           currentZone={zoneName}
           onMoveItem={onMoveItem}
+          onHideItem={onHideItem}
           onToggleLabel={onToggleLabel}
           dropZoneName={zoneName}
           dropIndex={idx}
@@ -446,6 +489,7 @@ function ActivityBarButton({
   tooltipSide,
   currentZone,
   onMoveItem,
+  onHideItem,
   onToggleLabel,
   dropZoneName,
   dropIndex,
@@ -469,6 +513,7 @@ function ActivityBarButton({
   tooltipSide: "left" | "right";
   currentZone: ActivityBarZone;
   onMoveItem: (itemId: string, targetZone: ActivityBarZone) => void;
+  onHideItem: (itemId: string) => void;
   onToggleLabel: () => void;
   dropZoneName: ActivityBarZone;
   dropIndex: number;
@@ -503,6 +548,7 @@ function ActivityBarButton({
               onPointerMove={onPointerMove}
               onPointerUp={onPointerEnd}
               onPointerCancel={onPointerCancel}
+              onContextMenu={(event) => event.stopPropagation()}
               className={`relative flex flex-col items-center justify-center w-full transition-colors ${showLabel ? "min-h-12 gap-0.5 py-1" : "h-9"}`}
               style={{
                 color: active ? "var(--df-primary)" : "var(--df-text-muted)",
@@ -564,6 +610,10 @@ function ActivityBarButton({
             ))}
           </ContextMenuSubContent>
         </ContextMenuSub>
+        <ContextMenuSeparator />
+        <ContextMenuItem onClick={() => onHideItem(item.id)}>
+          {t("activityBar.hideItem", { name: item.tooltip })}
+        </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuCheckboxItem checked={showLabel} onCheckedChange={onToggleLabel}>
           {t("activityBar.showLabel")}

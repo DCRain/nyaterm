@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
-import type { SessionPane } from "@/types/global";
-import { canCreateSessionFromPane } from "./appWorkspace";
+import type { SessionPane, UiConfig } from "@/types/global";
+import {
+  canCreateSessionFromPane,
+  cloneDefaultActivityBarLayout,
+  getHiddenActivityItemsForSide,
+  getItemSide,
+  getSideOpenPanels,
+  getVisibleActivityIds,
+  hideActivityBarItem,
+  isActivityBarItemVisible,
+  isActivityItemAvailable,
+  mergeVisibleReorder,
+  resetActivityBarLayout,
+  showActivityBarItem,
+  toggleActivityBarItemVisibility,
+} from "./appWorkspace";
 
 const basePane = {
   id: "pane-1",
@@ -92,5 +106,100 @@ describe("canCreateSessionFromPane", () => {
 
   it("still allows local panes without connection metadata", () => {
     expect(canCreateSessionFromPane(pane({ type: "Local" }))).toBe(true);
+  });
+});
+
+function uiConfig(overrides: Partial<UiConfig> = {}): UiConfig {
+  return {
+    activity_bar_layout: cloneDefaultActivityBarLayout(),
+    active_left_panel: null,
+    active_right_panel: null,
+    left_open_panels: [],
+    right_open_panels: [],
+    show_notes_panel: true,
+    show_remote_stats: true,
+    show_gpu_monitor: true,
+    show_ascend_npu_monitor: true,
+    show_process_manager: true,
+    show_docker_manager: true,
+    ...overrides,
+  } as UiConfig;
+}
+
+describe("activity bar visibility state", () => {
+  it("hides, shows, and toggles icons without changing feature availability", () => {
+    const ui = uiConfig({
+      show_gpu_monitor: true,
+      activity_bar_layout: hideActivityBarItem(cloneDefaultActivityBarLayout(), "gpuMonitor"),
+    });
+
+    expect(isActivityItemAvailable("gpuMonitor", ui)).toBe(true);
+    expect(isActivityBarItemVisible("gpuMonitor", ui)).toBe(false);
+    expect(showActivityBarItem(ui.activity_bar_layout, "gpuMonitor").hidden_items).toEqual([]);
+    expect(
+      toggleActivityBarItemVisibility(ui.activity_bar_layout, "gpuMonitor").hidden_items,
+    ).toEqual([]);
+    expect(
+      toggleActivityBarItemVisibility(cloneDefaultActivityBarLayout(), "gpuMonitor").hidden_items,
+    ).toEqual(["gpuMonitor"]);
+  });
+
+  it("filters activity bar ids by hidden state while open-panel state can remain active", () => {
+    const layout = hideActivityBarItem(cloneDefaultActivityBarLayout(), "aiAssistant");
+    const ui = uiConfig({ activity_bar_layout: layout, active_right_panel: "aiAssistant" });
+
+    expect(getVisibleActivityIds(["savedConnections", "aiAssistant"], ui)).toEqual([
+      "savedConnections",
+    ]);
+    expect(getSideOpenPanels(ui, "right", false)).toEqual(["aiAssistant"]);
+  });
+
+  it("keeps hidden disabled feature state until the feature is available again", () => {
+    const layout = hideActivityBarItem(cloneDefaultActivityBarLayout(), "gpuMonitor");
+    const disabled = uiConfig({ activity_bar_layout: layout, show_gpu_monitor: false });
+    const enabled = uiConfig({ activity_bar_layout: layout, show_gpu_monitor: true });
+
+    expect(isActivityItemAvailable("gpuMonitor", disabled)).toBe(false);
+    expect(isActivityBarItemVisible("gpuMonitor", disabled)).toBe(false);
+    expect(isActivityBarItemVisible("gpuMonitor", enabled)).toBe(false);
+    expect(enabled.activity_bar_layout.hidden_items).toEqual(["gpuMonitor"]);
+  });
+
+  it("merges visible reorders without moving or restoring hidden items", () => {
+    const layout = {
+      ...cloneDefaultActivityBarLayout(),
+      left_top: ["A", "B", "C", "D"],
+      hidden_items: ["B"],
+    };
+    const ui = uiConfig({ activity_bar_layout: layout });
+
+    expect(mergeVisibleReorder(layout.left_top, ["A", "D", "C"], ui)).toEqual([
+      "A",
+      "B",
+      "D",
+      "C",
+    ]);
+  });
+
+  it("resolves hidden items by their layout side", () => {
+    const layout = {
+      ...cloneDefaultActivityBarLayout(),
+      left_bottom: [...cloneDefaultActivityBarLayout().left_bottom, "aiAssistant"],
+      right_top: cloneDefaultActivityBarLayout().right_top.filter((id) => id !== "aiAssistant"),
+      hidden_items: ["aiAssistant"],
+    };
+    const ui = uiConfig({ activity_bar_layout: layout });
+
+    expect(getItemSide("aiAssistant", layout)).toBe("left");
+    expect(getHiddenActivityItemsForSide(ui, "left")).toEqual(["aiAssistant"]);
+    expect(getHiddenActivityItemsForSide(ui, "right")).toEqual([]);
+  });
+
+  it("resets layout order, hidden items, and label visibility", () => {
+    const layout = resetActivityBarLayout();
+
+    expect(layout.hidden_items).toEqual([]);
+    expect(layout.show_labels).toBe(false);
+    expect(layout.left_top).toEqual(["fileExplorer", "notes", "network", "securityAuth"]);
   });
 });
