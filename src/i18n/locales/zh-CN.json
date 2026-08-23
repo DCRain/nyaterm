@@ -1410,6 +1410,8 @@
     "dockerManager": "Docker",
     "fileExplorer": "文件浏览器",
     "fileTransfer": "文件传输",
+    "floatingMode": "悬浮面板",
+    "floatingModeDescription": "以覆盖工作区的方式打开侧边面板，不改变终端尺寸。",
     "gpuMonitor": "GPU",
     "network": "网络",
     "noActiveSessions": "暂无活动会话",

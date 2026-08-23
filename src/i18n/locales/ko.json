@@ -1410,6 +1410,8 @@
     "dockerManager": "Docker",
     "fileExplorer": "파일",
     "fileTransfer": "전송",
+    "floatingMode": "플로팅 패널",
+    "floatingModeDescription": "터미널 크기를 바꾸지 않고 사이드 패널을 오버레이로 엽니다.",
     "gpuMonitor": "GPU",
     "network": "네트워크",
     "noActiveSessions": "활성 세션이 없습니다",

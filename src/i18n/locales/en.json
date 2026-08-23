@@ -1411,6 +1411,8 @@
     "dockerManager": "Docker",
     "fileExplorer": "Files",
     "fileTransfer": "Transfers",
+    "floatingMode": "Floating Panels",
+    "floatingModeDescription": "Open side panels as overlays without resizing the terminal.",
     "gpuMonitor": "GPU",
     "network": "Network",
     "noActiveSessions": "No active sessions",
