@@ -20,7 +20,9 @@ import {
 } from "@/components/ui/select";
 
 export interface VariableDef {
+  key: string;
   raw: string;
+  raws: string[];
   name: string;
   options?: string[];
   defaultValue?: string;
@@ -50,18 +52,14 @@ export default function VariablePromptDialog({
       const initial: Record<string, string> = {};
 
       variables.forEach((v) => {
-        initial[v.name] = v.defaultValue || (v.options && v.options.length > 0 ? v.options[0] : "");
+        initial[v.key] = v.defaultValue || (v.options && v.options.length > 0 ? v.options[0] : "");
       });
       setValues(initial);
     }
   }, [open, variables]);
 
   const handleSubmit = () => {
-    let finalCmd = command;
-    variables.forEach((v) => {
-      finalCmd = finalCmd.split(v.raw).join(values[v.name] || "");
-    });
-    onSubmit(finalCmd);
+    onSubmit(resolveCommandVariables(command, variables, values));
   };
 
   return (
@@ -75,13 +73,13 @@ export default function VariablePromptDialog({
         </DialogHeader>
 
         <div className="p-5 space-y-4 max-h-[60vh] overflow-y-auto">
-          {variables.map((v) => (
-            <div key={v.name}>
+          {variables.map((v, index) => (
+            <div key={v.key}>
               <Label className="text-[0.6875rem] text-muted-foreground">{v.name}</Label>
               {v.options && v.options.length > 0 ? (
                 <Select
-                  value={values[v.name] || ""}
-                  onValueChange={(val) => setValues({ ...values, [v.name]: val })}
+                  value={values[v.key] || ""}
+                  onValueChange={(val) => setValues({ ...values, [v.key]: val })}
                 >
                   <SelectTrigger className="mt-1 h-8 text-xs">
                     <SelectValue />
@@ -97,9 +95,9 @@ export default function VariablePromptDialog({
               ) : (
                 <Input
                   className="mt-1 text-xs h-8"
-                  value={values[v.name] || ""}
-                  onChange={(e) => setValues({ ...values, [v.name]: e.target.value })}
-                  autoFocus
+                  value={values[v.key] || ""}
+                  onChange={(e) => setValues({ ...values, [v.key]: e.target.value })}
+                  autoFocus={index === 0}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       handleSubmit();
@@ -116,10 +114,7 @@ export default function VariablePromptDialog({
             </Label>
             <div className="text-[0.6875rem] font-mono break-all text-muted-foreground mt-2">
               {(() => {
-                let preview = command;
-                variables.forEach((v) => {
-                  preview = preview.split(v.raw).join(values[v.name] || "");
-                });
+                const preview = resolveCommandVariables(command, variables, values);
                 return preview || <span className="opacity-50">Empty command</span>;
               })()}
             </div>
@@ -139,31 +134,80 @@ export default function VariablePromptDialog({
   );
 }
 
+function parseVariableContent(content: string) {
+  const optionDelimiter = content.indexOf("|");
+  if (optionDelimiter >= 0) {
+    const name = content.slice(0, optionDelimiter).trim();
+    const options = content
+      .slice(optionDelimiter + 1)
+      .split(",")
+      .map((s) => s.trim());
+    return { name, options };
+  }
+
+  const defaultDelimiter = content.indexOf("=");
+  if (defaultDelimiter >= 0) {
+    const name = content.slice(0, defaultDelimiter).trim();
+    const defaultValue = content.slice(defaultDelimiter + 1).trim();
+    return { name, defaultValue };
+  }
+
+  return { name: content.trim() };
+}
+
 export function parseCommandVariables(command: string): VariableDef[] {
   const regex = /\{\{([^}]+)\}\}/g;
   const matches = [...command.matchAll(regex)];
 
   const vars: VariableDef[] = [];
-  const seen = new Set<string>();
+  const byName = new Map<string, VariableDef>();
 
   for (const match of matches) {
     const raw = match[0];
-    const content = match[1];
+    const variable = parseVariableContent(match[1]);
+    if (!variable.name) continue;
 
-    if (seen.has(raw)) continue;
-    seen.add(raw);
-
-    if (content.includes("|")) {
-      const [name, optsStr] = content.split("|");
-      const options = optsStr.split(",").map((s) => s.trim());
-      vars.push({ raw, name: name.trim(), options });
-    } else if (content.includes("=")) {
-      const [name, defaultVal] = content.split("=");
-      vars.push({ raw, name: name.trim(), defaultValue: defaultVal.trim() });
-    } else {
-      vars.push({ raw, name: content.trim() });
+    const existing = byName.get(variable.name);
+    if (existing) {
+      if (!existing.raws.includes(raw)) {
+        existing.raws.push(raw);
+      }
+      if (!existing.options && variable.options) {
+        existing.options = variable.options;
+      }
+      if (existing.defaultValue === undefined && variable.defaultValue !== undefined) {
+        existing.defaultValue = variable.defaultValue;
+      }
+      continue;
     }
+
+    const parsedVariable: VariableDef = {
+      key: `variable-${vars.length}`,
+      raw,
+      raws: [raw],
+      name: variable.name,
+      options: variable.options,
+      defaultValue: variable.defaultValue,
+    };
+    vars.push(parsedVariable);
+    byName.set(variable.name, parsedVariable);
   }
 
   return vars;
+}
+
+export function resolveCommandVariables(
+  command: string,
+  variables: VariableDef[],
+  values: Record<string, string>,
+) {
+  let finalCmd = command;
+  variables.forEach((variable) => {
+    const value = values[variable.key] || "";
+    const raws = variable.raws.length > 0 ? variable.raws : [variable.raw];
+    raws.forEach((raw) => {
+      finalCmd = finalCmd.split(raw).join(value);
+    });
+  });
+  return finalCmd;
 }
