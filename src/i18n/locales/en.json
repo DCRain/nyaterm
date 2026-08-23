@@ -836,6 +836,7 @@
   "externalOpen": {
     "continueConnection": "Continue Connection",
     "inlinePassword": "This link format cannot pass passwords. Use ssh://user:password@host:port only for one-time SSH passwords.",
+    "invalidMode": "External SSH link mode must be standard or terminal.",
     "invalidPort": "External link port must be between 1 and 65535.",
     "invalidUrl": "Invalid external connection link.",
     "matchDescription": "Choose which saved connection should handle this external link.",
@@ -2645,6 +2646,7 @@
     "inlinePassword": "Only ssh:// URLs can include one-time passwords. Command-style inline passwords are not supported.",
     "invalidBaudRate": "Enter a valid baud rate.",
     "invalidInput": "Enter a valid command, URL, or host.",
+    "invalidMode": "SSH URL mode must be standard or terminal.",
     "invalidPort": "Port must be between 1 and 65535.",
     "loadingSerialPorts": "Loading serial ports...",
     "missingHost": "Enter a host to connect to.",

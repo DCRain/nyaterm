@@ -835,6 +835,7 @@
   "externalOpen": {
     "continueConnection": "继续连接",
     "inlinePassword": "这种链接格式不能传递密码。仅 ssh://user:password@host:port 支持一次性 SSH 密码。",
+    "invalidMode": "外部 SSH 链接模式必须是 standard 或 terminal。",
     "invalidPort": "外部链接端口必须在 1 到 65535 之间。",
     "invalidUrl": "无效的外部连接链接。",
     "matchDescription": "选择要用于处理此外部链接的已保存连接。",
@@ -2644,6 +2645,7 @@
     "inlinePassword": "只有 ssh:// URL 可以携带一次性密码，不支持命令形式的内联密码。",
     "invalidBaudRate": "请输入有效的波特率。",
     "invalidInput": "请输入有效的命令、URL 或主机。",
+    "invalidMode": "SSH URL 模式必须是 standard 或 terminal。",
     "invalidPort": "端口必须在 1 到 65535 之间。",
     "loadingSerialPorts": "正在加载串口设备...",
     "missingHost": "请输入要连接的主机。",
