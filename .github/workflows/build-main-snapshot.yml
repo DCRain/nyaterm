@@ -328,11 +328,38 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  build-win7:
+    name: Build Windows 7 x64
+    needs: prepare
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout main commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.main_sha }}
+          fetch-depth: 0
+
+      - name: Build Win7 offline installer
+        id: win7
+        uses: ./.github/actions/build-win7
+        with:
+          artifact-version: ${{ env.SNAPSHOT_VERSION }}
+
+      - name: Upload Win7 build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-windows-x64-win7
+          path: ${{ steps.win7.outputs.installer-path }}
+          if-no-files-found: error
+          retention-days: 7
+
   publish-github-release:
     name: Publish GitHub snapshot release
     needs:
       - prepare
       - build
+      - build-win7
     runs-on: ubuntu-latest
 
     permissions:
