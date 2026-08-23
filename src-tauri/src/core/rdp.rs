@@ -894,6 +894,12 @@ async fn build_ironrdp_config(
         );
     }
 
+    tracing::debug!(
+        session_id = %config.session_id,
+        "RDP TLS backend: {}",
+        rdp_tls_backend_label()
+    );
+
     let certificate_verifier = Arc::new(NyaTermRdpCertificateVerifier {
         app: app.clone(),
         session: session.clone(),
@@ -1647,8 +1653,15 @@ fn emit_pointer_event(app: &AppHandle, session_id: &str, event: RdpPointerEvent)
 
 fn classify_connector_error(error: &ironrdp::connector::ConnectorError) -> (RdpErrorKind, bool) {
     let text = format!("{error:?}").to_ascii_lowercase();
-    if text.contains("certificate") {
+    classify_connector_error_text(&text)
+}
+
+fn classify_connector_error_text(text: &str) -> (RdpErrorKind, bool) {
+    if is_nyaterm_certificate_rejection(text) {
         return (RdpErrorKind::Certificate, false);
+    }
+    if is_tls_error_text(text) {
+        return (RdpErrorKind::Tls, true);
     }
     if text.contains("credssp")
         || text.contains("authentication")
@@ -1661,14 +1674,17 @@ fn classify_connector_error(error: &ironrdp::connector::ConnectorError) -> (RdpE
     if text.contains("negotiation") || text.contains("x224") || text.contains("nla") {
         return (RdpErrorKind::Negotiation, false);
     }
-    if text.contains("tls") {
-        return (RdpErrorKind::Tls, true);
+    if text.contains("certificate") {
+        return (RdpErrorKind::Certificate, false);
     }
     (RdpErrorKind::Transport, true)
 }
 
 fn classify_session_error<E: fmt::Debug>(error: &E) -> (RdpErrorKind, bool) {
     let text = format!("{error:?}").to_ascii_lowercase();
+    if is_tls_error_text(&text) {
+        return (RdpErrorKind::Tls, true);
+    }
     if text.contains("authentication") || text.contains("password") {
         return (RdpErrorKind::Authentication, false);
     }
@@ -1685,6 +1701,21 @@ fn classify_session_error<E: fmt::Debug>(error: &E) -> (RdpErrorKind, bool) {
         return (RdpErrorKind::Transport, true);
     }
     (RdpErrorKind::Session, true)
+}
+
+fn is_tls_error_text(text: &str) -> bool {
+    text.contains("tls")
+        || text.contains("handshake")
+        || text.contains("schannel")
+        || text.contains("connectionreset")
+        || text.contains("connection reset")
+        || text.contains("10054")
+}
+
+fn is_nyaterm_certificate_rejection(text: &str) -> bool {
+    text.contains("certificate rejected")
+        || text.contains("unknown certificate")
+        || text.contains("certificate fingerprint changed")
 }
 
 fn user_facing_connector_error(
@@ -1704,6 +1735,7 @@ fn user_facing_connector_error(
 fn user_facing_session_error<E: fmt::Debug>(error: &E, kind: RdpErrorKind) -> String {
     match kind {
         RdpErrorKind::Authentication => "RDP authentication failed".to_string(),
+        RdpErrorKind::Tls => format!("RDP TLS connection failed: {error:?}"),
         RdpErrorKind::Clipboard => format!("RDP clipboard error: {error:?}"),
         RdpErrorKind::Transport => format!("RDP transport interrupted: {error:?}"),
         _ => format!("RDP session error: {error:?}"),
@@ -1846,6 +1878,16 @@ fn current_platform() -> MajorPlatformType {
     {
         MajorPlatformType::UNIX
     }
+}
+
+#[cfg(windows)]
+fn rdp_tls_backend_label() -> &'static str {
+    "native-tls (Schannel)"
+}
+
+#[cfg(not(windows))]
+fn rdp_tls_backend_label() -> &'static str {
+    "rustls"
 }
 
 async fn set_state(
@@ -2022,6 +2064,57 @@ mod tests {
                 KnownHostCheck::HostSeen
             ),
             Ok(true)
+        );
+    }
+
+    #[test]
+    fn rdp_tls_backend_label_matches_target() {
+        #[cfg(windows)]
+        assert_eq!(rdp_tls_backend_label(), "native-tls (Schannel)");
+        #[cfg(not(windows))]
+        assert_eq!(rdp_tls_backend_label(), "rustls");
+    }
+
+    #[test]
+    fn native_tls_vendor_keeps_certificate_decision_with_nyaterm() {
+        let native_tls_backend = include_str!("../../vendor/ironrdp-tls/src/native_tls.rs");
+
+        assert!(native_tls_backend.contains(".danger_accept_invalid_certs(true)"));
+        assert!(native_tls_backend.contains(".danger_accept_invalid_hostnames(true)"));
+        assert!(native_tls_backend.contains(".use_sni(false)"));
+    }
+
+    #[test]
+    fn connector_classifier_treats_tls_upgrade_reset_as_tls() {
+        let text = r#"error { context: "tlsupgrade", kind: custom, source: some(os {
+            code: 10054,
+            kind: connectionreset,
+            message: "remote host reset the connection"
+        })) }"#;
+
+        assert_eq!(
+            classify_connector_error_text(text),
+            (RdpErrorKind::Tls, true)
+        );
+    }
+
+    #[test]
+    fn classifier_keeps_nyaterm_certificate_rejections_as_certificate() {
+        assert_eq!(
+            classify_connector_error_text("tlsupgrade failed: certificate rejected"),
+            (RdpErrorKind::Certificate, false)
+        );
+        assert_eq!(
+            classify_connector_error_text("certificate fingerprint changed"),
+            (RdpErrorKind::Certificate, false)
+        );
+    }
+
+    #[test]
+    fn session_classifier_treats_handshake_failures_as_tls() {
+        assert_eq!(
+            classify_session_error(&"native-tls Schannel handshake failure"),
+            (RdpErrorKind::Tls, true)
         );
     }
 
