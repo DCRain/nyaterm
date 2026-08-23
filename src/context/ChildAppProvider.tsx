@@ -144,6 +144,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   },
   transfer: {
     editor_type: "external",
+    internal_editor_display: "workspace",
     download_threads: 3,
     upload_threads: 3,
     duplicate_strategy: "ask",

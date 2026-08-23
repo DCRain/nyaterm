@@ -84,7 +84,7 @@ import { matchesKeyEvent } from "@/lib/shortcutRegistry";
 import { getSessionInputPeerIds } from "@/lib/syncInputGroups";
 import { cn, formatSize } from "@/lib/utils";
 import type { FileWindowTarget } from "@/lib/windowManager";
-import { openAutoUpload, openFilePreview } from "@/lib/windowManager";
+import { openAutoUpload, openFilePreview, openRemoteFileEditor } from "@/lib/windowManager";
 import { findOpenFileDocument } from "@/lib/workspaceTabs";
 import type {
   AICustomActionConfig,
@@ -94,6 +94,7 @@ import type {
   SessionInfo,
   SessionType,
 } from "@/types/global";
+import { resolveFileEditorOpenTarget, resolveInternalEditorDisplay } from "./editorOpenMode";
 import { FileExplorerDialogs } from "./FileExplorerDialogs";
 import {
   clearDirectoryChildrenCacheForPath,
@@ -2844,6 +2845,25 @@ function FileExplorerPane({
 
     const backend = explorerBackendRef.current;
     const path = getEntryFullPath(entry);
+    if (resolveInternalEditorDisplay(appSettings.transfer.internal_editor_display) === "window") {
+      try {
+        await openRemoteFileEditor({
+          sessionId: activeSessionId,
+          backend,
+          path,
+          name: entry.name,
+          size: entry.size,
+          mtime: entry.mtime,
+          target: fileWindowTarget,
+        });
+      } catch (error) {
+        toast.error(
+          getErrorMessage(error) || t("fileExplorer.openInternalFailed"),
+        );
+      }
+      return;
+    }
+
     const existing = findOpenFileDocument(tabs, {
       backend,
       sessionId: activeSessionId,
@@ -2894,7 +2914,7 @@ function FileExplorerPane({
   };
 
   const handleOpenDefault = async (entry: FileEntry) => {
-    if ((appSettings.transfer.editor_type || "external") === "internal") {
+    if (resolveFileEditorOpenTarget(appSettings.transfer) !== "external") {
       await handleOpenInternal(entry);
       return;
     }

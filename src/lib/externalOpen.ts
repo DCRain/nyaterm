@@ -8,10 +8,11 @@ import {
   type TemporaryTelnetLinkConfig,
 } from "./temporaryLink";
 
-export type ExternalOpenProtocol = "ssh" | "telnet";
+export type ExternalNetworkOpenProtocol = "ssh" | "telnet";
+export type ExternalOpenProtocol = ExternalNetworkOpenProtocol | "local";
 
-export interface ExternalOpenIntent {
-  protocol: ExternalOpenProtocol;
+export interface ExternalNetworkOpenIntent {
+  protocol: ExternalNetworkOpenProtocol;
   host: string;
   port: number;
   username: string | null;
@@ -21,6 +22,15 @@ export interface ExternalOpenIntent {
   runtimeModeSpecified: boolean;
   temporary: TemporaryLinkConfig;
 }
+
+export interface ExternalLocalOpenIntent {
+  protocol: "local";
+  workingDir: string | null;
+}
+
+export type ExternalOpenIntent =
+  | ExternalNetworkOpenIntent
+  | ExternalLocalOpenIntent;
 
 export type ExternalOpenParseResult =
   | { ok: true; intent: ExternalOpenIntent }
@@ -88,7 +98,7 @@ export function parseExternalOpenUrl(rawUrl: string): ExternalOpenParseResult {
 
 export function findExternalConnectionMatches(
   savedConnections: SavedConnection[],
-  intent: ExternalOpenIntent,
+  intent: ExternalNetworkOpenIntent,
 ): ExternalConnectionResolution {
   if (intent.protocol === "ssh" && intent.passwordSpecified) {
     return { kind: "temporary", config: intent.temporary };
@@ -129,7 +139,7 @@ export function findExternalConnectionMatches(
 
 function parseExternalTemporaryUrl(
   rawUrl: string,
-  protocol: ExternalOpenProtocol,
+  protocol: ExternalNetworkOpenProtocol,
 ): ExternalOpenParseResult {
   const parsed = parseTemporaryLink(protocol, rawUrl);
   if (!parsed.ok) {
@@ -199,7 +209,7 @@ function parseNyatermUrl(rawUrl: string): ExternalOpenParseResult {
   }
 
   const protocol = url.pathname.replace(/^\/+/, "").toLowerCase();
-  if (protocol !== "ssh" && protocol !== "telnet") {
+  if (protocol !== "ssh" && protocol !== "telnet" && protocol !== "local") {
     return invalid(
       "externalOpen.unsupportedProtocol",
       "unsupported_scheme",
@@ -208,6 +218,10 @@ function parseNyatermUrl(rawUrl: string): ExternalOpenParseResult {
   }
 
   const params = url.searchParams;
+  if (protocol === "local") {
+    return parseNyatermLocalUrl(params);
+  }
+
   for (const key of params.keys()) {
     const normalizedKey = key.toLowerCase();
     if (normalizedKey === "password") {
@@ -367,7 +381,7 @@ function normalizeHostForMatch(host: string): string {
 
 function normalizePortForProtocol(
   port: number | undefined,
-  protocol: ExternalOpenProtocol,
+  protocol: ExternalNetworkOpenProtocol,
 ) {
   return port && Number.isInteger(port)
     ? port
@@ -376,12 +390,45 @@ function normalizePortForProtocol(
       : DEFAULT_TELNET_PORT;
 }
 
-function parsePort(value: string | null, protocol: ExternalOpenProtocol) {
+function parsePort(value: string | null, protocol: ExternalNetworkOpenProtocol) {
   if (!value)
     return protocol === "ssh" ? DEFAULT_SSH_PORT : DEFAULT_TELNET_PORT;
   if (!/^\d+$/.test(value)) return null;
   const port = Number(value);
   return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
+}
+
+function parseNyatermLocalUrl(params: URLSearchParams): ExternalOpenParseResult {
+  for (const key of params.keys()) {
+    const normalizedKey = key.toLowerCase();
+    if (normalizedKey === "password") {
+      return invalid(
+        "externalOpen.inlinePassword",
+        "inline_password",
+        "nyaterm",
+      );
+    }
+    if (normalizedKey !== "cwd") {
+      return invalid(
+        "externalOpen.unsupportedParameter",
+        "unsupported_parameter",
+        "nyaterm",
+      );
+    }
+  }
+
+  const workingDir = params.get("cwd");
+  if (workingDir !== null && workingDir.trim() === "") {
+    return invalid("externalOpen.invalidUrl", "empty_cwd", "nyaterm");
+  }
+
+  return {
+    ok: true,
+    intent: {
+      protocol: "local",
+      workingDir,
+    },
+  };
 }
 
 function mapTemporaryErrorKey(errorKey: string) {

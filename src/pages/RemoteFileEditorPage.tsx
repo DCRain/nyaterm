@@ -24,7 +24,7 @@ import ChildWindowHeader from "@/components/layout/ChildWindowHeader";
 import {
   getLocalPathName,
   languageFromFilename,
-  type RemoteTextFile,
+  type TextFileOpenResult,
 } from "@/components/panel/file-explorer/model";
 import { Button } from "@/components/ui/button";
 import {
@@ -210,6 +210,13 @@ export default function RemoteFileEditorPage() {
     [updateTabs],
   );
 
+  const closeWindow = useCallback(() => {
+    forceCloseRef.current = true;
+    getCurrentWindow()
+      .close()
+      .catch(() => {});
+  }, []);
+
   const createEditorState = useCallback(
     (content: string, language: string) =>
       EditorState.create({
@@ -261,6 +268,58 @@ export default function RemoteFileEditorPage() {
     [rememberCurrentEditorState],
   );
 
+  const removeUnsupportedTab = useCallback(
+    (id: string) => {
+      delete editorStatesRef.current[id];
+      const currentTabs = tabsRef.current;
+      if (currentTabs.length <= 1) {
+        closeWindow();
+        return;
+      }
+
+      const index = currentTabs.findIndex((item) => item.id === id);
+      const nextTabs = currentTabs.filter((item) => item.id !== id);
+      updateTabs(() => nextTabs);
+      if (activeTabIdRef.current === id) {
+        const nextActive = nextTabs[Math.min(Math.max(index, 0), nextTabs.length - 1)];
+        activeTabIdRef.current = nextActive.id;
+        setActiveTabId(nextActive.id);
+      }
+    },
+    [closeWindow, updateTabs],
+  );
+
+  const openExternalFile = useCallback(
+    async (tab: EditorTab) => {
+      if (tab.backend === "local") {
+        await openPath(tab.path, appSettings.transfer.default_editor || undefined);
+        return;
+      }
+
+      const root = await tempDir();
+      const safeName = await invoke<string>("sanitize_download_file_name", { name: tab.name });
+      const localPath = await join(
+        root,
+        "nyaterm",
+        tab.sessionId,
+        Date.now().toString(),
+        safeName,
+      );
+      await invoke("download_remote_file", {
+        sessionId: tab.sessionId,
+        remotePath: tab.path,
+        localPath,
+      });
+      await invoke("start_file_watch", {
+        sessionId: tab.sessionId,
+        localPath,
+        remotePath: tab.path,
+      });
+      await openPath(localPath, appSettings.transfer.default_editor || undefined);
+    },
+    [appSettings.transfer.default_editor],
+  );
+
   const loadFile = useCallback(
     async (id: string, fallbackTab?: EditorTab) => {
       const tab = tabsRef.current.find((item) => item.id === id) ?? fallbackTab;
@@ -268,29 +327,51 @@ export default function RemoteFileEditorPage() {
 
       updateTab(id, (current) => ({ ...current, loading: true, error: "" }));
       try {
-        const result = await invoke<RemoteTextFile>(
-          tab.backend === "local" ? "read_local_file_text" : "read_remote_file_text",
+        const result = await invoke<TextFileOpenResult>(
+          tab.backend === "local" ? "open_local_file_text" : "open_remote_file_text",
           {
             sessionId: tab.sessionId,
             path: tab.path,
             maxBytes: MAX_EDITOR_FILE_BYTES,
           },
         );
+        if (result.status === "unsupported") {
+          toast.info(
+            t(
+              result.reason === "binary"
+                ? "fileExplorer.binaryOpenExternal"
+                : "fileExplorer.unsupportedEncodingOpenExternal",
+            ),
+          );
+          try {
+            await openExternalFile(tab);
+            removeUnsupportedTab(id);
+          } catch (externalError) {
+            updateTab(id, (current) => ({
+              ...current,
+              loading: false,
+              error: getErrorMessage(externalError) || t("fileEditor.openExternalFailed"),
+            }));
+          }
+          return;
+        }
+
+        const file = result.file;
         updateTab(id, (current) => ({
           ...current,
-          content: result.content,
-          baseSize: result.size,
-          baseMtime: result.mtime ?? current.mtime ?? 0,
-          baseMtimeNanos: result.mtimeNanos,
-          baseContentHash: result.contentHash,
-          size: result.size,
-          mtime: result.mtime ?? current.mtime ?? 0,
+          content: file.content,
+          baseSize: file.size,
+          baseMtime: file.mtime ?? current.mtime ?? 0,
+          baseMtimeNanos: file.mtimeNanos,
+          baseContentHash: file.contentHash,
+          size: file.size,
+          mtime: file.mtime ?? current.mtime ?? 0,
           loading: false,
           dirty: false,
           error: "",
           lastSavedAt: null,
         }));
-        const nextState = createEditorState(result.content, tab.language);
+        const nextState = createEditorState(file.content, tab.language);
         editorStatesRef.current[id] = nextState;
         if (activeTabIdRef.current === id) {
           setEditorState(nextState);
@@ -303,7 +384,7 @@ export default function RemoteFileEditorPage() {
         }));
       }
     },
-    [createEditorState, setEditorState, t, updateTab],
+    [createEditorState, openExternalFile, removeUnsupportedTab, setEditorState, t, updateTab],
   );
 
   const addOrFocusTab = useCallback(
@@ -401,13 +482,6 @@ export default function RemoteFileEditorPage() {
     };
   }, [dirtyTabs.length]);
 
-  const closeWindow = useCallback(() => {
-    forceCloseRef.current = true;
-    getCurrentWindow()
-      .close()
-      .catch(() => {});
-  }, []);
-
   const requestReloadTab = useCallback(
     (tab: EditorTab) => {
       if (tab.dirty) {
@@ -481,38 +555,11 @@ export default function RemoteFileEditorPage() {
 
   const openExternal = useCallback(
     (tab: EditorTab) => {
-      const run = async () => {
-        if (tab.backend === "local") {
-          await openPath(tab.path, appSettings.transfer.default_editor || undefined);
-          return;
-        }
-
-        const root = await tempDir();
-        const safeName = await invoke<string>("sanitize_download_file_name", { name: tab.name });
-        const localPath = await join(
-          root,
-          "nyaterm",
-          tab.sessionId,
-          Date.now().toString(),
-          safeName,
-        );
-        await invoke("download_remote_file", {
-          sessionId: tab.sessionId,
-          remotePath: tab.path,
-          localPath,
-        });
-        await invoke("start_file_watch", {
-          sessionId: tab.sessionId,
-          localPath,
-          remotePath: tab.path,
-        });
-        await openPath(localPath, appSettings.transfer.default_editor || undefined);
-      };
-      run().catch((err) => {
+      openExternalFile(tab).catch((err) => {
         toast.error(getErrorMessage(err) || t("fileEditor.openExternalFailed"));
       });
     },
-    [appSettings.transfer.default_editor, t],
+    [openExternalFile, t],
   );
 
   const closeTab = useCallback(

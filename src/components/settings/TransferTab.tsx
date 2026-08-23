@@ -144,6 +144,21 @@ export function TransferTab() {
             ]}
           />
         )}
+
+        {(transfer.editor_type || "external") === "internal" && (
+          <SettingSelect
+            label={t("settings.internalEditorDisplay")}
+            desc={t("settings.internalEditorDisplayDesc")}
+            value={transfer.internal_editor_display || "workspace"}
+            controlClassName="max-w-sm"
+            onValueChange={(v) =>
+              update({ internal_editor_display: v as "workspace" | "window" })
+            }
+          >
+            <SelectItem value="workspace">{t("settings.internalEditorDisplayWorkspace")}</SelectItem>
+            <SelectItem value="window">{t("settings.internalEditorDisplayWindow")}</SelectItem>
+          </SettingSelect>
+        )}
       </SettingSection>
 
       <SettingSection contentClassName="space-y-5">
