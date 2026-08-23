@@ -113,6 +113,9 @@ importers:
       '@xterm/addon-fit':
         specifier: 0.12.0-beta.288
         version: 0.12.0-beta.288(@xterm/xterm@6.1.0-beta.288)
+      '@xterm/addon-image':
+        specifier: 0.10.0-beta.288
+        version: 0.10.0-beta.288(@xterm/xterm@6.1.0-beta.288)
       '@xterm/addon-search':
         specifier: 0.17.0-beta.288
         version: 0.17.0-beta.288(@xterm/xterm@6.1.0-beta.288)
@@ -4603,6 +4606,11 @@ packages:
 
   '@xterm/addon-fit@0.12.0-beta.288':
     resolution: {integrity: sha512-fiPUx+IKzr+LRzjxkPQ+PHmbzxYqyCxIwk4H0Nf5+TDpP9tSyvxvcZgThfzjL/dBi/fhuHw8UrsiObtpahxCyg==}
+    peerDependencies:
+      '@xterm/xterm': ^6.1.0-beta.288
+
+  '@xterm/addon-image@0.10.0-beta.288':
+    resolution: {integrity: sha512-zlgz0IIG3Te/aP4Kg1xRgWvCzgMgAk3LOP+RvGJAfP2g8tMFZBqcVVdX9BWTsp6hZQ4XaBPiiW+bORms/0Y3OQ==}
     peerDependencies:
       '@xterm/xterm': ^6.1.0-beta.288
 
@@ -14912,6 +14920,10 @@ snapshots:
       '@xtuc/long': 4.2.2
 
   '@xterm/addon-fit@0.12.0-beta.288(@xterm/xterm@6.1.0-beta.288)':
+    dependencies:
+      '@xterm/xterm': 6.1.0-beta.288
+
+  '@xterm/addon-image@0.10.0-beta.288(@xterm/xterm@6.1.0-beta.288)':
     dependencies:
       '@xterm/xterm': 6.1.0-beta.288
 
