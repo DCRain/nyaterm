@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { SessionPane, UiConfig } from "@/types/global";
 import {
   canCreateSessionFromPane,
+  canUseFloatingPanel,
+  clearUnavailableFloatingPanels,
   cloneDefaultActivityBarLayout,
   getHiddenActivityItemsForSide,
   getItemSide,
@@ -11,6 +13,9 @@ import {
   isActivityBarItemVisible,
   isActivityItemAvailable,
   mergeVisibleReorder,
+  moveFloatingPanelSide,
+  normalizePanelOpenMode,
+  reduceFloatingPanelSelect,
   resetActivityBarLayout,
   showActivityBarItem,
   toggleActivityBarItemVisibility,
@@ -112,6 +117,7 @@ describe("canCreateSessionFromPane", () => {
 function uiConfig(overrides: Partial<UiConfig> = {}): UiConfig {
   return {
     activity_bar_layout: cloneDefaultActivityBarLayout(),
+    panel_open_mode: "docked",
     active_left_panel: null,
     active_right_panel: null,
     left_open_panels: [],
@@ -201,5 +207,73 @@ describe("activity bar visibility state", () => {
     expect(layout.hidden_items).toEqual([]);
     expect(layout.show_labels).toBe(false);
     expect(layout.left_top).toEqual(["fileExplorer", "notes", "network", "securityAuth"]);
+  });
+});
+
+describe("floating panel state", () => {
+  it("normalizes unknown panel open modes to docked", () => {
+    expect(normalizePanelOpenMode("floating")).toBe("floating");
+    expect(normalizePanelOpenMode("docked")).toBe("docked");
+    expect(normalizePanelOpenMode("sideways")).toBe("docked");
+    expect(normalizePanelOpenMode(null)).toBe("docked");
+    expect(normalizePanelOpenMode(undefined)).toBe("docked");
+  });
+
+  it("only treats real side panels as floating-capable", () => {
+    expect(canUseFloatingPanel("recording")).toBe(true);
+    expect(canUseFloatingPanel("aiAssistant")).toBe(true);
+    expect(canUseFloatingPanel("settings")).toBe(false);
+    expect(canUseFloatingPanel("lock")).toBe(false);
+    expect(canUseFloatingPanel("quickCmdBar")).toBe(false);
+    expect(canUseFloatingPanel("serialSend")).toBe(false);
+  });
+
+  it("toggles the same floating panel and replaces another panel on the same side", () => {
+    const empty = { left: null, right: null };
+    const opened = reduceFloatingPanelSelect(empty, "fileExplorer", "left");
+    expect(opened).toEqual({ left: "fileExplorer", right: null });
+    expect(reduceFloatingPanelSelect(opened, "notes", "left")).toEqual({
+      left: "notes",
+      right: null,
+    });
+    expect(reduceFloatingPanelSelect(opened, "fileExplorer", "left")).toEqual({
+      left: null,
+      right: null,
+    });
+  });
+
+  it("keeps left and right floating panels independent", () => {
+    const state = reduceFloatingPanelSelect(
+      { left: "fileExplorer", right: null },
+      "aiAssistant",
+      "right",
+    );
+
+    expect(state).toEqual({ left: "fileExplorer", right: "aiAssistant" });
+  });
+
+  it("moves a floating panel to a new side and replaces the target side", () => {
+    expect(
+      moveFloatingPanelSide(
+        { left: "fileExplorer", right: "aiAssistant" },
+        "aiAssistant",
+        "left",
+      ),
+    ).toEqual({ left: "aiAssistant", right: null });
+  });
+
+  it("closes floating panels that become unavailable without treating hidden items as unavailable", () => {
+    const layout = hideActivityBarItem(cloneDefaultActivityBarLayout(), "aiAssistant");
+    const ui = uiConfig({
+      activity_bar_layout: layout,
+      show_gpu_monitor: false,
+    });
+
+    expect(
+      clearUnavailableFloatingPanels(
+        { left: "gpuMonitor", right: "aiAssistant" },
+        ui,
+      ),
+    ).toEqual({ left: null, right: "aiAssistant" });
   });
 });

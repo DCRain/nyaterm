@@ -246,6 +246,8 @@ pub struct UiConfig {
     pub terminal_window_layout: Option<RestorableTerminalWindowNode>,
     #[serde(default = "default_start_workspace_mode")]
     pub start_workspace_mode: String,
+    #[serde(default = "default_panel_open_mode")]
+    pub panel_open_mode: String,
     #[serde(default = "default_left_width")]
     pub left_width: f64,
     #[serde(default = "default_right_width")]
@@ -384,6 +386,10 @@ fn default_start_workspace_mode() -> String {
     "workbench".to_string()
 }
 
+fn default_panel_open_mode() -> String {
+    "docked".to_string()
+}
+
 fn default_active_left_panel() -> Option<String> {
     Some("fileExplorer".to_string())
 }
@@ -454,6 +460,7 @@ impl Default for UiConfig {
             open_tabs: vec![],
             terminal_window_layout: None,
             start_workspace_mode: default_start_workspace_mode(),
+            panel_open_mode: default_panel_open_mode(),
             left_width: default_left_width(),
             right_width: default_right_width(),
             quick_cmd_height: default_quick_cmd_height(),
@@ -505,7 +512,7 @@ impl Default for UiConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActivityBarLayout, RestorablePaneNode, RestorableTab};
+    use super::{ActivityBarLayout, RestorablePaneNode, RestorableTab, UiConfig};
     use serde_json::json;
 
     #[test]
@@ -535,6 +542,24 @@ mod tests {
             serde_json::from_value(encoded).expect("activity layout decode");
 
         assert_eq!(decoded.hidden_items, layout.hidden_items);
+    }
+
+    #[test]
+    fn ui_config_defaults_panel_open_mode_to_docked() {
+        let ui = UiConfig::default();
+        assert_eq!(ui.panel_open_mode, "docked");
+    }
+
+    #[test]
+    fn ui_config_deserializes_legacy_shape_without_panel_open_mode() {
+        let raw = json!({
+            "left_width": 300.0,
+            "right_width": 320.0
+        });
+
+        let ui: UiConfig = serde_json::from_value(raw).expect("legacy ui config");
+
+        assert_eq!(ui.panel_open_mode, "docked");
     }
 
     #[test]

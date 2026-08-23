@@ -55,16 +55,24 @@ import {
 } from "./lib/appSessionFactory";
 import {
   buildPanelOpenUpdate,
+  canUseFloatingPanel,
   canCreateSessionFromPane,
+  clearUnavailableFloatingPanels,
   collectActiveNonSerialSessionIds,
   EXCLUSIVE_PANEL_IDS,
+  type FloatingPanelsState,
   getSideOpenPanels,
   getSideOverlayPanel,
+  getItemSide,
   getVisibleActivityIds,
   hasLiveSession,
   isActivityItemAvailable,
   isNonSerialSessionType,
+  moveFloatingPanelSide,
   NON_PANEL_IDS,
+  normalizePanelOpenMode,
+  type PanelOpenMode,
+  reduceFloatingPanelSelect,
   type TrayAction,
 } from "./lib/appWorkspace";
 import { collectFileDocumentPaneIds, removePaneFromTabs } from "./lib/appWorkspaceClose";
@@ -218,6 +226,7 @@ function App() {
     [remoteStatsEnabled],
   );
   const multiPanelOpen = appSettings.appearance.panel_multi_open;
+  const panelOpenMode = normalizePanelOpenMode(uiConfig.panel_open_mode);
   const { t, i18n } = useTranslation();
 
   useEffect(() => {
@@ -243,6 +252,11 @@ function App() {
   const [showSyncGroupDialog, setShowSyncGroupDialog] = useState(false);
   const [showQuitConfirm, setShowQuitConfirm] = useState(false);
   const [showActivityBarResetConfirm, setShowActivityBarResetConfirm] = useState(false);
+  const [floatingPanels, setFloatingPanels] = useState<FloatingPanelsState>({
+    left: null,
+    right: null,
+  });
+  const [lastFloatingSide, setLastFloatingSide] = useState<"left" | "right" | null>(null);
   const {
     pendingFileDocumentClose,
     savingFileDocuments,
@@ -323,12 +337,103 @@ function App() {
     return () => clearTimeout(timer);
   }, [portable, runtimeInfoLoaded]);
 
+  const closeFloatingPanel = useCallback(
+    (side: "left" | "right") => {
+      if (!floatingPanels[side]) return;
+      const next = { ...floatingPanels, [side]: null };
+      setFloatingPanels(next);
+      if (lastFloatingSide !== side) return;
+      setLastFloatingSide(
+        side === "left" ? (next.right ? "right" : null) : next.left ? "left" : null,
+      );
+    },
+    [floatingPanels, lastFloatingSide],
+  );
+
+  const handleFloatingPanelSelect = useCallback(
+    (panelId: string, side: "left" | "right") => {
+      const next = reduceFloatingPanelSelect(floatingPanels, panelId, side);
+      const otherSide = side === "left" ? "right" : "left";
+      setFloatingPanels(next);
+      setLastFloatingSide(next[side] ? side : next[otherSide] ? otherSide : null);
+    },
+    [floatingPanels],
+  );
+
+  const handleFloatingPanelMove = useCallback(
+    (panelId: string, targetSide: "left" | "right") => {
+      const next = moveFloatingPanelSide(floatingPanels, panelId, targetSide);
+      if (next === floatingPanels) return;
+      setFloatingPanels(next);
+      setLastFloatingSide(targetSide);
+    },
+    [floatingPanels],
+  );
+
+  const handlePanelOpenModeChange = useCallback(
+    (mode: PanelOpenMode) => {
+      const nextMode = normalizePanelOpenMode(mode);
+      setFloatingPanels({ left: null, right: null });
+      setLastFloatingSide(null);
+      updateUi(
+        nextMode === "floating"
+          ? {
+              active_left_panel: null,
+              active_right_panel: null,
+              left_open_panels: [],
+              right_open_panels: [],
+              panel_open_mode: "floating",
+            }
+          : { panel_open_mode: "docked" },
+      );
+    },
+    [updateUi],
+  );
+
+  const openPanel = useCallback(
+    (panelId: string, fallbackSide: "left" | "right" = "left") => {
+      const side = getItemSide(panelId, uiConfig.activity_bar_layout) ?? fallbackSide;
+      if (panelOpenMode === "floating" && canUseFloatingPanel(panelId)) {
+        handleFloatingPanelSelect(panelId, side);
+        return;
+      }
+      updateUi((prev) => buildPanelOpenUpdate(prev, panelId, multiPanelOpen, fallbackSide));
+    },
+    [
+      handleFloatingPanelSelect,
+      multiPanelOpen,
+      panelOpenMode,
+      uiConfig.activity_bar_layout,
+      updateUi,
+    ],
+  );
+
   const handleOpenPanel = useCallback(
     (panelId: "activeSessions" | "syncBackupHistory") => {
-      updateUi((prev) => buildPanelOpenUpdate(prev, panelId, multiPanelOpen));
+      openPanel(panelId);
     },
-    [multiPanelOpen, updateUi],
+    [openPanel],
   );
+
+  useEffect(() => {
+    if (!settingsLoaded || panelOpenMode !== "floating") return;
+    updateUi((prev) => {
+      if (
+        !prev.active_left_panel &&
+        !prev.active_right_panel &&
+        (prev.left_open_panels?.length ?? 0) === 0 &&
+        (prev.right_open_panels?.length ?? 0) === 0
+      ) {
+        return {};
+      }
+      return {
+        active_left_panel: null,
+        active_right_panel: null,
+        left_open_panels: [],
+        right_open_panels: [],
+      };
+    });
+  }, [panelOpenMode, settingsLoaded, updateUi]);
 
   // Cross-window event listeners
   useEffect(() => {
@@ -1150,11 +1255,11 @@ function App() {
       const detail = (event as CustomEvent<AIOpenIntent>).detail;
       if (!detail) return;
       setAiIntent(detail);
-      updateUi((prev) => buildPanelOpenUpdate(prev, "aiAssistant", multiPanelOpen, "right"));
+      openPanel("aiAssistant", "right");
     };
     window.addEventListener(AI_OPEN_EVENT, handler);
     return () => window.removeEventListener(AI_OPEN_EVENT, handler);
-  }, [multiPanelOpen, updateUi]);
+  }, [openPanel]);
 
   const { unreadTabIds, disconnectedTabIds } = useTabStatusIndicators(tabs, activeTabId);
 
@@ -1676,6 +1781,18 @@ function App() {
   );
 
   const handleToggleLeftSidebar = useCallback(() => {
+    if (panelOpenMode === "floating") {
+      if (floatingPanels.left) {
+        closeFloatingPanel("left");
+        return;
+      }
+      const first = getVisibleActivityIds(
+        [...uiConfig.activity_bar_layout.left_top, ...uiConfig.activity_bar_layout.left_bottom],
+        uiConfig,
+      ).find(canUseFloatingPanel);
+      if (first) handleFloatingPanelSelect(first, "left");
+      return;
+    }
     updateUi((prev) => {
       if (multiPanelOpen) {
         if ((prev.left_open_panels?.length ?? 0) > 0 || prev.active_left_panel) {
@@ -1697,9 +1814,29 @@ function App() {
       ).find((id) => !NON_PANEL_IDS.has(id));
       return { active_left_panel: first ?? null };
     });
-  }, [multiPanelOpen, updateUi]);
+  }, [
+    closeFloatingPanel,
+    floatingPanels.left,
+    handleFloatingPanelSelect,
+    multiPanelOpen,
+    panelOpenMode,
+    uiConfig,
+    updateUi,
+  ]);
 
   const handleToggleRightSidebar = useCallback(() => {
+    if (panelOpenMode === "floating") {
+      if (floatingPanels.right) {
+        closeFloatingPanel("right");
+        return;
+      }
+      const first = getVisibleActivityIds(
+        [...uiConfig.activity_bar_layout.right_top, ...uiConfig.activity_bar_layout.right_bottom],
+        uiConfig,
+      ).find(canUseFloatingPanel);
+      if (first) handleFloatingPanelSelect(first, "right");
+      return;
+    }
     updateUi((prev) => {
       if (multiPanelOpen) {
         if ((prev.right_open_panels?.length ?? 0) > 0 || prev.active_right_panel) {
@@ -1721,7 +1858,15 @@ function App() {
       ).find((id) => !NON_PANEL_IDS.has(id));
       return { active_right_panel: first ?? null };
     });
-  }, [multiPanelOpen, updateUi]);
+  }, [
+    closeFloatingPanel,
+    floatingPanels.right,
+    handleFloatingPanelSelect,
+    multiPanelOpen,
+    panelOpenMode,
+    uiConfig,
+    updateUi,
+  ]);
 
   const { handleZoomIn, handleZoomOut, handleResetZoom } = useTerminalZoom(
     updateAppSettings,
@@ -2586,9 +2731,9 @@ function App() {
 
   const handleOpenChat = useCallback(() => {
     if (!isLocked) {
-      updateUi((prev) => buildPanelOpenUpdate(prev, "aiAssistant", multiPanelOpen, "right"));
+      openPanel("aiAssistant", "right");
     }
-  }, [isLocked, multiPanelOpen, updateUi]);
+  }, [isLocked, openPanel]);
 
   const handleShowAllCommands = useCallback(() => {
     if (!isLocked) {
@@ -2828,6 +2973,9 @@ function App() {
     uiConfig,
     recordingSessions,
     multiPanelOpen,
+    panelOpenMode,
+    onFloatingPanelSelect: handleFloatingPanelSelect,
+    onFloatingPanelMove: handleFloatingPanelMove,
     updateUi,
     setIsLocked,
     t,
@@ -3083,10 +3231,101 @@ function App() {
     () => (multiPanelOpen ? new Set(rightPanelIds) : undefined),
     [multiPanelOpen, rightPanelIds],
   );
+  const dockedLeftPanelIds = panelOpenMode === "floating" ? [] : leftPanelIds;
+  const dockedRightPanelIds = panelOpenMode === "floating" ? [] : rightPanelIds;
+  const dockedLeftOverlayPanelId = panelOpenMode === "floating" ? null : leftOverlayPanelId;
+  const dockedRightOverlayPanelId = panelOpenMode === "floating" ? null : rightOverlayPanelId;
+  const visibleFloatingPanels =
+    panelOpenMode === "floating" ? floatingPanels : { left: null, right: null };
+  const leftActivityActiveIds = useMemo(() => {
+    if (panelOpenMode !== "floating") return leftActiveIds;
+    return floatingPanels.left ? new Set([floatingPanels.left]) : undefined;
+  }, [floatingPanels.left, leftActiveIds, panelOpenMode]);
+  const rightActivityActiveIds = useMemo(() => {
+    if (panelOpenMode !== "floating") return rightActiveIds;
+    return floatingPanels.right ? new Set([floatingPanels.right]) : undefined;
+  }, [floatingPanels.right, panelOpenMode, rightActiveIds]);
+
+  useEffect(() => {
+    if (panelOpenMode !== "floating") return;
+    const next = clearUnavailableFloatingPanels(floatingPanels, uiConfig);
+    if (next === floatingPanels) return;
+    setFloatingPanels(next);
+    setLastFloatingSide((current) => {
+      if (current && next[current]) return current;
+      return next.right ? "right" : next.left ? "left" : null;
+    });
+  }, [floatingPanels, panelOpenMode, uiConfig]);
+
+  useEffect(() => {
+    if (panelOpenMode !== "floating") return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (isLocked || modalChildWindowCount > 0) return;
+      if (
+        showAbout ||
+        showUpdateDialog ||
+        showSyncGroupDialog ||
+        showQuitConfirm ||
+        showActivityBarResetConfirm ||
+        showSessionQuickSwitcher ||
+        showTemporarySshLink ||
+        Boolean(externalMatchDialog) ||
+        Boolean(postLoginConfirm) ||
+        Boolean(pendingFileDocumentClose) ||
+        Boolean(activeHostKeyRequest) ||
+        Boolean(activeSshAgentRequest) ||
+        Boolean(activeOtpRequest) ||
+        Boolean(activeSshAuthRequest) ||
+        Boolean(dockerSudoPasswordRequest) ||
+        rdpCertificateRequests.length > 0
+      ) {
+        return;
+      }
+
+      const sideToClose =
+        lastFloatingSide && floatingPanels[lastFloatingSide]
+          ? lastFloatingSide
+          : floatingPanels.right
+            ? "right"
+            : floatingPanels.left
+              ? "left"
+              : null;
+      if (!sideToClose) return;
+      event.preventDefault();
+      closeFloatingPanel(sideToClose);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    activeHostKeyRequest,
+    activeOtpRequest,
+    activeSshAgentRequest,
+    activeSshAuthRequest,
+    closeFloatingPanel,
+    dockerSudoPasswordRequest,
+    externalMatchDialog,
+    floatingPanels,
+    isLocked,
+    lastFloatingSide,
+    modalChildWindowCount,
+    panelOpenMode,
+    pendingFileDocumentClose,
+    postLoginConfirm,
+    rdpCertificateRequests.length,
+    showAbout,
+    showActivityBarResetConfirm,
+    showQuitConfirm,
+    showSessionQuickSwitcher,
+    showSyncGroupDialog,
+    showTemporarySshLink,
+    showUpdateDialog,
+  ]);
 
   // When multi-open mode is first enabled, seed the stacks from the active panels.
   useEffect(() => {
-    if (!settingsLoaded || !multiPanelOpen) return;
+    if (!settingsLoaded || !multiPanelOpen || panelOpenMode === "floating") return;
     updateUi((prev) => ({
       ...((prev.left_open_panels?.length ?? 0) === 0 &&
       prev.active_left_panel &&
@@ -3101,7 +3340,7 @@ function App() {
         ? { right_open_panels: [prev.active_right_panel] }
         : {}),
     }));
-  }, [multiPanelOpen, settingsLoaded, updateUi]);
+  }, [multiPanelOpen, panelOpenMode, settingsLoaded, updateUi]);
 
   const handlePanelStackResize = useCallback(
     (
@@ -3135,6 +3374,22 @@ function App() {
       });
     },
     [updateUi],
+  );
+
+  const getPanelTitle = useCallback(
+    (panelId: string) => {
+      switch (panelId) {
+        case "securityAuth":
+          return t("securityAuth.title");
+        case "aiAssistant":
+          return t("ai.title");
+        case "recording":
+          return t("recording.panelTitle");
+        default:
+          return t(`panel.${panelId}`);
+      }
+    },
+    [t],
   );
 
   const renderPanelContent = useCallback(
@@ -3271,6 +3526,7 @@ function App() {
           onRequestQuit: handleRequestQuit,
           onToggleActivityBarItemVisibility: handleToggleItemVisibility,
           onRequestActivityBarReset: () => setShowActivityBarResetConfirm(true),
+          onPanelOpenModeChange: handlePanelOpenModeChange,
         }}
         mobile={{
           leftOpen: mobileLeftOpen,
@@ -3282,8 +3538,8 @@ function App() {
           items: leftTopItems,
           bottomItems: leftBottomItems,
           hiddenItems: leftHiddenItems,
-          activeId: uiConfig.active_left_panel,
-          activeIds: leftActiveIds,
+          activeId: panelOpenMode === "floating" ? null : uiConfig.active_left_panel,
+          activeIds: leftActivityActiveIds,
           activeBottomIds: toggleActiveIds,
           onSelect: handleItemSelect,
           onReorder: (zoneKey, ids) => handleReorder("left", zoneKey, ids),
@@ -3292,14 +3548,16 @@ function App() {
           onShowItem: handleShowItem,
           onToggleLabel: handleToggleLabel,
           onRequestResetLayout: () => setShowActivityBarResetConfirm(true),
+          panelOpenMode,
+          onPanelOpenModeChange: handlePanelOpenModeChange,
           showLabels,
         }}
         rightActivityBar={{
           items: rightTopItems,
           bottomItems: rightBottomItems,
           hiddenItems: rightHiddenItems,
-          activeId: uiConfig.active_right_panel,
-          activeIds: rightActiveIds,
+          activeId: panelOpenMode === "floating" ? null : uiConfig.active_right_panel,
+          activeIds: rightActivityActiveIds,
           activeBottomIds: toggleActiveIds,
           onSelect: handleItemSelect,
           onReorder: (zoneKey, ids) => handleReorder("right", zoneKey, ids),
@@ -3308,15 +3566,20 @@ function App() {
           onShowItem: handleShowItem,
           onToggleLabel: handleToggleLabel,
           onRequestResetLayout: () => setShowActivityBarResetConfirm(true),
+          panelOpenMode,
+          onPanelOpenModeChange: handlePanelOpenModeChange,
           showLabels,
         }}
         onLeftResize={handleLeftResize}
         onRightResize={handleRightResize}
         panelContent={renderPanelContent}
-        leftPanelIds={leftPanelIds}
-        rightPanelIds={rightPanelIds}
-        leftOverlayPanelId={leftOverlayPanelId}
-        rightOverlayPanelId={rightOverlayPanelId}
+        panelTitle={getPanelTitle}
+        leftPanelIds={dockedLeftPanelIds}
+        rightPanelIds={dockedRightPanelIds}
+        floatingPanelIds={visibleFloatingPanels}
+        onCloseFloatingPanel={closeFloatingPanel}
+        leftOverlayPanelId={dockedLeftOverlayPanelId}
+        rightOverlayPanelId={dockedRightOverlayPanelId}
         panelStackSizes={uiConfig.panel_stack_sizes ?? {}}
         onPanelStackResize={handlePanelStackResize}
         workspace={{

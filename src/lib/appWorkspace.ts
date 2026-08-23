@@ -57,6 +57,7 @@ export const ACTIVITY_BAR_PANEL_ITEM_IDS = new Set<string>([
   "ascendNpuMonitor",
   "processManager",
   "dockerManager",
+  "recording",
 ]);
 
 export const NON_PANEL_IDS = new Set([
@@ -68,6 +69,23 @@ export const NON_PANEL_IDS = new Set([
 
 /** Panels that never join the multi-open stack and are always shown on their own. */
 export const EXCLUSIVE_PANEL_IDS = new Set(["aiAssistant"]);
+
+export type PanelOpenMode = "docked" | "floating";
+
+export interface FloatingPanelsState {
+  left: string | null;
+  right: string | null;
+}
+
+export function normalizePanelOpenMode(
+  value: string | null | undefined,
+): PanelOpenMode {
+  return value === "floating" ? "floating" : "docked";
+}
+
+export function canUseFloatingPanel(id: string): boolean {
+  return ACTIVITY_BAR_PANEL_ITEM_IDS.has(id) && !NON_PANEL_IDS.has(id);
+}
 
 const MONITOR_PANEL_VISIBILITY: Record<string, (ui: UiConfig) => boolean> = {
   notes: (ui) => ui.show_notes_panel ?? true,
@@ -154,6 +172,44 @@ export function getItemSide(
 
 export function isActivityItemAvailable(id: string, ui: UiConfig): boolean {
   return MONITOR_PANEL_VISIBILITY[id]?.(ui) ?? true;
+}
+
+export function reduceFloatingPanelSelect(
+  state: FloatingPanelsState,
+  panelId: string,
+  side: "left" | "right",
+): FloatingPanelsState {
+  return {
+    ...state,
+    [side]: state[side] === panelId ? null : panelId,
+  };
+}
+
+export function moveFloatingPanelSide(
+  state: FloatingPanelsState,
+  panelId: string,
+  targetSide: "left" | "right",
+): FloatingPanelsState {
+  const sourceSide = targetSide === "left" ? "right" : "left";
+  if (state[targetSide] !== panelId && state[sourceSide] !== panelId) {
+    return state;
+  }
+  return {
+    ...state,
+    [sourceSide]: state[sourceSide] === panelId ? null : state[sourceSide],
+    [targetSide]: panelId,
+  };
+}
+
+export function clearUnavailableFloatingPanels(
+  state: FloatingPanelsState,
+  ui: UiConfig,
+): FloatingPanelsState {
+  const left =
+    state.left && isActivityItemAvailable(state.left, ui) ? state.left : null;
+  const right =
+    state.right && isActivityItemAvailable(state.right, ui) ? state.right : null;
+  return left === state.left && right === state.right ? state : { left, right };
 }
 
 export function isActivityItemVisible(id: string, ui: UiConfig): boolean {

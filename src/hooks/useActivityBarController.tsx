@@ -24,6 +24,7 @@ import {
   ACTIVITY_BAR_ITEM_IDS,
   ACTIVITY_LAYOUT_ZONES,
   buildMultiPanelToggleUpdate,
+  canUseFloatingPanel,
   getHiddenActivityItemsForSide,
   getItemSide,
   hideActivityBarItem,
@@ -33,6 +34,7 @@ import {
   resetActivityBarLayout,
   showActivityBarItem,
   toggleActivityBarItemVisibility,
+  type PanelOpenMode,
 } from "@/lib/appWorkspace";
 import { openSettings } from "@/lib/windowManager";
 import type { ActivityBarLayout, ActivityBarZone, UiConfig } from "@/types/global";
@@ -221,6 +223,9 @@ interface UseActivityBarControllerOptions {
   uiConfig: UiConfig;
   recordingSessions: Set<string>;
   multiPanelOpen: boolean;
+  panelOpenMode: PanelOpenMode;
+  onFloatingPanelSelect: (panelId: string, side: "left" | "right") => void;
+  onFloatingPanelMove: (panelId: string, targetSide: "left" | "right") => void;
   updateUi: UpdateUi;
   setIsLocked: (locked: boolean) => void;
   t: TFunction;
@@ -230,6 +235,9 @@ export function useActivityBarController({
   uiConfig,
   recordingSessions,
   multiPanelOpen,
+  panelOpenMode,
+  onFloatingPanelSelect,
+  onFloatingPanelMove,
   updateUi,
   setIsLocked,
   t,
@@ -343,6 +351,10 @@ export function useActivityBarController({
       }
       const side = getItemSide(id, layout);
       if (!side) return;
+      if (panelOpenMode === "floating" && canUseFloatingPanel(id)) {
+        onFloatingPanelSelect(id, side);
+        return;
+      }
       if (multiPanelOpen) {
         updateUi((prev) => buildMultiPanelToggleUpdate(prev, id, side));
         return;
@@ -353,7 +365,14 @@ export function useActivityBarController({
         updateUi((prev) => ({ active_right_panel: prev.active_right_panel === id ? null : id }));
       }
     },
-    [layout, multiPanelOpen, setIsLocked, updateUi],
+    [
+      layout,
+      multiPanelOpen,
+      onFloatingPanelSelect,
+      panelOpenMode,
+      setIsLocked,
+      updateUi,
+    ],
   );
 
   const handleReorder = useCallback(
@@ -371,6 +390,8 @@ export function useActivityBarController({
 
   const handleMoveItem = useCallback(
     (itemId: string, targetZone: ActivityBarZone) => {
+      const isMovingToRight = targetZone === "right_top" || targetZone === "right_bottom";
+      const isMovingToLeft = targetZone === "left_top" || targetZone === "left_bottom";
       updateUi((prev) => {
         const zones = ["left_top", "left_bottom", "right_top", "right_bottom"] as const;
         const newLayout = { ...prev.activity_bar_layout };
@@ -378,8 +399,6 @@ export function useActivityBarController({
           newLayout[zone] = newLayout[zone].filter((id) => id !== itemId);
         }
         newLayout[targetZone] = [...newLayout[targetZone], itemId];
-        const isMovingToRight = targetZone === "right_top" || targetZone === "right_bottom";
-        const isMovingToLeft = targetZone === "left_top" || targetZone === "left_bottom";
         return {
           activity_bar_layout: newLayout,
           ...(prev.active_left_panel === itemId && isMovingToRight
@@ -396,8 +415,11 @@ export function useActivityBarController({
             : {}),
         };
       });
+      if (canUseFloatingPanel(itemId) && (isMovingToRight || isMovingToLeft)) {
+        onFloatingPanelMove(itemId, isMovingToRight ? "right" : "left");
+      }
     },
-    [updateUi],
+    [onFloatingPanelMove, updateUi],
   );
 
   const handleToggleLabel = useCallback(() => {

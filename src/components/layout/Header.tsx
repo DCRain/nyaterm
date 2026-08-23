@@ -81,6 +81,8 @@ import {
   ACTIVITY_BAR_PANEL_ITEM_IDS,
   getActivityBarItemIdsForSide,
   isActivityItemAvailable,
+  normalizePanelOpenMode,
+  type PanelOpenMode,
 } from "@/lib/appWorkspace";
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
@@ -577,6 +579,7 @@ interface HeaderProps {
   onRequestQuit?: () => void;
   onToggleActivityBarItemVisibility?: (itemId: string) => void;
   onRequestActivityBarReset?: () => void;
+  onPanelOpenModeChange?: (mode: PanelOpenMode) => void;
 }
 
 interface MenuItem {
@@ -741,6 +744,7 @@ export default function Header({
   onRequestQuit,
   onToggleActivityBarItemVisibility,
   onRequestActivityBarReset,
+  onPanelOpenModeChange,
 }: HeaderProps) {
   const [appWindow] = useState(() => getCurrentWindow());
   const { themeName, setTheme, themeNames, terminalThemeName, setTerminalTheme } = useTheme();
@@ -903,6 +907,7 @@ export default function Header({
 
   const leftActivityBarPanelMenuItems = buildActivityBarPanelMenuItems("left");
   const rightActivityBarPanelMenuItems = buildActivityBarPanelMenuItems("right");
+  const panelOpenMode = normalizePanelOpenMode(appSettings.ui.panel_open_mode);
 
   const menus: Record<string, MenuItem[]> = {
     file: [
@@ -997,6 +1002,16 @@ export default function Header({
         label: t("menu.panels"),
         icon: "view_sidebar",
         submenu: [
+          {
+            id: "view.panels.floatingMode",
+            label: t("panel.floatingMode"),
+            icon: "view_sidebar",
+            checked: panelOpenMode === "floating",
+            action: () =>
+              onPanelOpenModeChange?.(
+                panelOpenMode === "floating" ? "docked" : "floating",
+              ),
+          },
           {
             id: "view.panels.multiOpen",
             label: t("settings.panelMultiOpen"),

@@ -6,6 +6,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import FloatingPanel from "@/components/app/FloatingPanel";
 import { MdClose, MdTerminal } from "react-icons/md";
 import PanelStack from "@/components/app/PanelStack";
 import AboutDialog from "@/components/dialog/app/AboutDialog";
@@ -74,9 +75,15 @@ interface AppLayoutProps {
   onLeftResize: (delta: number) => void;
   onRightResize: (delta: number) => void;
   panelContent: (panelId: string | null) => ReactNode;
+  panelTitle: (panelId: string) => string;
   /** Panels visible per side, ordered top-to-bottom (single id in single-open mode). */
   leftPanelIds: string[];
   rightPanelIds: string[];
+  floatingPanelIds: {
+    left: string | null;
+    right: string | null;
+  };
+  onCloseFloatingPanel: (side: "left" | "right") => void;
   /** Exclusive panel (e.g. AI assistant) shown alone instead of the stack (multi-open mode). */
   leftOverlayPanelId: string | null;
   rightOverlayPanelId: string | null;
@@ -169,8 +176,11 @@ export default function AppLayout({
   onLeftResize,
   onRightResize,
   panelContent,
+  panelTitle,
   leftPanelIds,
   rightPanelIds,
+  floatingPanelIds,
+  onCloseFloatingPanel,
   leftOverlayPanelId,
   rightOverlayPanelId,
   panelStackSizes,
@@ -427,6 +437,30 @@ export default function AppLayout({
                     <p className="text-sm">{t("common.loading")}</p>
                   </div>
                 </div>
+              )}
+              {floatingPanelIds.left && (
+                <FloatingPanel
+                  side="left"
+                  panelId={floatingPanelIds.left}
+                  width={uiConfig.left_width}
+                  title={panelTitle(floatingPanelIds.left)}
+                  onClose={() => onCloseFloatingPanel("left")}
+                  onResize={onLeftResize}
+                >
+                  {panelContent(floatingPanelIds.left)}
+                </FloatingPanel>
+              )}
+              {floatingPanelIds.right && (
+                <FloatingPanel
+                  side="right"
+                  panelId={floatingPanelIds.right}
+                  width={uiConfig.right_width}
+                  title={panelTitle(floatingPanelIds.right)}
+                  onClose={() => onCloseFloatingPanel("right")}
+                  onResize={onRightResize}
+                >
+                  {panelContent(floatingPanelIds.right)}
+                </FloatingPanel>
               )}
             </div>
 

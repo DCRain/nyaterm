@@ -27,6 +27,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import type { PanelOpenMode } from "@/lib/appWorkspace";
 import type { ActivityBarZone } from "@/types/global";
 
 export interface ActivityBarItem {
@@ -105,6 +106,8 @@ interface ActivityBarProps {
   onShowItem: (itemId: string) => void;
   onToggleLabel: () => void;
   onRequestResetLayout: () => void;
+  panelOpenMode: PanelOpenMode;
+  onPanelOpenModeChange: (mode: PanelOpenMode) => void;
   showLabels: boolean;
   side: "left" | "right";
   zone: { top: ActivityBarZone; bottom: ActivityBarZone };
@@ -124,6 +127,8 @@ export default function ActivityBar({
   onShowItem,
   onToggleLabel,
   onRequestResetLayout,
+  panelOpenMode,
+  onPanelOpenModeChange,
   showLabels,
   side,
   zone,
@@ -181,6 +186,15 @@ export default function ActivityBar({
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
+          <ContextMenuCheckboxItem
+            checked={panelOpenMode === "floating"}
+            onCheckedChange={(checked) =>
+              onPanelOpenModeChange(checked ? "floating" : "docked")
+            }
+          >
+            {t("panel.floatingMode")}
+          </ContextMenuCheckboxItem>
+          <ContextMenuSeparator />
           <ContextMenuSub>
             <ContextMenuSubTrigger disabled={hiddenItems.length === 0}>
               {t("activityBar.hiddenItems")}

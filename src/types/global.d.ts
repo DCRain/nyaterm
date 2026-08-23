@@ -764,6 +764,7 @@ export interface UiConfig {
   open_tabs: RestorableTab[];
   terminal_window_layout: RestorableTerminalWindowNode | null;
   start_workspace_mode?: "workbench" | "assets";
+  panel_open_mode: "docked" | "floating";
   left_width: number;
   right_width: number;
   quick_cmd_height: number;
