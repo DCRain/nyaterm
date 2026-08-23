@@ -38,6 +38,10 @@ use crate::core::webdav::WebDavManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // rustls 0.23 cannot pick a process default when both `ring` and `aws-lc-rs`
+    // are in the graph (FTP uses ring; ironrdp/sspi may pull aws-lc-rs). RDP
+    // CredSSP then panics on ClientConfig::builder(). Install ring first.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     portable_updater::schedule_cleanup_from_environment();
     let runtime = runtime::resolve().expect("failed to resolve runtime paths");
     runtime::prepare_webview_environment(&runtime);
