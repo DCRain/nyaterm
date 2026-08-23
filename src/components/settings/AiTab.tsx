@@ -28,12 +28,14 @@ import {
   getProviderLabel,
   isBuiltinProvider,
   requiresManualCustomModelEntry,
+  supportsApiFormatSelection,
   supportsCustomModelDiscovery,
 } from "@/lib/aiSettings";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import type {
   AICustomActionConfig,
+  AIApiFormat,
   AIModelConfigItem,
   AIPermissionMode,
   AIProviderCredential,
@@ -67,6 +69,7 @@ function newCredential(): AIProviderCredential {
     id: `credential-${crypto.randomUUID()}`,
     name: "",
     provider_kind: "openai_compatible",
+    api_format: "chat_completions",
     base_url: "",
     api_key: "",
     enabled: true,
@@ -949,6 +952,12 @@ export function AiModelsTab() {
   };
 
   const updateCredential = (id: string, patch: Partial<AIProviderCredential>) => {
+    if (
+      patch.provider_kind &&
+      !supportsApiFormatSelection({ provider_kind: patch.provider_kind })
+    ) {
+      patch = { ...patch, api_format: "chat_completions" };
+    }
     const nextCredentials = ai.provider_credentials.map((credential) =>
       credential.id === id ? { ...credential, ...patch } : credential,
     );
@@ -1173,17 +1182,35 @@ export function AiModelsTab() {
                 </div>
               </div>
               {builtin ? (
-                <SettingInput
-                  label={t("settings.apiKey")}
-                  type="password"
-                  placeholder={credential.api_key === "__SET__" ? "__SET__" : "sk-..."}
-                  value={credential.api_key ?? ""}
-                  onChange={(event) =>
-                    updateCredential(credential.id, {
-                      api_key: event.target.value,
-                    })
-                  }
-                />
+                <SettingFieldGrid>
+                  <SettingInput
+                    label={t("settings.apiKey")}
+                    type="password"
+                    placeholder={credential.api_key === "__SET__" ? "__SET__" : "sk-..."}
+                    value={credential.api_key ?? ""}
+                    onChange={(event) =>
+                      updateCredential(credential.id, {
+                        api_key: event.target.value,
+                      })
+                    }
+                  />
+                  {supportsApiFormatSelection(credential) ? (
+                    <SettingSelect
+                      label={t("ai.apiFormat")}
+                      value={credential.api_format ?? "chat_completions"}
+                      onValueChange={(api_format) =>
+                        updateCredential(credential.id, {
+                          api_format: api_format as AIApiFormat,
+                        })
+                      }
+                    >
+                      <SelectItem value="chat_completions">
+                        {t("ai.apiFormatChatCompletions")}
+                      </SelectItem>
+                      <SelectItem value="responses">{t("ai.apiFormatResponses")}</SelectItem>
+                    </SettingSelect>
+                  ) : null}
+                </SettingFieldGrid>
               ) : (
                 <SettingFieldGrid>
                   <SettingInput
@@ -1222,6 +1249,22 @@ export function AiModelsTab() {
                       })
                     }
                   />
+                  {supportsApiFormatSelection(credential) ? (
+                    <SettingSelect
+                      label={t("ai.apiFormat")}
+                      value={credential.api_format ?? "chat_completions"}
+                      onValueChange={(api_format) =>
+                        updateCredential(credential.id, {
+                          api_format: api_format as AIApiFormat,
+                        })
+                      }
+                    >
+                      <SelectItem value="chat_completions">
+                        {t("ai.apiFormatChatCompletions")}
+                      </SelectItem>
+                      <SelectItem value="responses">{t("ai.apiFormatResponses")}</SelectItem>
+                    </SettingSelect>
+                  ) : null}
                   <SettingInput
                     label={t("settings.apiKey")}
                     type="password"

@@ -28,6 +28,19 @@ pub enum AiProviderKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum AiApiFormat {
+    ChatCompletions,
+    Responses,
+}
+
+impl Default for AiApiFormat {
+    fn default() -> Self {
+        Self::ChatCompletions
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum AiBackendKind {
     Genai,
     Codex,
@@ -248,6 +261,8 @@ pub struct AiProviderCredential {
     pub name: String,
     pub provider_kind: AiProviderKind,
     #[serde(default)]
+    pub api_format: AiApiFormat,
+    #[serde(default)]
     pub base_url: Option<String>,
     #[serde(default)]
     pub api_key: Option<String>,
@@ -325,7 +340,7 @@ pub struct AiSettings {
 }
 
 fn default_schema_version() -> u32 {
-    5
+    6
 }
 
 fn default_true() -> bool {
@@ -483,6 +498,7 @@ fn credential_from_profile(profile: &AiProviderProfile) -> AiProviderCredential 
         id: profile.id.clone(),
         name: profile.name.clone(),
         provider_kind: profile.provider_kind.clone(),
+        api_format: AiApiFormat::default(),
         base_url: profile.base_url.clone(),
         api_key: profile.api_key.clone(),
         enabled: profile.enabled,
@@ -576,7 +592,7 @@ impl Default for AiSettings {
             .map(|item| item.id.clone());
 
         Self {
-            schema_version: 5,
+            schema_version: 6,
             enabled: true,
             context_line_limit: default_context_line_limit(),
             redaction_enabled: true,
@@ -662,7 +678,7 @@ pub fn merge_masked_ai_settings(current: &AiSettings, mut next: AiSettings) -> A
 pub fn normalize_ai_settings(settings: &mut AiSettings) -> bool {
     let original = serde_json::to_string(settings).unwrap_or_default();
 
-    settings.schema_version = 5;
+    settings.schema_version = 6;
     if settings.request_user_agent.trim().is_empty() {
         settings.request_user_agent = default_request_user_agent();
     }
@@ -839,9 +855,11 @@ mod tests {
         let mut current = AiSettings::default();
         current.provider_profiles[0].api_key = Some("real-key".to_string());
         current.provider_credentials[0].api_key = Some("credential-key".to_string());
+        current.provider_credentials[0].api_format = AiApiFormat::Responses;
         let mut next = current.clone();
         next.provider_profiles[0].api_key = Some(MASKED_SECRET_VALUE.to_string());
         next.provider_credentials[0].api_key = Some(MASKED_SECRET_VALUE.to_string());
+        next.provider_credentials[0].api_format = AiApiFormat::Responses;
 
         let merged = merge_masked_ai_settings(&current, next);
         assert_eq!(
@@ -851,6 +869,10 @@ mod tests {
         assert_eq!(
             merged.provider_credentials[0].api_key.as_deref(),
             Some("credential-key")
+        );
+        assert_eq!(
+            merged.provider_credentials[0].api_format,
+            AiApiFormat::Responses
         );
     }
 
@@ -886,7 +908,7 @@ mod tests {
         settings.active_profile_id = "deepseek".to_string();
 
         assert!(normalize_ai_settings(&mut settings));
-        assert_eq!(settings.schema_version, 5);
+        assert_eq!(settings.schema_version, 6);
         assert!(!settings.provider_credentials.is_empty());
         assert!(
             settings
@@ -917,6 +939,36 @@ mod tests {
     }
 
     #[test]
+    fn legacy_provider_credentials_default_to_chat_completions() {
+        let mut settings: AiSettings = serde_json::from_value(serde_json::json!({
+            "schema_version": 5,
+            "provider_credentials": [
+                {
+                    "id": "openai",
+                    "name": "OpenAI",
+                    "provider_kind": "openai",
+                    "api_key": "key",
+                    "enabled": true
+                }
+            ],
+            "models": []
+        }))
+        .expect("legacy settings should deserialize");
+
+        assert_eq!(
+            settings.provider_credentials[0].api_format,
+            AiApiFormat::ChatCompletions
+        );
+
+        assert!(normalize_ai_settings(&mut settings));
+        assert_eq!(settings.schema_version, 6);
+        assert_eq!(
+            settings.provider_credentials[0].api_format,
+            AiApiFormat::ChatCompletions
+        );
+    }
+
+    #[test]
     fn normalize_migrates_v3_models_to_v4_genai_backend() {
         let mut settings: AiSettings = serde_json::from_value(serde_json::json!({
             "schema_version": 3,
@@ -935,7 +987,7 @@ mod tests {
 
         assert!(normalize_ai_settings(&mut settings));
 
-        assert_eq!(settings.schema_version, 5);
+        assert_eq!(settings.schema_version, 6);
         assert_eq!(settings.models[0].backend, AiBackendKind::Genai);
         assert!(!settings.codex.enabled);
     }
@@ -1042,6 +1094,7 @@ mod tests {
                 id: "credential-openai-compatible".to_string(),
                 name: "OpenAI Compatible".to_string(),
                 provider_kind: AiProviderKind::OpenaiCompatible,
+                api_format: AiApiFormat::default(),
                 base_url: Some(OLLAMA_LEGACY_DEFAULT_BASE_URL.to_string()),
                 api_key: None,
                 enabled: true,

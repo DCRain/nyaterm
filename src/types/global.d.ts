@@ -1345,6 +1345,7 @@ export type AIReasoningEffort =
   | "medium"
   | "high"
   | "xhigh";
+export type AIApiFormat = "chat_completions" | "responses";
 export type AIModelSource = "rust-genai" | "manual";
 export type AIBackendKind = "genai" | "codex";
 export type CodexThreadMode = "persistent" | "ephemeral";
@@ -1409,6 +1410,7 @@ export interface AIProviderCredential {
   id: string;
   name: string;
   provider_kind: AIProviderKind;
+  api_format: AIApiFormat;
   base_url?: string | null;
   api_key?: string | null;
   enabled: boolean;
