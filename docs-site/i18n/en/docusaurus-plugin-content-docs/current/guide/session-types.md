@@ -23,8 +23,8 @@ Understanding the differences helps explain why some panels or enhancements only
 | Local Terminal | Local shell work, scripts, builds | Shared terminal UI, command history, split panes |
 | Telnet | Legacy devices, lab environments, compatibility troubleshooting | Terminal workspace features with `Backspace Mode`, but not SSH-only features |
 | Serial | Routers, switches, boards, embedded debug ports | Serial port settings, `Backspace Mode`, and terminal workspace features |
-| RDP | Windows Remote Desktop or graphical administration entry points | Remote desktop display, NLA/CredSSP, certificate verification, text clipboard, window fitting, and reconnects |
-| VNC | Raw TCP VNC services, VM consoles, lightweight graphical remote desktops | Raw / ZRLE / Tight / Tight JPEG display, None / VNC Auth, window scaling, text clipboard, and reconnects |
+| RDP | Windows Remote Desktop or graphical administration entry points | Remote desktop display, NLA/CredSSP, certificate verification, proxy / SSH jump host, text clipboard, window fitting, and reconnects |
+| VNC | Raw TCP VNC services, VM consoles, lightweight graphical remote desktops | Raw / ZRLE / Tight / Tight JPEG display, None / VNC Auth, proxy / SSH jump host, window scaling, text clipboard, and reconnects |
 
 ## SSH
 
@@ -112,13 +112,14 @@ When creating an RDP session, you can configure:
 - Host, port, username, password, and domain
 - Network Level Authentication (NLA / CredSSP)
 - Certificate policy: ask on unknown certificates, strict rejection, or accept for this session
+- Network: a saved proxy or SSH jump host
 - Display mode: fit to window or fixed size
 - Text clipboard mode
 - Automatic reconnect attempts
 
 When connecting to an RDP host with an unknown certificate, NyaTerm opens a certificate verification dialog. You can accept the certificate for the current connection only or accept and remember it. If a remembered certificate changes later, NyaTerm prompts again before connecting.
 
-RDP does not provide terminal command history, the SFTP file explorer, SSH proxy/jump-host behavior, or remote resource monitoring. If you need command-line enhancements, use SSH, Local Terminal, Telnet, or Serial instead.
+RDP does not provide terminal command history, the SFTP file explorer, or remote resource monitoring. If you need command-line enhancements, use SSH, Local Terminal, Telnet, or Serial instead.
 
 ## VNC
 
@@ -128,12 +129,13 @@ When creating a VNC session, you can configure:
 
 - Host and port
 - Security mode: automatic, None, or classic VNC Authentication
+- Network: a saved proxy or SSH jump host
 - Display mode: fit to window, actual size, or stretch
 - Text clipboard toggle
 - Automatic reconnect attempts
 - Shared / view-only behavior
 
-The current VNC transport is direct TCP only, with no TLS / VeNCrypt. Classic VNC Authentication passwords are limited to 8 bytes; NyaTerm rejects longer passwords instead of truncating them. Framebuffer encodings are advertised by default as `DesktopSizePseudo`, ZRLE, Tight, then Raw; Tight JPEG is decoded in the backend into the same RGBA framebuffer path, and Raw remains the stable fallback. CopyRect, cursor pseudo-encoding, remote resize, proxies, and SSH transport are not supported. Text clipboard exchange is limited to Latin-1 text so binary or oversized payloads do not enter the VNC protocol path.
+The VNC protocol layer has no TLS / VeNCrypt support, but its underlying TCP connection can be established through a saved SOCKS5 / HTTP / ProxyCommand proxy or SSH jump host. Classic VNC Authentication passwords are limited to 8 bytes; NyaTerm rejects longer passwords instead of truncating them. Framebuffer encodings are advertised by default as `DesktopSizePseudo`, ZRLE, Tight, then Raw; Tight JPEG is decoded in the backend into the same RGBA framebuffer path, and Raw remains the stable fallback. CopyRect, cursor pseudo-encoding, and remote resize are not supported. Text clipboard exchange is limited to Latin-1 text so binary or oversized payloads do not enter the VNC protocol path.
 
 ### VNC Interop Matrix
 

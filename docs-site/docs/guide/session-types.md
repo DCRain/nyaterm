@@ -23,8 +23,8 @@ NyaTerm 不只是 SSH 客户端，而是一个把多类终端与远程桌面工�
 | 本地终端 | 本地 shell、脚本调试、构建命令 | 共享同一套终端 UI、命令历史、分屏 |
 | Telnet | 旧设备、实验环境、兼容性排障 | 终端工作区能力，支持 `Backspace Mode`，但不包含 SSH 专属特性 |
 | 串口 | 路由器、交换机、板卡、嵌入式调试口 | 串口参数配置、`Backspace Mode` 与终端工作区能力 |
-| RDP | Windows 远程桌面、图形化运维入口 | 远程桌面画面、NLA/CredSSP、证书验证、文本剪贴板、窗口适配与重连 |
-| VNC | 裸 TCP VNC 服务、虚拟机控制台、轻量图形远程桌面 | Raw / ZRLE / Tight / Tight JPEG 显示、None / VNC Auth、窗口适配、文本剪贴板与重连 |
+| RDP | Windows 远程桌面、图形化运维入口 | 远程桌面画面、NLA/CredSSP、证书验证、代理 / SSH 跳板机、文本剪贴板、窗口适配与重连 |
+| VNC | 裸 TCP VNC 服务、虚拟机控制台、轻量图形远程桌面 | Raw / ZRLE / Tight / Tight JPEG 显示、None / VNC Auth、代理 / SSH 跳板机、窗口适配、文本剪贴板与重连 |
 
 ## SSH
 
@@ -114,13 +114,14 @@ RDP 会话适合连接 Windows 主机或提供 RDP 服务的远程桌面环境�
 - 主机、端口、用户名、密码和域
 - 是否启用网络级身份验证（NLA / CredSSP）
 - 证书策略：未知证书时询问、严格拒绝或仅本次接受
+- 网络：已保存代理或 SSH 跳板机
 - 显示模式：适应窗口或固定尺寸
 - 文本剪贴板模式
 - 自动重连次数
 
 首次连接未知证书的 RDP 主机时，NyaTerm 会显示证书验证对话框。你可以只接受本次连接，也可以接受并记住该证书；如果已保存的证书后续发生变化，连接前会再次提示。
 
-RDP 目前不提供终端命令历史、SFTP 文件浏览器、SSH 代理 / 跳板机或远程资源监控。如果你需要命令行增强能力，应优先使用 SSH、本地终端、Telnet 或串口会话。
+RDP 目前不提供终端命令历史、SFTP 文件浏览器或远程资源监控。如果你需要命令行增强能力，应优先使用 SSH、本地终端、Telnet 或串口会话。
 
 ## VNC
 
@@ -130,12 +131,13 @@ VNC 会话适合连接提供传统 RFB / VNC 服务的虚拟机控制台、实�
 
 - 主机和端口
 - 安全模式：自动、None 或 classic VNC Authentication
+- 网络：已保存代理或 SSH 跳板机
 - 显示模式：适应窗口、实际尺寸或拉伸
 - 文本剪贴板开关
 - 自动重连次数
 - shared / view-only 行为
 
-当前 VNC 传输仅支持 direct TCP，没有 TLS / VeNCrypt。classic VNC Authentication 的密码限制为 8 字节以内，NyaTerm 会拒绝超长密码而不会截断。画面编码默认按 `DesktopSizePseudo`、ZRLE、Tight、Raw 顺序声明；Tight JPEG 会在后端解码成统一 RGBA framebuffer，Raw 仍保留为稳定 fallback。暂不支持 CopyRect、cursor pseudo-encoding、远程 resize、代理和 SSH transport。文本剪贴板限定为 Latin-1 文本，避免把二进制或超大内容塞进 VNC 协议路径。
+VNC 协议层没有 TLS / VeNCrypt 支持，但底层 TCP 连接可以通过已保存 SOCKS5 / HTTP / ProxyCommand 代理或 SSH 跳板机建立。classic VNC Authentication 的密码限制为 8 字节以内，NyaTerm 会拒绝超长密码而不会截断。画面编码默认按 `DesktopSizePseudo`、ZRLE、Tight、Raw 顺序声明；Tight JPEG 会在后端解码成统一 RGBA framebuffer，Raw 仍保留为稳定 fallback。暂不支持 CopyRect、cursor pseudo-encoding 和远程 resize。文本剪贴板限定为 Latin-1 文本，避免把二进制或超大内容塞进 VNC 协议路径。
 
 ### VNC 互通矩阵
 
