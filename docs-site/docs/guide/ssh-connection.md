@@ -243,6 +243,7 @@ NyaTerm 也可以从浏览器、脚本、启动器或其他工具中打开连接
 支持的入口：
 
 - 程序调用：把链接作为启动参数传给 NyaTerm，例如 `NyaTerm.exe ssh://root@example.com:22`
+- 本地终端调用：使用 `NyaTerm.exe --local`，或通过 `NyaTerm.exe --local --cwd "D:\Projects\foo"` 指定初始工作目录
 - 协议调用：通过系统 URL Scheme 打开 `ssh://`、`telnet://` 或 `nyaterm://` 链接
 
 支持的链接格式：
@@ -252,10 +253,13 @@ NyaTerm 也可以从浏览器、脚本、启动器或其他工具中打开连接
 - `telnet://host:port`
 - `nyaterm://connect/ssh?host=host&port=22&username=user`
 - `nyaterm://connect/telnet?host=host&port=23`
+- `nyaterm://connect/local`
+- `nyaterm://connect/local?cwd=<urlencoded-path>`
 
 处理规则：
 
 - SSH 默认用户名为 `root`，默认端口为 `22`；Telnet 默认端口为 `23`
+- 本地终端外部调用不会匹配或创建已保存连接；`cwd` 只控制初始工作目录，不支持执行任意启动命令
 - NyaTerm 会优先匹配同协议、同主机、同端口的已保存连接；SSH 链接显式写了用户名时，还会按用户名精确匹配
 - 如果匹配到多个已保存连接，会弹出选择窗口；如果没有匹配项，会按临时连接打开
 - 带一次性密码的 `ssh://` 链接始终作为临时连接处理，避免把外部传入的密码绑定到已保存连接

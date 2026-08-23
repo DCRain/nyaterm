@@ -245,6 +245,7 @@ NyaTerm can also open connection links from browsers, scripts, launchers, or oth
 Supported entry points:
 
 - Program invocation: pass a link as a NyaTerm startup argument, for example `NyaTerm.exe ssh://root@example.com:22`
+- Local terminal invocation: use `NyaTerm.exe --local`, or `NyaTerm.exe --local --cwd "D:\Projects\foo"` to set the initial working directory
 - Protocol invocation: open an `ssh://`, `telnet://`, or `nyaterm://` link through the operating system URL scheme handler
 
 Supported link formats:
@@ -254,10 +255,13 @@ Supported link formats:
 - `telnet://host:port`
 - `nyaterm://connect/ssh?host=host&port=22&username=user`
 - `nyaterm://connect/telnet?host=host&port=23`
+- `nyaterm://connect/local`
+- `nyaterm://connect/local?cwd=<urlencoded-path>`
 
 Handling rules:
 
 - SSH defaults to username `root` and port `22`; Telnet defaults to port `23`
+- External local terminal requests do not match or create saved connections; `cwd` only controls the initial working directory and does not execute arbitrary startup commands
 - NyaTerm first looks for saved connections with the same protocol, host, and port; when an SSH link includes a username, the username must match exactly
 - If multiple saved connections match, NyaTerm shows a chooser; if none match, it opens a temporary connection
 - `ssh://` links with one-time passwords always open as temporary connections, so an externally supplied password is not attached to a saved connection
