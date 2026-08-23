@@ -4,6 +4,7 @@ pub struct LocalSessionConfig {
     pub shell_path: String,
     pub shell_args: String,
     pub working_dir: Option<String>,
+    pub fail_on_missing_working_dir: bool,
     pub name: String,
     pub encoding: String,
 }

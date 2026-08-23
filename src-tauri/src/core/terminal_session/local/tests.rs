@@ -5,9 +5,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::is_utf8_locale;
     use super::{
-        WorkingDirectoryOutcome, apply_working_dir_to_command,
+        LocalSessionConfig, WorkingDirectoryOutcome, apply_working_dir_to_command,
         build_local_startup_script_for_platform, parse_shell_args, resolve_shell_command,
-        should_emit_visible_output,
+        should_emit_visible_output, validate_working_dir_before_spawn,
     };
     use crate::core::ssh::osc::build_ready_marker;
     use portable_pty::CommandBuilder;
@@ -216,6 +216,50 @@ mod tests {
 
         assert_eq!(outcome, WorkingDirectoryOutcome::MissingLocalDirectory);
         assert!(cmd.get_cwd().is_none());
+    }
+
+    #[test]
+    fn explicit_missing_working_dir_is_rejected_before_spawn() {
+        let missing_dir = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(
+                "__nyaterm_missing_explicit_work_dir_{}__",
+                std::process::id()
+            ));
+        assert!(!missing_dir.exists());
+        let config = LocalSessionConfig {
+            connection_id: None,
+            shell_path: "pwsh.exe".to_string(),
+            shell_args: String::new(),
+            working_dir: Some(missing_dir.to_string_lossy().to_string()),
+            fail_on_missing_working_dir: true,
+            name: "Local Terminal".to_string(),
+            encoding: "UTF-8".to_string(),
+        };
+
+        assert!(validate_working_dir_before_spawn(Some(&config)).is_err());
+    }
+
+    #[test]
+    fn saved_missing_working_dir_preserves_fallback_behavior() {
+        let missing_dir = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(
+                "__nyaterm_missing_saved_work_dir_{}__",
+                std::process::id()
+            ));
+        assert!(!missing_dir.exists());
+        let config = LocalSessionConfig {
+            connection_id: Some("saved-local".to_string()),
+            shell_path: "pwsh.exe".to_string(),
+            shell_args: String::new(),
+            working_dir: Some(missing_dir.to_string_lossy().to_string()),
+            fail_on_missing_working_dir: false,
+            name: "Saved Local".to_string(),
+            encoding: "UTF-8".to_string(),
+        };
+
+        assert!(validate_working_dir_before_spawn(Some(&config)).is_ok());
     }
 
     #[test]

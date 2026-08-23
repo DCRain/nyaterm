@@ -173,6 +173,17 @@ export async function createTemporarySession(
   }
 }
 
+export async function createExternalLocalSession(
+  workingDir: string | null,
+  createRequestId?: string,
+) {
+  return invoke<string>("create_local_session", {
+    connectionId: null,
+    createRequestId,
+    workingDir,
+  });
+}
+
 export function createSessionForPane(
   pane: Pick<SessionPane, "type" | "connectionId" | "temporaryConfig">,
   createRequestId?: string,

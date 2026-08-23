@@ -7,6 +7,8 @@ pub async fn create_local_session(
     session_ready_hook: Option<SessionReadyHook>,
 ) -> AppResult<String> {
     tracing::info!("Creating local PTY session");
+    validate_working_dir_before_spawn(config.as_ref())?;
+
     let session_id = uuid::Uuid::new_v4().to_string();
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
     let output_control_tx = cmd_tx.clone();
@@ -148,6 +150,21 @@ fn pty_session_thread(
             if apply_working_dir_to_command(&mut cmd, dir)
                 == WorkingDirectoryOutcome::MissingLocalDirectory
             {
+                if cfg.fail_on_missing_working_dir {
+                    tracing::error!(
+                        working_dir = %dir,
+                        "Explicit local terminal working directory does not exist"
+                    );
+                    let _ = app.emit(
+                        &format!("session-error-{}", session_id),
+                        format!("Working directory '{}' does not exist.", dir),
+                    );
+                    let _ = app.emit(&format!("session-closed-{}", session_id), ());
+                    rt_handle.block_on(async {
+                        manager.remove_session(&session_id).await;
+                    });
+                    return;
+                }
                 tracing::warn!(
                     working_dir = %dir,
                     "Configured local terminal working directory does not exist; using default working directory"
@@ -619,6 +636,44 @@ fn pty_session_thread(
         manager.remove_session(&session_id).await;
     });
     let _ = app.emit(&format!("session-closed-{}", session_id), ());
+}
+
+fn validate_working_dir_before_spawn(config: Option<&LocalSessionConfig>) -> AppResult<()> {
+    let Some(cfg) = config else {
+        return Ok(());
+    };
+    if !cfg.fail_on_missing_working_dir {
+        return Ok(());
+    }
+    let Some(dir) = cfg.working_dir.as_deref() else {
+        return Ok(());
+    };
+    if dir.trim().is_empty() {
+        return Err(crate::error::AppError::Config(
+            "Working directory is empty.".to_string(),
+        ));
+    }
+
+    let (mut cmd, _) = match cfg {
+        LocalSessionConfig {
+            shell_path,
+            shell_args,
+            ..
+        } if !shell_path.trim().is_empty() => {
+            build_shell_command(shell_path, shell_args).map_err(crate::error::AppError::Config)?
+        }
+        _ => platform_default_shell(),
+    };
+
+    if apply_working_dir_to_command(&mut cmd, dir) == WorkingDirectoryOutcome::MissingLocalDirectory
+    {
+        return Err(crate::error::AppError::Config(format!(
+            "Working directory '{}' does not exist.",
+            dir
+        )));
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

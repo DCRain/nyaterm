@@ -238,10 +238,56 @@ pub fn handle_deep_link_urls(app: &tauri::AppHandle, urls: Vec<String>) {
 }
 
 pub fn extract_external_open_urls(args: impl IntoIterator<Item = String>) -> Vec<String> {
-    args.into_iter()
-        .filter_map(|arg| sanitize_external_open_arg(&arg))
-        .take(MAX_URLS_PER_BATCH)
-        .collect()
+    let mut accepted = Vec::new();
+    let mut local_requested = false;
+    let mut local_cwd = None;
+    let mut expecting_cwd_value = false;
+
+    for arg in args {
+        if expecting_cwd_value {
+            local_cwd = Some(arg);
+            expecting_cwd_value = false;
+            continue;
+        }
+
+        let candidate = arg.trim();
+        if candidate.eq_ignore_ascii_case("--local") {
+            local_requested = true;
+            continue;
+        }
+        if candidate.eq_ignore_ascii_case("--cwd") {
+            expecting_cwd_value = true;
+            continue;
+        }
+        if let Some(value) = candidate.strip_prefix("--cwd=") {
+            local_cwd = Some(value.to_string());
+            continue;
+        }
+
+        if let Some(url) = sanitize_external_open_arg(&arg) {
+            accepted.push(url);
+            if accepted.len() >= MAX_URLS_PER_BATCH {
+                return accepted;
+            }
+        }
+    }
+
+    if local_requested && accepted.len() < MAX_URLS_PER_BATCH {
+        if let Some(url) =
+            sanitize_external_open_arg(&build_local_external_open_url(local_cwd.as_deref()))
+        {
+            accepted.push(url);
+        }
+    }
+
+    accepted
+}
+
+fn build_local_external_open_url(cwd: Option<&str>) -> String {
+    match cwd {
+        Some(cwd) => format!("nyaterm://connect/local?cwd={}", urlencoding::encode(cwd)),
+        None => "nyaterm://connect/local".to_string(),
+    }
 }
 
 fn sanitize_external_open_arg(arg: &str) -> Option<String> {
@@ -368,6 +414,72 @@ mod tests {
     }
 
     #[test]
+    fn extracts_local_request_from_startup_args() {
+        let args = vec!["--local".to_string()];
+        assert_eq!(
+            extract_external_open_urls(args),
+            vec!["nyaterm://connect/local".to_string()]
+        );
+    }
+
+    #[test]
+    fn extracts_local_request_with_unix_cwd() {
+        let args = vec![
+            "--local".to_string(),
+            "--cwd".to_string(),
+            "/tmp/test".to_string(),
+        ];
+        assert_eq!(
+            extract_external_open_urls(args),
+            vec!["nyaterm://connect/local?cwd=%2Ftmp%2Ftest".to_string()]
+        );
+    }
+
+    #[test]
+    fn extracts_local_request_with_windows_cwd() {
+        let args = vec![
+            "--local".to_string(),
+            "--cwd".to_string(),
+            r"C:\Users\Test User\project".to_string(),
+        ];
+        assert_eq!(
+            extract_external_open_urls(args),
+            vec!["nyaterm://connect/local?cwd=C%3A%5CUsers%5CTest%20User%5Cproject".to_string()]
+        );
+    }
+
+    #[test]
+    fn extracts_local_request_with_unicode_cwd() {
+        let args = vec![
+            "--local".to_string(),
+            "--cwd".to_string(),
+            r"D:\项目\测试".to_string(),
+        ];
+        assert_eq!(
+            extract_external_open_urls(args),
+            vec![
+                "nyaterm://connect/local?cwd=D%3A%5C%E9%A1%B9%E7%9B%AE%5C%E6%B5%8B%E8%AF%95"
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn ignores_cwd_without_local_request() {
+        let args = vec!["--cwd".to_string(), "/tmp/test".to_string()];
+        assert!(extract_external_open_urls(args).is_empty());
+    }
+
+    #[test]
+    fn extracts_nyaterm_ssh_url_from_startup_args() {
+        let args = vec!["nyaterm://connect/ssh?host=example.com".to_string()];
+        assert_eq!(
+            extract_external_open_urls(args),
+            vec!["nyaterm://connect/ssh?host=example.com".to_string()]
+        );
+    }
+
+    #[test]
     fn enqueues_ssh_and_telnet_urls_from_deep_links() {
         let state = ExternalOpenState::default();
         let enqueued = state.enqueue_batch(
@@ -425,6 +537,26 @@ mod tests {
         );
         let second = state.enqueue_batch(
             vec!["ssh://root@host:22".to_string()],
+            ExternalOpenSource::SecondInstance,
+            "main",
+            now + Duration::from_millis(100),
+        );
+        assert_eq!(first, 1);
+        assert_eq!(second, 0);
+    }
+
+    #[test]
+    fn deduplicates_local_requests_within_window() {
+        let state = ExternalOpenState::default();
+        let now = Instant::now();
+        let first = state.enqueue_batch(
+            vec!["--local".to_string()],
+            ExternalOpenSource::StartupArguments,
+            "main",
+            now,
+        );
+        let second = state.enqueue_batch(
+            vec!["nyaterm://connect/local".to_string()],
             ExternalOpenSource::SecondInstance,
             "main",
             now + Duration::from_millis(100),

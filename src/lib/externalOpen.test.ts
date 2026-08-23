@@ -11,15 +11,15 @@ describe("parseExternalOpenUrl", () => {
   it("parses SSH deep link URLs and uses the default port", () => {
     const result = parseExternalOpenUrl("ssh://root@example.com");
     expect(result.ok).toBe(true);
-    expect(intent(result).port).toBe(22);
-    expect(sshRuntimeMode(intent(result))).toBe("standard");
+    expect(networkIntent(result).port).toBe(22);
+    expect(sshRuntimeMode(networkIntent(result))).toBe("standard");
   });
 
   it("preserves SSH terminal runtime mode through normalization", () => {
     const result = parseExternalOpenUrl("ssh://root@example.com?mode=terminal");
     expect(result.ok).toBe(true);
-    expect(sshRuntimeMode(intent(result))).toBe("terminal");
-    expect(intent(result).runtimeModeSpecified).toBe(true);
+    expect(sshRuntimeMode(networkIntent(result))).toBe("terminal");
+    expect(networkIntent(result).runtimeModeSpecified).toBe(true);
   });
 
   it("rejects invalid SSH runtime mode values", () => {
@@ -31,28 +31,28 @@ describe("parseExternalOpenUrl", () => {
   it("parses Telnet deep link URLs and uses the default port", () => {
     const result = parseExternalOpenUrl("telnet://example.com");
     expect(result.ok).toBe(true);
-    expect(intent(result).port).toBe(23);
+    expect(networkIntent(result).port).toBe(23);
   });
 
   it("normalizes IPv6 hosts", () => {
     const result = parseExternalOpenUrl("ssh://root@[2001:db8::1]:2222");
     expect(result.ok).toBe(true);
-    expect(intent(result).host).toBe("2001:db8::1");
-    expect(intent(result).port).toBe(2222);
+    expect(networkIntent(result).host).toBe("2001:db8::1");
+    expect(networkIntent(result).port).toBe(2222);
   });
 
   it("decodes URL-encoded SSH usernames", () => {
     const result = parseExternalOpenUrl("ssh://user%2Bprod@example.com:22");
     expect(result.ok).toBe(true);
-    expect(intent(result).username).toBe("user+prod");
-    expect(intent(result).usernameSpecified).toBe(true);
+    expect(networkIntent(result).username).toBe("user+prod");
+    expect(networkIntent(result).usernameSpecified).toBe(true);
   });
 
   it("parses one-time SSH URL passwords", () => {
     const result = parseExternalOpenUrl("ssh://root:secret@example.com:22");
     expect(result.ok).toBe(true);
-    expect(sshPassword(intent(result))).toBe("secret");
-    expect(intent(result).passwordSpecified).toBe(true);
+    expect(sshPassword(networkIntent(result))).toBe("secret");
+    expect(networkIntent(result).passwordSpecified).toBe(true);
   });
 
   it("decodes URL-encoded SSH URL passwords", () => {
@@ -60,7 +60,7 @@ describe("parseExternalOpenUrl", () => {
       "ssh://user:p%40ss%3Aword@example.com:22",
     );
     expect(result.ok).toBe(true);
-    expect(sshPassword(intent(result))).toBe("p@ss:word");
+    expect(sshPassword(networkIntent(result))).toBe("p@ss:word");
   });
 
   it("rejects NyaTerm deep link passwords", () => {
@@ -87,14 +87,14 @@ describe("parseExternalOpenUrl", () => {
       "nyaterm://connect/ssh?host=192.168.1.10&port=2222&username=root",
     );
     expect(result.ok).toBe(true);
-    expect(intent(result)).toMatchObject({
+    expect(networkIntent(result)).toMatchObject({
       protocol: "ssh",
       host: "192.168.1.10",
       port: 2222,
       username: "root",
       usernameSpecified: true,
     });
-    expect(sshRuntimeMode(intent(result))).toBe("standard");
+    expect(sshRuntimeMode(networkIntent(result))).toBe("standard");
   });
 
   it("parses NyaTerm SSH terminal runtime mode", () => {
@@ -102,8 +102,8 @@ describe("parseExternalOpenUrl", () => {
       "nyaterm://connect/ssh?host=example.com&username=root&mode=terminal",
     );
     expect(result.ok).toBe(true);
-    expect(sshRuntimeMode(intent(result))).toBe("terminal");
-    expect(intent(result).runtimeModeSpecified).toBe(true);
+    expect(sshRuntimeMode(networkIntent(result))).toBe("terminal");
+    expect(networkIntent(result).runtimeModeSpecified).toBe(true);
   });
 
   it("uses decoded NyaTerm query usernames once", () => {
@@ -111,7 +111,7 @@ describe("parseExternalOpenUrl", () => {
       "nyaterm://connect/ssh?host=example.com&username=user%25prod",
     );
     expect(result.ok).toBe(true);
-    expect(intent(result).username).toBe("user%prod");
+    expect(networkIntent(result).username).toBe("user%prod");
   });
 
   it("parses NyaTerm Telnet deep links", () => {
@@ -119,7 +119,7 @@ describe("parseExternalOpenUrl", () => {
       "nyaterm://connect/telnet?host=192.168.1.10&port=2323",
     );
     expect(result.ok).toBe(true);
-    expect(intent(result)).toMatchObject({
+    expect(networkIntent(result)).toMatchObject({
       protocol: "telnet",
       host: "192.168.1.10",
       port: 2323,

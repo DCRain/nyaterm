@@ -42,6 +42,7 @@ import {
   buildStartupCommandPayload,
   capturePaneReconnectContent,
   closeStaleCreatedSession,
+  createExternalLocalSession,
   createSessionForConnection,
   createSessionForPane,
   createTemporarySession,
@@ -1031,6 +1032,44 @@ function App() {
     [addPendingTab, hasTab, markTabConnectionFailed, t, updateTabSession],
   );
 
+  const connectExternalLocalSession = useCallback(
+    async (workingDir: string | null) => {
+      const pending = addPendingTab(
+        t("menu.newLocalTerminal"),
+        "Local",
+        undefined,
+      );
+      const { tabId, createRequestId } = pending;
+
+      try {
+        const sessionId = await createExternalLocalSession(
+          workingDir,
+          createRequestId,
+        );
+        if (!hasTab(tabId)) {
+          await closeStaleCreatedSession(sessionId);
+          return;
+        }
+        updateTabSession(tabId, sessionId);
+        focusTerminalSession(sessionId);
+      } catch (error) {
+        if (isSessionCreationCancelled(error) || !hasTab(tabId)) {
+          return;
+        }
+        const errorMessage = getErrorMessage(error);
+        logger.error({
+          domain: "session.lifecycle",
+          event: "external_local.open_failed",
+          message: "External local terminal failed",
+          error,
+        });
+        markTabConnectionFailed(tabId, errorMessage);
+        toast.error(t("savedConnections.connectionFailed", { error: errorMessage }));
+      }
+    },
+    [addPendingTab, hasTab, markTabConnectionFailed, t, updateTabSession],
+  );
+
   const chooseExternalConnection = useCallback(
     (resolution: Extract<ExternalConnectionResolution, { kind: "ambiguous" }>) =>
       new Promise<ExternalConnectionChoice>((resolve) => {
@@ -1081,6 +1120,23 @@ function App() {
           },
         });
         toast.error(t(parsed.errorKey));
+        return;
+      }
+
+      if (parsed.intent.protocol === "local") {
+        logger.info({
+          domain: "app.lifecycle",
+          event: "external_open.local_terminal_created",
+          message: "External open will create a local terminal",
+          ids: { request_id: request.id },
+          data: {
+            scheme: parsed.intent.protocol,
+            source: request.source,
+            target_window_label: request.targetWindowLabel,
+            has_working_dir: parsed.intent.workingDir !== null,
+          },
+        });
+        await connectExternalLocalSession(parsed.intent.workingDir);
         return;
       }
 
@@ -1155,6 +1211,7 @@ function App() {
     [
       chooseExternalConnection,
       confirmExternalPostLogin,
+      connectExternalLocalSession,
       connectSavedConnection,
       connectTemporaryConnection,
       t,
