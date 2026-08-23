@@ -817,6 +817,7 @@ export function FileExplorerPane({
   const visitedHistoryRef = useRef<string[]>([]);
   const dragSelectionRef = useRef<{
     anchor: string;
+    clicked: string;
     baseSelection: Set<string>;
     additive: boolean;
     /** Skip range-select while waiting to start an HTML5 path drag. */
@@ -1047,10 +1048,20 @@ export function FileExplorerPane({
     };
   }, [activeSessionId]);
 
+  const finishClickWithoutPathDrag = useCallback(() => {
+    const dragged = pathDragActiveRef.current;
+    const drag = dragSelectionRef.current;
+    dragSelectionRef.current = null;
+    if (dragged || !drag?.suppressRangeDrag || drag.additive) {
+      return;
+    }
+    lastSelectedRef.current = drag.clicked;
+    setSelectedFiles(new Set([drag.clicked]));
+  }, []);
+
   useEffect(() => {
     const handleMouseUp = () => {
-      // Do not collapse selection on mouseup — keeps multi-select after path drag.
-      dragSelectionRef.current = null;
+      finishClickWithoutPathDrag();
       pathDragActiveRef.current = false;
     };
 
@@ -1058,7 +1069,7 @@ export function FileExplorerPane({
     return () => {
       window.removeEventListener("mouseup", handleMouseUp);
     };
-  }, []);
+  }, [finishClickWithoutPathDrag]);
 
   // Keep the in-memory per-session cache bounded to live sessions so closed
   // sessions release their cached directory listing and history.
@@ -1876,6 +1887,7 @@ export function FileExplorerPane({
       if (!additive && !hasRangeAnchor && prev.has(entry.name)) {
         dragSelectionRef.current = {
           anchor: lastSelectedRef.current ?? entry.name,
+          clicked: entry.name,
           baseSelection: new Set(prev),
           additive: false,
           suppressRangeDrag: true,
@@ -1904,6 +1916,7 @@ export function FileExplorerPane({
 
       dragSelectionRef.current = {
         anchor,
+        clicked: entry.name,
         baseSelection,
         additive,
       };
@@ -2239,6 +2252,18 @@ export function FileExplorerPane({
         target.tagName === "TEXTAREA" ||
         target.tagName === "SELECT")
     ) {
+      return;
+    }
+
+    if (
+      event.key === "Escape" &&
+      !inlineRenameState &&
+      selectedFilesRef.current.size > 0
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      setSelectedFiles(new Set());
+      lastSelectedRef.current = null;
       return;
     }
 
@@ -2813,8 +2838,12 @@ export function FileExplorerPane({
     // If we never crossed the drag threshold, ensure no stale session remains.
     if (!state.active) {
       cancelExplorerPathPointerDrag();
+      finishClickWithoutPathDrag();
+    } else {
+      dragSelectionRef.current = null;
     }
-  }, []);
+    pathDragActiveRef.current = false;
+  }, [finishClickWithoutPathDrag]);
 
   const handlePathPointerCancel = useCallback((_entry: FileEntry, event: React.PointerEvent) => {
     const state = pathPointerDragRef.current;
@@ -3442,9 +3471,13 @@ export function FileExplorerPane({
               ref={listContainerRef}
               className="h-full overflow-auto text-sm terminal-scroll outline-none"
               tabIndex={canBrowseFiles ? 0 : -1}
-              onMouseDown={() => {
+              onMouseDown={(event) => {
                 if (canBrowseFiles) {
                   listContainerRef.current?.focus();
+                }
+                if (event.target === event.currentTarget) {
+                  setSelectedFiles(new Set());
+                  lastSelectedRef.current = null;
                 }
               }}
               onKeyDown={handleListKeyDown}

@@ -1054,7 +1054,60 @@ fn synthetic_dir_properties(path: &str) -> FileProperties {
 }
 
 fn map_opendal_error(error: opendal::Error) -> AppError {
-    AppError::Config(classify_s3_error(error.kind(), &error.to_string()).to_string())
+    let raw = error.to_string();
+    let code = classify_s3_error(error.kind(), &raw);
+    let reason = summarize_s3_error_reason(&raw);
+    if reason.is_empty() {
+        AppError::Config(code.to_string())
+    } else {
+        AppError::Config(format!("{code}: {reason}"))
+    }
+}
+
+fn summarize_s3_error_reason(raw: &str) -> String {
+    if let Some(code) = xml_tag(raw, "Code") {
+        if let Some(message) = xml_tag(raw, "Message") {
+            let message = message.trim();
+            if !message.is_empty() {
+                return format!("{code}: {message}");
+            }
+        }
+        return code;
+    }
+    for token in [
+        "AccessDenied",
+        "NoSuchBucket",
+        "NoSuchKey",
+        "SignatureDoesNotMatch",
+        "InvalidAccessKeyId",
+        "InvalidBucketName",
+        "AccessForbidden",
+        "RequestTimeTooSkewed",
+    ] {
+        if raw.contains(token) {
+            return token.to_string();
+        }
+    }
+    raw.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.eq_ignore_ascii_case("context:") && !line.eq_ignore_ascii_case("source:"))
+        .unwrap_or(raw)
+        .chars()
+        .take(240)
+        .collect()
+}
+
+fn xml_tag(raw: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = raw.find(&open)? + open.len();
+    let end = raw[start..].find(&close)? + start;
+    let value = raw[start..end].trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
 }
 
 pub(crate) fn s3_test_error_code(error: &opendal::Error) -> &'static str {
@@ -1113,7 +1166,10 @@ pub type SharedS3Manager = Arc<S3Manager>;
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_s3_error, is_s3_list_self_entry, resolve_s3_location, s3_list_child};
+    use super::{
+        classify_s3_error, is_s3_list_self_entry, resolve_s3_location, s3_list_child,
+        summarize_s3_error_reason,
+    };
     use opendal::ErrorKind;
 
     #[test]
@@ -1217,6 +1273,15 @@ mod tests {
         assert_eq!(
             classify_s3_error(ErrorKind::Unexpected, "status: 404 Not Found"),
             "s3:notFound"
+        );
+    }
+
+    #[test]
+    fn s3_reason_prefers_xml_code_and_message() {
+        let raw = r#"status: 403 Forbidden <Error><Code>AccessDenied</Code><Message>You have no right to access this object.</Message></Error>"#;
+        assert_eq!(
+            summarize_s3_error_reason(raw),
+            "AccessDenied: You have no right to access this object."
         );
     }
 }

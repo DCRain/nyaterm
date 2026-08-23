@@ -90,10 +90,19 @@ export default function DeleteDialog({ data, onClose, onSuccess }: DeleteDialogP
       }
 
       if (failedCount > 0) {
+        const firstFailure = results.find(
+          (result): result is PromiseRejectedResult => result.status === "rejected",
+        );
+        const errorText = firstFailure ? getErrorMessage(firstFailure.reason) : "";
         toast.error(
           failedCount === 1
-            ? t("fileExplorer.deleteFailedItem")
-            : t("fileExplorer.deleteFailedCount", { count: failedCount }),
+            ? errorText || t("fileExplorer.deleteFailedItem")
+            : errorText
+              ? t("fileExplorer.deleteFailedCountWithError", {
+                  count: failedCount,
+                  error: errorText,
+                })
+              : t("fileExplorer.deleteFailedCount", { count: failedCount }),
         );
       }
 

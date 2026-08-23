@@ -21,13 +21,6 @@ export function getErrorMessage(error: unknown): string {
   return fallback === "[object Object]" ? "Unknown error" : humanizeBackendError(fallback);
 }
 
-const S3_ERROR_KEYS: Record<string, string> = {
-  "s3:unauthorized": "error.s3Unauthorized",
-  "s3:forbidden": "error.s3Forbidden",
-  "s3:notFound": "error.s3NotFound",
-  "s3:failed": "error.s3Failed",
-};
-
 const WEBDAV_ERROR_KEYS: Record<string, string> = {
   "webdav:unauthorized": "error.webdavUnauthorized",
   "webdav:forbidden": "error.webdavForbidden",
@@ -46,28 +39,58 @@ function matchCodedError(raw: string, table: Record<string, string>): string | n
   return null;
 }
 
+function formatS3Failure(raw: string): string {
+  const reason = extractS3FailureReason(raw);
+  return reason
+    ? i18n.t("error.s3OperationFailed", { reason })
+    : i18n.t("error.s3Failed");
+}
+
+function extractS3FailureReason(raw: string): string {
+  const coded = raw.match(/^s3:(?:unauthorized|forbidden|notFound|failed)(?::\s*)?(.*)$/i);
+  if (coded) {
+    return (coded[1] ?? "").trim();
+  }
+  const named = raw.match(
+    /\b(AccessDenied|NoSuchBucket|NoSuchKey|SignatureDoesNotMatch|InvalidAccessKeyId|InvalidBucketName|AccessForbidden|RequestTimeTooSkewed)\b/,
+  );
+  if (named?.[1]) {
+    return named[1];
+  }
+  const xmlCode = raw.match(/<Code>([^<]+)<\/Code>/i);
+  const xmlMessage = raw.match(/<Message>([^<]+)<\/Message>/i);
+  if (xmlCode?.[1] && xmlMessage?.[1]) {
+    return `${xmlCode[1]}: ${xmlMessage[1]}`;
+  }
+  if (xmlCode?.[1]) {
+    return xmlCode[1];
+  }
+  return (
+    raw
+      .split("\n")
+      .map((line) => line.trim())
+      .find(Boolean) ?? raw
+  );
+}
+
 export function humanizeBackendError(raw: string): string {
-  const trimmed = raw.trim();
-  const s3 = matchCodedError(trimmed, S3_ERROR_KEYS);
-  if (s3) return s3;
+  let trimmed = raw.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    trimmed = trimmed.slice(1, -1).trim();
+  }
+  if (
+    /^(s3:(unauthorized|forbidden|notFound|failed)|s3 error|nosuchbucket)/i.test(trimmed) ||
+    trimmed.toLowerCase().includes("service: s3")
+  ) {
+    return formatS3Failure(trimmed);
+  }
   const webdav = matchCodedError(trimmed, WEBDAV_ERROR_KEYS);
   if (webdav) return webdav;
 
   const lower = trimmed.toLowerCase();
-  const isS3 = lower.includes("s3:") || lower.includes("s3 error") || lower.includes("nosuchbucket");
-  if (isS3) {
-    if (lower.includes("status: 401") || lower.includes("401 unauthorized")) {
-      return i18n.t("error.s3Unauthorized");
-    }
-    if (lower.includes("status: 403") || lower.includes("403 forbidden")) {
-      return i18n.t("error.s3Forbidden");
-    }
-    if (lower.includes("status: 404") || lower.includes("404 not found") || lower.includes("nosuchbucket")) {
-      return i18n.t("error.s3NotFound");
-    }
-    return i18n.t("error.s3Failed");
-  }
-
   if (lower.includes("status: 401") || lower.includes("401 unauthorized")) {
     return i18n.t("error.webdavUnauthorized");
   }
