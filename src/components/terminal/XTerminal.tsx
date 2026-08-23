@@ -86,6 +86,7 @@ import {
   type TerminalFitScheduler,
   TerminalResizeDeduper,
 } from "./terminalFitScheduler";
+import { installTerminalImageAddon } from "./terminalImageAddon";
 import {
   getSelectedInputRange,
   type InputSelectionRange,
@@ -795,6 +796,7 @@ export default function XTerminal({
     terminal.loadAddon(searchAddon);
     terminal.loadAddon(serializeAddon);
     terminal.loadAddon(unicodeGraphemesAddon);
+    installTerminalImageAddon(terminal, { sessionId, sessionType });
     terminal.open(containerRef.current);
 
     const trimDisposable = (
