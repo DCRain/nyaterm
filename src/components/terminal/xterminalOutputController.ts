@@ -210,6 +210,25 @@ export function createXTerminalOutputController({
         },
       });
     },
+    onForegroundFrameFallback: (stats) => {
+      logger.debug({
+        domain: "terminal.input",
+        event: "terminal.output.foreground_frame_fallback",
+        message: "Foreground terminal output drain fallback fired",
+        ids: { session_id: sessionId },
+        data: {
+          queue_bytes: stats.queueBytes,
+          writing_bytes: stats.writingBytes,
+          unacked_bytes: stats.unackedBytes,
+          pending_bytes: stats.pendingBytes,
+          fallback_delay_ms: stats.fallbackDelayMs,
+          frame_gate: frameGateRef.current?.snapshot(),
+          performance_mode: performanceModeRef.current,
+          visible: visibleRef.current,
+          buffer_type: terminal.buffer.active.type,
+        },
+      });
+    },
   });
   outputDrainRef.current = outputDrain;
   const frameGateMode = resolveDec2026FrameGateMode();

@@ -3,6 +3,7 @@ import { XTERM_PERFORMANCE_CONFIG } from "@/lib/xtermPerformance";
 import {
   TerminalOutputDrain,
   type TerminalOutputBackgroundDrainStats,
+  type TerminalOutputForegroundFrameFallbackStats,
 } from "./terminalOutputDrain";
 
 const settle = async () => {
@@ -25,11 +26,13 @@ function createHarness(
   let nextFrameId = 1;
   const timers = new Map<number, { at: number; callback: () => void }>();
   const frames = new Map<number, FrameRequestCallback>();
+  const canceledFrames: FrameRequestCallback[] = [];
   const pendingWriteCallbacks: Array<() => void> = [];
   const writes: string[] = [];
   const acks: number[] = [];
   const pressure: number[] = [];
   const backgroundDrains: TerminalOutputBackgroundDrainStats[] = [];
+  const foregroundFallbacks: TerminalOutputForegroundFrameFallbackStats[] = [];
 
   const terminal = {
     write: vi.fn((data: string, callback?: () => void) => {
@@ -53,6 +56,7 @@ function createHarness(
     onAck: (bytes) => acks.push(bytes),
     onPressureChange: (bytes) => pressure.push(bytes),
     onBackgroundDrain: (stats) => backgroundDrains.push(stats),
+    onForegroundFrameFallback: (stats) => foregroundFallbacks.push(stats),
     timers: {
       requestAnimationFrame: (callback) => {
         const id = nextFrameId;
@@ -61,6 +65,10 @@ function createHarness(
         return id;
       },
       cancelAnimationFrame: (id) => {
+        const callback = frames.get(id);
+        if (callback) {
+          canceledFrames.push(callback);
+        }
         frames.delete(id);
       },
       setTimeout: (callback, delay) => {
@@ -96,12 +104,22 @@ function createHarness(
     }
   };
 
+  const flushCanceledFrames = () => {
+    const due = [...canceledFrames];
+    canceledFrames.length = 0;
+    for (const callback of due) {
+      callback(now);
+    }
+  };
+
   return {
     acks,
     advance,
     backgroundDrains,
     drain,
+    flushCanceledFrames,
     flushFrame,
+    foregroundFallbacks,
     pendingWriteCallbacks,
     pressure,
     terminal,
@@ -222,7 +240,9 @@ describe("TerminalOutputDrain", () => {
     );
 
     drain.setMode("foreground");
-    expect(timers.size).toBe(0);
+    expect([...timers.values()][0]?.at).toBe(
+      XTERM_PERFORMANCE_CONFIG.output.foregroundFrameFallbackMs,
+    );
     expect(getFrameCount()).toBe(1);
 
     flushFrame();
@@ -230,6 +250,7 @@ describe("TerminalOutputDrain", () => {
 
     expect(writes).toHaveLength(1);
     expect(writes[0]).toHaveLength(1024);
+    expect(getFrameCount()).toBe(1);
   });
 
   it("does not background write while hibernating or hibernated", async () => {
@@ -267,6 +288,141 @@ describe("TerminalOutputDrain", () => {
     flushFrame();
     await settle();
     expect(writes).toEqual(["abcd", "efgh", "ij"]);
+  });
+
+  it("uses the foreground frame fallback when animation frames are starved", async () => {
+    const { acks, advance, drain, foregroundFallbacks, getFrameCount, writes } =
+      createHarness({
+        writeChunkBytes: 8,
+      });
+
+    drain.setMode("foreground");
+    drain.enqueue({ data: "fallback", bytes: 8 });
+    expect(getFrameCount()).toBe(1);
+
+    advance(XTERM_PERFORMANCE_CONFIG.output.foregroundFrameFallbackMs - 1);
+    await settle();
+    expect(writes).toEqual([]);
+
+    advance(1);
+    await settle();
+
+    expect(writes).toEqual(["fallback"]);
+    expect(acks).toEqual([8]);
+    expect(getFrameCount()).toBe(0);
+    expect(foregroundFallbacks).toHaveLength(1);
+    expect(foregroundFallbacks[0]).toMatchObject({
+      queueBytes: 8,
+      pendingBytes: 8,
+      fallbackDelayMs: XTERM_PERFORMANCE_CONFIG.output.foregroundFrameFallbackMs,
+    });
+  });
+
+  it("cancels the foreground fallback when the animation frame wins", async () => {
+    const { advance, drain, flushFrame, foregroundFallbacks, timers, writes } =
+      createHarness();
+
+    drain.setMode("foreground");
+    drain.enqueue({ data: "frame", bytes: 5 });
+
+    flushFrame();
+    await settle();
+    advance(XTERM_PERFORMANCE_CONFIG.output.foregroundFrameFallbackMs);
+    await settle();
+
+    expect(writes).toEqual(["frame"]);
+    expect(foregroundFallbacks).toEqual([]);
+    expect(timers.size).toBe(0);
+  });
+
+  it("ignores stale animation frames after the foreground fallback wins", async () => {
+    const { advance, drain, flushCanceledFrames, foregroundFallbacks, writes } =
+      createHarness();
+
+    drain.setMode("foreground");
+    drain.enqueue({ data: "timer", bytes: 5 });
+
+    advance(XTERM_PERFORMANCE_CONFIG.output.foregroundFrameFallbackMs);
+    await settle();
+    flushCanceledFrames();
+    await settle();
+
+    expect(writes).toEqual(["timer"]);
+    expect(foregroundFallbacks).toHaveLength(1);
+  });
+
+  it("cleans up foreground watchdogs when switching to background", async () => {
+    const {
+      advance,
+      drain,
+      flushCanceledFrames,
+      foregroundFallbacks,
+      getFrameCount,
+      timers,
+      writes,
+    } = createHarness();
+
+    drain.setMode("foreground");
+    drain.enqueue({ data: "background", bytes: 10 });
+    expect(getFrameCount()).toBe(1);
+
+    drain.setMode("background");
+    expect(getFrameCount()).toBe(0);
+    expect([...timers.values()][0]?.at).toBe(
+      XTERM_PERFORMANCE_CONFIG.output.backgroundDrainIntervalMs,
+    );
+
+    flushCanceledFrames();
+    advance(XTERM_PERFORMANCE_CONFIG.output.foregroundFrameFallbackMs);
+    await settle();
+    expect(writes).toEqual([]);
+
+    advance(
+      XTERM_PERFORMANCE_CONFIG.output.backgroundDrainIntervalMs -
+        XTERM_PERFORMANCE_CONFIG.output.foregroundFrameFallbackMs,
+    );
+    await settle();
+
+    expect(writes).toEqual(["background"]);
+    expect(foregroundFallbacks).toEqual([]);
+  });
+
+  it("does not write after disposing with pending foreground watchdogs", async () => {
+    const { advance, drain, flushCanceledFrames, getFrameCount, timers, writes } =
+      createHarness();
+
+    drain.setMode("foreground");
+    drain.enqueue({ data: "disposed", bytes: 8 });
+    expect(getFrameCount()).toBe(1);
+
+    drain.dispose();
+    expect(getFrameCount()).toBe(0);
+    expect(timers.size).toBe(0);
+
+    flushCanceledFrames();
+    advance(XTERM_PERFORMANCE_CONFIG.output.foregroundFrameFallbackMs);
+    await settle();
+
+    expect(writes).toEqual([]);
+  });
+
+  it("keeps draining sustained foreground backlog through fallback timers", async () => {
+    const { acks, advance, drain, foregroundFallbacks, writes } = createHarness({
+      writeChunkBytes: 2,
+    });
+
+    drain.setMode("foreground");
+    drain.enqueue({ data: "abcdef", bytes: 6 });
+
+    for (let i = 0; i < 3; i += 1) {
+      advance(XTERM_PERFORMANCE_CONFIG.output.foregroundFrameFallbackMs);
+      await settle();
+    }
+
+    expect(writes).toEqual(["ab", "cd", "ef"]);
+    expect(acks.reduce((total, bytes) => total + bytes, 0)).toBe(6);
+    expect(foregroundFallbacks).toHaveLength(3);
+    expect(drain.getQueueBytes()).toBe(0);
   });
 
   it("uses the microtask fast path for light foreground pressure", async () => {
@@ -353,12 +509,15 @@ describe("TerminalOutputDrain", () => {
     expect(timers.size).toBe(1);
 
     drain.setMode("foreground");
-    expect(timers.size).toBe(0);
+    expect([...timers.values()][0]?.at).toBe(
+      XTERM_PERFORMANCE_CONFIG.output.foregroundFrameFallbackMs,
+    );
     flushFrame();
     await settle();
 
     expect(writes).toEqual(["abcd"]);
     expect(acks).toEqual([]);
+    expect(timers.size).toBe(0);
 
     advance(XTERM_PERFORMANCE_CONFIG.output.backgroundDrainIntervalMs);
     await settle();

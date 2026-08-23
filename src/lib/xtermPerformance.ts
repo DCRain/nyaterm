@@ -26,6 +26,8 @@ export const XTERM_PERFORMANCE_CONFIG = {
     lowLatencyFlushBacklogBytes: 64 * 1024,
     /** Main-thread time budget for one continuous foreground drain turn. */
     maxForegroundDrainTurnMs: 10,
+    /** Watchdog delay that keeps visible output moving when animation frames are starved. */
+    foregroundFrameFallbackMs: 100,
     /** Max UTF-8 bytes to write into xterm in a single call. */
     writeChunkBytes: 32 * 1024,
     /** Max UTF-8 bytes to write into xterm during one hidden background drain. */
