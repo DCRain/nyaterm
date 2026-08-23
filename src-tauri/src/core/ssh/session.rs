@@ -16,9 +16,12 @@ use crate::core::{
 };
 use crate::error::{AppError, AppResult};
 use std::future::Future;
+use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use tauri::{AppHandle, Manager};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::{mpsc, oneshot};
 
 async fn create_authenticated_connection(
@@ -261,6 +264,81 @@ fn set_owner_window_label(config: &mut SshConfig, owner_window_label: Option<Str
     if let Some(proxy_jump) = config.proxy_jump.as_mut() {
         set_owner_window_label(proxy_jump, owner_window_label);
     }
+}
+
+pub(crate) struct SshForwardedStream {
+    stream: russh::ChannelStream<russh::client::Msg>,
+    _ssh_handle: SshHandle,
+}
+
+impl AsyncRead for SshForwardedStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for SshForwardedStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.stream).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_shutdown(cx)
+    }
+}
+
+pub(crate) async fn open_ssh_direct_tcpip_stream(
+    app: &AppHandle,
+    jump_connection_id: &str,
+    target_host: &str,
+    target_port: u16,
+    owner_window_label: Option<String>,
+) -> AppResult<SshForwardedStream> {
+    let mut ssh_config = load_saved_ssh_config(app, jump_connection_id)?;
+    set_owner_window_label(&mut ssh_config, owner_window_label);
+    let (ssh_handle, _x11_rx) = loop {
+        match create_authenticated_connection(app, &ssh_config, false).await {
+            Err(error) if is_agent_auth_retry(&error) => continue,
+            result => break result,
+        }
+    }?;
+
+    let channel = {
+        let handle = ssh_handle.target_handle();
+        let handle = handle.lock().await;
+        handle
+            .channel_open_direct_tcpip(target_host, target_port.into(), "127.0.0.1", 0)
+            .await
+            .map_err(|error| {
+                AppError::Channel(format!(
+                    "Failed to open SSH ProxyJump direct-tcpip channel to {target_host}:{target_port}: {error}"
+                ))
+            })?
+    };
+
+    tracing::info!(
+        jump_connection_id = %jump_connection_id,
+        target_host = %target_host,
+        target_port = target_port,
+        "SSH direct-tcpip stream opened"
+    );
+
+    Ok(SshForwardedStream {
+        stream: channel.into_stream(),
+        _ssh_handle: ssh_handle,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

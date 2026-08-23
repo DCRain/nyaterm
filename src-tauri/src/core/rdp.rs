@@ -1,10 +1,12 @@
-use crate::config::{self, ConnectionAuth, ConnectionType};
+use crate::config::{self, ConnectionAuth, ConnectionNetwork, ConnectionType};
+use crate::core::network::{BoxedTransportStream, open_tcp_transport};
 use crate::core::remote_desktop::frame::{
     RemoteDesktopFramePatch, RemoteDesktopPixelFormat, encode_frame_patch,
 };
 use crate::error::{AppError, AppResult};
 use async_trait::async_trait;
 use base64::Engine as _;
+use ironrdp::client::config::DirectTransport as IronRdpDirectTransport;
 use ironrdp::client::config::{
     ClipboardType as IronRdpClipboardType, Config as IronRdpConfig,
     ConfigBuilder as IronRdpConfigBuilder, Destination as IronRdpDestination,
@@ -35,13 +37,16 @@ use ironrdp::pdu::rdp::capability_sets::MajorPlatformType;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
-use std::fmt;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Poll};
 use std::thread::JoinHandle;
+use std::{fmt, io};
 use tauri::async_runtime::JoinHandle as TauriJoinHandle;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::time::{Duration, sleep};
 use x509_cert::der::Decode as _;
@@ -190,6 +195,7 @@ pub struct RdpConnectConfig {
     pub reconnect_enabled: bool,
     pub reconnect_max_attempts: u32,
     pub color_depth: u8,
+    pub network: Option<ConnectionNetwork>,
 }
 
 pub struct RdpSession {
@@ -253,6 +259,36 @@ pub struct IronRdpEngine;
 impl IronRdpEngine {
     pub fn new() -> Self {
         Self
+    }
+}
+
+struct IronRdpTransportStreamAdapter(BoxedTransportStream);
+
+impl AsyncRead for IronRdpTransportStreamAdapter {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for IronRdpTransportStreamAdapter {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.0).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_shutdown(cx)
     }
 }
 
@@ -562,6 +598,7 @@ impl RdpEngine for IronRdpEngine {
 
 pub fn load_saved_rdp_config(app: &AppHandle, connection_id: &str) -> AppResult<RdpConnectConfig> {
     let conn = config::load_connection_by_id(app, connection_id)?;
+    let network = conn.network.clone();
     let password = resolve_rdp_password(app, conn.auth.as_ref())?;
     let ConnectionType::Rdp {
         host,
@@ -598,6 +635,7 @@ pub fn load_saved_rdp_config(app: &AppHandle, connection_id: &str) -> AppResult<
         reconnect_enabled: reconnect.enabled,
         reconnect_max_attempts: reconnect.max_attempts,
         color_depth: display.color_depth,
+        network,
     })
 }
 
@@ -932,6 +970,29 @@ async fn build_ironrdp_config(
         .with_client_name(client_name())
         .with_platform(current_platform())
         .with_server_certificate_verifier(certificate_verifier);
+
+    if let Some(network) = config.network.clone() {
+        let app = app.clone();
+        builder = builder.with_direct_transport_connector(Arc::new(move |destination| {
+            let app = app.clone();
+            let network = network.clone();
+            Box::pin(async move {
+                let transport = open_tcp_transport(
+                    &app,
+                    destination.name(),
+                    destination.port(),
+                    Some(&network),
+                    None,
+                )
+                .await
+                .map_err(|error| io::Error::other(error.to_string()))?;
+                Ok(IronRdpDirectTransport {
+                    stream: Box::new(IronRdpTransportStreamAdapter(transport.stream)),
+                    local_addr: transport.local_addr,
+                })
+            })
+        }));
+    }
 
     if config.clipboard_mode == "disabled" {
         *session.clipboard_bridge.lock().await = None;
@@ -1969,6 +2030,7 @@ mod tests {
             reconnect_enabled: true,
             reconnect_max_attempts: 3,
             color_depth: 32,
+            network: None,
         }
     }
 

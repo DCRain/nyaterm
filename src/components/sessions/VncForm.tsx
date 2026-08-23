@@ -2,6 +2,8 @@ import { Eye, EyeOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MdChevronRight, MdClose, MdWarningAmber } from "react-icons/md";
+import type { ConnectionOption } from "@/components/network/shared";
+import { SessionNetworkSection } from "@/components/sessions/SessionNetworkSection";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,7 +18,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { invoke } from "@/lib/invoke";
-import type { SavedPassword } from "@/types/global";
+import type { ProxyConfig, SavedPassword } from "@/types/global";
 
 export type VncScaleMode = "fit" | "actual" | "stretch";
 export type VncSecurityMode = "auto" | "vnc-auth" | "none";
@@ -46,6 +48,12 @@ interface VncFormProps {
   setReconnectEnabled: (value: boolean) => void;
   reconnectMaxAttempts: number;
   setReconnectMaxAttempts: (value: number) => void;
+  proxyId: string;
+  setProxyId: (value: string) => void;
+  proxies: ProxyConfig[];
+  jumpHostId: string;
+  setJumpHostId: (value: string) => void;
+  jumpHostOptions: ConnectionOption[];
   connectionId?: string;
 }
 
@@ -81,6 +89,12 @@ export function VncForm({
   setReconnectEnabled,
   reconnectMaxAttempts,
   setReconnectMaxAttempts,
+  proxyId,
+  setProxyId,
+  proxies,
+  jumpHostId,
+  setJumpHostId,
+  jumpHostOptions,
   connectionId,
 }: VncFormProps) {
   const { t } = useTranslation();
@@ -275,6 +289,15 @@ export function VncForm({
           <span>{t("dialog.advancedConfig")}</span>
         </CollapsibleTrigger>
         <CollapsibleContent className="mt-3 space-y-3">
+          <SessionNetworkSection
+            proxyId={proxyId}
+            setProxyId={setProxyId}
+            proxies={proxies}
+            jumpHostId={jumpHostId}
+            setJumpHostId={setJumpHostId}
+            jumpHostOptions={jumpHostOptions}
+          />
+
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <Label className="text-xs font-medium text-foreground/80">

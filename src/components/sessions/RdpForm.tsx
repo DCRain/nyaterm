@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MdChevronRight, MdClose } from "react-icons/md";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { SessionNetworkSection } from "@/components/sessions/SessionNetworkSection";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NumberInput } from "@/components/ui/number-input";
@@ -17,11 +18,13 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { invoke } from "@/lib/invoke";
 import type {
+  ProxyConfig,
   RdpCertificatePolicy,
   RdpClipboardMode,
   RdpDisplayMode,
   SavedPassword,
 } from "@/types/global";
+import type { ConnectionOption } from "@/components/network/shared";
 
 interface RdpFormProps {
   host: string;
@@ -54,6 +57,12 @@ interface RdpFormProps {
   setReconnectEnabled: (value: boolean) => void;
   reconnectMaxAttempts: number;
   setReconnectMaxAttempts: (value: number) => void;
+  proxyId: string;
+  setProxyId: (value: string) => void;
+  proxies: ProxyConfig[];
+  jumpHostId: string;
+  setJumpHostId: (value: string) => void;
+  jumpHostOptions: ConnectionOption[];
   connectionId?: string;
 }
 
@@ -96,6 +105,12 @@ export function RdpForm({
   setReconnectEnabled,
   reconnectMaxAttempts,
   setReconnectMaxAttempts,
+  proxyId,
+  setProxyId,
+  proxies,
+  jumpHostId,
+  setJumpHostId,
+  jumpHostOptions,
   connectionId,
 }: RdpFormProps) {
   const { t } = useTranslation();
@@ -327,9 +342,12 @@ export function RdpForm({
         </CollapsibleTrigger>
         <CollapsibleContent className="mt-3">
           <Tabs defaultValue="security" className="w-full">
-            <TabsList className="grid h-8 w-full grid-cols-4 pointer-events-auto">
+            <TabsList className="grid h-8 w-full grid-cols-5 pointer-events-auto">
               <TabsTrigger value="security" className="text-xs">
                 {t("dialog.rdpSecurity")}
+              </TabsTrigger>
+              <TabsTrigger value="network" className="text-xs">
+                {t("dialog.proxySelect")}
               </TabsTrigger>
               <TabsTrigger value="display" className="text-xs">
                 {t("dialog.rdpDisplay")}
@@ -378,6 +396,17 @@ export function RdpForm({
                   </div>
                 </div>
               </div>
+            </TabsContent>
+
+            <TabsContent value="network" className="mt-3 border-0 outline-none">
+              <SessionNetworkSection
+                proxyId={proxyId}
+                setProxyId={setProxyId}
+                proxies={proxies}
+                jumpHostId={jumpHostId}
+                setJumpHostId={setJumpHostId}
+                jumpHostOptions={jumpHostOptions}
+              />
             </TabsContent>
 
             <TabsContent value="display" className="mt-3 border-0 outline-none">

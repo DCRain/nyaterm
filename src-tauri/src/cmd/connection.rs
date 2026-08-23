@@ -547,9 +547,14 @@ fn validate_proxy_jump_config(
         return Ok(());
     };
 
-    if !matches!(connection.config, config::ConnectionType::Ssh { .. }) {
+    if !matches!(
+        connection.config,
+        config::ConnectionType::Ssh { .. }
+            | config::ConnectionType::Rdp { .. }
+            | config::ConnectionType::Vnc { .. }
+    ) {
         return Err(AppError::Config(
-            "ProxyJump is only supported for SSH connections".to_string(),
+            "ProxyJump is only supported for SSH, RDP, and VNC connections".to_string(),
         ));
     }
 
@@ -988,13 +993,26 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
     }
 
     #[test]
-    fn rejects_proxy_jump_on_non_ssh_connections() {
+    fn rejects_proxy_jump_on_unsupported_connections() {
         let connection = telnet_connection("telnet-1", Some("jump-1"));
         let jump = ssh_connection("jump-1", None);
 
         let error = validate_proxy_jump_config(&connection, &[jump]).unwrap_err();
 
         assert!(error.to_string().contains("ProxyJump is only supported"));
+    }
+
+    #[test]
+    fn accepts_proxy_jump_on_vnc_connections() {
+        let mut connection = vnc_connection();
+        connection.id = "vnc-target".to_string();
+        connection.network = Some(ConnectionNetwork {
+            proxy_id: None,
+            proxy_jump_id: Some("jump-1".to_string()),
+        });
+        let jump = ssh_connection("jump-1", None);
+
+        validate_proxy_jump_config(&connection, &[jump]).unwrap();
     }
 
     #[test]

@@ -1494,7 +1494,7 @@ pub(super) async fn connect_with_proxy(
     Ok(handle)
 }
 
-async fn open_proxy_command_stream(
+pub(crate) async fn open_proxy_command_stream(
     template: Option<&str>,
     host: &str,
     port: u16,
@@ -1560,7 +1560,7 @@ async fn open_proxy_command_stream(
     Ok(ProxyCommandStream { stdout, stdin })
 }
 
-struct ProxyCommandStream {
+pub(crate) struct ProxyCommandStream {
     stdout: tokio::process::ChildStdout,
     stdin: tokio::process::ChildStdin,
 }

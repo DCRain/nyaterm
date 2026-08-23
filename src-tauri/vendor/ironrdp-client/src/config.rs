@@ -4,11 +4,14 @@ use core::str::FromStr;
 use core::time::Duration;
 #[cfg(all(windows, feature = "dvc-com-plugin"))]
 use std::path::PathBuf;
+use std::io;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Context as _;
 use ironrdp_cfg::PropertySetExt as _;
 use ironrdp_propertyset::PropertySet;
+use tokio::io::{AsyncRead, AsyncWrite};
 use url::Url;
 
 // ── Extension registry ────────────────────────────────────────────────────────
@@ -36,6 +39,20 @@ pub trait ServerCertificateVerifier: fmt::Debug + Send + Sync {
         der: Vec<u8>,
     ) -> ServerCertificateVerifyFuture<'a>;
 }
+
+pub trait DirectTransportStream: AsyncRead + AsyncWrite {}
+impl<T: AsyncRead + AsyncWrite + ?Sized> DirectTransportStream for T {}
+
+pub type BoxedDirectTransportStream = Box<dyn DirectTransportStream + Unpin + Send + Sync>;
+
+pub struct DirectTransport {
+    pub stream: BoxedDirectTransportStream,
+    pub local_addr: Option<SocketAddr>,
+}
+
+pub type DirectTransportFuture = Pin<Box<dyn Future<Output = io::Result<DirectTransport>> + Send>>;
+pub type DirectTransportConnector =
+    Arc<dyn Fn(Destination) -> DirectTransportFuture + Send + Sync>;
 
 /// Private registry of user-supplied static and dynamic virtual channel factories.
 ///
@@ -84,6 +101,7 @@ pub struct Config {
     pub(crate) fake_events_interval: Option<Duration>,
     pub(crate) channels: ChannelConfig,
     pub(crate) certificate_verifier: Option<Arc<dyn ServerCertificateVerifier>>,
+    pub(crate) direct_transport_connector: Option<DirectTransportConnector>,
 
     #[cfg(feature = "clipboard")]
     pub(crate) cliprdr_factory: Option<CliprdrFactory>,
@@ -171,6 +189,10 @@ impl fmt::Debug for Config {
         s.field(
             "certificate_verifier",
             &self.certificate_verifier.as_ref().map(|_| "<verifier>"),
+        );
+        s.field(
+            "direct_transport_connector",
+            &self.direct_transport_connector.as_ref().map(|_| "<connector>"),
         );
         #[cfg(feature = "clipboard")]
         s.field(
@@ -379,7 +401,7 @@ impl Destination {
         let addr = addr.into();
 
         if let Some(addr_split) = addr.rsplit_once(':') {
-            if let Ok(sock_addr) = addr.parse::<core::net::SocketAddr>() {
+            if let Ok(sock_addr) = addr.parse::<SocketAddr>() {
                 Ok(Self {
                     name: sock_addr.ip().to_string(),
                     port: sock_addr.port(),
@@ -604,6 +626,7 @@ pub struct ConfigBuilder {
     fake_events_interval: Option<Duration>,
     channels: ChannelConfig,
     certificate_verifier: Option<Arc<dyn ServerCertificateVerifier>>,
+    direct_transport_connector: Option<DirectTransportConnector>,
     #[cfg(feature = "clipboard")]
     cliprdr_factory: Option<CliprdrFactory>,
     #[cfg(feature = "dvc-pipe-proxy")]
@@ -901,6 +924,15 @@ impl ConfigBuilder {
             }
         }
         self.transport = transport;
+        self
+    }
+
+    #[must_use]
+    pub fn with_direct_transport_connector(
+        mut self,
+        connector: DirectTransportConnector,
+    ) -> Self {
+        self.direct_transport_connector = Some(connector);
         self
     }
 
@@ -1264,6 +1296,7 @@ impl ConfigBuilder {
             fake_events_interval: self.fake_events_interval,
             channels: self.channels,
             certificate_verifier: self.certificate_verifier,
+            direct_transport_connector: self.direct_transport_connector,
             #[cfg(feature = "clipboard")]
             cliprdr_factory: self.cliprdr_factory,
             #[cfg(feature = "dvc-pipe-proxy")]
@@ -1510,4 +1543,53 @@ fn kerberos_config_from_properties(
             kdc_proxy_url: Some(url),
             hostname: client_name.to_owned(),
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn direct_transport_connector_is_cloneable_and_invoked_per_connect() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let connector_calls = calls.clone();
+        let connector: DirectTransportConnector = Arc::new(move |_destination| {
+            let connector_calls = connector_calls.clone();
+            Box::pin(async move {
+                connector_calls.fetch_add(1, Ordering::SeqCst);
+                let (stream, _peer) = tokio::io::duplex(64);
+                Ok(DirectTransport {
+                    stream: Box::new(stream),
+                    local_addr: None,
+                })
+            })
+        });
+
+        let config = ConfigBuilder::new()
+            .with_destination(Destination::from_parts("windows.internal.example", 3389))
+            .with_transport(TransportKind::Direct)
+            .with_direct_transport_connector(connector)
+            .with_username("user")
+            .with_password("password")
+            .with_client_build(1)
+            .with_client_dir("client")
+            .with_client_name("client")
+            .with_platform(ironrdp_pdu::rdp::capability_sets::MajorPlatformType::UNSPECIFIED)
+            .build()
+            .expect("config");
+
+        let cloned = config.clone();
+        let destination = cloned.destination().clone();
+        let connector = cloned
+            .direct_transport_connector
+            .as_ref()
+            .expect("custom direct connector");
+        connector(destination.clone()).await.expect("first connect");
+        connector(destination).await.expect("reconnect");
+
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(config.destination().name(), "windows.internal.example");
+        assert_eq!(config.destination().port(), 3389);
+    }
 }

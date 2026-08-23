@@ -14,10 +14,11 @@ import {
   MdRefresh,
   MdSettings,
 } from "react-icons/md";
-import { ConnectionCombobox, type ConnectionOption } from "@/components/network/shared";
+import type { ConnectionOption } from "@/components/network/shared";
 import { KeyManagementTab } from "@/components/panel/security-auth/KeyManagementTab";
 import { PasswordManagementTab } from "@/components/panel/security-auth/PasswordManagementTab";
 import { ConnectionRecordingSettings } from "@/components/sessions/ConnectionRecordingSettings";
+import { SessionNetworkSection } from "@/components/sessions/SessionNetworkSection";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -288,15 +289,6 @@ function AdvancedCombobox({
       </PopoverContent>
     </Popover>
   );
-}
-
-function formatProxySubtitle(proxy: ProxyConfig) {
-  if (proxy.protocol === "proxycommand") {
-    return [proxy.protocol.toUpperCase(), proxy.command].filter(Boolean).join(" · ");
-  }
-  return [`${proxy.protocol.toUpperCase()} ${proxy.host}:${proxy.port}`, proxy.username]
-    .filter(Boolean)
-    .join(" · ");
 }
 
 function formatOtpLabel(entry: OtpEntry) {
@@ -736,14 +728,6 @@ export function SshForm({
     [endpoints[index], endpoints[nextIndex]] = [endpoints[nextIndex], endpoints[index]];
     updateForwardingSources({ external_agent_endpoints: endpoints });
   };
-  const proxyOptions = proxies.map((proxy) => ({
-    id: proxy.id,
-    label: proxy.name,
-    searchText: [proxy.name, proxy.protocol, proxy.host, proxy.port, proxy.username, proxy.command]
-      .filter(Boolean)
-      .join(" "),
-    subtitle: formatProxySubtitle(proxy),
-  }));
   const otpOptions = otpEntries.map((entry) => ({
     id: entry.id,
     label: formatOtpLabel(entry),
@@ -1216,13 +1200,10 @@ export function SshForm({
           <span>{t("dialog.advancedConfig")}</span>
         </CollapsibleTrigger>
         <CollapsibleContent className="mt-3 space-y-3">
-          <Tabs defaultValue="proxy" className="w-full">
-            <TabsList className="grid h-8 w-full grid-cols-4 pointer-events-auto">
-              <TabsTrigger value="proxy" className="text-xs">
+          <Tabs defaultValue="network" className="w-full">
+            <TabsList className="grid h-8 w-full grid-cols-3 pointer-events-auto">
+              <TabsTrigger value="network" className="text-xs">
                 {t("dialog.proxySelect")}
-              </TabsTrigger>
-              <TabsTrigger value="jump-host" className="text-xs">
-                {t("dialog.proxyJump")}
               </TabsTrigger>
               <TabsTrigger value="two-factor" className="text-xs">
                 {t("dialog.twoFactorAuth")}
@@ -1232,26 +1213,15 @@ export function SshForm({
               </TabsTrigger>
             </TabsList>
 
-            <TabsContent value="proxy" className="mt-3 border-0 outline-none">
-              <div className="rounded-lg border bg-accent/25 p-3">
-                <div>
-                  <Label className="text-xs font-medium text-foreground/80">
-                    {t("dialog.proxySelect")}
-                  </Label>
-                  <div className="mt-1">
-                    <AdvancedCombobox
-                      value={proxyId}
-                      options={proxyOptions}
-                      placeholder={t("dialog.noProxy")}
-                      searchPlaceholder={t("network.searchProxies")}
-                      emptyText={t("network.noProxyConfigs")}
-                      missingSelectionLabel={t("dialog.selectedItemMissing")}
-                      clearLabel={t("dialog.noProxy")}
-                      onChange={setProxyId}
-                    />
-                  </div>
-                </div>
-              </div>
+            <TabsContent value="network" className="mt-3 border-0 outline-none">
+              <SessionNetworkSection
+                proxyId={proxyId}
+                setProxyId={setProxyId}
+                proxies={proxies}
+                jumpHostId={jumpHostId}
+                setJumpHostId={setJumpHostId}
+                jumpHostOptions={jumpHostOptions}
+              />
             </TabsContent>
 
             <TabsContent value="agent" className="mt-3 border-0 outline-none">
@@ -1590,28 +1560,6 @@ export function SshForm({
                     "Agent forwarding exposes signing capability from the selected local Agent endpoints and NyaTerm stored keys to remote processes. Enable it only for trusted servers. Private key material is never sent to the remote server; endpoint and forwarding policy remain device-local.",
                   )}
                 </p>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="jump-host" className="mt-3 border-0 outline-none">
-              <div className="rounded-lg border bg-accent/25 p-3">
-                <div>
-                  <Label className="text-xs font-medium text-foreground/80">
-                    {t("dialog.selectProxyJump")}
-                  </Label>
-                  <div className="mt-1">
-                    <ConnectionCombobox
-                      value={jumpHostId}
-                      options={jumpHostOptions}
-                      placeholder={t("dialog.noProxyJump")}
-                      searchPlaceholder={t("network.searchConnections")}
-                      emptyText={t("dialog.proxyJumpSshOnly")}
-                      missingSelectionLabel={t("network.connectionMissing")}
-                      clearLabel={t("dialog.noProxyJump")}
-                      onChange={setJumpHostId}
-                    />
-                  </div>
-                </div>
               </div>
             </TabsContent>
 

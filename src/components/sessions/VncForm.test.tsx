@@ -35,6 +35,12 @@ function props() {
     setReconnectEnabled: vi.fn(),
     reconnectMaxAttempts: 5,
     setReconnectMaxAttempts: vi.fn(),
+    proxyId: "",
+    setProxyId: vi.fn(),
+    proxies: [],
+    jumpHostId: "",
+    setJumpHostId: vi.fn(),
+    jumpHostOptions: [],
   };
 }
 

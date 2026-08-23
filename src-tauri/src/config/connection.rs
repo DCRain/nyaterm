@@ -2256,6 +2256,28 @@ mod tests {
     }
 
     #[test]
+    fn rdp_and_vnc_old_configs_default_to_no_network() {
+        let rdp: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "rdp-1",
+            "name": "Windows",
+            "type": "rdp",
+            "host": "192.168.1.20",
+            "username": "Administrator"
+        }))
+        .expect("rdp connection");
+        let vnc: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "vnc-1",
+            "name": "Linux desktop",
+            "type": "vnc",
+            "host": "192.168.1.30"
+        }))
+        .expect("vnc connection");
+
+        assert!(rdp.network.is_none());
+        assert!(vnc.network.is_none());
+    }
+
+    #[test]
     fn post_login_defaults_delay_when_omitted() {
         let connection: SavedConnection = serde_json::from_value(serde_json::json!({
             "id": "conn-1",

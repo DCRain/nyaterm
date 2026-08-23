@@ -828,7 +828,7 @@ export default function NewSessionPage() {
                   ? "vnc"
                   : "serial";
       const network =
-        currentTab === "ssh"
+        currentTab === "ssh" || currentTab === "rdp" || currentTab === "vnc"
           ? (() => {
               const nextNetwork: NonNullable<SavedConnection["network"]> = {};
               if (proxyId) {
@@ -989,6 +989,7 @@ export default function NewSessionPage() {
               username: normalizedUsername,
               domain: rdpDomain.trim() || undefined,
               auth,
+              network,
               security: {
                 use_nla: rdpUseNla,
                 certificate_policy: rdpCertificatePolicy,
@@ -1013,6 +1014,7 @@ export default function NewSessionPage() {
               host: normalizedHost,
               port: vncPort,
               auth,
+              network,
               security: { mode: vncSecurityMode },
               display: { scale_mode: vncScaleMode },
               clipboard: { enabled: vncClipboardEnabled },
@@ -1536,6 +1538,12 @@ export default function NewSessionPage() {
               setReconnectEnabled={setRdpReconnectEnabled}
               reconnectMaxAttempts={rdpReconnectMaxAttempts}
               setReconnectMaxAttempts={setRdpReconnectMaxAttempts}
+              proxyId={proxyId}
+              setProxyId={setProxyId}
+              proxies={proxies}
+              jumpHostId={jumpHostId}
+              setJumpHostId={setJumpHostId}
+              jumpHostOptions={jumpHostOptions}
               connectionId={initialData?.id || editId}
             />
           </TabsContent>
@@ -1566,6 +1574,12 @@ export default function NewSessionPage() {
               setReconnectEnabled={setVncReconnectEnabled}
               reconnectMaxAttempts={vncReconnectMaxAttempts}
               setReconnectMaxAttempts={setVncReconnectMaxAttempts}
+              proxyId={proxyId}
+              setProxyId={setProxyId}
+              proxies={proxies}
+              jumpHostId={jumpHostId}
+              setJumpHostId={setJumpHostId}
+              jumpHostOptions={jumpHostOptions}
               connectionId={initialData?.id || editId}
             />
           </TabsContent>
