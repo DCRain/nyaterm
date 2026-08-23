@@ -22,6 +22,7 @@ pub mod remote_desktop;
 pub mod rdp;
 pub mod s3;
 pub mod ftp;
+pub mod webdav;
 pub mod session;
 pub mod settings;
 pub mod sftp;

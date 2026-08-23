@@ -34,6 +34,7 @@ use crate::core::{
 };
 use crate::core::s3::S3Manager;
 use crate::core::ftp::FtpManager;
+use crate::core::webdav::WebDavManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -54,6 +55,7 @@ pub fn run() {
     let cloud_sync_manager = Arc::new(CloudSyncManager::new());
     let s3_manager = Arc::new(S3Manager::new());
     let ftp_manager = Arc::new(FtpManager::new());
+    let webdav_manager = Arc::new(WebDavManager::new());
     let agent_approval_manager = Arc::new(AgentApprovalManager::new());
     let nyaterm_mcp_runtime = Arc::new(core::ai::NyaTermMcpRuntime::new());
     let codex_app_server_manager = Arc::new(core::ai::CodexAppServerManager::new());
@@ -108,6 +110,7 @@ pub fn run() {
         .manage(cloud_sync_manager.clone())
         .manage(s3_manager.clone())
         .manage(ftp_manager.clone())
+        .manage(webdav_manager.clone())
         .manage(agent_approval_manager.clone())
         .manage(nyaterm_mcp_runtime.clone())
         .manage(codex_app_server_manager.clone())
@@ -305,6 +308,17 @@ pub fn run() {
             cmd::ftp::download_ftp_directory,
             cmd::ftp::invalidate_ftp_connection,
             cmd::ftp::respond_ftp_certificate,
+            cmd::webdav::list_webdav_dir,
+            cmd::webdav::list_webdav_child_directories,
+            cmd::webdav::create_webdav_dir,
+            cmd::webdav::create_webdav_file,
+            cmd::webdav::delete_webdav_object,
+            cmd::webdav::rename_webdav_object,
+            cmd::webdav::upload_local_file_to_webdav,
+            cmd::webdav::upload_local_directory_to_webdav,
+            cmd::webdav::download_webdav_file,
+            cmd::webdav::download_webdav_directory,
+            cmd::webdav::invalidate_webdav_connection,
             cmd::sftp::create_remote_dir,
             cmd::sftp::create_remote_symlink,
             cmd::sftp::chmod_remote_file,

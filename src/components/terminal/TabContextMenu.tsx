@@ -116,8 +116,10 @@ export default function TabContextMenu({
   const isStorageWorkspace =
     activePane?.view === "s3" ||
     activePane?.view === "ftp" ||
+    activePane?.view === "webdav" ||
     activePane?.type === "S3" ||
-    activePane?.type === "FTP";
+    activePane?.type === "FTP" ||
+    activePane?.type === "WebDAV";
   const canSpawnSession =
     !!activePane &&
     isTerminalPane &&
@@ -153,7 +155,7 @@ export default function TabContextMenu({
     !isStorageWorkspace &&
     !activePane.connecting &&
     !activePane.connectError;
-  const canSplit = canSpawnSession && activePane?.view !== "sftp" && activePane?.view !== "s3" && activePane?.view !== "ftp";
+  const canSplit = canSpawnSession && activePane?.view !== "sftp" && activePane?.view !== "s3" && activePane?.view !== "ftp" && activePane?.view !== "webdav";
   const canUseAI =
     !!activePane &&
     isTerminalPane &&

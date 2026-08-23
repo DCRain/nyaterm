@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 
 export interface MoveDialogData {
@@ -88,6 +89,13 @@ export default function MoveDialog({ data, onClose, onSuccess }: MoveDialogProps
                     oldPath: operation.oldPath,
                     newPath: operation.newPath,
                   })
+              : data.backend === "webdav"
+                ? invoke("rename_webdav_object", {
+                    sessionId: data.sessionId,
+                    connectionId: data.connectionId,
+                    oldPath: operation.oldPath,
+                    newPath: operation.newPath,
+                  })
               : invoke("rename_remote_file", {
                   sessionId: data.sessionId,
                   oldPath: operation.oldPath,
@@ -115,7 +123,7 @@ export default function MoveDialog({ data, onClose, onSuccess }: MoveDialogProps
 
       onClose();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(getErrorMessage(e));
     } finally {
       setIsSubmitting(false);
     }

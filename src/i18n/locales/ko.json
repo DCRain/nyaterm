@@ -591,6 +591,8 @@
     "protocolS3Desc": "S3 호환 버킷에서 파일을 탐색하고 전송합니다",
     "protocolFtp": "FTP",
     "protocolFtpDesc": "FTP 또는 FTPS로 파일을 탐색하고 전송합니다",
+    "protocolWebDav": "WebDAV",
+    "protocolWebDavDesc": "WebDAV로 파일을 탐색하고 전송합니다",
     "ftpHost": "호스트",
     "ftpHostRequired": "FTP 호스트는 필수입니다.",
     "ftpPort": "포트",
@@ -599,6 +601,11 @@
     "ftpPassword": "비밀번호",
     "ftpUseTls": "TLS 사용 (FTPS)",
     "ftpUseTlsDesc": "서버에서 보안 연결을 요구할 때 FTPS를 사용합니다.",
+    "webdavEndpoint": "엔드포인트",
+    "webdavEndpointRequired": "WebDAV 엔드포인트는 필수입니다.",
+    "webdavRoot": "루트 경로",
+    "webdavUsername": "사용자 이름",
+    "webdavPassword": "비밀번호",
     "s3AccessKeyId": "Access Key ID",
     "s3Bucket": "Bucket",
     "s3BucketRequired": "S3 버킷은 필수입니다.",
@@ -836,6 +843,13 @@
       "ftp_host_required": "FTP 호스트는 필수입니다",
       "ftp_config_invalid": "FTP 구성이 올바르지 않습니다{{detailSuffix}}",
       "ftp_fail": "FTP 연결 실패{{detailSuffix}}",
+      "webdav_config_invalid": "WebDAV 구성이 잘못되었습니다",
+      "webdav_endpoint_required": "WebDAV 엔드포인트는 필수입니다",
+      "webdav_fail": "WebDAV 연결 실패",
+      "webdav_forbidden": "이 WebDAV 경로에 접근할 권한이 없습니다",
+      "webdav_method_not_allowed": "서버가 이 작업을 허용하지 않습니다. 권한이 없거나 지원하지 않는 메서드입니다",
+      "webdav_not_found": "WebDAV 경로를 찾을 수 없습니다",
+      "webdav_unauthorized": "인증이 필요하거나 사용자 이름/비밀번호가 올바르지 않습니다",
       "serial_fail": "시리얼 포트 {{portName}}를 열 수 없습니다{{detailSuffix}}",
       "serial_ok": "시리얼 포트 {{portName}}를 열었습니다",
       "serial_port_required": "시리얼 포트가 필요합니다",
@@ -969,7 +983,13 @@
   },
   "error": {
     "reloadApplication": "애플리케이션 다시 로드",
-    "somethingWentWrong": "문제가 발생했습니다"
+    "somethingWentWrong": "문제가 발생했습니다",
+    "webdavFailed": "WebDAV 작업에 실패했습니다.",
+    "webdavForbidden": "이 경로에 접근할 권한이 없습니다.",
+    "webdavMethodNotAllowed": "서버가 이 작업을 허용하지 않습니다. 권한이 없거나 지원하지 않는 메서드입니다.",
+    "webdavNotFound": "경로를 찾을 수 없습니다.",
+    "webdavUnauthorized": "인증이 필요하거나 사용자 이름/비밀번호가 올바르지 않습니다.",
+    "webdavUnsupported": "서버가 이 작업을 지원하지 않습니다."
   },
   "externalOpen": {
     "continueConnection": "연결 계속",
@@ -1952,8 +1972,11 @@
     "openS3Only": "S3 파일 탐색기는 S3 연결에서만 사용할 수 있습니다.",
     "openFtp": "FTP 파일 탐색기 열기",
     "openFtpOnly": "FTP 파일 탐색기는 FTP 연결에서만 사용할 수 있습니다.",
+    "openWebDav": "WebDAV 파일 탐색기 열기",
+    "openWebDavOnly": "WebDAV 파일 탐색기는 WebDAV 연결에서만 사용할 수 있습니다.",
     "filterS3": "S3",
     "filterFtp": "FTP",
+    "filterWebDav": "WebDAV",
     "parity": "패리티",
     "port": "포트",
     "rename": "이름 바꾸기",
@@ -2828,6 +2851,11 @@
     "local": "로컬",
     "remote": "FTP",
     "tabTitle": "FTP · {{name}}"
+  },
+  "webdavWorkspace": {
+    "local": "로컬",
+    "remote": "WebDAV",
+    "tabTitle": "WebDAV · {{name}}"
   },
   "sshAgentAuth": {
     "endpoint": {

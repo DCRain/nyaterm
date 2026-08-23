@@ -136,6 +136,7 @@ import {
   getLocalPathName,
   type InlineRenameState,
   isParentDirectoryEntry,
+  isStorageExplorerBackend,
   joinExplorerPath,
   type LoadDirectoryOptions,
   MIN_FILE_LIST_COLUMN_WIDTHS,
@@ -158,7 +159,7 @@ export default MemoizedFileExplorer;
 
 type FileExplorerPaneEndpoint = {
   sessionId: string;
-  kind: "local" | "remote" | "s3" | "ftp";
+  kind: "local" | "remote" | "s3" | "ftp" | "webdav";
   currentPath: string;
 };
 
@@ -741,14 +742,14 @@ export function FileExplorerPane({
   const explorerBackend: FileExplorerBackendKind =
     forceBackend ?? (hasLocalSession ? "local" : "remote");
   const [remoteFileBrowserEnabled, setRemoteFileBrowserEnabled] = useState<boolean | null>(
-    explorerBackend === "local" || explorerBackend === "s3" || explorerBackend === "ftp" ? true : null,
+    explorerBackend === "local" || explorerBackend === "s3" || explorerBackend === "ftp" || explorerBackend === "webdav" ? true : null,
   );
   const canBrowseFiles =
-    explorerBackend === "local" || explorerBackend === "s3" || explorerBackend === "ftp"
+    explorerBackend === "local" || explorerBackend === "s3" || explorerBackend === "ftp" || explorerBackend === "webdav"
       ? !!activeSessionId
       : hasSshSession && remoteFileBrowserEnabled === true;
   const canUseRemoteTransfer =
-    (explorerBackend === "remote" || explorerBackend === "s3" || explorerBackend === "ftp") && canBrowseFiles;
+    (explorerBackend === "remote" || explorerBackend === "s3" || explorerBackend === "ftp" || explorerBackend === "webdav") && canBrowseFiles;
   const hasUnsupportedSession =
     !forceBackend &&
     !!activeSessionId &&
@@ -1039,7 +1040,7 @@ export function FileExplorerPane({
         visitedHistoryRef.current,
         backend,
       );
-      if (snapshot) {
+      if (snapshot && !isStorageExplorerBackend(backend)) {
         sessionCacheRef.current.set(fileExplorerSessionCacheKey(activeSessionId, backend), snapshot);
       }
     };
@@ -1094,7 +1095,7 @@ export function FileExplorerPane({
 
   // Resolve whether backend terminal-path tracking is available for this session.
   useEffect(() => {
-    if (explorerBackend === "local" || explorerBackend === "s3" || explorerBackend === "ftp") {
+    if (explorerBackend === "local" || explorerBackend === "s3" || explorerBackend === "ftp" || explorerBackend === "webdav") {
       setRemoteFileBrowserEnabled(true);
       setCwdTrackingActive(false);
       return;
@@ -1239,6 +1240,12 @@ export function FileExplorerPane({
                     connectionId: activeConnectionId ?? undefined,
                     path: normalizedPath,
                   })
+              : backend === "webdav"
+                ? await invoke<FileEntry[]>("list_webdav_dir", {
+                    sessionId: activeSessionId,
+                    connectionId: activeConnectionId ?? undefined,
+                    path: normalizedPath,
+                  })
               : await invoke<FileEntry[]>("list_remote_dir", {
                   sessionId: activeSessionId,
                   path: normalizedPath,
@@ -1310,16 +1317,22 @@ export function FileExplorerPane({
           nextVisitedHistory,
           backend,
         );
-        if (snapshot) {
+        if (snapshot && !isStorageExplorerBackend(backend)) {
           sessionCacheRef.current.set(cacheKey, snapshot);
         }
         return true;
       } catch (e) {
         pendingPreserveScrollRef.current = null;
-        const msg = String(e);
-        if (filesRef.current.length > 0) {
+        const msg = getErrorMessage(e);
+        if (
+          filesRef.current.length > 0 &&
+          !isStorageExplorerBackend(explorerBackendRef.current)
+        ) {
           toast.error(msg);
         } else {
+          if (isStorageExplorerBackend(explorerBackendRef.current)) {
+            setFiles([]);
+          }
           setError(msg);
         }
         return false;
@@ -1449,7 +1462,7 @@ export function FileExplorerPane({
           },
           error,
         });
-        toast.error(String(error));
+        toast.error(getErrorMessage(error));
       }
     },
     [resolveLocalDropPaths, t, uploadLocalEntriesToTarget],
@@ -1471,7 +1484,7 @@ export function FileExplorerPane({
         visitedHistoryRef.current,
         backend,
       );
-      if (snapshot) {
+      if (snapshot && !isStorageExplorerBackend(backend)) {
         cache.set(fileExplorerSessionCacheKey(prevId, backend), snapshot);
       }
     }
@@ -1492,7 +1505,7 @@ export function FileExplorerPane({
     }
 
     const cached = cache.get(fileExplorerSessionCacheKey(activeSessionId, backend));
-    if (cached?.currentPath) {
+    if (cached?.currentPath && !isStorageExplorerBackend(backend)) {
       setFiles(cached.files);
       setCurrentPath(cached.currentPath);
       setHomeDir(cached.homeDir);
@@ -1533,7 +1546,7 @@ export function FileExplorerPane({
 
       try {
         const home = normalizeExplorerPath(
-          backend === "s3" || backend === "ftp"
+          backend === "s3" || backend === "ftp" || backend === "webdav"
             ? "/"
             : await invoke<string>(
                 backend === "local" ? "get_local_home_dir" : "get_home_dir",
@@ -1976,6 +1989,13 @@ export function FileExplorerPane({
                 path: normalizedPath,
                 showHiddenFiles,
               })
+          : backend === "webdav"
+            ? await invoke<DirectoryChild[]>("list_webdav_child_directories", {
+                sessionId: activeSessionId,
+                connectionId: activeConnectionId ?? undefined,
+                path: normalizedPath,
+                showHiddenFiles,
+              })
           : await invoke<DirectoryChild[]>("list_remote_child_directories", {
               sessionId: activeSessionId,
               path: normalizedPath,
@@ -2142,7 +2162,7 @@ export function FileExplorerPane({
   };
 
   const handlePreview = async (entry: FileEntry) => {
-    if (!activeSessionId || entry.is_dir || explorerBackend === "s3" || explorerBackend === "ftp") return;
+    if (!activeSessionId || entry.is_dir || explorerBackend === "s3" || explorerBackend === "ftp" || explorerBackend === "webdav") return;
     try {
       await openFilePreview({
         sessionId: activeSessionId,
@@ -2520,6 +2540,13 @@ export function FileExplorerPane({
           oldPath: inlineRenameState.oldPath,
           newPath,
         });
+      } else if (backend === "webdav") {
+        await invoke("rename_webdav_object", {
+          sessionId: activeSessionId,
+          connectionId: activeConnectionId ?? undefined,
+          oldPath: inlineRenameState.oldPath,
+          newPath,
+        });
       } else {
         await invoke("rename_remote_file", {
           sessionId: activeSessionId,
@@ -2535,7 +2562,7 @@ export function FileExplorerPane({
       });
       setInlineRenameState(null);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(getErrorMessage(e));
       setInlineRenameState((prev) =>
         prev && prev.entryName === inlineRenameState.entryName
           ? { ...prev, isSubmitting: false }
@@ -3069,7 +3096,7 @@ export function FileExplorerPane({
           appSettings.transfer.default_editor || undefined,
         );
       } catch (e) {
-        toast.error(String(e));
+        toast.error(getErrorMessage(e));
       }
       return;
     }
@@ -3114,7 +3141,7 @@ export function FileExplorerPane({
         appSettings.transfer.default_editor || undefined,
       );
     } catch (e) {
-      toast.error(String(e));
+      toast.error(getErrorMessage(e));
     }
   };
 
@@ -3125,6 +3152,7 @@ export function FileExplorerPane({
       entry.is_dir ||
       backend === "s3" ||
       backend === "ftp" ||
+      backend === "webdav" ||
       (activeSessionType !== "SSH" && activeSessionType !== "Local")
     ) {
       return;

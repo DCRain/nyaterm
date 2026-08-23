@@ -592,6 +592,8 @@
     "protocolS3Desc": "Browse and transfer files with an S3-compatible bucket",
     "protocolFtp": "FTP",
     "protocolFtpDesc": "Browse and transfer files over FTP or FTPS",
+    "protocolWebDav": "WebDAV",
+    "protocolWebDavDesc": "Browse and transfer files over WebDAV",
     "ftpHost": "Host",
     "ftpHostRequired": "FTP host is required.",
     "ftpPort": "Port",
@@ -600,6 +602,11 @@
     "ftpPassword": "Password",
     "ftpUseTls": "Use TLS (FTPS)",
     "ftpUseTlsDesc": "Enable explicit FTPS when your server requires a secure connection.",
+    "webdavEndpoint": "Endpoint",
+    "webdavEndpointRequired": "WebDAV endpoint is required.",
+    "webdavRoot": "Root path",
+    "webdavUsername": "Username",
+    "webdavPassword": "Password",
     "s3AccessKeyId": "Access Key ID",
     "s3Bucket": "Bucket",
     "s3BucketRequired": "S3 bucket is required.",
@@ -837,6 +844,13 @@
       "ftp_host_required": "FTP host is required",
       "ftp_config_invalid": "FTP configuration is invalid{{detailSuffix}}",
       "ftp_fail": "FTP connection failed{{detailSuffix}}",
+      "webdav_config_invalid": "WebDAV configuration is invalid",
+      "webdav_endpoint_required": "WebDAV endpoint is required",
+      "webdav_fail": "WebDAV connection failed",
+      "webdav_forbidden": "You do not have permission to access this WebDAV path",
+      "webdav_method_not_allowed": "This WebDAV operation is not allowed (insufficient permission, or the method is not supported)",
+      "webdav_not_found": "The WebDAV path was not found",
+      "webdav_unauthorized": "Authentication required, or the username or password is incorrect",
       "serial_fail": "Could not open serial port {{portName}}{{detailSuffix}}",
       "serial_ok": "Opened serial port {{portName}}",
       "serial_port_required": "Serial port is required",
@@ -970,7 +984,13 @@
   },
   "error": {
     "reloadApplication": "Reload Application",
-    "somethingWentWrong": "Something went wrong"
+    "somethingWentWrong": "Something went wrong",
+    "webdavFailed": "The WebDAV operation failed.",
+    "webdavForbidden": "You do not have permission to access this path.",
+    "webdavMethodNotAllowed": "This operation is not allowed on the server (insufficient permission, or the method is not supported).",
+    "webdavNotFound": "The path was not found.",
+    "webdavUnauthorized": "Authentication required, or the username or password is incorrect.",
+    "webdavUnsupported": "The server does not support this operation."
   },
   "externalOpen": {
     "continueConnection": "Continue Connection",
@@ -1953,8 +1973,11 @@
     "openS3Only": "S3 file explorer is only available for S3 connections.",
     "openFtp": "Open FTP file explorer",
     "openFtpOnly": "FTP file explorer is only available for FTP connections.",
+    "openWebDav": "Open WebDAV file explorer",
+    "openWebDavOnly": "WebDAV file explorer is only available for WebDAV connections.",
     "filterS3": "S3",
     "filterFtp": "FTP",
+    "filterWebDav": "WebDAV",
     "parity": "Parity",
     "port": "Port",
     "rename": "Rename",
@@ -2838,6 +2861,11 @@
     "local": "Local",
     "remote": "FTP",
     "tabTitle": "FTP · {{name}}"
+  },
+  "webdavWorkspace": {
+    "local": "Local",
+    "remote": "WebDAV",
+    "tabTitle": "WebDAV · {{name}}"
   },
   "sshAgentAuth": {
     "endpoint": {

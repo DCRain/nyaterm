@@ -1,6 +1,6 @@
 /** Type of terminal session. */
 export type SessionType = "SSH" | "Local" | "Telnet" | "Serial";
-export type WorkspaceSessionType = SessionType | "RDP" | "VNC" | "S3" | "FTP";
+export type WorkspaceSessionType = SessionType | "RDP" | "VNC" | "S3" | "FTP" | "WebDAV";
 export type WorkspacePaneKind = "terminal" | "remote-desktop" | "file";
 export type PersistedWorkspacePaneKind = WorkspacePaneKind | "rdp";
 export type { TemporaryLinkConfig } from "@/types/temporaryConnection";
@@ -62,7 +62,8 @@ export type ConnectionTypeTag =
   | "rdp"
   | "vnc"
   | "s3"
-  | "ftp";
+  | "ftp"
+  | "webdav";
 
 /** Metadata for a connected or disconnected session. */
 export interface SessionInfo {
@@ -90,6 +91,7 @@ export type SessionPaneView =
   | "sftp"
   | "s3"
   | "ftp"
+  | "webdav"
   | "workbench"
   | "note"
   | "externalMarkdown";
@@ -122,7 +124,7 @@ export interface WorkspacePaneBase {
 /** Leaf node representing one terminal session inside a workspace tab. */
 export interface TerminalSessionPane extends WorkspacePaneBase {
   paneKind: "terminal";
-  type: SessionType | "S3" | "FTP";
+  type: SessionType | "S3" | "FTP" | "WebDAV";
 }
 
 export type RemoteDesktopScaleMode = "fit" | "actual" | "stretch";

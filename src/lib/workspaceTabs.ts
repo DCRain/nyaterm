@@ -62,13 +62,18 @@ export function isFtpWorkspacePane(node: PaneNode): node is SessionPane {
   return isSessionPane(node) && node.view === "ftp";
 }
 
+export function isWebDavWorkspacePane(node: PaneNode): node is SessionPane {
+  return isSessionPane(node) && node.view === "webdav";
+}
+
 export function isSessionlessWorkspacePane(node: PaneNode): node is SessionPane {
   return (
     isWorkbenchPane(node) ||
     isNotePane(node) ||
     isExternalMarkdownPane(node) ||
     isS3WorkspacePane(node) ||
-    isFtpWorkspacePane(node)
+    isFtpWorkspacePane(node) ||
+    isWebDavWorkspacePane(node)
   );
 }
 
@@ -456,6 +461,7 @@ function serializePane(node: PaneNode): RestorablePaneNode | null {
         node.view === "sftp" ||
         node.view === "s3" ||
         node.view === "ftp" ||
+        node.view === "webdav" ||
         node.view === "workbench" ||
         node.view === "note"
           ? node.view
@@ -560,6 +566,9 @@ export function normalizeSessionType(
     case "FTP":
     case "ftp":
       return "FTP";
+    case "WebDAV":
+    case "webdav":
+      return "WebDAV";
     default:
       return null;
   }
@@ -580,12 +589,13 @@ function restorePane(node: RestorablePaneNode): PaneNode | null {
       node.view === "sftp" ||
       node.view === "s3" ||
       node.view === "ftp" ||
+      node.view === "webdav" ||
       node.view === "workbench" ||
       node.view === "note"
         ? node.view
         : undefined;
     const isSessionless =
-      view === "workbench" || view === "note" || view === "s3" || view === "ftp";
+      view === "workbench" || view === "note" || view === "s3" || view === "ftp" || view === "webdav";
     return {
       id: node.id || createWorkspaceId("pane"),
       kind: "leaf",
@@ -595,7 +605,9 @@ function restorePane(node: RestorablePaneNode): PaneNode | null {
           ? `s3:${node.connection_id}`
           : view === "ftp" && node.connection_id
             ? `ftp:${node.connection_id}`
-            : createWorkspaceId(
+            : view === "webdav" && node.connection_id
+              ? `webdav:${node.connection_id}`
+              : createWorkspaceId(
               view === "note" ? "note" : view === "workbench" ? "workbench" : "pending",
             ),
       name: node.title,

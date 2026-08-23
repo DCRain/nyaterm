@@ -13,6 +13,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 
 export interface DeleteDialogData {
@@ -66,6 +67,13 @@ export default function DeleteDialog({ data, onClose, onSuccess }: DeleteDialogP
                     path: item.path,
                     isDirectory: item.isDirectory ?? false,
                   })
+              : data.backend === "webdav"
+                ? invoke("delete_webdav_object", {
+                    sessionId: data.sessionId,
+                    connectionId: data.connectionId,
+                    path: item.path,
+                    isDirectory: item.isDirectory ?? false,
+                  })
               : invoke("delete_remote_file", {
                   sessionId: data.sessionId,
                   path: item.path,
@@ -91,7 +99,7 @@ export default function DeleteDialog({ data, onClose, onSuccess }: DeleteDialogP
 
       onClose();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(getErrorMessage(e));
     } finally {
       setIsSubmitting(false);
     }

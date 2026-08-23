@@ -45,10 +45,10 @@ export type LoadDirectoryOptions = {
   silent?: boolean;
 };
 
-export type FileExplorerBackendKind = "remote" | "local" | "s3" | "ftp";
+export type FileExplorerBackendKind = "remote" | "local" | "s3" | "ftp" | "webdav";
 
 export function isPosixExplorerBackend(backend: FileExplorerBackendKind): boolean {
-  return backend === "remote" || backend === "s3" || backend === "ftp";
+  return backend === "remote" || backend === "s3" || backend === "ftp" || backend === "webdav";
 }
 
 export type BreadcrumbSegment = {
@@ -92,15 +92,25 @@ export function fileExplorerSessionCacheKey(
 }
 
 export function getSessionIdFromFileExplorerSessionCacheKey(cacheKey: string): string {
-  if (
-    cacheKey.endsWith(":local") ||
-    cacheKey.endsWith(":remote") ||
-    cacheKey.endsWith(":s3") ||
-    cacheKey.endsWith(":ftp")
-  ) {
-    return cacheKey.slice(0, cacheKey.lastIndexOf(":"));
+  for (const suffix of [":local", ":remote", ":s3", ":ftp", ":webdav"] as const) {
+    if (cacheKey.endsWith(suffix)) {
+      return cacheKey.slice(0, -suffix.length);
+    }
   }
   return cacheKey;
+}
+
+export function isStorageExplorerBackend(backend: FileExplorerBackendKind): boolean {
+  return backend === "s3" || backend === "ftp" || backend === "webdav";
+}
+
+export function clearFileExplorerSessionCacheForSession(sessionId: string | null | undefined) {
+  if (!sessionId) return;
+  for (const cacheKey of [...fileExplorerSessionCacheStore.keys()]) {
+    if (getSessionIdFromFileExplorerSessionCacheKey(cacheKey) === sessionId) {
+      fileExplorerSessionCacheStore.delete(cacheKey);
+    }
+  }
 }
 
 export type MoveDialogItem = {

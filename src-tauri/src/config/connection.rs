@@ -691,6 +691,19 @@ pub enum ConnectionType {
         #[serde(default, skip_serializing_if = "is_false")]
         use_tls: bool,
     },
+    #[serde(rename = "webdav")]
+    WebDav {
+        #[serde(default)]
+        endpoint: String,
+        #[serde(default)]
+        root: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        username: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        password: Option<String>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        has_password: bool,
+    },
 }
 
 fn default_ssh_port() -> u16 {
@@ -1272,7 +1285,11 @@ pub fn save_sessions(app: &AppHandle, config: &SessionsConfig) -> AppResult<()> 
             ConnectionType::Ssh { .. } => {
                 migrate_legacy_ssh_agent_settings(conn);
             }
-            ConnectionType::Rdp { .. } | ConnectionType::Vnc { .. } | ConnectionType::S3 { .. } | ConnectionType::Ftp { .. } => {}
+            ConnectionType::Rdp { .. }
+            | ConnectionType::Vnc { .. }
+            | ConnectionType::S3 { .. }
+            | ConnectionType::Ftp { .. }
+            | ConnectionType::WebDav { .. } => {}
         }
         validate_ssh_agent_settings(&conn.config)?;
         if let Some(auth) = &mut conn.auth {
@@ -1289,7 +1306,7 @@ pub fn save_sessions(app: &AppHandle, config: &SessionsConfig) -> AppResult<()> 
             *has_secret_access_key = false;
             let _ = (secret_access_key, access_key_id, session_token);
         }
-        if let ConnectionType::Ftp {
+        if let ConnectionType::WebDav {
             has_password,
             password,
             username,
@@ -1377,7 +1394,11 @@ pub fn resolve_connection_encoding(app: &AppHandle, conn: &SavedConnection) -> S
         | ConnectionType::LocalTerminal { encoding, .. }
         | ConnectionType::Telnet { encoding, .. }
         | ConnectionType::Serial { encoding, .. } => encoding.as_str(),
-        ConnectionType::Rdp { .. } | ConnectionType::Vnc { .. } | ConnectionType::S3 { .. } | ConnectionType::Ftp { .. } => "",
+        ConnectionType::Rdp { .. }
+        | ConnectionType::Vnc { .. }
+        | ConnectionType::S3 { .. }
+        | ConnectionType::Ftp { .. }
+        | ConnectionType::WebDav { .. } => "",
     };
     if !per_conn.is_empty() {
         return per_conn.to_string();

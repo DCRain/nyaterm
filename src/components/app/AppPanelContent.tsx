@@ -56,6 +56,7 @@ interface AppPanelContentProps {
   onOpenSftp?: (connection: SavedConnection) => Promise<void> | void;
   onOpenS3?: (connection: SavedConnection) => Promise<void> | void;
   onOpenFtp?: (connection: SavedConnection) => Promise<void> | void;
+  onOpenWebDav?: (connection: SavedConnection) => Promise<void> | void;
   onSessionClick: (sessionId: string) => void;
   onSessionReconnect: (sessionId: string) => Promise<void> | void;
   onSessionDisconnect: (sessionId: string) => Promise<void> | void;
@@ -88,6 +89,7 @@ export default function AppPanelContent({
   onOpenSftp,
   onOpenS3,
   onOpenFtp,
+  onOpenWebDav,
   onSessionClick,
   onSessionReconnect,
   onSessionDisconnect,
@@ -145,6 +147,7 @@ export default function AppPanelContent({
             onOpenSftp={onOpenSftp}
             onOpenS3={onOpenS3}
             onOpenFtp={onOpenFtp}
+            onOpenWebDav={onOpenWebDav}
           />
         );
       case "activeSessions":

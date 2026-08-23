@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 
 export interface NewItemDialogData {
@@ -65,6 +66,10 @@ export default function NewItemDialog({ data, onClose, onSuccess }: NewItemDialo
           ? isFile
             ? "create_ftp_file"
             : "create_ftp_dir"
+        : data.backend === "webdav"
+          ? isFile
+            ? "create_webdav_file"
+            : "create_webdav_dir"
         : isFile
           ? "create_remote_file"
           : "create_remote_dir";
@@ -95,7 +100,7 @@ export default function NewItemDialog({ data, onClose, onSuccess }: NewItemDialo
     try {
       setIsSubmitting(true);
       const path = joinExplorerPath(data.currentDirPath, trimmed, data.backend);
-      if (data.backend === "s3" || data.backend === "ftp") {
+      if (data.backend === "s3" || data.backend === "ftp" || data.backend === "webdav") {
         await invoke(command, {
           sessionId: data.sessionId,
           connectionId: data.connectionId,
@@ -111,7 +116,7 @@ export default function NewItemDialog({ data, onClose, onSuccess }: NewItemDialo
       onSuccess({ name: trimmed, openAfterCreate, is_dir: !isFile });
       onClose();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(getErrorMessage(e));
     } finally {
       setIsSubmitting(false);
     }

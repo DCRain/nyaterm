@@ -64,6 +64,19 @@ fn default_ftp_test_root() -> String {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct TestWebDavInput {
+    #[serde(default)]
+    pub endpoint: String,
+    #[serde(default)]
+    pub root: String,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TestConnectionEndpointRequest {
     pub protocol: String,
     pub host: Option<String>,
@@ -89,6 +102,8 @@ pub struct TestConnectionEndpointRequest {
     pub s3: Option<TestS3Input>,
     #[serde(default)]
     pub ftp: Option<TestFtpInput>,
+    #[serde(default)]
+    pub webdav: Option<TestWebDavInput>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -145,6 +160,7 @@ pub async fn test_connection_endpoint(
         )),
         "s3" => Ok(test_s3(request.s3.as_ref(), request.connection_id.as_deref()).await),
         "ftp" => Ok(test_ftp(&app, window.label(), request.ftp.as_ref()).await),
+        "webdav" => Ok(test_webdav(request.webdav.as_ref()).await),
         other => Err(AppError::Config(format!(
             "Unsupported protocol for connectivity test: {other}"
         ))),
@@ -294,6 +310,62 @@ async fn run_s3_probe(operator: Operator, bucket: &str) -> TestConnectionEndpoin
             TestConnectionEndpointParams {
                 host: Some(bucket.to_string()),
                 detail: Some(err.to_string()),
+                ..Default::default()
+            },
+        ),
+    }
+}
+
+async fn test_webdav(input: Option<&TestWebDavInput>) -> TestConnectionEndpointResult {
+    let endpoint = input
+        .map(|value| value.endpoint.trim().to_string())
+        .unwrap_or_default();
+    if endpoint.is_empty() {
+        return result(
+            false,
+            "webdav_endpoint_required",
+            TestConnectionEndpointParams::default(),
+        );
+    }
+
+    let operator = match crate::core::webdav::build_opendal_webdav_operator(
+        &endpoint,
+        input.map(|value| value.root.as_str()).unwrap_or(""),
+        input
+            .and_then(|value| value.username.as_deref())
+            .unwrap_or(""),
+        input
+            .and_then(|value| value.password.as_deref())
+            .unwrap_or(""),
+    ) {
+        Ok(op) => op,
+        Err(err) => {
+            return result(
+                false,
+                "webdav_config_invalid",
+                TestConnectionEndpointParams {
+                    host: Some(endpoint),
+                    detail: Some(err.to_string()),
+                    ..Default::default()
+                },
+            );
+        }
+    };
+
+    match operator.list("/").await {
+        Ok(_) => result(
+            true,
+            "ok",
+            TestConnectionEndpointParams {
+                host: Some(endpoint),
+                ..Default::default()
+            },
+        ),
+        Err(err) => result(
+            false,
+            crate::core::webdav::webdav_test_error_code(&err),
+            TestConnectionEndpointParams {
+                host: Some(endpoint),
                 ..Default::default()
             },
         ),

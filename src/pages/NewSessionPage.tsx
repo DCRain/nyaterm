@@ -17,6 +17,7 @@ import { buildGroupPath, type ConnectionOption, sortLabel } from "@/components/n
 import { LocalTerminal } from "@/components/sessions/LocalTerminal";
 import { S3Form } from "@/components/sessions/S3Form";
 import { FtpForm } from "@/components/sessions/FtpForm";
+import { WebDavForm } from "@/components/sessions/WebDavForm";
 import {
   DEFAULT_RDP_HEIGHT,
   DEFAULT_RDP_USERNAME,
@@ -47,7 +48,7 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useApp } from "@/context/AppContext";
-import { getErrorMessage } from "@/lib/errors";
+import { getErrorMessage, humanizeBackendError } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import { isValidSerialBaudRate, MAX_SERIAL_BAUD_RATE, MIN_SERIAL_BAUD_RATE } from "@/lib/serial";
 import { validateSshAgentForwardingEndpoints } from "@/lib/sshAgent";
@@ -151,7 +152,7 @@ const isValidSftpShellDetectionTimeout = (value: number) =>
   value <= MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS;
 
 type WizardStep = "pick" | "form";
-  type ProtocolTab = "ssh" | "local" | "telnet" | "serial" | "rdp" | "vnc" | "s3" | "ftp";
+  type ProtocolTab = "ssh" | "local" | "telnet" | "serial" | "rdp" | "vnc" | "s3" | "ftp" | "webdav";
 
   const PROTOCOL_OPTIONS: Array<{
     id: ProtocolTab;
@@ -224,6 +225,14 @@ type WizardStep = "pick" | "form";
       descKey: "dialog.protocolFtpDesc",
       descFallback: "Browse and transfer files over FTP or FTPS",
       icon: MdFolder,
+    },
+    {
+      id: "webdav",
+      titleKey: "dialog.protocolWebDav",
+      titleFallback: "WebDAV",
+      descKey: "dialog.protocolWebDavDesc",
+      descFallback: "Browse and transfer files over WebDAV",
+      icon: MdCloud,
     },
   ];
 
@@ -322,6 +331,11 @@ export default function NewSessionPage() {
   const [ftpPassword, setFtpPassword] = useState("");
   const [ftpHasPassword, setFtpHasPassword] = useState(false);
   const [ftpUseTls, setFtpUseTls] = useState(false);
+  const [webdavEndpoint, setWebdavEndpoint] = useState("");
+  const [webdavRoot, setWebdavRoot] = useState("");
+  const [webdavUsername, setWebdavUsername] = useState("");
+  const [webdavPassword, setWebdavPassword] = useState("");
+  const [webdavHasPassword, setWebdavHasPassword] = useState(false);
 
   // Proxy
   const [proxyId, setProxyId] = useState("");
@@ -421,6 +435,7 @@ export default function NewSessionPage() {
           vnc: "vnc",
           s3: "s3",
           ftp: "ftp",
+          webdav: "webdav",
         };
         setCurrentTab(tabMap[found.type] || "ssh");
         setWizardStep("form");
@@ -536,6 +551,12 @@ export default function NewSessionPage() {
           setFtpPassword(found.password || "");
           setFtpHasPassword(Boolean(found.has_password));
           setFtpUseTls(Boolean(found.use_tls));
+        } else if (found.type === "webdav") {
+          setWebdavEndpoint(found.endpoint || "");
+          setWebdavRoot(found.root || "");
+          setWebdavUsername(found.username || "");
+          setWebdavPassword(found.password || "");
+          setWebdavHasPassword(Boolean(found.has_password));
         }
       })
       .catch((e) => setError(getErrorMessage(e)));
@@ -925,6 +946,12 @@ export default function NewSessionPage() {
       }
     }
 
+    if (currentTab === "webdav") {
+      if (!webdavEndpoint.trim()) {
+        return t("dialog.webdavEndpointRequired", "WebDAV endpoint is required.");
+      }
+    }
+
     if (currentTab === "serial") {
       if (!serialPortName.trim()) {
         return t("dialog.serialPortRequired", "Serial port is required");
@@ -969,6 +996,7 @@ export default function NewSessionPage() {
     s3Bucket,
     ftpHost,
     ftpPort,
+    webdavEndpoint,
     telnetPort,
     t,
     username,
@@ -1026,7 +1054,9 @@ export default function NewSessionPage() {
                     ? s3Bucket.trim() || t("dialog.protocolS3", "S3")
                     : currentTab === "ftp"
                       ? `${ftpHost.trim()}:${ftpPort}`
-                      : normalizedHost;
+                      : currentTab === "webdav"
+                        ? webdavEndpoint.trim() || t("dialog.protocolWebDav", "WebDAV")
+                        : normalizedHost;
 
       const typeTag =
         currentTab === "ssh"
@@ -1043,6 +1073,8 @@ export default function NewSessionPage() {
                     ? "s3"
                     : currentTab === "ftp"
                       ? "ftp"
+                      : currentTab === "webdav"
+                        ? "webdav"
                     : "serial";
       const network =
         currentTab === "ssh"
@@ -1148,7 +1180,7 @@ export default function NewSessionPage() {
         description: normalizedDescription || undefined,
         sort_order: sortOrder,
         open_on_startup:
-          currentTab === "rdp" || currentTab === "vnc" || currentTab === "s3" || currentTab === "ftp"
+          currentTab === "rdp" || currentTab === "vnc" || currentTab === "s3" || currentTab === "ftp" || currentTab === "webdav"
             ? false
             : openOnStartup,
         icon: iconKey || undefined,
@@ -1312,6 +1344,22 @@ export default function NewSessionPage() {
               use_tls: ftpUseTls,
             }
           : {}),
+        ...(currentTab === "webdav"
+          ? {
+              endpoint: webdavEndpoint.trim(),
+              root: webdavRoot.trim(),
+              username: webdavUsername.trim()
+                ? webdavUsername.trim()
+                : editId
+                  ? "__SET__"
+                  : undefined,
+              password: webdavPassword
+                ? webdavPassword
+                : webdavHasPassword
+                  ? "__SET__"
+                  : "",
+            }
+          : {}),
       };
 
       const savedId = await invoke<string>("save_connection", { connection });
@@ -1352,7 +1400,8 @@ export default function NewSessionPage() {
 
   const formatTestResultMessage = useCallback(
     (code: string, params?: Record<string, string | number | undefined>, detail?: string) => {
-      const detailSuffix = detail?.trim() ? `: ${detail.trim()}` : "";
+      const humanDetail = detail?.trim() ? humanizeBackendError(detail.trim()) : "";
+      const detailSuffix = humanDetail ? `: ${humanDetail}` : "";
       const key = `dialog.testResult.${code}`;
       const translated = t(key, {
         host: params?.host,
@@ -1504,6 +1553,15 @@ export default function NewSessionPage() {
                   username: ftpUsername.trim() || undefined,
                   password: ftpPassword || undefined,
                   useTls: ftpUseTls,
+                }
+              : undefined,
+          webdav:
+            currentTab === "webdav"
+              ? {
+                  endpoint: webdavEndpoint.trim(),
+                  root: webdavRoot.trim(),
+                  username: webdavUsername.trim() || undefined,
+                  password: webdavPassword || undefined,
                 }
               : undefined,
         },
@@ -2134,6 +2192,21 @@ export default function NewSessionPage() {
                 setHasPassword={setFtpHasPassword}
                 useTls={ftpUseTls}
                 setUseTls={setFtpUseTls}
+              />
+            </TabsContent>
+
+            <TabsContent value="webdav" className="space-y-3 m-0 border-0 outline-none w-full">
+              <WebDavForm
+                endpoint={webdavEndpoint}
+                setEndpoint={setWebdavEndpoint}
+                root={webdavRoot}
+                setRoot={setWebdavRoot}
+                username={webdavUsername}
+                setUsername={setWebdavUsername}
+                password={webdavPassword}
+                setPassword={setWebdavPassword}
+                hasPassword={webdavHasPassword}
+                setHasPassword={setWebdavHasPassword}
               />
             </TabsContent>
 

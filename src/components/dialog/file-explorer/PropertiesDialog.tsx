@@ -17,6 +17,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import type { FileProperties } from "@/types/global";
 
@@ -176,7 +177,7 @@ export default function PropertiesDialog({ data, onClose, onSuccess }: Propertie
       await onSuccess?.();
       onClose();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(getErrorMessage(e));
     } finally {
       setIsSaving(false);
     }

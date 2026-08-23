@@ -591,6 +591,8 @@
     "protocolS3Desc": "瀏覽並傳輸 S3 相容儲存桶中的檔案",
     "protocolFtp": "FTP",
     "protocolFtpDesc": "透過 FTP 或 FTPS 瀏覽並傳輸檔案",
+    "protocolWebDav": "WebDAV",
+    "protocolWebDavDesc": "透過 WebDAV 瀏覽並傳輸檔案",
     "ftpHost": "主機",
     "ftpHostRequired": "FTP 主機為必填項。",
     "ftpPort": "連接埠",
@@ -599,6 +601,11 @@
     "ftpPassword": "密碼",
     "ftpUseTls": "使用 TLS (FTPS)",
     "ftpUseTlsDesc": "當伺服器要求安全連線時啟用 FTPS。",
+    "webdavEndpoint": "端點",
+    "webdavEndpointRequired": "WebDAV 端點為必填項。",
+    "webdavRoot": "根路徑",
+    "webdavUsername": "使用者名稱",
+    "webdavPassword": "密碼",
     "s3AccessKeyId": "Access Key ID",
     "s3Bucket": "Bucket",
     "s3BucketRequired": "必須填寫 S3 Bucket。",
@@ -836,6 +843,13 @@
       "ftp_host_required": "FTP 主機為必填項",
       "ftp_config_invalid": "FTP 設定無效{{detailSuffix}}",
       "ftp_fail": "FTP 連線失敗{{detailSuffix}}",
+      "webdav_config_invalid": "WebDAV 設定無效",
+      "webdav_endpoint_required": "必須填寫 WebDAV 位址",
+      "webdav_fail": "WebDAV 連線失敗",
+      "webdav_forbidden": "沒有權限存取此 WebDAV 路徑",
+      "webdav_method_not_allowed": "伺服器不允許此操作（權限不足，或不支援該操作）",
+      "webdav_not_found": "WebDAV 路徑不存在",
+      "webdav_unauthorized": "需要登入，或使用者名稱/密碼不正確",
       "serial_fail": "無法開啟序列埠 {{portName}}{{detailSuffix}}",
       "serial_ok": "已開啟序列埠 {{portName}}",
       "serial_port_required": "請選擇序列埠",
@@ -969,7 +983,13 @@
   },
   "error": {
     "reloadApplication": "重新載入應用程式",
-    "somethingWentWrong": "出現錯誤"
+    "somethingWentWrong": "出現錯誤",
+    "webdavFailed": "WebDAV 操作失敗。",
+    "webdavForbidden": "沒有權限存取此路徑。",
+    "webdavMethodNotAllowed": "伺服器不允許此操作（權限不足，或不支援該操作）。",
+    "webdavNotFound": "路徑不存在。",
+    "webdavUnauthorized": "需要登入，或使用者名稱/密碼不正確。",
+    "webdavUnsupported": "伺服器不支援此操作。"
   },
   "externalOpen": {
     "continueConnection": "繼續連線",
@@ -1950,8 +1970,11 @@
     "openS3Only": "僅 S3 連線支援開啟資源管理員。",
     "openFtp": "開啟 FTP 資源管理員",
     "openFtpOnly": "僅 FTP 連線支援開啟資源管理員。",
+    "openWebDav": "開啟 WebDAV 資源管理員",
+    "openWebDavOnly": "僅 WebDAV 連線支援開啟資源管理員。",
     "filterS3": "S3",
     "filterFtp": "FTP",
+    "filterWebDav": "WebDAV",
     "parity": "校驗位",
     "port": "埠",
     "rename": "重新命名",
@@ -2832,6 +2855,11 @@
     "local": "本機",
     "remote": "FTP",
     "tabTitle": "FTP · {{name}}"
+  },
+  "webdavWorkspace": {
+    "local": "本機",
+    "remote": "WebDAV",
+    "tabTitle": "WebDAV · {{name}}"
   },
   "sshAgentAuth": {
     "endpoint": {

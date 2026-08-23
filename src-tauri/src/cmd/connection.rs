@@ -4,6 +4,7 @@ use crate::config::{
 };
 use crate::core::{QuickCommandsImportResult, QuickCommandsImportSource, QuickCommandsStore};
 use crate::core::ftp::SharedFtpManager;
+use crate::core::webdav::SharedWebDavManager;
 use crate::error::{AppError, AppResult};
 use crate::utils::crypto;
 use std::collections::HashSet;
@@ -36,6 +37,9 @@ pub fn get_saved_connections(app: tauri::AppHandle) -> AppResult<Vec<SavedConnec
         if matches!(conn.config, config::ConnectionType::Ftp { .. }) {
             crate::core::ftp::decrypt_ftp_secrets_in_place(conn)?;
         }
+        if matches!(conn.config, config::ConnectionType::WebDav { .. }) {
+            crate::core::webdav::decrypt_webdav_secrets_in_place(conn)?;
+        }
         if let config::ConnectionType::S3 {
             secret_access_key,
             has_secret_access_key,
@@ -45,6 +49,14 @@ pub fn get_saved_connections(app: tauri::AppHandle) -> AppResult<Vec<SavedConnec
             *has_secret_access_key = secret_access_key.is_some();
         }
         if let config::ConnectionType::Ftp {
+            password,
+            has_password,
+            ..
+        } = &mut conn.config
+        {
+            *has_password = password.is_some();
+        }
+        if let config::ConnectionType::WebDav {
             password,
             has_password,
             ..
@@ -112,8 +124,10 @@ pub fn save_connection(
     validate_vnc_config(&connection)?;
     validate_s3_config(&connection)?;
     validate_ftp_config(&connection)?;
+    validate_webdav_config(&connection)?;
     merge_s3_secrets_for_save(&mut connection, existing.as_ref())?;
     merge_ftp_secrets_for_save(&mut connection, existing.as_ref())?;
+    merge_webdav_secrets_for_save(&mut connection, existing.as_ref())?;
 
     if let Some(ref mut auth) = connection.auth {
         // password_id: Some("") means explicitly cleared, None means preserve existing
@@ -146,6 +160,7 @@ pub fn save_connection(
     }
 
     let is_ftp = matches!(connection.config, config::ConnectionType::Ftp { .. });
+    let is_webdav = matches!(connection.config, config::ConnectionType::WebDav { .. });
 
     if let Some(ex) = cfg.connections.iter_mut().find(|c| c.id == target_id) {
         *ex = connection;
@@ -160,6 +175,13 @@ pub fn save_connection(
         let conn_id = target_id.clone();
         tauri::async_runtime::spawn(async move {
             ftp_manager.invalidate(&conn_id).await;
+        });
+    }
+    if is_webdav {
+        let webdav_manager = app.state::<SharedWebDavManager>().inner().clone();
+        let conn_id = target_id.clone();
+        tauri::async_runtime::spawn(async move {
+            webdav_manager.invalidate(&conn_id).await;
         });
     }
     Ok(target_id)
@@ -611,6 +633,58 @@ fn merge_ftp_secrets_for_save(
     *password = match password.as_deref() {
         Some(config::MASKED_SECRET_VALUE) | None => {
             existing_ftp.as_ref().and_then(|(_, pass)| pass.clone())
+        }
+        Some("") => None,
+        Some(plain) => Some(crypto::encrypt(plain)?),
+    };
+    *has_password = false;
+    Ok(())
+}
+
+fn validate_webdav_config(connection: &SavedConnection) -> AppResult<()> {
+    let config::ConnectionType::WebDav { endpoint, .. } = &connection.config else {
+        return Ok(());
+    };
+
+    if endpoint.trim().is_empty() {
+        return Err(AppError::Config("WebDAV endpoint is required".to_string()));
+    }
+    Ok(())
+}
+
+fn merge_webdav_secrets_for_save(
+    connection: &mut SavedConnection,
+    existing: Option<&SavedConnection>,
+) -> AppResult<()> {
+    let config::ConnectionType::WebDav {
+        username,
+        password,
+        has_password,
+        ..
+    } = &mut connection.config
+    else {
+        return Ok(());
+    };
+
+    let existing_webdav = existing.and_then(|conn| match &conn.config {
+        config::ConnectionType::WebDav {
+            username,
+            password,
+            ..
+        } => Some((username.clone(), password.clone())),
+        _ => None,
+    });
+
+    *username = match username.as_deref() {
+        Some(config::MASKED_SECRET_VALUE) | None => {
+            existing_webdav.as_ref().and_then(|(user, _)| user.clone())
+        }
+        Some("") => None,
+        Some(plain) => Some(crypto::encrypt(plain)?),
+    };
+    *password = match password.as_deref() {
+        Some(config::MASKED_SECRET_VALUE) | None => {
+            existing_webdav.as_ref().and_then(|(_, pass)| pass.clone())
         }
         Some("") => None,
         Some(plain) => Some(crypto::encrypt(plain)?),

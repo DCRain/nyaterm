@@ -478,7 +478,8 @@ pub fn strip_device_local_sessions(sessions: &mut config::SessionsConfig) {
             | config::ConnectionType::Rdp { .. }
             | config::ConnectionType::Vnc { .. }
             | config::ConnectionType::S3 { .. }
-            | config::ConnectionType::Ftp { .. } => {}
+            | config::ConnectionType::Ftp { .. }
+            | config::ConnectionType::WebDav { .. } => {}
         }
     }
 }

@@ -642,6 +642,9 @@ fn build_recording_context(
         Some(config::ConnectionType::Ftp { host, port, .. }) => {
             ("ftp".to_string(), Some(host.clone()), Some(*port), None)
         }
+        Some(config::ConnectionType::WebDav { endpoint, .. }) => {
+            ("webdav".to_string(), Some(endpoint.clone()), None, None)
+        }
         Some(config::ConnectionType::Serial { port_name, .. }) => {
             ("serial".to_string(), Some(port_name.clone()), None, None)
         }

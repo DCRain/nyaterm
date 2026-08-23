@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 
 export interface NewSymlinkDialogData {
@@ -49,7 +50,7 @@ export default function NewSymlinkDialog({ data, onClose, onSuccess }: NewSymlin
       onSuccess();
       onClose();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(getErrorMessage(e));
     } finally {
       setIsSubmitting(false);
     }

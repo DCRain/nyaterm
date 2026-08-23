@@ -33,6 +33,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "./components/ui/alert-dialog";
+import { clearDirectoryChildrenCacheForSession } from "./components/panel/file-explorer/FileExplorerPathBar";
+import { clearFileExplorerSessionCacheForSession } from "./components/panel/file-explorer/model";
 import { useApp } from "./context/AppContext";
 import { TransferProvider } from "./context/TransferContext";
 import { useActivityBarController } from "./hooks/useActivityBarController";
@@ -67,6 +69,30 @@ function removePaneFromTabs(tabs: Tab[], tabId: string, paneId: string) {
     const root = removeSessionPane(tab.root, paneId);
     return root ? [{ ...tab, root }] : [];
   });
+}
+
+function storageWorkspaceInvalidate(
+  sessionId: string,
+): { command: string; connectionId: string } | null {
+  if (sessionId.startsWith("webdav:")) {
+    return {
+      command: "invalidate_webdav_connection",
+      connectionId: sessionId.slice("webdav:".length),
+    };
+  }
+  if (sessionId.startsWith("ftp:")) {
+    return {
+      command: "invalidate_ftp_connection",
+      connectionId: sessionId.slice("ftp:".length),
+    };
+  }
+  if (sessionId.startsWith("s3:")) {
+    return {
+      command: "invalidate_s3_connection",
+      connectionId: sessionId.slice("s3:".length),
+    };
+  }
+  return null;
 }
 
 type SecurityPrompt =
@@ -212,6 +238,7 @@ const CONNECTION_SESSION_TYPES: Partial<Record<SavedConnection["type"], Workspac
   vnc: "VNC",
   s3: "S3",
   ftp: "FTP",
+  webdav: "WebDAV",
 };
 
 const STARTUP_OPEN_CONNECTION_TYPES = new Set<SavedConnection["type"]>([
@@ -1430,6 +1457,46 @@ function App() {
     [addPendingTab, invoke, recordRecentConnection, setActiveTabId, t, updateUi],
   );
 
+  const openWebDavWorkspace = useCallback(
+    (connection: SavedConnection) => {
+      if (connection.type !== "webdav") {
+        toast.error(t("savedConnections.openWebDavOnly"));
+        return;
+      }
+
+      const existing = tabsRef.current.find((tab) =>
+        collectSessionPanes(tab.root).some(
+          (pane) => pane.view === "webdav" && pane.connectionId === connection.id,
+        ),
+      );
+      if (existing) {
+        clearFileExplorerSessionCacheForSession(`webdav:${connection.id}`);
+        clearDirectoryChildrenCacheForSession(`webdav:${connection.id}`);
+        void invoke("invalidate_webdav_connection", { connection_id: connection.id });
+        setActiveTabId(existing.id);
+        recordRecentConnection(connection.id);
+        updateUi({ saved_connections_last_opened_connection_id: connection.id });
+        return;
+      }
+
+      const tabName = t("webdavWorkspace.tabTitle", { name: connection.name });
+      addPendingTab(
+        tabName,
+        "WebDAV",
+        connection.id,
+        undefined,
+        { view: "webdav" },
+        {
+          connecting: false,
+          sessionId: `webdav:${connection.id}`,
+        },
+      );
+      recordRecentConnection(connection.id);
+      updateUi({ saved_connections_last_opened_connection_id: connection.id });
+    },
+    [addPendingTab, invoke, recordRecentConnection, setActiveTabId, t, updateUi],
+  );
+
   const connectSavedConnection = useCallback(
     async (connection: SavedConnection, options?: { failureContext?: string }) => {
       if (connection.type === "s3") {
@@ -1439,6 +1506,11 @@ function App() {
 
       if (connection.type === "ftp") {
         openFtpWorkspace(connection);
+        return;
+      }
+
+      if (connection.type === "webdav") {
+        openWebDavWorkspace(connection);
         return;
       }
 
@@ -1534,6 +1606,7 @@ function App() {
       maybePromptConnectionEdit,
       openS3Workspace,
       openFtpWorkspace,
+      openWebDavWorkspace,
       recordRecentConnection,
       t,
       updateAutoIconForSessionStart,
@@ -2368,6 +2441,26 @@ function App() {
         "connecting" | "connectError" | "sessionId" | "createRequestId" | "type" | "view"
       >,
     ) => {
+      const storageInvalidate = storageWorkspaceInvalidate(pane.sessionId);
+      if (
+        storageInvalidate ||
+        pane.view === "s3" ||
+        pane.view === "ftp" ||
+        pane.view === "webdav" ||
+        pane.type === "S3" ||
+        pane.type === "FTP" ||
+        pane.type === "WebDAV"
+      ) {
+        if (storageInvalidate) {
+          clearFileExplorerSessionCacheForSession(pane.sessionId);
+          clearDirectoryChildrenCacheForSession(pane.sessionId);
+          await invoke(storageInvalidate.command, {
+            connection_id: storageInvalidate.connectionId,
+          }).catch(() => {});
+        }
+        return true;
+      }
+
       if (pane.connecting) {
         if (pane.view === "workbench" || pane.view === "note" || pane.view === "externalMarkdown") {
           return true;
@@ -4110,8 +4203,10 @@ function App() {
             pane.paneKind !== "terminal" ||
             pane.type === "S3" ||
             pane.type === "FTP" ||
+            pane.type === "WebDAV" ||
             pane.view === "s3" ||
             pane.view === "ftp" ||
+            pane.view === "webdav" ||
             !hasLiveSession(pane) ||
             seen.has(pane.sessionId)
           ) {
@@ -4149,7 +4244,7 @@ function App() {
     const sessions: QuickSwitcherSession[] = [];
     for (const tab of tabs) {
       for (const pane of collectSessionPanes(tab.root)) {
-        if (pane.paneKind !== "terminal" || pane.type === "S3" || pane.type === "FTP" || pane.view === "s3" || pane.view === "ftp") continue;
+        if (pane.paneKind !== "terminal" || pane.type === "S3" || pane.type === "FTP" || pane.type === "WebDAV" || pane.view === "s3" || pane.view === "ftp" || pane.view === "webdav") continue;
         const connection = pane.connectionId ? connectionsById.get(pane.connectionId) : undefined;
         sessions.push({
           id: pane.sessionId,
@@ -4375,6 +4470,7 @@ function App() {
         onOpenSftp={openSftpWorkspace}
         onOpenS3={openS3Workspace}
         onOpenFtp={openFtpWorkspace}
+        onOpenWebDav={openWebDavWorkspace}
         onSessionClick={handleSessionClick}
         onSessionReconnect={handleReconnectSessionById}
         onSessionDisconnect={handleDisconnectSessionById}
@@ -4409,6 +4505,7 @@ function App() {
       openSftpWorkspace,
       openS3Workspace,
       openFtpWorkspace,
+      openWebDavWorkspace,
       recordingStatuses,
       uiConfig.show_ascend_npu_monitor,
       uiConfig.show_gpu_monitor,

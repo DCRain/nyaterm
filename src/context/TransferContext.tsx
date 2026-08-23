@@ -12,6 +12,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { useApp } from "@/context/AppContext";
+import { getErrorMessage, humanizeBackendError } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import { filterEnqueueUploadRequests } from "@/lib/transferDuplicateResolution";
 
@@ -45,7 +46,7 @@ export interface EnqueueDownloadRequest {
 
 export interface CopyEndpointRequest {
   sessionId: string;
-  kind: "local" | "remote" | "s3" | "ftp";
+  kind: "local" | "remote" | "s3" | "ftp" | "webdav";
   path: string;
 }
 
@@ -90,10 +91,10 @@ export interface TransferItem {
   direction: TransferDirection;
   kind: TransferKind;
   sourceSessionId?: string;
-  sourceKind?: "local" | "remote" | "s3" | "ftp";
+  sourceKind?: "local" | "remote" | "s3" | "ftp" | "webdav";
   sourcePath?: string;
   targetSessionId?: string;
-  targetKind?: "local" | "remote" | "s3" | "ftp";
+  targetKind?: "local" | "remote" | "s3" | "ftp" | "webdav";
   targetPath?: string;
   parentId?: string;
   status: TransferStatus;
@@ -423,7 +424,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
             ? t("fileTransfer.uploadFolderFailed", { name: p.file_name })
             : t("fileTransfer.uploadFailed", { name: p.file_name }),
           {
-            description: p.error_msg,
+            description: p.error_msg ? humanizeBackendError(p.error_msg) : undefined,
           },
         );
       }
@@ -493,7 +494,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
         });
 
         void invoke("resume_transfer", { transferId: nextQueued.id }).catch((error) => {
-          toast.error(String(error));
+          toast.error(getErrorMessage(error));
           setTransferMap((prev) => {
             const existing = prev.get(nextQueued.id);
             if (!existing || existing.status === "completed" || existing.status === "cancelled") {
@@ -585,6 +586,23 @@ export function TransferProvider({ children }: { children: ReactNode }) {
                   transferId: nextQueued.id,
                 });
               }
+            } else if (source.kind === "local" && target.kind === "webdav") {
+              const remotePath = joinPosix(target.path, request.fileName);
+              if (request.kind === "directory") {
+                await invoke("upload_local_directory_to_webdav", {
+                  sessionId: target.sessionId,
+                  localPath: source.path,
+                  remotePath,
+                  transferId: nextQueued.id,
+                });
+              } else {
+                await invoke("upload_local_file_to_webdav", {
+                  sessionId: target.sessionId,
+                  localPath: source.path,
+                  remotePath,
+                  transferId: nextQueued.id,
+                });
+              }
             } else if (source.kind === "s3" && target.kind === "local") {
               const localPath = joinLocal(target.path, request.fileName);
               if (request.kind === "directory") {
@@ -613,6 +631,23 @@ export function TransferProvider({ children }: { children: ReactNode }) {
                 });
               } else {
                 await invoke("download_ftp_file", {
+                  sessionId: source.sessionId,
+                  remotePath: source.path,
+                  localPath,
+                  transferId: nextQueued.id,
+                });
+              }
+            } else if (source.kind === "webdav" && target.kind === "local") {
+              const localPath = joinLocal(target.path, request.fileName);
+              if (request.kind === "directory") {
+                await invoke("download_webdav_directory", {
+                  sessionId: source.sessionId,
+                  remotePath: source.path,
+                  localPath,
+                  transferId: nextQueued.id,
+                });
+              } else {
+                await invoke("download_webdav_file", {
                   sessionId: source.sessionId,
                   remotePath: source.path,
                   localPath,
@@ -707,6 +742,44 @@ export function TransferProvider({ children }: { children: ReactNode }) {
                 transferId: nextQueued.id,
               });
             }
+          } else if (
+            request.direction === "upload" &&
+            request.sessionId.startsWith("webdav:")
+          ) {
+            if (request.kind === "directory") {
+              await invoke("upload_local_directory_to_webdav", {
+                sessionId: request.sessionId,
+                localPath: request.localPath,
+                remotePath: request.remotePath,
+                transferId: nextQueued.id,
+              });
+            } else {
+              await invoke("upload_local_file_to_webdav", {
+                sessionId: request.sessionId,
+                localPath: request.localPath,
+                remotePath: request.remotePath,
+                transferId: nextQueued.id,
+              });
+            }
+          } else if (
+            request.direction === "download" &&
+            request.sessionId.startsWith("webdav:")
+          ) {
+            if (request.kind === "directory") {
+              await invoke("download_webdav_directory", {
+                sessionId: request.sessionId,
+                remotePath: request.remotePath,
+                localPath: request.localPath,
+                transferId: nextQueued.id,
+              });
+            } else {
+              await invoke("download_webdav_file", {
+                sessionId: request.sessionId,
+                remotePath: request.remotePath,
+                localPath: request.localPath,
+                transferId: nextQueued.id,
+              });
+            }
           } else if (request.direction === "upload" && request.kind === "directory") {
             await invoke("upload_local_directory", {
               sessionId: request.sessionId,
@@ -794,7 +867,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
     if (parkedTransferIdsRef.current.has(id)) {
       parkedTransferIdsRef.current.delete(id);
       void invoke("cancel_transfer", { transferId: id }).catch((error) => {
-        toast.error(String(error));
+        toast.error(getErrorMessage(error));
       });
     }
     transferSpeedSamplesRef.current.delete(id);
@@ -842,7 +915,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
     try {
       await invoke("pause_transfer", { transferId: id });
     } catch (error) {
-      toast.error(String(error));
+      toast.error(getErrorMessage(error));
     }
   }, []);
 
@@ -883,7 +956,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
     try {
       await invoke("resume_transfer", { transferId: id });
     } catch (error) {
-      toast.error(String(error));
+      toast.error(getErrorMessage(error));
     }
   }, []);
 
@@ -915,7 +988,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
       try {
         await invoke("cancel_transfer", { transferId: id });
       } catch (error) {
-        toast.error(String(error));
+        toast.error(getErrorMessage(error));
       }
       setTransferMap((prev) => {
         const parked = prev.get(id);
@@ -956,7 +1029,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
       });
       setQueueRevision((revision) => revision + 1);
     } catch (error) {
-      toast.error(String(error));
+      toast.error(getErrorMessage(error));
     }
   }, []);
 

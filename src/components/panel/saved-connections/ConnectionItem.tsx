@@ -280,6 +280,25 @@ function getConnectionDetailRows(
       });
       return rows;
     }
+    case "webdav": {
+      const rows: ConnectionDetailRow[] = [
+        {
+          label: t("dialog.webdavEndpoint", "Endpoint"),
+          value: formatRequiredDetailValue(conn.endpoint, t),
+          copyValue: getCopyDetailValue(conn.endpoint),
+        },
+      ];
+      const root = formatOptionalDetailValue(conn.root);
+      const username = formatOptionalDetailValue(conn.username);
+      if (root) rows.push({ label: t("dialog.webdavRoot", "Root path"), value: root });
+      if (username) rows.push({ label: t("dialog.webdavUsername", "Username"), value: username });
+      rows.push({
+        label: t("savedConnections.description"),
+        value: description,
+        multiline: true,
+      });
+      return rows;
+    }
     default: {
       const rows: ConnectionDetailRow[] = [
         {
@@ -409,6 +428,7 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
     handleOpenSftp,
     handleOpenS3,
     handleOpenFtp,
+    handleOpenWebDav,
     handleCopyConnection,
     handleToggleOpenOnStartup,
     requestMoveConnectionToGroup,
@@ -761,6 +781,17 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
             {t("savedConnections.openFtp")}
           </ContextMenuItem>
         ) : null}
+        {conn.type === "webdav" ? (
+          <ContextMenuItem
+            onClick={() => {
+              closeAndSuppressDetails();
+              handleOpenWebDav(conn);
+            }}
+          >
+            <MdFolderOpen className="text-[0.875rem] text-muted-foreground mr-2" />
+            {t("savedConnections.openWebDav")}
+          </ContextMenuItem>
+        ) : null}
         <ContextMenuItem
           onClick={() => {
             closeAndSuppressDetails();
@@ -790,7 +821,7 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
           <MdContentCopy className="text-[0.875rem] text-muted-foreground mr-2" />
           {t("savedConnections.copy")}
         </ContextMenuItem>
-        {conn.type !== "rdp" && conn.type !== "vnc" && conn.type !== "s3" && conn.type !== "ftp" ? (
+        {conn.type !== "rdp" && conn.type !== "vnc" && conn.type !== "s3" && conn.type !== "ftp" && conn.type !== "webdav" ? (
           <ContextMenuItem
             onClick={() => {
               closeAndSuppressDetails();
