@@ -22,7 +22,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, Mutex};
 
 use crate::config::{ConnectionType, SavedConnection};
-use crate::core::sftp::{DirectoryChild, FileEntry};
+use crate::core::sftp::{DirectoryChild, FileEntry, FileProperties};
 use crate::error::{AppError, AppResult};
 use crate::storage::{FtpCertificateMetadata, KnownHostCheck};
 use crate::utils::crypto;
@@ -260,6 +260,42 @@ impl FtpManager {
             .map_err(|_| AppError::Config("FTP session closed".into()))?;
         rx.await
             .map_err(|_| AppError::Config("FTP session closed".into()))?
+    }
+
+    pub async fn file_properties(
+        &self,
+        app: &AppHandle,
+        connection_id: &str,
+        path: &str,
+        _is_directory: bool,
+        target_window_label: Option<&str>,
+    ) -> AppResult<FileProperties> {
+        if is_ftp_root(path) {
+            return Ok(synthetic_dir_properties(path));
+        }
+        let Some((parent, name)) = ftp_parent_and_name(path) else {
+            return Ok(synthetic_dir_properties(path));
+        };
+        let entries = self
+            .list_dir(app, connection_id, &parent, target_window_label)
+            .await?;
+        let entry = entries
+            .into_iter()
+            .find(|item| item.name == name)
+            .ok_or_else(|| AppError::Config(format!("FTP entry '{path}' not found")))?;
+        Ok(FileProperties {
+            name: entry.name,
+            is_dir: entry.is_dir,
+            is_symlink: entry.is_symlink,
+            size: if entry.is_dir { 0 } else { entry.size },
+            permissions: entry.permissions,
+            owner: entry.owner,
+            group: entry.group,
+            uid: String::new(),
+            gid: String::new(),
+            mtime: entry.mtime,
+            atime: entry.mtime,
+        })
     }
 
     pub async fn list_child_directories(
@@ -1511,6 +1547,50 @@ fn connect_params_from_connection(connection: &SavedConnection) -> AppResult<Ftp
         password: password.clone().unwrap_or_default(),
         use_tls: *use_tls,
     })
+}
+
+fn is_ftp_root(path: &str) -> bool {
+    let trimmed = path.trim();
+    trimmed.is_empty() || trimmed == "/"
+}
+
+fn ftp_parent_and_name(path: &str) -> Option<(String, String)> {
+    let trimmed = path.trim().trim_end_matches('/');
+    if trimmed.is_empty() || trimmed == "/" {
+        return None;
+    }
+    let name = trimmed
+        .rsplit('/')
+        .find(|segment| !segment.is_empty())?
+        .to_string();
+    let parent = match trimmed.rsplit_once('/') {
+        Some(("", _)) | None => "/".to_string(),
+        Some((parent, _)) if parent.is_empty() => "/".to_string(),
+        Some((parent, _)) => parent.to_string(),
+    };
+    Some((parent, name))
+}
+
+fn synthetic_dir_properties(path: &str) -> FileProperties {
+    let name = path
+        .trim_end_matches('/')
+        .rsplit('/')
+        .find(|segment| !segment.is_empty())
+        .unwrap_or("/")
+        .to_string();
+    FileProperties {
+        name,
+        is_dir: true,
+        is_symlink: false,
+        size: 0,
+        permissions: "drwxr-xr-x".into(),
+        owner: String::new(),
+        group: String::new(),
+        uid: String::new(),
+        gid: String::new(),
+        mtime: 0,
+        atime: 0,
+    }
 }
 
 fn normalize_ftp_prefix(path: &str) -> String {

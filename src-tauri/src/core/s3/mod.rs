@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use opendal::layers::{RetryLayer, TimeoutLayer, TracingLayer};
 use opendal::services::S3;
-use opendal::{EntryMode, Operator};
+use opendal::{EntryMode, ErrorKind, Operator};
 use serde::Serialize;
 use tauri::AppHandle;
 use tauri::Emitter;
@@ -15,7 +15,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
 use crate::config::{ConnectionType, SavedConnection};
-use crate::core::sftp::{DirectoryChild, FileEntry};
+use crate::core::sftp::{DirectoryChild, FileEntry, FileProperties};
 use crate::error::{AppError, AppResult};
 use crate::utils::crypto;
 use crate::utils::url::normalize_storage_endpoint;
@@ -117,6 +117,29 @@ impl S3Manager {
             _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
         });
         Ok(result)
+    }
+
+    pub async fn file_properties(
+        &self,
+        connection_id: &str,
+        path: &str,
+        is_directory: bool,
+    ) -> AppResult<FileProperties> {
+        let op = self.operator_for(connection_id).await?;
+        if is_directory {
+            let key = normalize_s3_dir_key(path);
+            match op.stat(&key).await {
+                Ok(meta) => Ok(storage_file_properties(path, &meta, true)),
+                Err(error) if error.kind() == ErrorKind::NotFound => {
+                    Ok(synthetic_dir_properties(path))
+                }
+                Err(error) => Err(map_opendal_error(error)),
+            }
+        } else {
+            let key = normalize_s3_object_key(path);
+            let meta = op.stat(&key).await.map_err(map_opendal_error)?;
+            Ok(storage_file_properties(path, &meta, false))
+        }
     }
 
     pub async fn list_child_directories(
@@ -772,6 +795,54 @@ fn normalize_s3_object_key(path: &str) -> String {
         trimmed.to_string()
     } else {
         format!("/{trimmed}")
+    }
+}
+
+fn storage_entry_name(path: &str) -> String {
+    path.trim_end_matches('/')
+        .rsplit('/')
+        .find(|segment| !segment.is_empty())
+        .unwrap_or("/")
+        .to_string()
+}
+
+fn storage_file_properties(path: &str, meta: &opendal::Metadata, is_dir: bool) -> FileProperties {
+    let mtime = meta
+        .last_modified()
+        .map(|t| t.into_inner().as_second().max(0) as u64)
+        .unwrap_or(0);
+    FileProperties {
+        name: storage_entry_name(path),
+        is_dir,
+        is_symlink: false,
+        size: if is_dir { 0 } else { meta.content_length() },
+        permissions: if is_dir {
+            "drwxr-xr-x".into()
+        } else {
+            "-rw-r--r--".into()
+        },
+        owner: String::new(),
+        group: String::new(),
+        uid: String::new(),
+        gid: String::new(),
+        mtime,
+        atime: mtime,
+    }
+}
+
+fn synthetic_dir_properties(path: &str) -> FileProperties {
+    FileProperties {
+        name: storage_entry_name(path),
+        is_dir: true,
+        is_symlink: false,
+        size: 0,
+        permissions: "drwxr-xr-x".into(),
+        owner: String::new(),
+        group: String::new(),
+        uid: String::new(),
+        gid: String::new(),
+        mtime: 0,
+        atime: 0,
     }
 }
 

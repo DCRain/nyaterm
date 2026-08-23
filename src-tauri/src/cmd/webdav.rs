@@ -1,7 +1,7 @@
 use tauri::AppHandle;
 
 use crate::core::webdav::{connection_id_from_session, SharedWebDavManager};
-use crate::core::sftp::{DirectoryChild, FileEntry};
+use crate::core::sftp::{DirectoryChild, FileEntry, FileProperties};
 use crate::error::{AppError, AppResult};
 
 fn resolve_connection_id(session_id: &str, connection_id: Option<&str>) -> AppResult<String> {
@@ -47,6 +47,18 @@ pub async fn create_webdav_dir(
 ) -> AppResult<()> {
     let id = resolve_connection_id(&session_id, connection_id.as_deref())?;
     state.create_dir(&id, &path).await
+}
+
+#[tauri::command]
+pub async fn get_webdav_file_properties(
+    state: tauri::State<'_, SharedWebDavManager>,
+    session_id: String,
+    connection_id: Option<String>,
+    path: String,
+    is_directory: bool,
+) -> AppResult<FileProperties> {
+    let id = resolve_connection_id(&session_id, connection_id.as_deref())?;
+    state.file_properties(&id, &path, is_directory).await
 }
 
 #[tauri::command]

@@ -116,11 +116,29 @@ export default function PropertiesDialog({ data, onClose, onSuccess }: Propertie
             sessionId: data.sessionId,
             path: data.fullPath,
           })
-        : invoke<FileProperties>("get_file_properties", {
-            sessionId: data.sessionId,
-            path: data.fullPath,
-            rawPathToken: data.rawPathToken,
-          });
+        : data.backend === "s3"
+          ? invoke<FileProperties>("get_s3_file_properties", {
+              sessionId: data.sessionId,
+              path: data.fullPath,
+              isDirectory: data.is_dir,
+            })
+          : data.backend === "ftp"
+            ? invoke<FileProperties>("get_ftp_file_properties", {
+                sessionId: data.sessionId,
+                path: data.fullPath,
+                isDirectory: data.is_dir,
+              })
+            : data.backend === "webdav"
+              ? invoke<FileProperties>("get_webdav_file_properties", {
+                  sessionId: data.sessionId,
+                  path: data.fullPath,
+                  isDirectory: data.is_dir,
+                })
+              : invoke<FileProperties>("get_file_properties", {
+                  sessionId: data.sessionId,
+                  path: data.fullPath,
+                  rawPathToken: data.rawPathToken,
+                });
 
     request
       .then((props) => {
@@ -133,7 +151,7 @@ export default function PropertiesDialog({ data, onClose, onSuccess }: Propertie
         }
       })
       .catch((e) => {
-        if (isMounted) setError(String(e));
+        if (isMounted) setError(getErrorMessage(e));
       })
       .finally(() => {
         if (isMounted) setLoading(false);
