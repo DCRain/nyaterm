@@ -76,7 +76,12 @@ export function scheduleChildWindowShellReady() {
     if (fallbackTimeoutId !== undefined) window.clearTimeout(fallbackTimeoutId);
   };
 
-  const hasMountedContent = () => {
+  const hasMountedShell = () => {
+    const root = document.getElementById("root");
+    return Boolean(root?.firstElementChild);
+  };
+
+  const hasLayoutableShell = () => {
     const root = document.getElementById("root");
     if (!root?.firstElementChild) return false;
     const rect = root.getBoundingClientRect();
@@ -90,7 +95,7 @@ export function scheduleChildWindowShellReady() {
 
   const waitForMountedContent = () => {
     if (settled) return;
-    if (hasMountedContent()) {
+    if (hasLayoutableShell()) {
       waitForPaint();
       return;
     }
@@ -99,7 +104,7 @@ export function scheduleChildWindowShellReady() {
 
   const emitReady = () => {
     if (settled) return;
-    if (!hasMountedContent()) {
+    if (!hasLayoutableShell()) {
       waitForMountedContent();
       return;
     }
@@ -108,7 +113,7 @@ export function scheduleChildWindowShellReady() {
 
   const emitReadyFromFallback = () => {
     if (settled) return;
-    if (hasMountedContent()) {
+    if (hasMountedShell()) {
       signalReady();
       return;
     }
