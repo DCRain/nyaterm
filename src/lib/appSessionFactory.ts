@@ -15,6 +15,7 @@ import type {
   SavedConnection,
   SessionPane,
   SessionType,
+  SshRuntimeMode,
   WorkspaceSessionType,
 } from "@/types/global";
 
@@ -23,7 +24,10 @@ export type StartupCommandRequest = {
   delayMs: number;
 };
 
-const CONNECTION_SESSION_TYPES: Record<SavedConnection["type"], WorkspaceSessionType> = {
+const CONNECTION_SESSION_TYPES: Record<
+  SavedConnection["type"],
+  WorkspaceSessionType
+> = {
   ssh: "SSH",
   local_terminal: "Local",
   telnet: "Telnet",
@@ -38,7 +42,9 @@ export function getConnectionSessionType(
   return connection ? CONNECTION_SESSION_TYPES[connection.type] : "SSH";
 }
 
-export function getRemoteDesktopPaneDisplay(connection: SavedConnection | null | undefined) {
+export function getRemoteDesktopPaneDisplay(
+  connection: SavedConnection | null | undefined,
+) {
   if (connection?.type === "rdp") {
     return {
       remoteWidth: connection.display?.width ?? 1920,
@@ -57,7 +63,9 @@ export function getRemoteDesktopPaneDisplay(connection: SavedConnection | null |
 }
 
 export function isSessionCreationCancelled(error: unknown) {
-  return getErrorMessage(error).toLowerCase().includes("session creation cancelled");
+  return getErrorMessage(error)
+    .toLowerCase()
+    .includes("session creation cancelled");
 }
 
 export async function attachSessionBeforeClose(sessionId: string) {
@@ -92,6 +100,7 @@ export async function createSessionForConnection(
   connection: Pick<SavedConnection, "id" | "type">,
   createRequestId?: string,
   startupCommand?: StartupCommandRequest,
+  runtimeModeOverride?: SshRuntimeMode,
 ) {
   switch (connection.type) {
     case "local_terminal":
@@ -125,6 +134,7 @@ export async function createSessionForConnection(
         connectionId: connection.id,
         createRequestId,
         startupCommand: buildStartupCommandPayload(startupCommand),
+        runtimeMode: runtimeModeOverride,
       });
   }
 }
@@ -245,7 +255,9 @@ export function createSessionForPane(
   }
 }
 
-export function getTemporaryLinkSessionType(config: TemporaryLinkConfig): SessionType {
+export function getTemporaryLinkSessionType(
+  config: TemporaryLinkConfig,
+): SessionType {
   switch (config.protocol) {
     case "telnet":
       return "Telnet";
@@ -256,7 +268,9 @@ export function getTemporaryLinkSessionType(config: TemporaryLinkConfig): Sessio
   }
 }
 
-export function buildStartupCommandPayload(startupCommand?: StartupCommandRequest) {
+export function buildStartupCommandPayload(
+  startupCommand?: StartupCommandRequest,
+) {
   if (!startupCommand || !startupCommand.command.trim()) return null;
   return {
     command: startupCommand.command,
@@ -268,15 +282,22 @@ export async function sendStartupCommandToSession(
   sessionId: string,
   startupCommand: StartupCommandRequest,
 ) {
-  const delayMs = Math.max(0, Math.min(60000, Math.round(startupCommand.delayMs)));
+  const delayMs = Math.max(
+    0,
+    Math.min(60000, Math.round(startupCommand.delayMs)),
+  );
   if (delayMs > 0) {
     await new Promise((resolve) => window.setTimeout(resolve, delayMs));
   }
-  await sendSessionInput(sessionId, buildTerminalCommandInput(startupCommand.command), {
-    preview: { kind: "reset" },
-    registerSubmission: startupCommand.command,
-    origin: "startup_command",
-  });
+  await sendSessionInput(
+    sessionId,
+    buildTerminalCommandInput(startupCommand.command),
+    {
+      preview: { kind: "reset" },
+      registerSubmission: startupCommand.command,
+      origin: "startup_command",
+    },
+  );
 }
 
 export function focusTerminalSession(sessionId?: string | null) {

@@ -2453,6 +2453,7 @@ mod tests {
             post_login: None,
             ssh_algorithms: None,
             ssh_profile: Default::default(),
+            runtime_mode: Default::default(),
             terminal_type: Default::default(),
             sftp: SftpSettings::default(),
             encoding: "UTF-8".to_string(),

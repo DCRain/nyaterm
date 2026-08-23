@@ -27,6 +27,7 @@ describe("canCreateSessionFromPane", () => {
           type: "SSH",
           temporaryConfig: {
             protocol: "ssh",
+            runtime_mode: "standard",
             name: "root@example.com:22",
             host: "example.com",
             port: 22,

@@ -32,7 +32,7 @@ function renderFileExplorer(activePane: FileDocumentPane) {
       activePane={activePane}
       activeConnection={null}
       activeSessionId={null}
-      activeSshSessionId={null}
+      activeStatsSessionId={null}
       remoteStatsEnabled={false}
       remoteStats={{} as RemoteStatsState}
       gpuMonitorEnabled={false}
@@ -71,7 +71,12 @@ describe("AppPanelContent file explorer", () => {
       file: {
         backend: "remote",
         path: "/tmp/notes.txt",
-        initial: { content: "notes", size: 5, mtime: 1, contentHash: "hash-notes" },
+        initial: {
+          content: "notes",
+          size: 5,
+          mtime: 1,
+          contentHash: "hash-notes",
+        },
       },
     };
 

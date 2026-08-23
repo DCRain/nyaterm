@@ -384,6 +384,14 @@ pub enum SshProfile {
     NetworkDevice,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SshRuntimeMode {
+    #[default]
+    Standard,
+    Terminal,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum SshTerminalType {
     #[default]
@@ -456,6 +464,18 @@ pub fn effective_cwd_follow_mode_for_profile(
         SftpCwdFollowMode::Off
     } else {
         effective_cwd_follow_mode(settings)
+    }
+}
+
+pub fn effective_cwd_follow_mode_for_runtime(
+    settings: &SftpSettings,
+    profile: &SshProfile,
+    runtime_mode: &SshRuntimeMode,
+) -> SftpCwdFollowMode {
+    if *runtime_mode == SshRuntimeMode::Terminal {
+        SftpCwdFollowMode::Off
+    } else {
+        effective_cwd_follow_mode_for_profile(settings, profile)
     }
 }
 

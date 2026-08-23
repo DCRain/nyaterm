@@ -11,6 +11,20 @@ describe("parseExternalOpenUrl", () => {
     const result = parseExternalOpenUrl("ssh://root@example.com");
     expect(result.ok).toBe(true);
     expect(intent(result).port).toBe(22);
+    expect(sshRuntimeMode(intent(result))).toBe("standard");
+  });
+
+  it("preserves SSH terminal runtime mode through normalization", () => {
+    const result = parseExternalOpenUrl("ssh://root@example.com?mode=terminal");
+    expect(result.ok).toBe(true);
+    expect(sshRuntimeMode(intent(result))).toBe("terminal");
+    expect(intent(result).runtimeModeSpecified).toBe(true);
+  });
+
+  it("rejects invalid SSH runtime mode values", () => {
+    const result = parseExternalOpenUrl("ssh://root@example.com?mode=foo");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errorKey).toBe("externalOpen.invalidMode");
   });
 
   it("parses Telnet deep link URLs and uses the default port", () => {
@@ -41,7 +55,9 @@ describe("parseExternalOpenUrl", () => {
   });
 
   it("decodes URL-encoded SSH URL passwords", () => {
-    const result = parseExternalOpenUrl("ssh://user:p%40ss%3Aword@example.com:22");
+    const result = parseExternalOpenUrl(
+      "ssh://user:p%40ss%3Aword@example.com:22",
+    );
     expect(result.ok).toBe(true);
     expect(sshPassword(intent(result))).toBe("p@ss:word");
   });
@@ -77,6 +93,16 @@ describe("parseExternalOpenUrl", () => {
       username: "root",
       usernameSpecified: true,
     });
+    expect(sshRuntimeMode(intent(result))).toBe("standard");
+  });
+
+  it("parses NyaTerm SSH terminal runtime mode", () => {
+    const result = parseExternalOpenUrl(
+      "nyaterm://connect/ssh?host=example.com&username=root&mode=terminal",
+    );
+    expect(result.ok).toBe(true);
+    expect(sshRuntimeMode(intent(result))).toBe("terminal");
+    expect(intent(result).runtimeModeSpecified).toBe(true);
   });
 
   it("uses decoded NyaTerm query usernames once", () => {
@@ -88,13 +114,24 @@ describe("parseExternalOpenUrl", () => {
   });
 
   it("parses NyaTerm Telnet deep links", () => {
-    const result = parseExternalOpenUrl("nyaterm://connect/telnet?host=192.168.1.10&port=2323");
+    const result = parseExternalOpenUrl(
+      "nyaterm://connect/telnet?host=192.168.1.10&port=2323",
+    );
     expect(result.ok).toBe(true);
     expect(intent(result)).toMatchObject({
       protocol: "telnet",
       host: "192.168.1.10",
       port: 2323,
     });
+  });
+
+  it("rejects NyaTerm Telnet runtime mode", () => {
+    const result = parseExternalOpenUrl(
+      "nyaterm://connect/telnet?host=example.com&mode=terminal",
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok)
+      expect(result.errorKey).toBe("externalOpen.unsupportedParameter");
   });
 });
 
@@ -105,6 +142,18 @@ describe("findExternalConnectionMatches", () => {
       intent(parseExternalOpenUrl("ssh://root@example.com:22")),
     );
     expect(result.kind).toBe("saved");
+  });
+
+  it("preserves an explicit terminal mode override for saved SSH matches", () => {
+    const result = findExternalConnectionMatches(
+      [sshConnection({ username: "root" })],
+      intent(parseExternalOpenUrl("ssh://root@example.com:22?mode=terminal")),
+    );
+
+    expect(result.kind).toBe("saved");
+    if (result.kind === "saved") {
+      expect(result.runtimeModeOverride).toBe("terminal");
+    }
   });
 
   it("returns a temporary config when no saved connection matches", () => {
@@ -128,7 +177,10 @@ describe("findExternalConnectionMatches", () => {
 
   it("returns ambiguous when multiple saved connections match", () => {
     const result = findExternalConnectionMatches(
-      [sshConnection({ id: "a", username: "root" }), sshConnection({ id: "b", username: "root" })],
+      [
+        sshConnection({ id: "a", username: "root" }),
+        sshConnection({ id: "b", username: "root" }),
+      ],
       intent(parseExternalOpenUrl("ssh://root@example.com:22")),
     );
     expect(result.kind).toBe("ambiguous");
@@ -163,7 +215,9 @@ describe("findExternalConnectionMatches", () => {
   });
 });
 
-function intent(result: ReturnType<typeof parseExternalOpenUrl>): ExternalOpenIntent {
+function intent(
+  result: ReturnType<typeof parseExternalOpenUrl>,
+): ExternalOpenIntent {
   if (!result.ok) throw new Error(result.errorKey);
   return result.intent;
 }
@@ -173,11 +227,21 @@ function sshPassword(intent: ExternalOpenIntent) {
   return sshPasswordFromConfig(intent.temporary);
 }
 
-function sshPasswordFromConfig(config: Extract<ExternalOpenIntent["temporary"], { protocol: "ssh" }>) {
+function sshRuntimeMode(intent: ExternalOpenIntent) {
+  return intent.temporary.protocol === "ssh"
+    ? intent.temporary.runtime_mode
+    : null;
+}
+
+function sshPasswordFromConfig(
+  config: Extract<ExternalOpenIntent["temporary"], { protocol: "ssh" }>,
+) {
   return config.auth.type === "password" ? config.auth.password : null;
 }
 
-function sshConnection(overrides: Partial<SavedConnection> = {}): SavedConnection {
+function sshConnection(
+  overrides: Partial<SavedConnection> = {},
+): SavedConnection {
   return {
     id: overrides.id ?? "ssh",
     name: overrides.name ?? "SSH",
@@ -189,7 +253,9 @@ function sshConnection(overrides: Partial<SavedConnection> = {}): SavedConnectio
   };
 }
 
-function telnetConnection(overrides: Partial<SavedConnection> = {}): SavedConnection {
+function telnetConnection(
+  overrides: Partial<SavedConnection> = {},
+): SavedConnection {
   return {
     id: overrides.id ?? "telnet",
     name: overrides.name ?? "Telnet",

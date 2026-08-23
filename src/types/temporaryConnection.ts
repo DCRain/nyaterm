@@ -1,7 +1,10 @@
-import type { SshConfig } from "@/types/global";
+import type { SshConfig, SshRuntimeMode } from "@/types/global";
+
+export type { SshRuntimeMode };
 
 export interface TemporarySshLinkConfig extends SshConfig {
   protocol: "ssh";
+  runtime_mode: SshRuntimeMode;
   backspace_mode: string;
   x11_forwarding: boolean;
   x11_display: string;

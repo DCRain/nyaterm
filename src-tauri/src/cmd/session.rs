@@ -45,8 +45,12 @@ pub async fn create_ssh_session(
     connection_id: String,
     create_request_id: Option<String>,
     startup_command: Option<StartupCommandPayload>,
+    runtime_mode: Option<crate::config::SshRuntimeMode>,
 ) -> AppResult<String> {
-    let ssh_config = ssh::load_saved_ssh_config(&app, &connection_id)?;
+    let mut ssh_config = ssh::load_saved_ssh_config(&app, &connection_id)?;
+    if let Some(runtime_mode) = runtime_mode {
+        ssh_config.runtime_mode = runtime_mode;
+    }
     let pending_creation = state.begin_session_creation(create_request_id).await;
     let (guard, cancel_rx) = match pending_creation {
         Some((guard, cancel_rx)) => (Some(guard), Some(cancel_rx)),
@@ -666,7 +670,7 @@ mod tests {
         StartupCommandPayload, normalize_temporary_ssh_config,
         resolve_telnet_connection_password_with, startup_command_payload_to_ssh,
     };
-    use crate::config::ConnectionAuth;
+    use crate::config::{ConnectionAuth, SshRuntimeMode};
 
     #[test]
     fn temporary_ssh_config_drops_saved_connection_features() {
@@ -697,7 +701,8 @@ mod tests {
             "post_login": {
                 "command": "uptime",
                 "delay_ms": 1000
-            }
+            },
+            "runtime_mode": "terminal"
         }))
         .expect("temporary ssh config");
 
@@ -711,6 +716,7 @@ mod tests {
         assert!(normalized.proxy.is_none());
         assert!(normalized.proxy_jump.is_none());
         assert!(normalized.post_login.is_none());
+        assert_eq!(normalized.runtime_mode, SshRuntimeMode::Terminal);
     }
 
     #[test]

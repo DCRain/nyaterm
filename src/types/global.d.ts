@@ -31,6 +31,7 @@ export type AIExecutionProfile =
   | "send_only"
   | "disabled";
 export type SshProfile = "standard" | "network_device";
+export type SshRuntimeMode = "standard" | "terminal";
 export type SshTerminalType =
   | "xterm-256color"
   | "xterm"
@@ -54,7 +55,13 @@ export interface SyncGroup {
 export type PaneSplitDirection = "horizontal" | "vertical";
 
 /** Connection type discriminator matching Rust ConnectionType. */
-export type ConnectionTypeTag = "ssh" | "local_terminal" | "telnet" | "serial" | "rdp" | "vnc";
+export type ConnectionTypeTag =
+  | "ssh"
+  | "local_terminal"
+  | "telnet"
+  | "serial"
+  | "rdp"
+  | "vnc";
 
 /** Metadata for a connected or disconnected session. */
 export interface SessionInfo {
@@ -202,6 +209,7 @@ export interface SshConfig {
   post_login?: { command: string; delay_ms: number } | null;
   ssh_algorithms?: SshAlgorithmPreferences | null;
   ssh_profile?: SshProfile;
+  runtime_mode?: SshRuntimeMode;
   terminal_type?: SshTerminalType;
   sftp?: SftpSettings;
   encoding?: string;
@@ -238,7 +246,9 @@ export interface SshAgentForwardingIdentity {
   custom_endpoint_index?: number;
 }
 
-export type SshAgentForwardingEndpointErrorCode = "connect_failed" | "identity_enumeration_failed";
+export type SshAgentForwardingEndpointErrorCode =
+  | "connect_failed"
+  | "identity_enumeration_failed";
 
 export interface SshAgentForwardingEndpointError {
   custom_endpoint_index: number;

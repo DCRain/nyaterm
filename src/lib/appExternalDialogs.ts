@@ -1,14 +1,19 @@
 import type { TemporaryLinkConfig } from "@/lib/temporaryLink";
-import type { SavedConnection } from "@/types/global";
+import type { SavedConnection, SshRuntimeMode } from "@/types/global";
 
 export type ExternalConnectionChoice =
-  | { kind: "saved"; connection: SavedConnection }
+  | {
+      kind: "saved";
+      connection: SavedConnection;
+      runtimeModeOverride?: SshRuntimeMode;
+    }
   | { kind: "temporary"; config: TemporaryLinkConfig }
   | { kind: "cancelled" };
 
 export type ExternalMatchDialogState = {
   connections: SavedConnection[];
   temporary: TemporaryLinkConfig;
+  runtimeModeOverride?: SshRuntimeMode;
   resolve: (choice: ExternalConnectionChoice) => void;
 };
 

@@ -1,4 +1,5 @@
 export type {
+  SshRuntimeMode,
   TemporaryLinkConfig,
   TemporaryLinkProtocol,
   TemporarySerialLinkConfig,
@@ -7,6 +8,7 @@ export type {
 } from "@/types/temporaryConnection";
 
 import type {
+  SshRuntimeMode,
   TemporaryLinkConfig,
   TemporaryLinkProtocol,
   TemporarySerialLinkConfig,
@@ -48,7 +50,9 @@ export function parseTemporaryLink(
   protocol: Exclude<TemporaryLinkProtocol, "serial">,
   input: string,
 ): TemporaryLinkParseResult {
-  return protocol === "telnet" ? parseTemporaryTelnetLink(input) : parseTemporarySshLink(input);
+  return protocol === "telnet"
+    ? parseTemporaryTelnetLink(input)
+    : parseTemporarySshLink(input);
 }
 
 export function parseTemporarySshLink(input: string): TemporaryLinkParseResult {
@@ -129,7 +133,9 @@ export function parseTemporarySshLink(input: string): TemporaryLinkParseResult {
   return buildConfig(hostSpec, username, port);
 }
 
-export function parseTemporaryTelnetLink(input: string): TemporaryLinkParseResult {
+export function parseTemporaryTelnetLink(
+  input: string,
+): TemporaryLinkParseResult {
   const text = input.trim();
   if (!text) return { ok: false, errorKey: "temporarySsh.empty" };
 
@@ -139,7 +145,8 @@ export function parseTemporaryTelnetLink(input: string): TemporaryLinkParseResul
   const tokens = tokenizeShellLike(text);
   if (!tokens.length) return { ok: false, errorKey: "temporarySsh.empty" };
 
-  const commandTokens = tokens[0]?.toLowerCase() === "telnet" ? tokens.slice(1) : tokens;
+  const commandTokens =
+    tokens[0]?.toLowerCase() === "telnet" ? tokens.slice(1) : tokens;
   let hostSpec: string | null = null;
   let port: number | null = null;
 
@@ -162,7 +169,8 @@ export function parseTemporaryTelnetLink(input: string): TemporaryLinkParseResul
     }
 
     if (port === null) {
-      if (!/^\d+$/.test(token)) return { ok: false, errorKey: "temporarySsh.invalidPort" };
+      if (!/^\d+$/.test(token))
+        return { ok: false, errorKey: "temporarySsh.invalidPort" };
       port = Number(token);
     }
   }
@@ -176,15 +184,21 @@ function parseSshUrl(text: string): TemporaryLinkParseResult | null {
 
   try {
     const url = new URL(text);
-    if (!url.hostname) return { ok: false, errorKey: "temporarySsh.missingHost" };
+    if (!url.hostname)
+      return { ok: false, errorKey: "temporarySsh.missingHost" };
     const port = url.port ? Number(url.port) : DEFAULT_SSH_PORT;
-    if (!isValidPort(port)) return { ok: false, errorKey: "temporarySsh.invalidPort" };
+    if (!isValidPort(port))
+      return { ok: false, errorKey: "temporarySsh.invalidPort" };
+    const runtimeMode = parseSshRuntimeMode(url.searchParams.get("mode"));
+    if (!runtimeMode)
+      return { ok: false, errorKey: "temporarySsh.invalidMode" };
     const password = url.password ? decodeURIComponent(url.password) : null;
     return createConfig(
       url.hostname,
       decodeURIComponent(url.username || DEFAULT_USERNAME),
       port,
       password,
+      runtimeMode,
     );
   } catch {
     return { ok: false, errorKey: "temporarySsh.invalidInput" };
@@ -199,9 +213,11 @@ function parseTelnetUrl(text: string): TemporaryLinkParseResult | null {
     if (url.username || url.password) {
       return { ok: false, errorKey: "temporarySsh.inlinePassword" };
     }
-    if (!url.hostname) return { ok: false, errorKey: "temporarySsh.missingHost" };
+    if (!url.hostname)
+      return { ok: false, errorKey: "temporarySsh.missingHost" };
     const port = url.port ? Number(url.port) : DEFAULT_TELNET_PORT;
-    if (!isValidPort(port)) return { ok: false, errorKey: "temporarySsh.invalidPort" };
+    if (!isValidPort(port))
+      return { ok: false, errorKey: "temporarySsh.invalidPort" };
     return createTelnetConfig(url.hostname, port);
   } catch {
     return { ok: false, errorKey: "temporarySsh.invalidInput" };
@@ -226,13 +242,15 @@ function buildConfig(
   const atIndex = target.lastIndexOf("@");
   if (atIndex >= 0) {
     const userPart = target.slice(0, atIndex);
-    if (userPart.includes(":")) return { ok: false, errorKey: "temporarySsh.inlinePassword" };
+    if (userPart.includes(":"))
+      return { ok: false, errorKey: "temporarySsh.inlinePassword" };
     username = userPart || username;
     target = target.slice(atIndex + 1);
   }
 
   const parsedTarget = parseHostPort(target);
-  if (!parsedTarget.host) return { ok: false, errorKey: "temporarySsh.missingHost" };
+  if (!parsedTarget.host)
+    return { ok: false, errorKey: "temporarySsh.missingHost" };
   if (parsedTarget.port !== null && !isValidPort(parsedTarget.port)) {
     return { ok: false, errorKey: "temporarySsh.invalidPort" };
   }
@@ -257,7 +275,8 @@ function buildTelnetConfig(
   }
 
   const parsedTarget = parseHostPort(hostSpec);
-  if (!parsedTarget.host) return { ok: false, errorKey: "temporarySsh.missingHost" };
+  if (!parsedTarget.host)
+    return { ok: false, errorKey: "temporarySsh.missingHost" };
   if (parsedTarget.port !== null && !isValidPort(parsedTarget.port)) {
     return { ok: false, errorKey: "temporarySsh.invalidPort" };
   }
@@ -276,6 +295,7 @@ function createConfig(
   username: string,
   port: number,
   password: string | null = null,
+  runtimeMode: SshRuntimeMode = "standard",
 ): Extract<TemporaryLinkParseResult, { ok: true }> {
   const normalizedHost = host.replace(/^\[(.*)\]$/, "$1");
   const name = `${username}@${normalizedHost}:${port}`;
@@ -284,6 +304,7 @@ function createConfig(
     ok: true,
     config: {
       protocol: "ssh",
+      runtime_mode: runtimeMode,
       name,
       host: normalizedHost,
       port,
@@ -297,6 +318,15 @@ function createConfig(
       post_login: null,
     },
   };
+}
+
+export function parseSshRuntimeMode(
+  value: string | null,
+): SshRuntimeMode | null {
+  const normalized = (value ?? "").trim().toLowerCase();
+  if (!normalized) return "standard";
+  if (normalized === "standard" || normalized === "terminal") return normalized;
+  return null;
 }
 
 function createTelnetConfig(
@@ -407,7 +437,13 @@ function isUnsupportedOpenSshOption(optionText: string) {
 }
 
 function optionConsumesValue(token: string) {
-  return token === "-A" || token === "-a" || token === "-E" || token === "-e" || token === "-Q";
+  return (
+    token === "-A" ||
+    token === "-a" ||
+    token === "-E" ||
+    token === "-e" ||
+    token === "-Q"
+  );
 }
 
 function isValidPortToken(value: string | undefined): value is string {
