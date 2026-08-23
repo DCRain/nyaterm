@@ -23,10 +23,19 @@
     "searchPlaceholder": "Search by name, type, or session ID..."
   },
   "activityBar": {
+    "hiddenItems": "Hidden Items",
+    "hideItem": "Hide \"{{name}}\"",
     "leftBottom": "Left Bottom",
+    "leftSide": "Left Side",
     "leftTop": "Left Top",
     "moveTo": "Move to",
+    "noHiddenItems": "No hidden items",
+    "noPanels": "No panels",
+    "resetLayout": "Reset Activity Bar Layout",
+    "resetLayoutDescription": "This will restore all hidden icons and reset Activity Bar icon positions and order.",
+    "resetLayoutTitle": "Reset Activity Bar layout?",
     "rightBottom": "Right Bottom",
+    "rightSide": "Right Side",
     "rightTop": "Right Top",
     "showLabel": "Show Labels"
   },

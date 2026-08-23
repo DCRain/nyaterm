@@ -23,10 +23,19 @@
     "searchPlaceholder": "按名稱、類型或工作階段 ID 搜尋..."
   },
   "activityBar": {
+    "hiddenItems": "隱藏的項目",
+    "hideItem": "隱藏「{{name}}」",
     "leftBottom": "左側底部",
+    "leftSide": "左側",
     "leftTop": "左側頂部",
     "moveTo": "移動至",
+    "noHiddenItems": "沒有隱藏的項目",
+    "noPanels": "沒有面板",
+    "resetLayout": "重置活動列佈局",
+    "resetLayoutDescription": "這將恢復所有隱藏的圖示，並重置活動列圖示的位置和順序。",
+    "resetLayoutTitle": "重置活動列佈局？",
     "rightBottom": "右側底部",
+    "rightSide": "右側",
     "rightTop": "右側頂部",
     "showLabel": "顯示工具名稱"
   },

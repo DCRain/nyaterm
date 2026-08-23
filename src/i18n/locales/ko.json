@@ -23,10 +23,19 @@
     "searchPlaceholder": "이름, 유형, 세션 ID로 검색..."
   },
   "activityBar": {
+    "hiddenItems": "숨긴 항목",
+    "hideItem": "\"{{name}}\" 숨기기",
     "leftBottom": "왼쪽 아래",
+    "leftSide": "왼쪽",
     "leftTop": "왼쪽 위",
     "moveTo": "이동",
+    "noHiddenItems": "숨긴 항목 없음",
+    "noPanels": "패널 없음",
+    "resetLayout": "활동 표시줄 레이아웃 재설정",
+    "resetLayoutDescription": "숨긴 아이콘을 모두 복원하고 활동 표시줄 아이콘의 위치와 순서를 초기화합니다.",
+    "resetLayoutTitle": "활동 표시줄 레이아웃을 재설정할까요?",
     "rightBottom": "오른쪽 아래",
+    "rightSide": "오른쪽",
     "rightTop": "오른쪽 위",
     "showLabel": "레이블 표시"
   },
