@@ -3845,10 +3845,9 @@ dependencies = [
 [[package]]
 name = "ironrdp-tls"
 version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea5f0bb732e33159834f06a687f5415dae1a82c71c123c1c3a3689d41ed47645"
 dependencies = [
  "tokio",
+ "tokio-native-tls",
  "tokio-rustls",
  "x509-cert",
 ]
@@ -9134,10 +9133,12 @@ checksum = "8f72a05e828585856dacd553fba484c242c46e391fb0e58917c942ee9202915c"
 dependencies = [
  "futures-util",
  "log",
+ "native-tls",
  "rustls",
  "rustls-native-certs",
  "rustls-pki-types",
  "tokio",
+ "tokio-native-tls",
  "tokio-rustls",
  "tungstenite",
 ]
@@ -9441,6 +9442,7 @@ dependencies = [
  "http",
  "httparse",
  "log",
+ "native-tls",
  "rand 0.9.5",
  "rustls",
  "rustls-pki-types",

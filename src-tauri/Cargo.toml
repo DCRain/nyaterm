@@ -160,7 +160,7 @@ encoding_rs = "0.8"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif", "webp"] }
 rqrr = "0.9"
 serialport = "4"
-ironrdp = { version = "0.17", default-features = false, features = ["client", "client-clipboard", "cliprdr", "connector", "core", "rustls", "input", "pdu"] }
+ironrdp = { version = "0.17", default-features = false, features = ["client", "client-clipboard", "cliprdr", "connector", "core", "input", "pdu"] }
 smallvec = "1"
 strip-ansi-escapes = "0.2"
 arboard = { version = "3", features = ["wayland-data-control"] }
@@ -184,6 +184,7 @@ vnc-rs = { path = "vendor/vnc-rs" }
 [patch.crates-io]
 ironrdp-connector = { path = "vendor/ironrdp-connector" }
 ironrdp-client = { path = "vendor/ironrdp-client" }
+ironrdp-tls = { path = "vendor/ironrdp-tls" }
 picky = { path = "vendor/picky" }
 sspi = { path = "vendor/sspi" }
 
@@ -195,7 +196,11 @@ tauri-plugin-updater = { version = "2", default-features = false, features = [
 tauri-plugin-process = "2"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
+[target.'cfg(not(windows))'.dependencies]
+ironrdp = { version = "0.17", default-features = false, features = ["rustls"] }
+
 [target.'cfg(windows)'.dependencies]
+ironrdp = { version = "0.17", default-features = false, features = ["native-tls"] }
 webview2-com = "0.38.2"
 # Native Acrylic window material. Pinned to 0.6 to match the version
 # tauri 2.x already pulls in transitively, avoiding duplicate crate versions.
