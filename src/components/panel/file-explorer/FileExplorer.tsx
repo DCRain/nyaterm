@@ -872,8 +872,14 @@ export function FileExplorerPane({
   const favoriteDirectories = favoriteScopeId
     ? (favoriteDirectoriesByConnection[favoriteScopeId] ?? [])
     : [];
-  const showHiddenFiles =
-    appSettings.ui.file_explorer_show_hidden_files ?? true;
+  const [showHiddenFilesPreference, setShowHiddenFilesPreference] = useState(
+    () => appSettings.ui.file_explorer_show_hidden_files ?? true,
+  );
+  const supportsHiddenFilesToggle =
+    explorerBackend !== "s3" && explorerBackend !== "webdav";
+  const showHiddenFiles = supportsHiddenFilesToggle
+    ? showHiddenFilesPreference
+    : true;
   const listScrollResetKey = `${activeSessionId ?? ""}:${currentPath}`;
   const listFilterResetKey = `${fileSearchQuery}:${fileSortMode.column}:${fileSortMode.direction}`;
   const activeConnection = useMemo(
@@ -2236,12 +2242,8 @@ export function FileExplorerPane({
   };
 
   const handleToggleHiddenFiles = useCallback(() => {
-    updateUi((prev) => ({
-      file_explorer_show_hidden_files: !(
-        prev.file_explorer_show_hidden_files ?? true
-      ),
-    }));
-  }, [updateUi]);
+    setShowHiddenFilesPreference((value) => !value);
+  }, []);
 
   const handleListKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const target = event.target;
@@ -3410,6 +3412,7 @@ export function FileExplorerPane({
           isFileSearchActive={isFileSearchActive}
           isFileSearchExpanded={isFileSearchExpanded}
           showHiddenFiles={showHiddenFiles}
+          showHiddenFilesToggle={supportsHiddenFilesToggle}
           showTransferActions={canUseRemoteTransfer}
           fileSearchQuery={fileSearchQuery}
           fileSearchInputRef={fileSearchInputRef}

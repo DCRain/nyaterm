@@ -58,6 +58,7 @@ interface FileExplorerToolbarProps {
   isFileSearchActive: boolean;
   isFileSearchExpanded: boolean;
   showHiddenFiles: boolean;
+  showHiddenFilesToggle?: boolean;
   showTransferActions: boolean;
   fileSearchQuery: string;
   fileSearchInputRef: RefObject<HTMLInputElement | null>;
@@ -81,6 +82,7 @@ export function FileExplorerToolbar({
   isFileSearchActive,
   isFileSearchExpanded,
   showHiddenFiles,
+  showHiddenFilesToggle = true,
   showTransferActions,
   fileSearchQuery,
   fileSearchInputRef,
@@ -221,24 +223,28 @@ export function FileExplorerToolbar({
         >
           <MdSearch className="h-4 w-4 translate-y-px" />
         </ToolbarIconButton>
-        <ToolbarIconButton
-          label={
-            showHiddenFiles ? t("fileExplorer.hideHiddenFiles") : t("fileExplorer.showHiddenFiles")
-          }
-          variant="ghost"
-          size="icon"
-          className={cn(
-            "h-7 w-7 rounded-md hover:text-foreground",
-            showHiddenFiles ? "bg-primary/10 text-primary" : "text-muted-foreground",
-          )}
-          onClick={onToggleHiddenFiles}
-        >
-          {showHiddenFiles ? (
-            <MdVisibility className="h-4 w-4" />
-          ) : (
-            <MdVisibilityOff className="h-4 w-4" />
-          )}
-        </ToolbarIconButton>
+        {showHiddenFilesToggle && (
+          <ToolbarIconButton
+            label={
+              showHiddenFiles
+                ? t("fileExplorer.hideHiddenFiles")
+                : t("fileExplorer.showHiddenFiles")
+            }
+            variant="ghost"
+            size="icon"
+            className={cn(
+              "h-7 w-7 rounded-md hover:text-foreground",
+              showHiddenFiles ? "bg-primary/10 text-primary" : "text-muted-foreground",
+            )}
+            onClick={onToggleHiddenFiles}
+          >
+            {showHiddenFiles ? (
+              <MdVisibility className="h-4 w-4" />
+            ) : (
+              <MdVisibilityOff className="h-4 w-4" />
+            )}
+          </ToolbarIconButton>
+        )}
       </div>
 
       {isFileSearchExpanded && (
