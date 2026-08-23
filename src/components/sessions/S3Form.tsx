@@ -63,7 +63,7 @@ export function S3Form({
         </Label>
         <Input
           className="mt-1 h-8 text-xs"
-          placeholder="https://s3.amazonaws.com"
+          placeholder={t("dialog.s3EndpointPlaceholder")}
           value={endpoint}
           onChange={(event) => setEndpoint(event.target.value)}
         />
@@ -101,7 +101,7 @@ export function S3Form({
         </Label>
         <Input
           className="mt-1 h-8 text-xs"
-          placeholder="/"
+          placeholder={t("dialog.s3RootPlaceholder")}
           value={root}
           onChange={(event) => setRoot(event.target.value)}
         />
@@ -192,10 +192,12 @@ export function S3Form({
             {t("dialog.s3VirtualHostStyle", "Virtual host style")}
           </span>
           <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">
-            {t(
-              "dialog.s3VirtualHostStyleDesc",
-              "Use virtual-hosted-style URLs when required by your provider.",
-            )}
+            {endpoint.toLowerCase().includes("oss-accesspoint")
+              ? t("dialog.s3VirtualHostStyleAliyunAccessPointDesc")
+              : endpoint.toLowerCase().includes("aliyuncs.com")
+                  || endpoint.toLowerCase().includes("aliyun.com")
+                ? t("dialog.s3VirtualHostStyleAliyunDesc")
+                : t("dialog.s3VirtualHostStyleDesc")}
           </p>
         </div>
         <Switch checked={virtualHostStyle} onCheckedChange={setVirtualHostStyle} />

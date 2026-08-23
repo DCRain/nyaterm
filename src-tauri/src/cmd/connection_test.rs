@@ -3,16 +3,15 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use opendal::services::S3;
 use opendal::Operator;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Window};
 
+use crate::core::s3::{self, S3OperatorSpec};
 use crate::core::ftp::{FtpConnectParams, SharedFtpManager};
 
 use crate::core::ssh::{DraftSshTestInput, build_test_ssh_config, test_authenticated_ssh};
 use crate::error::{AppError, AppResult};
-use crate::utils::url::normalize_storage_endpoint;
 
 const TCP_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -306,10 +305,9 @@ async fn run_s3_probe(operator: Operator, bucket: &str) -> TestConnectionEndpoin
         }
         Err(err) => result(
             false,
-            "s3_fail",
+            s3::s3_test_error_code(&err),
             TestConnectionEndpointParams {
                 host: Some(bucket.to_string()),
-                detail: Some(err.to_string()),
                 ..Default::default()
             },
         ),
@@ -375,51 +373,18 @@ async fn test_webdav(input: Option<&TestWebDavInput>) -> TestConnectionEndpointR
 fn build_s3_test_operator(
     input: Option<&TestS3Input>,
     _connection_id: Option<&str>,
-) -> AppResult<Operator> {
-    let input = input.ok_or_else(|| {
-        AppError::Config("S3 test requires form fields".into())
-    })?;
-
-    let mut builder = S3::default().bucket(&input.bucket);
-    let normalized_endpoint = normalize_storage_endpoint(&input.endpoint);
-    if !normalized_endpoint.is_empty() {
-        builder = builder.endpoint(&normalized_endpoint);
-    }
-    if !input.region.trim().is_empty() {
-        builder = builder.region(&input.region);
-    }
-    if !input.root.trim().is_empty() {
-        builder = builder.root(&input.root);
-    }
-    if let Some(key) = input
-        .access_key_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-    {
-        builder = builder.access_key_id(key);
-    }
-    if let Some(secret) = input
-        .secret_access_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-    {
-        builder = builder.secret_access_key(secret);
-    }
-    if let Some(token) = input
-        .session_token
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-    {
-        builder = builder.session_token(token);
-    }
-    if input.virtual_host_style {
-        builder = builder.enable_virtual_host_style();
-    }
-
-    Ok(Operator::new(builder).map_err(|err| AppError::Config(format!("S3 error: {err}")))?)
+) -> AppResult<opendal::Operator> {
+    let input = input.ok_or_else(|| AppError::Config("S3 test requires form fields".into()))?;
+    s3::build_s3_operator(S3OperatorSpec {
+        endpoint: input.endpoint.clone(),
+        bucket: input.bucket.clone(),
+        region: input.region.clone(),
+        root: input.root.clone(),
+        access_key_id: input.access_key_id.clone(),
+        secret_access_key: input.secret_access_key.clone(),
+        session_token: input.session_token.clone(),
+        virtual_host_style: input.virtual_host_style,
+    })
 }
 
 async fn test_ssh(

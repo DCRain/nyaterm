@@ -21,6 +21,13 @@ export function getErrorMessage(error: unknown): string {
   return fallback === "[object Object]" ? "Unknown error" : humanizeBackendError(fallback);
 }
 
+const S3_ERROR_KEYS: Record<string, string> = {
+  "s3:unauthorized": "error.s3Unauthorized",
+  "s3:forbidden": "error.s3Forbidden",
+  "s3:notFound": "error.s3NotFound",
+  "s3:failed": "error.s3Failed",
+};
+
 const WEBDAV_ERROR_KEYS: Record<string, string> = {
   "webdav:unauthorized": "error.webdavUnauthorized",
   "webdav:forbidden": "error.webdavForbidden",
@@ -30,15 +37,37 @@ const WEBDAV_ERROR_KEYS: Record<string, string> = {
   "webdav:failed": "error.webdavFailed",
 };
 
-export function humanizeBackendError(raw: string): string {
-  const trimmed = raw.trim();
-  for (const [code, key] of Object.entries(WEBDAV_ERROR_KEYS)) {
-    if (trimmed === code || trimmed.endsWith(code)) {
+function matchCodedError(raw: string, table: Record<string, string>): string | null {
+  for (const [code, key] of Object.entries(table)) {
+    if (raw === code || raw.endsWith(code)) {
       return i18n.t(key);
     }
   }
+  return null;
+}
+
+export function humanizeBackendError(raw: string): string {
+  const trimmed = raw.trim();
+  const s3 = matchCodedError(trimmed, S3_ERROR_KEYS);
+  if (s3) return s3;
+  const webdav = matchCodedError(trimmed, WEBDAV_ERROR_KEYS);
+  if (webdav) return webdav;
 
   const lower = trimmed.toLowerCase();
+  const isS3 = lower.includes("s3:") || lower.includes("s3 error") || lower.includes("nosuchbucket");
+  if (isS3) {
+    if (lower.includes("status: 401") || lower.includes("401 unauthorized")) {
+      return i18n.t("error.s3Unauthorized");
+    }
+    if (lower.includes("status: 403") || lower.includes("403 forbidden")) {
+      return i18n.t("error.s3Forbidden");
+    }
+    if (lower.includes("status: 404") || lower.includes("404 not found") || lower.includes("nosuchbucket")) {
+      return i18n.t("error.s3NotFound");
+    }
+    return i18n.t("error.s3Failed");
+  }
+
   if (lower.includes("status: 401") || lower.includes("401 unauthorized")) {
     return i18n.t("error.webdavUnauthorized");
   }

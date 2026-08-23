@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use opendal::layers::{RetryLayer, TimeoutLayer, TracingLayer};
+use opendal::layers::{CapabilityOverrideLayer, RetryLayer, TimeoutLayer, TracingLayer};
 use opendal::services::S3;
 use opendal::{EntryMode, ErrorKind, Operator};
 use serde::Serialize;
@@ -84,19 +84,21 @@ impl S3Manager {
         let op = self.operator_for(connection_id).await?;
         let prefix = normalize_s3_prefix(path);
         let entries = op.list(&prefix).await.map_err(map_opendal_error)?;
-        let mut result = Vec::new();
+        let mut by_name: HashMap<String, FileEntry> = HashMap::new();
         for entry in entries {
             let meta = entry.metadata();
-            let name = entry.name().trim_end_matches('/').to_string();
+            let listed_as_dir = matches!(meta.mode(), EntryMode::DIR);
+            let Some((name, is_dir)) = s3_list_child(&prefix, entry.path(), listed_as_dir) else {
+                continue;
+            };
             if name.is_empty() || name == "." || name == ".." {
                 continue;
             }
-            let is_dir = matches!(meta.mode(), EntryMode::DIR);
-            result.push(FileEntry {
-                name,
+            let item = FileEntry {
+                name: name.clone(),
                 is_dir,
                 is_symlink: false,
-                size: meta.content_length(),
+                size: if is_dir { 0 } else { meta.content_length() },
                 permissions: if is_dir {
                     "drwxr-xr-x".into()
                 } else {
@@ -109,8 +111,20 @@ impl S3Manager {
                     .map(|t| t.into_inner().as_second().max(0) as u64)
                     .unwrap_or(0),
                 raw_path_token: None,
-            });
+            };
+            match by_name.get_mut(&name) {
+                Some(existing) if is_dir => {
+                    existing.is_dir = true;
+                    existing.size = 0;
+                    existing.permissions = "drwxr-xr-x".into();
+                }
+                Some(_) => {}
+                None => {
+                    by_name.insert(name, item);
+                }
+            }
         }
+        let mut result: Vec<FileEntry> = by_name.into_values().collect();
         result.sort_by(|a, b| match (a.is_dir, b.is_dir) {
             (true, false) => std::cmp::Ordering::Less,
             (false, true) => std::cmp::Ordering::Greater,
@@ -185,11 +199,7 @@ impl S3Manager {
     pub async fn delete(&self, connection_id: &str, path: &str, is_dir: bool) -> AppResult<()> {
         let op = self.operator_for(connection_id).await?;
         if is_dir {
-            let prefix = normalize_s3_dir_key(path);
-            op.delete_with(&prefix)
-                .recursive(true)
-                .await
-                .map_err(map_opendal_error)
+            delete_s3_prefix(&op, &normalize_s3_dir_key(path)).await
         } else {
             let key = normalize_s3_object_key(path);
             op.delete(&key).await.map_err(map_opendal_error)
@@ -716,6 +726,18 @@ fn decrypt_optional(value: Option<String>) -> AppResult<Option<String>> {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct S3OperatorSpec {
+    pub endpoint: String,
+    pub bucket: String,
+    pub region: String,
+    pub root: String,
+    pub access_key_id: Option<String>,
+    pub secret_access_key: Option<String>,
+    pub session_token: Option<String>,
+    pub virtual_host_style: bool,
+}
+
 pub fn build_operator_from_connection(connection: &SavedConnection) -> AppResult<Operator> {
     let ConnectionType::S3 {
         endpoint,
@@ -732,31 +754,70 @@ pub fn build_operator_from_connection(connection: &SavedConnection) -> AppResult
         return Err(AppError::Config("Connection is not an S3 type".into()));
     };
 
-    let mut builder = S3::default().bucket(bucket);
-    let normalized_endpoint = normalize_storage_endpoint(endpoint);
-    if !normalized_endpoint.is_empty() {
-        builder = builder.endpoint(&normalized_endpoint);
+    build_s3_operator(S3OperatorSpec {
+        endpoint: endpoint.clone(),
+        bucket: bucket.clone(),
+        region: region.clone(),
+        root: root.clone(),
+        access_key_id: access_key_id.clone(),
+        secret_access_key: secret_access_key.clone(),
+        session_token: session_token.clone(),
+        virtual_host_style: *virtual_host_style,
+    })
+}
+
+pub fn build_s3_operator(spec: S3OperatorSpec) -> AppResult<Operator> {
+    let (endpoint, bucket, virtual_host_style) = resolve_s3_location(
+        &spec.endpoint,
+        &spec.bucket,
+        spec.virtual_host_style,
+    );
+    let mut builder = S3::default().bucket(&bucket);
+    if !endpoint.is_empty() {
+        builder = builder.endpoint(&endpoint);
     }
-    if !region.trim().is_empty() {
-        builder = builder.region(region);
+    if !spec.region.trim().is_empty() {
+        builder = builder.region(&spec.region);
     }
-    if !root.trim().is_empty() {
-        builder = builder.root(root);
+    if !spec.root.trim().is_empty() {
+        builder = builder.root(&spec.root);
     }
-    if let Some(key) = access_key_id.as_deref().filter(|v| !v.is_empty()) {
+    if let Some(key) = spec
+        .access_key_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         builder = builder.access_key_id(key);
     }
-    if let Some(secret) = secret_access_key.as_deref().filter(|v| !v.is_empty()) {
+    if let Some(secret) = spec
+        .secret_access_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         builder = builder.secret_access_key(secret);
     }
-    if let Some(token) = session_token.as_deref().filter(|v| !v.is_empty()) {
+    if let Some(token) = spec
+        .session_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         builder = builder.session_token(token);
     }
-    if *virtual_host_style {
+    if virtual_host_style {
         builder = builder.enable_virtual_host_style();
     }
 
-    Ok(Operator::new(builder)
+    let aliyun = {
+        let lower = endpoint.to_ascii_lowercase();
+        lower.contains("aliyuncs.com")
+            || lower.contains("aliyun.com")
+            || lower.contains("oss-accesspoint")
+    };
+
+    let mut operator = Operator::new(builder)
         .map_err(map_opendal_error)?
         .layer(
             TimeoutLayer::new()
@@ -764,7 +825,153 @@ pub fn build_operator_from_connection(connection: &SavedConnection) -> AppResult
                 .with_io_timeout(Duration::from_secs(60)),
         )
         .layer(RetryLayer::new().with_max_times(3))
-        .layer(TracingLayer::new()))
+        .layer(TracingLayer::new());
+    if aliyun {
+        // Access Points often allow DeleteObject but reject DeleteObjects.
+        operator = operator.layer(CapabilityOverrideLayer::new(|mut cap| {
+            cap.delete_max_size = Some(1);
+            cap
+        }));
+    }
+    Ok(operator)
+}
+
+/// Normalize endpoint/bucket and enable virtual-host style for Aliyun OSS.
+pub(crate) fn resolve_s3_location(
+    endpoint: &str,
+    bucket: &str,
+    virtual_host_style: bool,
+) -> (String, String, bool) {
+    let endpoint = normalize_storage_endpoint(endpoint);
+    let mut bucket = bucket.trim().to_string();
+    if endpoint.is_empty() {
+        return (endpoint, bucket, virtual_host_style);
+    }
+
+    let Some((scheme, host)) = split_endpoint_host(&endpoint) else {
+        return (endpoint, bucket, virtual_host_style);
+    };
+    if !is_aliyun_oss_host(&host) {
+        return (endpoint, bucket, virtual_host_style);
+    }
+
+    // Access Point hostname is already `{ap}.{region}.oss-accesspoint.aliyuncs.com`.
+    // Virtual-host with the AP label as the S3 "bucket" hits that host (listing works).
+    // Path-style with the real OSS bucket name requests `/{bucket}/` on the AP
+    // host and OSS returns NoSuchBucket.
+    if host.contains("oss-accesspoint") {
+        if let Some((ap_id, regional_host)) = split_aliyun_access_point(&host) {
+            return (format!("{scheme}://{regional_host}"), ap_id, true);
+        }
+        return (endpoint, bucket, false);
+    }
+
+    if let Some((url_bucket, regional_host)) = split_aliyun_virtual_host(&host) {
+        if bucket.is_empty() {
+            bucket = url_bucket;
+        }
+        let rewritten = format!("{scheme}://{regional_host}");
+        return (rewritten, bucket, true);
+    }
+
+    (endpoint, bucket, true)
+}
+
+fn split_endpoint_host(endpoint: &str) -> Option<(String, String)> {
+    let parseable = if endpoint.contains("://") {
+        endpoint.to_string()
+    } else {
+        format!("https://{endpoint}")
+    };
+    let url = reqwest::Url::parse(&parseable).ok()?;
+    let host = url.host_str()?.to_ascii_lowercase();
+    let scheme = url.scheme().to_string();
+    Some((scheme, host))
+}
+
+fn is_aliyun_oss_host(host: &str) -> bool {
+    host == "aliyuncs.com"
+        || host.ends_with(".aliyuncs.com")
+        || host == "aliyun.com"
+        || host.ends_with(".aliyun.com")
+}
+
+/// `{ap}.oss-cn-chengdu.oss-accesspoint.aliyuncs.com`
+/// → (`{ap}`, `oss-cn-chengdu.oss-accesspoint.aliyuncs.com`)
+fn split_aliyun_access_point(host: &str) -> Option<(String, String)> {
+    let (label, rest) = host.split_once('.')?;
+    if label.is_empty() || label.starts_with("oss-") || !rest.contains("oss-accesspoint") {
+        return None;
+    }
+    Some((label.to_string(), rest.to_string()))
+}
+
+/// `bucket.oss-cn-hangzhou.aliyuncs.com` → (`bucket`, `oss-cn-hangzhou.aliyuncs.com`)
+fn split_aliyun_virtual_host(host: &str) -> Option<(String, String)> {
+    let suffix = if host.ends_with(".aliyuncs.com") {
+        ".aliyuncs.com"
+    } else if host.ends_with(".aliyun.com") {
+        ".aliyun.com"
+    } else {
+        return None;
+    };
+    let rest = host.strip_suffix(suffix)?;
+    if rest.contains("oss-accesspoint") {
+        return None;
+    }
+    let (bucket, oss_rest) = rest.split_once(".oss-")?;
+    if bucket.is_empty() || oss_rest.is_empty() || oss_rest.contains('.') {
+        return None;
+    }
+    Some((bucket.to_string(), format!("oss-{oss_rest}{suffix}")))
+}
+
+async fn delete_s3_prefix(op: &Operator, prefix: &str) -> AppResult<()> {
+    let entries = op
+        .list_with(prefix)
+        .recursive(true)
+        .await
+        .map_err(map_opendal_error)?;
+    for entry in entries {
+        if is_s3_list_self_entry(prefix, entry.path()) {
+            continue;
+        }
+        op.delete(entry.path()).await.map_err(map_opendal_error)?;
+    }
+    match op.delete(prefix).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(map_opendal_error(error)),
+    }
+}
+
+fn is_s3_list_self_entry(listed_prefix: &str, entry_path: &str) -> bool {
+    normalize_s3_prefix(listed_prefix) == normalize_s3_prefix(entry_path)
+}
+
+/// Keep only an immediate child of `listed_prefix`. Nested keys become the first
+/// path segment as a directory so list-without-delimiter does not invent files.
+fn s3_list_child(listed_prefix: &str, entry_path: &str, listed_as_dir: bool) -> Option<(String, bool)> {
+    if is_s3_list_self_entry(listed_prefix, entry_path) {
+        return None;
+    }
+    let prefix = normalize_s3_prefix(listed_prefix);
+    let looks_like_dir = listed_as_dir || entry_path.trim().ends_with('/');
+    let full = if looks_like_dir {
+        normalize_s3_prefix(entry_path)
+    } else {
+        normalize_s3_object_key(entry_path)
+    };
+    let rest = full.strip_prefix(&prefix)?;
+    let rest = rest.trim_start_matches('/').trim_end_matches('/');
+    if rest.is_empty() {
+        return None;
+    }
+    match rest.split_once('/') {
+        Some((head, _)) if !head.is_empty() => Some((head.to_string(), true)),
+        Some(_) => None,
+        None => Some((rest.to_string(), looks_like_dir)),
+    }
 }
 
 fn normalize_s3_prefix(path: &str) -> String {
@@ -847,7 +1054,54 @@ fn synthetic_dir_properties(path: &str) -> FileProperties {
 }
 
 fn map_opendal_error(error: opendal::Error) -> AppError {
-    AppError::Config(format!("S3 error: {error}"))
+    AppError::Config(classify_s3_error(error.kind(), &error.to_string()).to_string())
+}
+
+pub(crate) fn s3_test_error_code(error: &opendal::Error) -> &'static str {
+    match classify_s3_error(error.kind(), &error.to_string()) {
+        "s3:unauthorized" => "s3_unauthorized",
+        "s3:forbidden" => "s3_forbidden",
+        "s3:notFound" => "s3_not_found",
+        _ => "s3_fail",
+    }
+}
+
+pub(crate) fn classify_s3_error(kind: ErrorKind, raw: &str) -> &'static str {
+    let lower = raw.to_ascii_lowercase();
+    if lower.contains("signaturedoesnotmatch") {
+        return "s3:failed";
+    }
+    match s3_http_status(raw) {
+        Some(401) => return "s3:unauthorized",
+        Some(403) => return "s3:forbidden",
+        Some(404) => return "s3:notFound",
+        _ => {}
+    }
+
+    match kind {
+        ErrorKind::PermissionDenied => "s3:unauthorized",
+        ErrorKind::NotFound => "s3:notFound",
+        _ => "s3:failed",
+    }
+}
+
+fn s3_http_status(raw: &str) -> Option<u16> {
+    let lower = raw.to_ascii_lowercase();
+    for code in [401_u16, 403, 404] {
+        if lower.contains(&format!("status: {code}")) {
+            return Some(code);
+        }
+    }
+    if lower.contains("401 unauthorized") {
+        return Some(401);
+    }
+    if lower.contains("403 forbidden") || lower.contains("accessdenied") {
+        return Some(403);
+    }
+    if lower.contains("404 not found") || lower.contains("nosuchbucket") {
+        return Some(404);
+    }
+    None
 }
 
 /// Resolve connection id from a synthetic S3 workspace session id (`s3:<connectionId>`).
@@ -856,3 +1110,113 @@ pub fn connection_id_from_session(session_id: &str) -> Option<&str> {
 }
 
 pub type SharedS3Manager = Arc<S3Manager>;
+
+#[cfg(test)]
+mod tests {
+    use super::{classify_s3_error, is_s3_list_self_entry, resolve_s3_location, s3_list_child};
+    use opendal::ErrorKind;
+
+    #[test]
+    fn aliyun_regional_endpoint_enables_virtual_host() {
+        let (endpoint, bucket, vhost) = resolve_s3_location(
+            "https://oss-cn-hangzhou.aliyuncs.com",
+            "my-bucket",
+            false,
+        );
+        assert_eq!(endpoint, "https://oss-cn-hangzhou.aliyuncs.com");
+        assert_eq!(bucket, "my-bucket");
+        assert!(vhost);
+    }
+
+    #[test]
+    fn aliyun_bucket_host_is_split_without_doubling() {
+        let (endpoint, bucket, vhost) = resolve_s3_location(
+            "https://my-bucket.oss-cn-hangzhou.aliyuncs.com",
+            "my-bucket",
+            false,
+        );
+        assert_eq!(endpoint, "https://oss-cn-hangzhou.aliyuncs.com");
+        assert_eq!(bucket, "my-bucket");
+        assert!(vhost);
+    }
+
+    #[test]
+    fn aliyun_bucket_host_fills_empty_bucket() {
+        let (endpoint, bucket, vhost) =
+            resolve_s3_location("https://photos.oss-cn-hangzhou-internal.aliyuncs.com", "", false);
+        assert_eq!(endpoint, "https://oss-cn-hangzhou-internal.aliyuncs.com");
+        assert_eq!(bucket, "photos");
+        assert!(vhost);
+    }
+
+    #[test]
+    fn aliyun_access_point_uses_hostname_not_oss_bucket() {
+        let (endpoint, bucket, vhost) = resolve_s3_location(
+            "https://video-school-prod-1039565482128221.oss-cn-chengdu.oss-accesspoint.aliyuncs.com",
+            "video-school-prod",
+            false,
+        );
+        assert_eq!(
+            endpoint,
+            "https://oss-cn-chengdu.oss-accesspoint.aliyuncs.com"
+        );
+        assert_eq!(bucket, "video-school-prod-1039565482128221");
+        assert!(vhost);
+    }
+
+    #[test]
+    fn aliyun_access_point_regional_root_does_not_prepend_bucket() {
+        let (endpoint, bucket, vhost) = resolve_s3_location(
+            "https://oss-cn-chengdu.oss-accesspoint.aliyuncs.com",
+            "video-school-prod",
+            true,
+        );
+        assert_eq!(
+            endpoint,
+            "https://oss-cn-chengdu.oss-accesspoint.aliyuncs.com"
+        );
+        assert_eq!(bucket, "video-school-prod");
+        assert!(!vhost);
+    }
+
+    #[test]
+    fn minio_keeps_user_virtual_host_flag() {
+        let (endpoint, bucket, vhost) =
+            resolve_s3_location("https://minio.example.com", "data", false);
+        assert_eq!(endpoint, "https://minio.example.com");
+        assert_eq!(bucket, "data");
+        assert!(!vhost);
+    }
+
+    #[test]
+    fn s3_list_skips_self_and_collapses_nested_keys() {
+        let prefix = "/docs/";
+        assert!(is_s3_list_self_entry(prefix, "/docs/"));
+        assert!(is_s3_list_self_entry(prefix, "/docs"));
+        assert_eq!(
+            s3_list_child(prefix, "/docs/api/", true),
+            Some(("api".into(), true))
+        );
+        assert_eq!(
+            s3_list_child(prefix, "/docs/readme.md", false),
+            Some(("readme.md".into(), false))
+        );
+        assert_eq!(
+            s3_list_child(prefix, "/docs/api/v1.md", false),
+            Some(("api".into(), true))
+        );
+        assert_eq!(s3_list_child(prefix, "/docs/", true), None);
+        assert_eq!(
+            s3_list_child("/", "/foo/bar.txt", false),
+            Some(("foo".into(), true))
+        );
+    }
+
+    #[test]
+    fn s3_404_is_not_found_code() {
+        assert_eq!(
+            classify_s3_error(ErrorKind::Unexpected, "status: 404 Not Found"),
+            "s3:notFound"
+        );
+    }
+}
