@@ -193,8 +193,8 @@ interface FileExplorerPaneExtraProps {
   onReceiveEntries?: (source: FileExplorerPaneEndpoint, entries: FileExplorerCopyEntry[]) => void;
   /** Hide terminal path/CD context actions (SFTP workspace). Default true. */
   showTerminalActions?: boolean;
-  /** Dual-pane SFTP: Upload (local→remote) or Download (remote→local) via peer send. */
-  peerTransferAction?: "upload" | "download";
+  /** Dual-pane: Upload (local→remote), Download (remote→local), or Copy (remote↔remote). */
+  peerTransferAction?: "upload" | "download" | "copy";
   /** Open a new SSH terminal and cd into a remote directory. */
   onOpenTerminalHere?: (directoryPath: string) => void;
 }
@@ -806,6 +806,7 @@ export function FileExplorerPane({
   const currentPathRawTokenRef = useRef<string | undefined>(undefined);
   const homeDirRef = useRef("");
   const listContainerRef = useRef<HTMLDivElement | null>(null);
+  const explorerRootRef = useRef<HTMLElement | null>(null);
   const fileSearchInputRef = useRef<HTMLInputElement | null>(null);
   const preserveFileSearchCaretRef = useRef(false);
   const pathInputRef = useRef<HTMLInputElement | null>(null);
@@ -1378,6 +1379,49 @@ export function FileExplorerPane({
       setIsManualRefreshing(false);
     }
   }, [isManualRefreshing, refreshCurrentDirectory]);
+
+  useEffect(() => {
+    if (!canBrowseFiles) return;
+
+    const handleRefreshShortcut = (event: KeyboardEvent) => {
+      if (
+        !matchesKeyEvent(
+          resolveShortcutKeys("fileExplorer.refresh", appSettings.keybindings),
+          event,
+        )
+      ) {
+        return;
+      }
+
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable ||
+          target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT")
+      ) {
+        return;
+      }
+
+      const root = explorerRootRef.current;
+      if (!root) return;
+      const active = document.activeElement;
+      const insidePane =
+        (target instanceof Node && root.contains(target)) ||
+        (active instanceof Node && root.contains(active));
+      if (!insidePane) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      void handleManualRefresh();
+    };
+
+    window.addEventListener("keydown", handleRefreshShortcut, true);
+    return () => {
+      window.removeEventListener("keydown", handleRefreshShortcut, true);
+    };
+  }, [appSettings.keybindings, canBrowseFiles, handleManualRefresh]);
 
   const uploadLocalEntriesToTarget = useCallback(
     (
@@ -2245,6 +2289,18 @@ export function FileExplorerPane({
       );
       setSelectedFiles(nextSelection);
       lastSelectedRef.current = filteredSortedFiles[0]?.name ?? null;
+      return;
+    }
+
+    if (
+      matchesKeyEvent(
+        resolveShortcutKeys("fileExplorer.refresh", appSettings.keybindings),
+        event.nativeEvent,
+      )
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      void handleManualRefresh();
       return;
     }
 
@@ -3307,6 +3363,7 @@ export function FileExplorerPane({
 
   return (
     <aside
+      ref={explorerRootRef}
       className="nyaterm-wallpaper-transparent-surface h-full flex flex-col overflow-hidden"
       style={{ backgroundColor: "var(--df-bg-panel)" }}
       onMouseDownCapture={handlePanelMouseDownCapture}

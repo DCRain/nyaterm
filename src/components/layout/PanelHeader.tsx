@@ -38,12 +38,12 @@ export default function PanelHeader({
           {title}
         </span>
         {meta != null ? (
-          <span
+          <div
             className="min-w-0 truncate text-[0.6875rem]"
             style={{ color: "var(--df-text-dimmed)" }}
           >
             {meta}
-          </span>
+          </div>
         ) : null}
       </div>
       {actions ? <div className="flex shrink-0 items-center gap-1">{actions}</div> : null}

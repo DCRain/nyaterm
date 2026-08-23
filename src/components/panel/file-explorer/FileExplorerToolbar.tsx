@@ -22,6 +22,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useApp } from "@/context/AppContext";
+import { resolveDisplayKeys } from "@/hooks/useShortcutMap";
 import { cn } from "@/lib/utils";
 
 type ToolbarIconButtonProps = ComponentProps<typeof Button> & {
@@ -97,6 +99,11 @@ export function FileExplorerToolbar({
   onCollapseSearch,
 }: FileExplorerToolbarProps) {
   const { t } = useTranslation();
+  const { appSettings } = useApp();
+  const refreshShortcut = resolveDisplayKeys(
+    "fileExplorer.refresh",
+    appSettings.keybindings,
+  );
 
   return (
     <div
@@ -189,7 +196,7 @@ export function FileExplorerToolbar({
         <MdArrowUpward className="h-4 w-4" />
       </ToolbarIconButton>
       <ToolbarIconButton
-        label={t("fileExplorer.refresh")}
+        label={`${t("fileExplorer.refresh")} (${refreshShortcut})`}
         variant="ghost"
         size="icon"
         className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"

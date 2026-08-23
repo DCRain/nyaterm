@@ -235,6 +235,13 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     defaultKeys: "F2",
     contextual: true,
   },
+  {
+    id: "fileExplorer.refresh",
+    category: "fileExplorer",
+    labelKey: "settings.shortcutLabels.refreshDirectory",
+    defaultKeys: "F5",
+    contextual: true,
+  },
 
   // --- Saved Connections ---
   {

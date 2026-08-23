@@ -62,7 +62,7 @@ interface FileListItemProps {
   onDownload: (entry: FileEntry) => void;
   showPeerSendAction?: boolean;
   /** Dual-pane SFTP: show Upload (local) or Download (remote) that sends to the peer pane. */
-  peerTransferAction?: "upload" | "download";
+  peerTransferAction?: "upload" | "download" | "copy";
   onSendToPeer?: (entry: FileEntry) => void;
   sendTargetOptions?: Array<{
     sessionId: string;
@@ -182,7 +182,12 @@ export function FileListItem({
       : peerTransferAction === "download"
         ? t("fileExplorer.downloadToLocalDir")
         : t("fileExplorer.sendToPeer");
-  const PeerTransferIcon = peerTransferAction === "download" ? MdDownload : MdUpload;
+  const PeerTransferIcon =
+    peerTransferAction === "download"
+      ? MdDownload
+      : peerTransferAction === "copy"
+        ? MdSend
+        : MdUpload;
   const showPeerTransferMenu = !!peerTransferAction && !!onSendToPeer && !isParentDirectoryEntry;
 
   useLayoutEffect(() => {

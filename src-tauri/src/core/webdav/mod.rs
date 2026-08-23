@@ -259,32 +259,52 @@ impl WebDavManager {
         }
 
         let result: AppResult<u64> = async {
-            let mut writer = op.writer_with(&key).await.map_err(map_opendal_error)?;
-            let mut buffer = vec![0u8; WEBDAV_CHUNK_SIZE];
-            let mut transferred: u64 = 0;
-            let mut last_progress = Instant::now();
-            loop {
-                let read = source
-                    .read(&mut buffer)
-                    .await
-                    .map_err(|err| AppError::Config(format!("Failed to read local file: {err}")))?;
-                if read == 0 {
-                    break;
-                }
-                writer
-                    .write(opendal::Buffer::from(buffer[..read].to_vec()))
-                    .await
-                    .map_err(map_opendal_error)?;
-                transferred = transferred.saturating_add(read as u64);
-                if let Some(emitter) = emit.as_ref() {
-                    if last_progress.elapsed() >= WEBDAV_PROGRESS_INTERVAL {
-                        last_progress = Instant::now();
-                        emitter.emit_status("progress", transferred, None);
+            // WebDAV (including GoWebDAV) typically supports one-shot PUT only.
+            // OpenDAL's streaming writer requires write_can_multi and otherwise
+            // returns ErrorKind::Unsupported before any request is sent.
+            if op.info().capability().write_can_multi {
+                let mut writer = op.writer_with(&key).await.map_err(map_opendal_error)?;
+                let mut buffer = vec![0u8; WEBDAV_CHUNK_SIZE];
+                let mut transferred: u64 = 0;
+                let mut last_progress = Instant::now();
+                loop {
+                    let read = source
+                        .read(&mut buffer)
+                        .await
+                        .map_err(|err| AppError::Config(format!("Failed to read local file: {err}")))?;
+                    if read == 0 {
+                        break;
+                    }
+                    writer
+                        .write(opendal::Buffer::from(buffer[..read].to_vec()))
+                        .await
+                        .map_err(map_opendal_error)?;
+                    transferred = transferred.saturating_add(read as u64);
+                    if let Some(emitter) = emit.as_ref() {
+                        if last_progress.elapsed() >= WEBDAV_PROGRESS_INTERVAL {
+                            last_progress = Instant::now();
+                            emitter.emit_status("progress", transferred, None);
+                        }
                     }
                 }
+                writer.close().await.map_err(map_opendal_error)?;
+                Ok(transferred)
+            } else {
+                let mut data = Vec::new();
+                if total_size > 0 {
+                    data.reserve(total_size as usize);
+                }
+                source
+                    .read_to_end(&mut data)
+                    .await
+                    .map_err(|err| AppError::Config(format!("Failed to read local file: {err}")))?;
+                let transferred = data.len() as u64;
+                if let Some(emitter) = emit.as_ref() {
+                    emitter.emit_status("progress", transferred, None);
+                }
+                op.write(&key, data).await.map_err(map_opendal_error)?;
+                Ok(transferred)
             }
-            writer.close().await.map_err(map_opendal_error)?;
-            Ok(transferred)
         }
         .await;
 

@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { useApp } from "@/context/AppContext";
 import { getErrorMessage, humanizeBackendError } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
+import { copyStorageEntry } from "@/lib/storageCopy";
 import { filterEnqueueUploadRequests } from "@/lib/transferDuplicateResolution";
 
 export type TransferDirection = "upload" | "download" | "copy";
@@ -542,134 +543,15 @@ export function TransferProvider({ children }: { children: ReactNode }) {
             if (!request.sourceEndpoint || !request.targetEndpoint) {
               throw new Error("Copy transfer is missing source or target endpoint");
             }
-            const source = request.sourceEndpoint;
-            const target = request.targetEndpoint;
-            const joinPosix = (dir: string, name: string) =>
-              !dir || dir === "/" ? `/${name}` : `${dir.replace(/\/+$/, "")}/${name}`;
-            const joinLocal = (dir: string, name: string) => {
-              const trimmed = dir.replace(/[\\/]+$/, "");
-              const sep = dir.includes("\\") ? "\\" : "/";
-              return trimmed ? `${trimmed}${sep}${name}` : name;
-            };
-
-            if (source.kind === "local" && target.kind === "s3") {
-              const remotePath = joinPosix(target.path, request.fileName);
-              if (request.kind === "directory") {
-                await invoke("upload_local_directory_to_s3", {
-                  sessionId: target.sessionId,
-                  localPath: source.path,
-                  remotePath,
-                  transferId: nextQueued.id,
-                });
-              } else {
-                await invoke("upload_local_file_to_s3", {
-                  sessionId: target.sessionId,
-                  localPath: source.path,
-                  remotePath,
-                  transferId: nextQueued.id,
-                });
-              }
-            } else if (source.kind === "local" && target.kind === "ftp") {
-              const remotePath = joinPosix(target.path, request.fileName);
-              if (request.kind === "directory") {
-                await invoke("upload_local_directory_to_ftp", {
-                  sessionId: target.sessionId,
-                  localPath: source.path,
-                  remotePath,
-                  transferId: nextQueued.id,
-                });
-              } else {
-                await invoke("upload_local_file_to_ftp", {
-                  sessionId: target.sessionId,
-                  localPath: source.path,
-                  remotePath,
-                  transferId: nextQueued.id,
-                });
-              }
-            } else if (source.kind === "local" && target.kind === "webdav") {
-              const remotePath = joinPosix(target.path, request.fileName);
-              if (request.kind === "directory") {
-                await invoke("upload_local_directory_to_webdav", {
-                  sessionId: target.sessionId,
-                  localPath: source.path,
-                  remotePath,
-                  transferId: nextQueued.id,
-                });
-              } else {
-                await invoke("upload_local_file_to_webdav", {
-                  sessionId: target.sessionId,
-                  localPath: source.path,
-                  remotePath,
-                  transferId: nextQueued.id,
-                });
-              }
-            } else if (source.kind === "s3" && target.kind === "local") {
-              const localPath = joinLocal(target.path, request.fileName);
-              if (request.kind === "directory") {
-                await invoke("download_s3_directory", {
-                  sessionId: source.sessionId,
-                  remotePath: source.path,
-                  localPath,
-                  transferId: nextQueued.id,
-                });
-              } else {
-                await invoke("download_s3_file", {
-                  sessionId: source.sessionId,
-                  remotePath: source.path,
-                  localPath,
-                  transferId: nextQueued.id,
-                });
-              }
-            } else if (source.kind === "ftp" && target.kind === "local") {
-              const localPath = joinLocal(target.path, request.fileName);
-              if (request.kind === "directory") {
-                await invoke("download_ftp_directory", {
-                  sessionId: source.sessionId,
-                  remotePath: source.path,
-                  localPath,
-                  transferId: nextQueued.id,
-                });
-              } else {
-                await invoke("download_ftp_file", {
-                  sessionId: source.sessionId,
-                  remotePath: source.path,
-                  localPath,
-                  transferId: nextQueued.id,
-                });
-              }
-            } else if (source.kind === "webdav" && target.kind === "local") {
-              const localPath = joinLocal(target.path, request.fileName);
-              if (request.kind === "directory") {
-                await invoke("download_webdav_directory", {
-                  sessionId: source.sessionId,
-                  remotePath: source.path,
-                  localPath,
-                  transferId: nextQueued.id,
-                });
-              } else {
-                await invoke("download_webdav_file", {
-                  sessionId: source.sessionId,
-                  remotePath: source.path,
-                  localPath,
-                  transferId: nextQueued.id,
-                });
-              }
-            } else {
-              await invoke("copy_file_entry", {
-                request: {
-                  source,
-                  target,
-                  fileName: request.fileName,
-                  isDirectory: request.kind === "directory",
-                  transferId: nextQueued.id,
-                  duplicateStrategyOverride: request.duplicateStrategyOverride,
-                },
-              });
-            }
-          } else if (
-            request.direction === "upload" &&
-            request.sessionId.startsWith("s3:")
-          ) {
+            await copyStorageEntry({
+              source: request.sourceEndpoint,
+              target: request.targetEndpoint,
+              fileName: request.fileName,
+              kind: request.kind,
+              transferId: nextQueued.id,
+              duplicateStrategyOverride: request.duplicateStrategyOverride,
+            });
+          } else if (request.direction === "upload" && request.sessionId.startsWith("s3:")) {
             if (request.kind === "directory") {
               await invoke("upload_local_directory_to_s3", {
                 sessionId: request.sessionId,
@@ -685,10 +567,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
                 transferId: nextQueued.id,
               });
             }
-          } else if (
-            request.direction === "download" &&
-            request.sessionId.startsWith("s3:")
-          ) {
+          } else if (request.direction === "download" && request.sessionId.startsWith("s3:")) {
             if (request.kind === "directory") {
               await invoke("download_s3_directory", {
                 sessionId: request.sessionId,
@@ -704,10 +583,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
                 transferId: nextQueued.id,
               });
             }
-          } else if (
-            request.direction === "upload" &&
-            request.sessionId.startsWith("ftp:")
-          ) {
+          } else if (request.direction === "upload" && request.sessionId.startsWith("ftp:")) {
             if (request.kind === "directory") {
               await invoke("upload_local_directory_to_ftp", {
                 sessionId: request.sessionId,
@@ -723,10 +599,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
                 transferId: nextQueued.id,
               });
             }
-          } else if (
-            request.direction === "download" &&
-            request.sessionId.startsWith("ftp:")
-          ) {
+          } else if (request.direction === "download" && request.sessionId.startsWith("ftp:")) {
             if (request.kind === "directory") {
               await invoke("download_ftp_directory", {
                 sessionId: request.sessionId,
@@ -742,10 +615,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
                 transferId: nextQueued.id,
               });
             }
-          } else if (
-            request.direction === "upload" &&
-            request.sessionId.startsWith("webdav:")
-          ) {
+          } else if (request.direction === "upload" && request.sessionId.startsWith("webdav:")) {
             if (request.kind === "directory") {
               await invoke("upload_local_directory_to_webdav", {
                 sessionId: request.sessionId,
@@ -761,10 +631,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
                 transferId: nextQueued.id,
               });
             }
-          } else if (
-            request.direction === "download" &&
-            request.sessionId.startsWith("webdav:")
-          ) {
+          } else if (request.direction === "download" && request.sessionId.startsWith("webdav:")) {
             if (request.kind === "directory") {
               await invoke("download_webdav_directory", {
                 sessionId: request.sessionId,
