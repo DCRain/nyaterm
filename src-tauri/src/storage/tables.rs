@@ -15,6 +15,7 @@ pub(super) const SETTINGS_DEFAULT: &str = "settings/default";
 pub(super) const SETTINGS_DOC_PREFIX: &str = "settings/doc/";
 pub(super) const GROUP_PREFIX: &str = "groups/";
 pub(super) const CONNECTION_PREFIX: &str = "connections/";
+pub(super) const CONNECTION_CUSTOM_ICON_PREFIX: &str = "connection_custom_icons/";
 pub(super) const CREDENTIAL_PREFIX: &str = "credentials/credential/";
 pub(super) const PASSWORD_PREFIX: &str = "credentials/password/";
 pub(super) const SSH_KEY_PREFIX: &str = "credentials/key/";

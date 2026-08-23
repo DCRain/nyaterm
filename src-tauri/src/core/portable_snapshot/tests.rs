@@ -606,6 +606,7 @@ mod tests {
                     last_used_at_ms: None,
                 },
             ],
+            custom_icons: Vec::new(),
         }
     }
 
@@ -667,6 +668,7 @@ mod tests {
                 updated_at_ms: None,
                 last_used_at_ms: None,
             }],
+            custom_icons: Vec::new(),
         }
     }
 

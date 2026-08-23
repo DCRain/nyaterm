@@ -446,6 +446,14 @@ export interface SupportedSshAlgorithms {
   secure: SshAlgorithmDefaults;
 }
 
+export interface ConnectionCustomIcon {
+  id: string;
+  name: string;
+  data_url: string;
+  created_at_ms: number;
+  updated_at_ms: number;
+}
+
 /** Unified saved connection with type-discriminated config. */
 export interface SavedConnection {
   id: string;

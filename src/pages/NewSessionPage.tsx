@@ -1,10 +1,12 @@
 import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { MdAdd, MdExpandMore } from "react-icons/md";
+import { MdAdd, MdClose, MdExpandMore, MdImage } from "react-icons/md";
 import {
   DEFAULT_CONNECTION_ICON,
+  isCustomConnectionIcon,
   LINUX_ICONS,
   resolveConnectionIcon,
   SERVER_ICONS,
@@ -33,6 +35,7 @@ import { invoke } from "@/lib/invoke";
 import { isValidSerialBaudRate, MAX_SERIAL_BAUD_RATE, MIN_SERIAL_BAUD_RATE } from "@/lib/serial";
 import { validateSshAgentForwardingEndpoints } from "@/lib/sshAgent";
 import type {
+  ConnectionCustomIcon,
   Group,
   OtpEntry,
   ProxyConfig,
@@ -57,6 +60,7 @@ const DEFAULT_SFTP_SHELL_DETECTION_TIMEOUT_MS = 3000;
 const MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS = 100;
 const MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS = 60_000;
 const DEFAULT_RDP_USERNAME = "Administrator";
+const CUSTOM_ICON_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "bmp", "gif"];
 const DEFAULT_SSH_ALGORITHMS: SshAlgorithmPreferences = {
   mode: "compatible",
   kex: [],
@@ -170,6 +174,7 @@ export default function NewSessionPage() {
   const [error, setError] = useState("");
   const [groups, setGroups] = useState<Group[]>([]);
   const [savedConnections, setSavedConnections] = useState<SavedConnection[]>([]);
+  const [customIcons, setCustomIcons] = useState<ConnectionCustomIcon[]>([]);
   const [showGroupDropdown, setShowGroupDropdown] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupParentId, setNewGroupParentId] = useState("");
@@ -373,6 +378,9 @@ export default function NewSessionPage() {
         }
       })
       .catch((e) => setError(getErrorMessage(e)));
+    invoke<ConnectionCustomIcon[]>("get_connection_custom_icons")
+      .then(setCustomIcons)
+      .catch((e) => setError(getErrorMessage(e)));
   }, [appSettings.recording.auto_start, appSettings.recording.default_mode, editId, t]);
 
   const loadSerialPorts = useCallback(async () => {
@@ -511,6 +519,52 @@ export default function NewSessionPage() {
     : currentTab === "ssh" && sshProfile === "network_device"
       ? t("dialog.iconAutoDetectNetworkDeviceTooltip")
       : t("dialog.iconAutoDetectTooltip");
+  const hasCustomIcon = isCustomConnectionIcon(iconKey);
+
+  const handleImportCustomIcon = useCallback(async () => {
+    try {
+      const selected = await openDialog({
+        directory: false,
+        multiple: false,
+        filters: [
+          {
+            name: t("dialog.connectionIconFiles"),
+            extensions: CUSTOM_ICON_EXTENSIONS,
+          },
+        ],
+        title: t("dialog.selectConnectionIcon"),
+      });
+      const selectedPath = Array.isArray(selected) ? selected[0] : selected;
+      if (typeof selectedPath !== "string" || !selectedPath) {
+        return;
+      }
+
+      const importedIcon = await invoke<ConnectionCustomIcon>("import_connection_icon", {
+        path: selectedPath,
+      });
+      setCustomIcons((icons) => {
+        const next = icons.filter((icon) => icon.id !== importedIcon.id);
+        next.push(importedIcon);
+        return next;
+      });
+      setIconKey(importedIcon.data_url);
+      setIconAutoDetect(false);
+      setShowIconPicker(false);
+      setError("");
+    } catch (e) {
+      setError(getErrorMessage(e));
+    }
+  }, [t]);
+
+  const handleDeleteCustomIcon = useCallback(async (iconId: string) => {
+    try {
+      await invoke("delete_connection_custom_icon", { id: iconId });
+      setCustomIcons((icons) => icons.filter((icon) => icon.id !== iconId));
+      setError("");
+    } catch (e) {
+      setError(getErrorMessage(e));
+    }
+  }, []);
 
   const newGroupParentLabel = useMemo(() => {
     if (!groupId || groupId === "new") {
@@ -1098,7 +1152,7 @@ export default function NewSessionPage() {
                     type="button"
                     variant="outline"
                     className="flex h-8 w-8 items-center justify-center p-0"
-                    title={iconKey || t("dialog.none")}
+                    title={hasCustomIcon ? t("dialog.customIcon") : iconKey || t("dialog.none")}
                   >
                     {(() => {
                       const def = resolveConnectionIcon(iconKey);
@@ -1169,6 +1223,61 @@ export default function NewSessionPage() {
                         </button>
                       );
                     })}
+                    {customIcons.map((customIcon) => {
+                      const def = resolveConnectionIcon(customIcon.data_url);
+                      const IconComp = def.icon;
+                      const isActive = iconKey === customIcon.data_url;
+                      return (
+                        <div
+                          key={customIcon.id}
+                          className="group relative h-7 w-7"
+                          title={customIcon.name || t("dialog.customIcon")}
+                        >
+                          <button
+                            type="button"
+                            className={`flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${isActive ? "bg-primary/15 ring-1 ring-primary/40" : ""}`}
+                            aria-label={customIcon.name || t("dialog.customIcon")}
+                            onClick={() => {
+                              setIconKey(customIcon.data_url);
+                              setIconAutoDetect(false);
+                              setShowIconPicker(false);
+                            }}
+                          >
+                            <IconComp
+                              style={{ color: def.color }}
+                              className="h-4 w-4 rounded-sm text-sm"
+                            />
+                          </button>
+                          <button
+                            type="button"
+                            className="absolute -right-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-background text-[0.6rem] text-muted-foreground opacity-0 shadow ring-1 ring-border transition-opacity hover:text-destructive group-hover:opacity-100 group-focus-within:opacity-100"
+                            title={t("dialog.removeCustomIcon")}
+                            aria-label={t("dialog.removeCustomIcon")}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void handleDeleteCustomIcon(customIcon.id);
+                            }}
+                          >
+                            <MdClose />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-2 border-t pt-2">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 w-full justify-start text-xs"
+                      onClick={() => {
+                        void handleImportCustomIcon();
+                      }}
+                    >
+                      <MdImage className="text-sm" />
+                      <span className="truncate">{t("dialog.selectCustomIcon")}</span>
+                    </Button>
                   </div>
                   {currentTab === "ssh" && (
                     <div className="mt-2 border-t pt-2">
