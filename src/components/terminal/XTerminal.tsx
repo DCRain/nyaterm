@@ -1424,11 +1424,13 @@ export default function XTerminal({
 
       if (data.startsWith("A")) {
         si.enabled = true;
+        si.commandRunning = false;
         return false;
       }
 
       if (data.startsWith("B")) {
         si.enabled = true;
+        si.commandRunning = false;
         resetCommandSuggestionSuppression();
         return false;
       }
