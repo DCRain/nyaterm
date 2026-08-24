@@ -167,6 +167,8 @@
     "history": "History",
     "historyCurrentTerminal": "Current Terminal",
     "historyInUse": "Already open in another terminal",
+    "historyLoadFailed": "Failed to load history",
+    "historyLoading": "Loading...",
     "historyMoveToCurrent": "Move to current terminal",
     "historyOtherSessions": "Other Sessions",
     "historySameConnection": "Same Connection",

@@ -167,6 +167,8 @@
     "history": "历史",
     "historyCurrentTerminal": "当前终端",
     "historyInUse": "已在另一个终端打开",
+    "historyLoadFailed": "加载历史会话失败",
+    "historyLoading": "加载中...",
     "historyMoveToCurrent": "移动到当前终端",
     "historyOtherSessions": "其他会话",
     "historySameConnection": "同一连接",

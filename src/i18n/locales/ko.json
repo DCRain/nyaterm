@@ -167,6 +167,8 @@
     "history": "기록",
     "historyCurrentTerminal": "현재 터미널",
     "historyInUse": "다른 터미널에서 열려 있음",
+    "historyLoadFailed": "기록을 불러오지 못했습니다",
+    "historyLoading": "불러오는 중...",
     "historyMoveToCurrent": "현재 터미널로 이동",
     "historyOtherSessions": "다른 세션",
     "historySameConnection": "같은 연결",

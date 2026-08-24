@@ -167,6 +167,8 @@
     "history": "歷史",
     "historyCurrentTerminal": "目前終端",
     "historyInUse": "已在另一個終端開啟",
+    "historyLoadFailed": "載入歷史工作階段失敗",
+    "historyLoading": "載入中...",
     "historyMoveToCurrent": "移動到目前終端",
     "historyOtherSessions": "其他工作階段",
     "historySameConnection": "同一連線",
