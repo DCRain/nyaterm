@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { useApp } from "@/context/AppContext";
 import { invoke } from "@/lib/invoke";
 import { filterEnqueueUploadRequests } from "@/lib/transferDuplicateResolution";
+import { pruneRetainedTransfers as pruneTransferMap } from "@/lib/transferRetention";
 
 export type TransferDirection = "upload" | "download" | "copy";
 export type TransferKind = "file" | "directory";
@@ -220,6 +221,24 @@ export function TransferProvider({ children }: { children: ReactNode }) {
 
   const transfers = useMemo(() => Array.from(transferMap.values()), [transferMap]);
 
+  const cleanupTransferArtifacts = useCallback((id: string) => {
+    transferSpeedSamplesRef.current.delete(id);
+    queuedTransfersRef.current.delete(id);
+    parkedTransferIdsRef.current.delete(id);
+    const folderToastId = uploadFolderToastIdsRef.current.get(id);
+    if (folderToastId !== undefined) {
+      toast.dismiss(folderToastId);
+      uploadFolderToastIdsRef.current.delete(id);
+    }
+  }, []);
+
+  const pruneRetainedTransfers = useCallback(
+    (map: Map<string, TransferItem>, now = Date.now()) => {
+      return pruneTransferMap(map, cleanupTransferArtifacts, now);
+    },
+    [cleanupTransferArtifacts],
+  );
+
   useEffect(() => {
     transferMapRef.current = transferMap;
   }, [transferMap]);
@@ -232,6 +251,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
 
       if (p.status === "started") {
         if (p.parent_id) {
+          setTransferMap((prev) => pruneRetainedTransfers(prev, now));
           return;
         }
         transferSpeedSamplesRef.current.set(p.id, [
@@ -266,14 +286,14 @@ export function TransferProvider({ children }: { children: ReactNode }) {
               (queuedTransfersRef.current.has(p.id) ? "running" : undefined),
             source: existing?.source ?? "sftp",
           });
-          return next;
+          return pruneRetainedTransfers(next, now);
         });
         return;
       }
 
       setTransferMap((prev) => {
         const existing = prev.get(p.id);
-        if (!existing) return prev;
+        if (!existing) return pruneRetainedTransfers(prev, now);
         const next = new Map(prev);
         let updated: TransferItem;
 
@@ -332,6 +352,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
             itemCountCompleted: p.item_count_completed ?? existing.itemCountCompleted,
             queueState: undefined,
             error: undefined,
+            timestamp: now,
           };
         } else {
           if (p.status === "completed" || p.status === "error") {
@@ -349,11 +370,12 @@ export function TransferProvider({ children }: { children: ReactNode }) {
             queueState:
               p.status === "completed" || p.status === "error" ? undefined : existing.queueState,
             error: p.error_msg,
+            timestamp: p.status === "completed" || p.status === "error" ? now : existing.timestamp,
           };
         }
 
         next.set(p.id, updated);
-        return next;
+        return pruneRetainedTransfers(next, now);
       });
 
       if (
@@ -431,7 +453,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [t]);
+  }, [pruneRetainedTransfers, t]);
 
   useEffect(() => {
     void queueRevision;
@@ -504,8 +526,9 @@ export function TransferProvider({ children }: { children: ReactNode }) {
               status: "error",
               queueState: undefined,
               error: String(error),
+              timestamp: Date.now(),
             });
-            return next;
+            return pruneRetainedTransfers(next);
           });
           setQueueRevision((revision) => revision + 1);
         });
@@ -598,8 +621,9 @@ export function TransferProvider({ children }: { children: ReactNode }) {
               status: "error",
               queueState: undefined,
               error: String(error),
+              timestamp: Date.now(),
             });
-            return next;
+            return pruneRetainedTransfers(next);
           });
         } finally {
           setQueueRevision((revision) => revision + 1);
@@ -609,6 +633,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
   }, [
     appSettings.transfer.download_threads,
     appSettings.transfer.upload_threads,
+    pruneRetainedTransfers,
     queueRevision,
     transferMap,
   ]);
@@ -618,37 +643,44 @@ export function TransferProvider({ children }: { children: ReactNode }) {
       const next = new Map(prev);
       for (const [id, t] of prev) {
         if (t.status === "completed") {
-          transferSpeedSamplesRef.current.delete(id);
+          cleanupTransferArtifacts(id);
           next.delete(id);
         }
       }
-      return next.size === prev.size ? prev : next;
+      if (next.size === prev.size) return pruneRetainedTransfers(prev);
+      return pruneRetainedTransfers(next);
     });
-  }, []);
+  }, [cleanupTransferArtifacts, pruneRetainedTransfers]);
 
   const clearAll = useCallback(() => {
+    for (const toastId of uploadFolderToastIdsRef.current.values()) {
+      toast.dismiss(toastId);
+    }
     queuedTransfersRef.current.clear();
     parkedTransferIdsRef.current.clear();
     transferSpeedSamplesRef.current.clear();
+    uploadFolderToastIdsRef.current.clear();
     setTransferMap(new Map());
   }, []);
 
-  const removeTransfer = useCallback((id: string) => {
-    if (parkedTransferIdsRef.current.has(id)) {
-      parkedTransferIdsRef.current.delete(id);
-      void invoke("cancel_transfer", { transferId: id }).catch((error) => {
-        toast.error(String(error));
+  const removeTransfer = useCallback(
+    (id: string) => {
+      if (parkedTransferIdsRef.current.has(id)) {
+        cleanupTransferArtifacts(id);
+        void invoke("cancel_transfer", { transferId: id }).catch((error) => {
+          toast.error(String(error));
+        });
+      }
+      cleanupTransferArtifacts(id);
+      setTransferMap((prev) => {
+        if (!prev.has(id)) return prev;
+        const next = new Map(prev);
+        next.delete(id);
+        return next;
       });
-    }
-    transferSpeedSamplesRef.current.delete(id);
-    queuedTransfersRef.current.delete(id);
-    setTransferMap((prev) => {
-      if (!prev.has(id)) return prev;
-      const next = new Map(prev);
-      next.delete(id);
-      return next;
-    });
-  }, []);
+    },
+    [cleanupTransferArtifacts],
+  );
 
   const pauseTransfer = useCallback(async (id: string) => {
     const existing = transferMapRef.current.get(id);
@@ -730,78 +762,82 @@ export function TransferProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const cancelTransfer = useCallback(async (id: string) => {
-    const existing = transferMapRef.current.get(id);
-    if (queuedTransfersRef.current.has(id)) {
-      queuedTransfersRef.current.delete(id);
-      transferSpeedSamplesRef.current.delete(id);
-      setTransferMap((prev) => {
-        const queued = prev.get(id);
-        if (!queued || queued.status === "completed" || queued.status === "error") return prev;
-        const next = new Map(prev);
-        next.set(id, {
-          ...queued,
-          status: "cancelled",
-          speedBytesPerSec: undefined,
-          queueState: undefined,
-          error: undefined,
+  const cancelTransfer = useCallback(
+    async (id: string) => {
+      const existing = transferMapRef.current.get(id);
+      if (queuedTransfersRef.current.has(id)) {
+        cleanupTransferArtifacts(id);
+        setTransferMap((prev) => {
+          const queued = prev.get(id);
+          if (!queued || queued.status === "completed" || queued.status === "error") return prev;
+          const next = new Map(prev);
+          next.set(id, {
+            ...queued,
+            status: "cancelled",
+            speedBytesPerSec: undefined,
+            queueState: undefined,
+            error: undefined,
+            timestamp: Date.now(),
+          });
+          return pruneRetainedTransfers(next);
         });
-        return next;
-      });
-      setQueueRevision((revision) => revision + 1);
-      return;
-    }
+        setQueueRevision((revision) => revision + 1);
+        return;
+      }
 
-    if (parkedTransferIdsRef.current.has(id)) {
-      parkedTransferIdsRef.current.delete(id);
-      transferSpeedSamplesRef.current.delete(id);
+      if (parkedTransferIdsRef.current.has(id)) {
+        cleanupTransferArtifacts(id);
+        try {
+          await invoke("cancel_transfer", { transferId: id });
+        } catch (error) {
+          toast.error(String(error));
+        }
+        setTransferMap((prev) => {
+          const parked = prev.get(id);
+          if (!parked || parked.status === "completed" || parked.status === "error") return prev;
+          const next = new Map(prev);
+          next.set(id, {
+            ...parked,
+            status: "cancelled",
+            speedBytesPerSec: undefined,
+            queueState: undefined,
+            error: undefined,
+            timestamp: Date.now(),
+          });
+          return pruneRetainedTransfers(next);
+        });
+        setQueueRevision((revision) => revision + 1);
+        return;
+      }
+
+      if (!existing) return;
+
       try {
         await invoke("cancel_transfer", { transferId: id });
+        cleanupTransferArtifacts(id);
+        setTransferMap((prev) => {
+          const existing = prev.get(id);
+          if (!existing || existing.status === "completed" || existing.status === "error") {
+            return prev;
+          }
+          const next = new Map(prev);
+          next.set(id, {
+            ...existing,
+            status: "cancelled",
+            speedBytesPerSec: undefined,
+            queueState: undefined,
+            error: undefined,
+            timestamp: Date.now(),
+          });
+          return pruneRetainedTransfers(next);
+        });
+        setQueueRevision((revision) => revision + 1);
       } catch (error) {
         toast.error(String(error));
       }
-      setTransferMap((prev) => {
-        const parked = prev.get(id);
-        if (!parked || parked.status === "completed" || parked.status === "error") return prev;
-        const next = new Map(prev);
-        next.set(id, {
-          ...parked,
-          status: "cancelled",
-          speedBytesPerSec: undefined,
-          queueState: undefined,
-          error: undefined,
-        });
-        return next;
-      });
-      setQueueRevision((revision) => revision + 1);
-      return;
-    }
-
-    if (!existing) return;
-
-    try {
-      await invoke("cancel_transfer", { transferId: id });
-      transferSpeedSamplesRef.current.delete(id);
-      setTransferMap((prev) => {
-        const existing = prev.get(id);
-        if (!existing || existing.status === "completed" || existing.status === "error") {
-          return prev;
-        }
-        const next = new Map(prev);
-        next.set(id, {
-          ...existing,
-          status: "cancelled",
-          speedBytesPerSec: undefined,
-          queueState: undefined,
-          error: undefined,
-        });
-        return next;
-      });
-      setQueueRevision((revision) => revision + 1);
-    } catch (error) {
-      toast.error(String(error));
-    }
-  }, []);
+    },
+    [cleanupTransferArtifacts, pruneRetainedTransfers],
+  );
 
   const retryTransfer = useCallback(async (item: TransferItem) => {
     parkedTransferIdsRef.current.delete(item.id);
@@ -937,92 +973,105 @@ export function TransferProvider({ children }: { children: ReactNode }) {
     [enqueueTransfers],
   );
 
-  const upsertExternalTransferProgress = useCallback((progress: ExternalTransferProgress) => {
-    const now = Date.now();
-    setTransferMap((prev) => {
-      const existing = prev.get(progress.id);
-      const next = new Map(prev);
-      let speedBytesPerSec = existing?.speedBytesPerSec ?? 0;
+  const upsertExternalTransferProgress = useCallback(
+    (progress: ExternalTransferProgress) => {
+      const now = Date.now();
+      setTransferMap((prev) => {
+        const existing = prev.get(progress.id);
+        const next = new Map(prev);
+        let speedBytesPerSec = existing?.speedBytesPerSec ?? 0;
 
-      if (!existing) {
-        transferSpeedSamplesRef.current.set(progress.id, [
-          {
-            bytesTransferred: progress.bytesTransferred,
-            timestamp: now,
-          },
-        ]);
-      } else {
-        const speed = calculateTransferSpeed(
-          transferSpeedSamplesRef.current.get(progress.id),
-          progress.bytesTransferred,
-          now,
-        );
-        transferSpeedSamplesRef.current.set(progress.id, speed.samples);
-        speedBytesPerSec = speed.speedBytesPerSec ?? speedBytesPerSec;
-      }
+        if (!existing) {
+          transferSpeedSamplesRef.current.set(progress.id, [
+            {
+              bytesTransferred: progress.bytesTransferred,
+              timestamp: now,
+            },
+          ]);
+        } else {
+          const speed = calculateTransferSpeed(
+            transferSpeedSamplesRef.current.get(progress.id),
+            progress.bytesTransferred,
+            now,
+          );
+          transferSpeedSamplesRef.current.set(progress.id, speed.samples);
+          speedBytesPerSec = speed.speedBytesPerSec ?? speedBytesPerSec;
+        }
 
-      next.set(progress.id, {
-        ...existing,
-        id: progress.id,
-        sessionId: progress.sessionId,
-        fileName: progress.fileName,
-        remotePath: progress.remotePath ?? existing?.remotePath ?? "",
-        localPath: progress.localPath ?? existing?.localPath ?? "",
-        direction: progress.direction,
-        kind: "file",
-        status: "transferring",
-        size: existing?.size ?? 0,
-        bytesTransferred: progress.bytesTransferred,
-        speedBytesPerSec,
-        totalSize: progress.totalSize,
-        timestamp: existing?.timestamp ?? now,
-        queueState: undefined,
-        error: undefined,
-        source: "zmodem",
+        next.set(progress.id, {
+          ...existing,
+          id: progress.id,
+          sessionId: progress.sessionId,
+          fileName: progress.fileName,
+          remotePath: progress.remotePath ?? existing?.remotePath ?? "",
+          localPath: progress.localPath ?? existing?.localPath ?? "",
+          direction: progress.direction,
+          kind: "file",
+          status: "transferring",
+          size: existing?.size ?? 0,
+          bytesTransferred: progress.bytesTransferred,
+          speedBytesPerSec,
+          totalSize: progress.totalSize,
+          timestamp: existing?.timestamp ?? now,
+          queueState: undefined,
+          error: undefined,
+          source: "zmodem",
+        });
+        return pruneRetainedTransfers(next, now);
       });
-      return next;
-    });
-  }, []);
+    },
+    [pruneRetainedTransfers],
+  );
 
-  const completeExternalTransfer = useCallback((id: string) => {
-    transferSpeedSamplesRef.current.delete(id);
-    setTransferMap((prev) => {
-      const existing = prev.get(id);
-      if (!existing) return prev;
-      const next = new Map(prev);
-      const completedBytes =
-        existing.totalSize > 0
-          ? Math.max(existing.bytesTransferred, existing.totalSize)
-          : existing.bytesTransferred;
-      next.set(id, {
-        ...existing,
-        status: "completed",
-        size: existing.totalSize > 0 ? existing.totalSize : existing.size,
-        bytesTransferred: completedBytes,
-        speedBytesPerSec: undefined,
-        queueState: undefined,
-        error: undefined,
+  const completeExternalTransfer = useCallback(
+    (id: string) => {
+      transferSpeedSamplesRef.current.delete(id);
+      const now = Date.now();
+      setTransferMap((prev) => {
+        const existing = prev.get(id);
+        if (!existing) return pruneRetainedTransfers(prev, now);
+        const next = new Map(prev);
+        const completedBytes =
+          existing.totalSize > 0
+            ? Math.max(existing.bytesTransferred, existing.totalSize)
+            : existing.bytesTransferred;
+        next.set(id, {
+          ...existing,
+          status: "completed",
+          size: existing.totalSize > 0 ? existing.totalSize : existing.size,
+          bytesTransferred: completedBytes,
+          speedBytesPerSec: undefined,
+          queueState: undefined,
+          error: undefined,
+          timestamp: now,
+        });
+        return pruneRetainedTransfers(next, now);
       });
-      return next;
-    });
-  }, []);
+    },
+    [pruneRetainedTransfers],
+  );
 
-  const failExternalTransfer = useCallback((id: string, reason: string) => {
-    transferSpeedSamplesRef.current.delete(id);
-    setTransferMap((prev) => {
-      const existing = prev.get(id);
-      if (!existing) return prev;
-      const next = new Map(prev);
-      next.set(id, {
-        ...existing,
-        status: "error",
-        speedBytesPerSec: undefined,
-        queueState: undefined,
-        error: reason,
+  const failExternalTransfer = useCallback(
+    (id: string, reason: string) => {
+      transferSpeedSamplesRef.current.delete(id);
+      const now = Date.now();
+      setTransferMap((prev) => {
+        const existing = prev.get(id);
+        if (!existing) return pruneRetainedTransfers(prev, now);
+        const next = new Map(prev);
+        next.set(id, {
+          ...existing,
+          status: "error",
+          speedBytesPerSec: undefined,
+          queueState: undefined,
+          error: reason,
+          timestamp: now,
+        });
+        return pruneRetainedTransfers(next, now);
       });
-      return next;
-    });
-  }, []);
+    },
+    [pruneRetainedTransfers],
+  );
 
   const contextValue = useMemo(
     () => ({

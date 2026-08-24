@@ -48,12 +48,15 @@ const LOG_LEVELS: Record<LogLevel, number> = {
 const DEFAULT_LEVEL: LogLevel = import.meta.env.DEV ? "debug" : "info";
 const BATCH_DELAY_MS = 250;
 const MAX_BATCH_SIZE = 50;
+const MAX_LOG_QUEUE_SIZE = 1000;
+const LOG_QUEUE_DROP_BATCH = 250;
 
 let minLevel: LogLevel = DEFAULT_LEVEL;
 const queue: FrontendLogEntry[] = [];
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let flushInFlight = false;
 let lifecycleFlushRegistered = false;
+let droppedLogEntryCount = 0;
 
 export function setLoggerLevel(level: DiagnosticsLogLevel): void {
   minLevel = level;
@@ -237,6 +240,36 @@ function scheduleFlush(): void {
   }, BATCH_DELAY_MS);
 }
 
+function enforceQueueLimit(): void {
+  if (queue.length <= MAX_LOG_QUEUE_SIZE) return;
+  const dropCount = Math.min(
+    queue.length - MAX_LOG_QUEUE_SIZE + LOG_QUEUE_DROP_BATCH,
+    queue.length,
+  );
+  queue.splice(0, dropCount);
+  droppedLogEntryCount += dropCount;
+}
+
+function createQueueOverflowSummary(droppedCount: number): FrontendLogEntry {
+  return normalizePayload("warn", {
+    domain: "ui.error",
+    event: "logger.queue_overflow",
+    message: "Frontend log queue overflowed; old log entries were dropped",
+    data: {
+      dropped_count: droppedCount,
+      max_queue_size: MAX_LOG_QUEUE_SIZE,
+    },
+  });
+}
+
+function prependQueueOverflowSummary(): void {
+  if (droppedLogEntryCount <= 0) return;
+  const summary = createQueueOverflowSummary(droppedLogEntryCount);
+  droppedLogEntryCount = 0;
+  writeConsole(summary);
+  queue.unshift(summary);
+}
+
 async function flushQueue(): Promise<void> {
   if (flushInFlight) return;
   if (flushTimer) {
@@ -246,6 +279,7 @@ async function flushQueue(): Promise<void> {
   if (queue.length === 0) return;
 
   flushInFlight = true;
+  prependQueueOverflowSummary();
   const batch = queue.splice(0, MAX_BATCH_SIZE);
 
   try {
@@ -293,6 +327,7 @@ function emit(level: LogLevel, payload: LogPayload): void {
   const entry = normalizePayload(level, payload);
   writeConsole(entry);
   queue.push(entry);
+  enforceQueueLimit();
 
   if (level === "warn" || level === "error" || queue.length >= MAX_BATCH_SIZE) {
     void flushQueue();

@@ -9,8 +9,10 @@ use crate::config::{AiExecutionProfile, SshProfile};
 use crate::core::capture::CapturedOutput;
 use crate::core::zmodem::{ZmodemPreparedUpload, ZmodemUploadConflictMode};
 use crate::error::{AppError, AppResult};
+use crate::observability::{StructuredLog, StructuredLogLevel};
 use crate::utils::fuzzy::{FuzzyResult, fuzzy_search_items};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::any::Any;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,6 +24,7 @@ use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 
 const HISTORY_SAVE_DEBOUNCE: Duration = Duration::from_millis(100);
 const HISTORY_EVENT_DEBOUNCE: Duration = Duration::from_millis(500);
+const MAX_PENDING_CONFIRMATIONS: usize = 256;
 
 pub type SharedCwd = Arc<Mutex<Option<String>>>;
 pub type SessionReadyHook = Arc<dyn Fn(&SessionInfo) + Send + Sync>;
@@ -197,6 +200,7 @@ struct CommandSubmissionState {
     pending_candidates: VecDeque<String>,
     last_shell_event: Option<String>,
     awaits_shell_event: bool,
+    confirmation_overflow_degraded: bool,
 }
 
 /// Central registry of sessions, history, and fuzzy search store.
@@ -395,23 +399,35 @@ impl SessionManager {
             return;
         };
 
-        let should_add_immediately = {
+        let overflow_flush = {
             let mut submissions = self.command_submissions.lock().await;
             if let Some(state) = submissions.get_mut(session_id) {
                 if state.awaits_shell_event {
                     state.pending_candidates.push_back(command.clone());
-                    false
+                    if state.pending_candidates.len() > MAX_PENDING_CONFIRMATIONS {
+                        state.awaits_shell_event = false;
+                        state.confirmation_overflow_degraded = true;
+                        state.last_shell_event = None;
+                        Some(state.pending_candidates.drain(..).collect::<Vec<_>>())
+                    } else {
+                        None
+                    }
                 } else {
-                    true
+                    Some(vec![command.clone()])
                 }
             } else {
-                true
+                Some(vec![command.clone()])
             }
         };
 
-        if should_add_immediately {
-            self.record_command_transcript(session_id, &command);
-            self.add_history_entry(command).await;
+        if let Some(commands) = overflow_flush {
+            if commands.len() > 1 {
+                log_confirmation_overflow(session_id, commands.len(), 0);
+            }
+            for command in commands {
+                self.record_command_transcript(session_id, &command);
+                self.add_history_entry(command).await;
+            }
         }
     }
 
@@ -427,7 +443,9 @@ impl SessionManager {
             let mut submissions = self.command_submissions.lock().await;
             let state = submissions.entry(session_id.to_string()).or_default();
 
-            if let Some(index) = state
+            if state.confirmation_overflow_degraded {
+                None
+            } else if let Some(index) = state
                 .pending_candidates
                 .iter()
                 .position(|pending| pending == &command)
@@ -686,6 +704,25 @@ impl SessionManager {
 
 fn session_awaits_shell_event(info: &SessionInfo) -> bool {
     matches!(info.session_type, SessionType::SSH | SessionType::Local) && info.injection_active
+}
+
+fn log_confirmation_overflow(session_id: &str, flushed_count: usize, dropped_count: usize) {
+    crate::observability::log_rate_limited(StructuredLog {
+        level: StructuredLogLevel::Warn,
+        domain: "session.lifecycle".to_string(),
+        event: "command_confirmation.pending_overflow".to_string(),
+        message:
+            "Shell command confirmation queue overflowed; downgraded to direct history recording"
+                .to_string(),
+        ids: Some(json!({ "session_id": session_id })),
+        data: Some(json!({
+            "pending_limit": MAX_PENDING_CONFIRMATIONS,
+            "flushed_count": flushed_count,
+            "dropped_count": dropped_count,
+        })),
+        error: None,
+        client_timestamp: None,
+    });
 }
 
 impl SessionManager {
@@ -960,6 +997,67 @@ mod tests {
             manager.get_all_history().await,
             vec!["docker ps".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn pending_confirmation_queue_stays_pending_at_limit() {
+        let manager = SessionManager::new();
+        manager
+            .add_session(test_handle("ssh-limit", SessionType::SSH, true))
+            .await;
+
+        for index in 0..super::MAX_PENDING_CONFIRMATIONS {
+            manager
+                .register_command_submission("ssh-limit", format!("echo {index}"))
+                .await;
+        }
+
+        assert!(
+            manager.get_all_history().await.is_empty(),
+            "commands at the pending limit should still await shell confirmation"
+        );
+        let results = manager.fuzzy_search("echo 255", 8, None, None).await;
+        assert!(
+            results.iter().any(|result| result.command == "echo 255"),
+            "pending commands should remain searchable before overflow"
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_confirmation_overflow_degrades_without_duplicate_confirmation() {
+        let manager = SessionManager::new();
+        manager
+            .add_session(test_handle("ssh-overflow", SessionType::SSH, true))
+            .await;
+
+        for index in 0..=super::MAX_PENDING_CONFIRMATIONS {
+            manager
+                .register_command_submission("ssh-overflow", format!("echo {index}"))
+                .await;
+        }
+
+        let history = manager.get_all_history().await;
+        assert_eq!(history.len(), super::MAX_PENDING_CONFIRMATIONS + 1);
+        assert_eq!(history.first().map(String::as_str), Some("echo 256"));
+
+        manager
+            .confirm_command_submission("ssh-overflow", "echo 0".to_string())
+            .await;
+        let history_after_confirmation = manager.get_all_history().await;
+        assert_eq!(
+            history_after_confirmation, history,
+            "late confirmations after degradation should not update history"
+        );
+
+        manager
+            .register_command_submission("ssh-overflow", "echo after".to_string())
+            .await;
+        let final_history = manager.get_all_history().await;
+        assert_eq!(
+            final_history.first().map(String::as_str),
+            Some("echo after")
+        );
+        assert_eq!(final_history.len(), super::MAX_PENDING_CONFIRMATIONS + 2);
     }
 
     #[tokio::test]
