@@ -363,11 +363,6 @@ pub async fn open_child_window(
     .inner_size(width, height)
     .maximized(maximized)
     .visible(false)
-    // On macOS, parent/addChildWindow can add the child to the parent hierarchy during
-    // creation; keep it unfocusable until the ready handshake to prevent the native window
-    // from stealing focus before the page is rendered.
-    .focusable(false)
-    .focused(false)
     .decorations(cfg!(target_os = "macos"))
     .resizable(resizable)
     .always_on_top(options.always_on_top.unwrap_or(false));
@@ -382,6 +377,11 @@ pub async fn open_child_window(
     #[cfg(target_os = "macos")]
     {
         builder = builder
+            // On macOS, parent/addChildWindow can add the child to the parent hierarchy during
+            // creation; keep it unfocusable until the ready handshake to prevent the native window
+            // from stealing focus before the page is rendered.
+            .focusable(false)
+            .focused(false)
             .title_bar_style(tauri::TitleBarStyle::Overlay)
             // Position the traffic light controls in logical points so the 12px native buttons
             // sit visually centered in the 40px custom header.
@@ -415,8 +415,11 @@ pub async fn open_child_window(
     // above its parent. Order it out immediately after build so the WebView's first frame and
     // page ready handshake complete before an empty window is exposed; revealChildWindow
     // restores focusability before showing it.
-    let _ = window.hide();
-    let _ = window.set_focusable(false);
+    #[cfg(target_os = "macos")]
+    {
+        let _ = window.hide();
+        let _ = window.set_focusable(false);
+    }
 
     if let Some(placement) = placement {
         if window

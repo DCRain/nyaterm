@@ -45,7 +45,7 @@ use ironrdp_dvc_pipe_proxy::DvcNamedPipeProxy;
 #[cfg(feature = "sound")]
 use ironrdp_rdpsnd_native::cpal;
 
-use crate::config::{Config, RDCleanPathConfig, Transport};
+use crate::config::{Config, DirectTransport, RDCleanPathConfig, Transport};
 
 // ── Public event types ────────────────────────────────────────────────────────
 
@@ -449,14 +449,25 @@ async fn connect_direct(
     input_sender: &mpsc::UnboundedSender<RdpInputEvent>,
     cliprdr_factory: CliprdrFactoryRef<'_>,
 ) -> ConnectorResult<(ConnectionResult, UpgradedFramed)> {
-    let dest = config.destination.to_string();
-    let stream = TcpStream::connect(&dest)
-        .await
-        .map_err(|e| ironrdp_connector::custom_err!("TCP connect", e))?;
-    let client_addr = stream
-        .local_addr()
-        .map_err(|e| ironrdp_connector::custom_err!("get socket local address", e))?;
-    let framed = ironrdp_tokio::TokioFramed::new(stream);
+    let transport = if let Some(connector) = &config.direct_transport_connector {
+        connector(config.destination.clone())
+            .await
+            .map_err(|e| ironrdp_connector::custom_err!("custom TCP connect", e))?
+    } else {
+        let dest = config.destination.to_string();
+        let stream = TcpStream::connect(&dest)
+            .await
+            .map_err(|e| ironrdp_connector::custom_err!("TCP connect", e))?;
+        let local_addr = stream.local_addr().ok();
+        DirectTransport {
+            stream: Box::new(stream),
+            local_addr,
+        }
+    };
+    let client_addr = transport
+        .local_addr
+        .unwrap_or_else(|| SocketAddr::from(([0, 0, 0, 0], 0)));
+    let framed = ironrdp_tokio::TokioFramed::new(transport.stream);
 
     let connector = build_connector(config, client_addr, input_sender, cliprdr_factory);
 

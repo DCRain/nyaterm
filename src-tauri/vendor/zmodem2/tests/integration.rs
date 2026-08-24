@@ -443,6 +443,9 @@ fn test_batch_to_rz() {
                         sender.finish_session().unwrap();
                     }
                 }
+                zmodem2::SenderEvent::FileSkipped => {
+                    panic!("test upload unexpectedly skipped {current_filename}");
+                }
                 zmodem2::SenderEvent::SessionComplete => {
                     session_done = true;
                 }

@@ -31,6 +31,7 @@ export type AIExecutionProfile =
   | "send_only"
   | "disabled";
 export type SshProfile = "standard" | "network_device";
+export type SshRuntimeMode = "standard" | "terminal";
 export type SshTerminalType =
   | "xterm-256color"
   | "xterm"
@@ -231,6 +232,7 @@ export interface SshConfig {
   post_login?: { command: string; delay_ms: number } | null;
   ssh_algorithms?: SshAlgorithmPreferences | null;
   ssh_profile?: SshProfile;
+  runtime_mode?: SshRuntimeMode;
   terminal_type?: SshTerminalType;
   sftp?: SftpSettings;
   encoding?: string;
@@ -267,7 +269,9 @@ export interface SshAgentForwardingIdentity {
   custom_endpoint_index?: number;
 }
 
-export type SshAgentForwardingEndpointErrorCode = "connect_failed" | "identity_enumeration_failed";
+export type SshAgentForwardingEndpointErrorCode =
+  | "connect_failed"
+  | "identity_enumeration_failed";
 
 export interface SshAgentForwardingEndpointError {
   custom_endpoint_index: number;
@@ -473,6 +477,14 @@ export interface SupportedSshAlgorithms {
   host_keys: AlgorithmOption[];
   compatible: SshAlgorithmDefaults;
   secure: SshAlgorithmDefaults;
+}
+
+export interface ConnectionCustomIcon {
+  id: string;
+  name: string;
+  data_url: string;
+  created_at_ms: number;
+  updated_at_ms: number;
 }
 
 /** Unified saved connection with type-discriminated config. */
@@ -789,14 +801,18 @@ export interface ActivityBarLayout {
   left_bottom: string[];
   right_top: string[];
   right_bottom: string[];
+  /** When true every activity bar icon shows its name below the icon. */
+  show_labels?: boolean;
   /** Expanded (icon + label) state for the left activity bar. */
-  show_labels_left: boolean;
+  show_labels_left?: boolean;
   /** Expanded (icon + label) state for the right activity bar. */
-  show_labels_right: boolean;
+  show_labels_right?: boolean;
   /** Whether the left activity bar strip is visible. */
-  show_left: boolean;
+  show_left?: boolean;
   /** Whether the right activity bar strip is visible. */
-  show_right: boolean;
+  show_right?: boolean;
+  /** Activity bar item ids hidden by the user without changing their layout position. */
+  hidden_items: string[];
 }
 
 /** Layout preferences: panel widths, active panels, theme. */
@@ -828,6 +844,7 @@ export interface UiConfig {
   open_tabs: RestorableTab[];
   terminal_window_layout: RestorableTerminalWindowNode | null;
   start_workspace_mode?: "workbench" | "assets";
+  panel_open_mode: "docked" | "floating";
   left_width: number;
   right_width: number;
   /** One-shot marker after raising panel widths for the type filter row. */
@@ -852,6 +869,7 @@ export interface UiConfig {
   show_quick_cmd_bar: boolean;
   show_serial_send_panel: boolean;
   serial_send_height: number;
+  serial_send_clear_after_send: boolean;
   zoom_level: number;
   language?: string;
   header_status_mode?: HeaderStatusMode;
@@ -1427,6 +1445,7 @@ export interface TerminalSettings {
 
 export interface TransferSettings {
   editor_type: "external" | "internal";
+  internal_editor_display: "workspace" | "window";
   download_threads: number;
   upload_threads: number;
   duplicate_strategy: string;
@@ -1464,6 +1483,7 @@ export type AIReasoningEffort =
   | "medium"
   | "high"
   | "xhigh";
+export type AIApiFormat = "chat_completions" | "responses";
 export type AIModelSource = "rust-genai" | "manual";
 export type AIBackendKind = "genai" | "codex";
 export type CodexThreadMode = "persistent" | "ephemeral";
@@ -1538,6 +1558,7 @@ export interface AIProviderCredential {
   id: string;
   name: string;
   provider_kind: AIProviderKind;
+  api_format: AIApiFormat;
   base_url?: string | null;
   api_key?: string | null;
   enabled: boolean;

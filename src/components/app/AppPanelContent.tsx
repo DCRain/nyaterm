@@ -34,7 +34,7 @@ interface AppPanelContentProps {
   activePane: SessionPane | null;
   activeConnection: SavedConnection | null;
   activeSessionId: string | null;
-  activeSshSessionId: string | null;
+  activeStatsSessionId: string | null;
   remoteStatsEnabled: boolean;
   remoteStats: RemoteStatsState;
   gpuMonitorEnabled: boolean;
@@ -62,7 +62,10 @@ interface AppPanelContentProps {
   onSessionDisconnect: (sessionId: string) => Promise<void> | void;
   canReconnect: (sessionId: string) => boolean;
   onCommandSend: (command: string, execute?: boolean) => void;
-  onToggleSessionRecording: (session: SessionInfo, mode?: RecordingMode) => Promise<void> | void;
+  onToggleSessionRecording: (
+    session: SessionInfo,
+    mode?: RecordingMode,
+  ) => Promise<void> | void;
   onSaveSessionTranscript: (session: SessionInfo) => Promise<void> | void;
 }
 
@@ -71,7 +74,7 @@ export default function AppPanelContent({
   activePane,
   activeConnection,
   activeSessionId,
-  activeSshSessionId,
+  activeStatsSessionId,
   remoteStatsEnabled,
   remoteStats,
   gpuMonitorEnabled,
@@ -99,10 +102,14 @@ export default function AppPanelContent({
   onSaveSessionTranscript,
 }: AppPanelContentProps) {
   const liveActivePane =
-    activePane && !activePane.connecting && !activePane.connectError ? activePane : null;
-  const liveTerminalPane = liveActivePane?.paneKind === "terminal" ? liveActivePane : null;
+    activePane && !activePane.connecting && !activePane.connectError
+      ? activePane
+      : null;
+  const liveTerminalPane =
+    liveActivePane?.paneKind === "terminal" ? liveActivePane : null;
   const filePanelPane =
-    liveActivePane?.paneKind === "terminal" || liveActivePane?.paneKind === "file"
+    liveActivePane?.paneKind === "terminal" ||
+    liveActivePane?.paneKind === "file"
       ? liveActivePane
       : null;
   const filePanelSessionId = filePanelPane?.sessionId ?? activeSessionId;
@@ -124,7 +131,10 @@ export default function AppPanelContent({
               />
             </div>
             <ResizeHandle direction="vertical" onResize={onTransferResize} />
-            <div style={{ height: transferHeight }} className="shrink-0 overflow-hidden">
+            <div
+              style={{ height: transferHeight }}
+              className="shrink-0 overflow-hidden"
+            >
               <FileTransfer activeSessionId={filePanelSessionId} />
             </div>
           </div>
@@ -170,11 +180,16 @@ export default function AppPanelContent({
           />
         );
       case "commandHistory":
-        return <CommandHistory activeSessionId={activeSessionId} onCommandSend={onCommandSend} />;
+        return (
+          <CommandHistory
+            activeSessionId={activeSessionId}
+            onCommandSend={onCommandSend}
+          />
+        );
       case "resourceMonitor":
         return (
           <ResourceMonitor
-            activeSessionId={activeSshSessionId}
+            activeSessionId={activeStatsSessionId}
             enabled={remoteStatsEnabled}
             remoteStats={remoteStats}
           />
@@ -182,7 +197,7 @@ export default function AppPanelContent({
       case "gpuMonitor":
         return (
           <GpuMonitor
-            activeSessionId={activeSshSessionId}
+            activeSessionId={activeStatsSessionId}
             enabled={gpuMonitorEnabled}
             gpuOverviewState={gpuOverviewState}
           />
@@ -190,15 +205,15 @@ export default function AppPanelContent({
       case "ascendNpuMonitor":
         return (
           <AscendNpuMonitor
-            activeSessionId={activeSshSessionId}
+            activeSessionId={activeStatsSessionId}
             enabled={npuMonitorEnabled}
             npuOverviewState={npuOverviewState}
           />
         );
       case "processManager":
-        return <ProcessManager activeSessionId={activeSshSessionId} />;
+        return <ProcessManager activeSessionId={activeStatsSessionId} />;
       case "dockerManager":
-        return <DockerManager activeSessionId={activeSshSessionId} />;
+        return <DockerManager activeSessionId={activeStatsSessionId} />;
       case "aiAssistant":
         return null;
       default:

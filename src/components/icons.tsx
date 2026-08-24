@@ -89,6 +89,33 @@ function createLocalSvgIcon(src: string): IconType {
   return LocalSvgIcon;
 }
 
+function createDataUrlIcon(src: string): IconType {
+  const DataUrlIcon: IconType = ({ className, size, style, title }) => {
+    const dimension = size ?? "1em";
+
+    return (
+      <img
+        src={src}
+        alt=""
+        aria-hidden={title ? undefined : true}
+        title={title}
+        className={className}
+        draggable={false}
+        style={{
+          display: "inline-block",
+          width: dimension,
+          height: dimension,
+          objectFit: "contain",
+          verticalAlign: "-0.125em",
+          ...style,
+        }}
+      />
+    );
+  };
+
+  return DataUrlIcon;
+}
+
 export interface QuickIconDef {
   icon: IconType;
   color: string;
@@ -215,6 +242,13 @@ function normalizeConnectionIconKey(iconKey: string): string {
     .toLowerCase();
 }
 
+export function isCustomConnectionIcon(iconKey?: string | null): boolean {
+  const trimmed = iconKey?.trim();
+  if (!trimmed) return false;
+
+  return /^data:image\/(?:png|jpeg|jpg|webp|bmp|gif);base64,[A-Za-z0-9+/]+={0,2}$/i.test(trimmed);
+}
+
 /**
  * Default "server" glyph offered in several theme-friendly colors.
  *
@@ -295,6 +329,10 @@ export function resolveConnectionIcon(iconKey?: string | null): QuickIconDef {
   }
 
   if (iconKey) {
+    if (isCustomConnectionIcon(iconKey)) {
+      return { icon: createDataUrlIcon(iconKey.trim()), color: "currentColor" };
+    }
+
     const normalizedKey = normalizeConnectionIconKey(iconKey);
     const resolvedKey = CONNECTION_ICON_ALIASES[normalizedKey] ?? normalizedKey;
     if (CONNECTION_ICONS[resolvedKey]) {

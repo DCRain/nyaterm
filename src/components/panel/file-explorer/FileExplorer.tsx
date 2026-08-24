@@ -95,7 +95,7 @@ import { matchesKeyEvent } from "@/lib/shortcutRegistry";
 import { getSessionInputPeerIds } from "@/lib/syncInputGroups";
 import { cn, formatSize, shellQuote } from "@/lib/utils";
 import type { FileWindowTarget } from "@/lib/windowManager";
-import { openAutoUpload, openFilePreview } from "@/lib/windowManager";
+import { openAutoUpload, openFilePreview, openRemoteFileEditor } from "@/lib/windowManager";
 import { findOpenFileDocument } from "@/lib/workspaceTabs";
 import type {
   AICustomActionConfig,
@@ -105,6 +105,7 @@ import type {
   SessionInfo,
   SessionType,
 } from "@/types/global";
+import { resolveFileEditorOpenTarget, resolveInternalEditorDisplay } from "./editorOpenMode";
 import { FileExplorerDialogs } from "./FileExplorerDialogs";
 import {
   clearDirectoryChildrenCacheForPath,
@@ -149,6 +150,8 @@ import {
   pushVisitedHistory,
   type RemoteTextFile,
   type ResolvedLocalDropPathEntry,
+  syncExplorerDirectoryToTerminalCwd,
+  syncExplorerDirectoryToTerminalCwdChange,
   type TextFileOpenResult,
 } from "./model";
 import { useExternalFileDrop } from "./useExternalFileDrop";
@@ -830,6 +833,7 @@ export function FileExplorerPane({
 
   const sessionCacheRef = useRef(fileExplorerSessionCacheStore);
   const prevSessionIdRef = useRef<string | null>(null);
+  const autoSyncCwdMountSyncKeyRef = useRef<string | null>(null);
   const [isExternalDropActive, setIsExternalDropActive] = useState(false);
   const [listScrollTop, setListScrollTop] = useState(0);
   const [listViewportHeight, setListViewportHeight] = useState(0);
@@ -865,7 +869,10 @@ export function FileExplorerPane({
   }, []);
   const autoSyncConnectionIds = appSettings.ui.file_explorer_auto_sync_cwd_connection_ids ?? [];
   const autoSyncScopeId = explorerBackend === "local" ? "local" : (activeConnectionId ?? null);
-  const autoSyncCwd = !!autoSyncScopeId && autoSyncConnectionIds.includes(autoSyncScopeId);
+  const autoSyncCwd =
+    !isStorageExplorerBackend(explorerBackend) &&
+    !!autoSyncScopeId &&
+    autoSyncConnectionIds.includes(autoSyncScopeId);
   const favoriteDirectoriesByConnection =
     appSettings.ui.file_explorer_favorite_dirs_by_connection_id ?? {};
   const favoriteScopeId = explorerBackend === "local" ? "local" : (activeConnectionId ?? null);
@@ -1341,6 +1348,9 @@ export function FileExplorerPane({
         return true;
       } catch (e) {
         pendingPreserveScrollRef.current = null;
+        if (options?.silent) {
+          return false;
+        }
         const msg = getErrorMessage(e);
         if (
           filesRef.current.length > 0 &&
@@ -1638,6 +1648,53 @@ export function FileExplorerPane({
       cancelled = true;
     };
   }, [activeSessionId, canBrowseFiles, loadDirectory, resetExternalDropHover]);
+
+  useEffect(() => {
+    if (!activeSessionId) {
+      autoSyncCwdMountSyncKeyRef.current = null;
+      return;
+    }
+
+    if (!autoSyncCwd) {
+      autoSyncCwdMountSyncKeyRef.current = null;
+      return;
+    }
+
+    if (!canBrowseFiles || !currentPath) {
+      return;
+    }
+
+    const syncKey = `${activeSessionId}:${autoSyncScopeId ?? ""}:${explorerBackend}`;
+    if (autoSyncCwdMountSyncKeyRef.current === syncKey) {
+      return;
+    }
+
+    let cancelled = false;
+    autoSyncCwdMountSyncKeyRef.current = syncKey;
+    void syncExplorerDirectoryToTerminalCwd({
+      enabled: autoSyncCwd,
+      canBrowseFiles,
+      sessionId: activeSessionId,
+      backend: explorerBackend,
+      currentPath,
+      readTerminalCwd: (sessionId) =>
+        invoke<string | null>("try_get_terminal_cwd", { sessionId }),
+      loadDirectory: (path, options) =>
+        cancelled ? Promise.resolve(false) : loadDirectory(path, options),
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeSessionId,
+    autoSyncCwd,
+    autoSyncScopeId,
+    canBrowseFiles,
+    currentPath,
+    explorerBackend,
+    loadDirectory,
+  ]);
 
   useEffect(() => {
     if (isEditingPath) {
@@ -2535,14 +2592,12 @@ export function FileExplorerPane({
     const unlisten = listen<string>(
       `cwd-changed-${activeSessionId}`,
       (event) => {
-      const backend = explorerBackendRef.current;
-      const newCwd = normalizeExplorerPath(event.payload, backend);
-        if (
-          newCwd &&
-          newCwd !== normalizeExplorerPath(currentPathRef.current, backend)
-        ) {
-        loadDirectory(newCwd);
-      }
+        syncExplorerDirectoryToTerminalCwdChange({
+          backend: explorerBackendRef.current,
+          currentPath: currentPathRef.current,
+          cwd: event.payload,
+          loadDirectory,
+        });
       },
     );
     return () => {
@@ -3246,6 +3301,25 @@ export function FileExplorerPane({
     }
 
     const path = getEntryFullPath(entry);
+    if (resolveInternalEditorDisplay(appSettings.transfer.internal_editor_display) === "window") {
+      try {
+        await openRemoteFileEditor({
+          sessionId: activeSessionId,
+          backend,
+          path,
+          name: entry.name,
+          size: entry.size,
+          mtime: entry.mtime,
+          target: fileWindowTarget,
+        });
+      } catch (error) {
+        toast.error(
+          getErrorMessage(error) || t("fileExplorer.openInternalFailed"),
+        );
+      }
+      return;
+    }
+
     const existing = findOpenFileDocument(tabs, {
       backend,
       sessionId: activeSessionId,
@@ -3296,7 +3370,7 @@ export function FileExplorerPane({
   };
 
   const handleOpenDefault = async (entry: FileEntry) => {
-    if ((appSettings.transfer.editor_type || "external") === "internal") {
+    if (resolveFileEditorOpenTarget(appSettings.transfer) !== "external") {
       await handleOpenInternal(entry);
       return;
     }

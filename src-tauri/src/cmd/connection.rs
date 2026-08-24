@@ -1,16 +1,22 @@
 use crate::config::{
-    self, AssetAccelerator, AssetAcceleratorType, AssetMetadata, Group, QuickCommandsConfig,
-    SavedConnection, SavedPassword, SshKey,
+    self, AssetAccelerator, AssetAcceleratorType, AssetMetadata, ConnectionCustomIcon, Group,
+    QuickCommandsConfig, SavedConnection, SavedPassword, SshKey,
 };
 use crate::core::{QuickCommandsImportResult, QuickCommandsImportSource, QuickCommandsStore};
 use crate::core::ftp::SharedFtpManager;
 use crate::core::webdav::SharedWebDavManager;
 use crate::error::{AppError, AppResult};
 use crate::utils::crypto;
+use base64::Engine;
 use std::collections::HashSet;
+use std::io::Cursor;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
+
+const CONNECTION_ICON_MAX_BYTES: u64 = 10 * 1024 * 1024;
+const CONNECTION_ICON_MAX_DIMENSION: u32 = 128;
 
 fn schedule_cloud_sync_notify(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
@@ -71,6 +77,135 @@ pub fn get_saved_connections(app: tauri::AppHandle) -> AppResult<Vec<SavedConnec
 #[tauri::command]
 pub fn get_supported_ssh_algorithms() -> crate::core::ssh::SupportedSshAlgorithms {
     crate::core::ssh::get_supported_ssh_algorithms()
+}
+
+#[tauri::command]
+pub fn get_connection_custom_icons(app: tauri::AppHandle) -> AppResult<Vec<ConnectionCustomIcon>> {
+    Ok(config::load_config(&app)?.custom_icons)
+}
+
+#[tauri::command]
+pub fn delete_connection_custom_icon(app: tauri::AppHandle, id: String) -> AppResult<()> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Err(AppError::Config(
+            "Connection custom icon id is empty".to_string(),
+        ));
+    }
+
+    let mut cfg = config::load_config(&app)?;
+    let previous_len = cfg.custom_icons.len();
+    cfg.custom_icons.retain(|icon| icon.id != id);
+    if cfg.custom_icons.len() == previous_len {
+        return Ok(());
+    }
+
+    config::save_config(&app, &cfg)?;
+    let _ = app.emit("connections-changed", ());
+    schedule_cloud_sync_notify(app.clone());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn import_connection_icon(
+    app: tauri::AppHandle,
+    path: String,
+) -> AppResult<ConnectionCustomIcon> {
+    let data_url = import_connection_icon_data_url(&path)?;
+    let name = connection_icon_name_from_path(Path::new(path.trim()));
+    let id = config::connection_custom_icon_id_for_data_url(&data_url);
+
+    let mut cfg = config::load_config(&app)?;
+    if let Some(existing) = cfg.custom_icons.iter().find(|icon| icon.id == id) {
+        return Ok(existing.clone());
+    }
+
+    let icon = config::connection_custom_icon_from_data_url(&data_url, name, current_time_ms())
+        .ok_or_else(|| AppError::Config("Imported connection icon is invalid".to_string()))?;
+    cfg.custom_icons.push(icon.clone());
+    config::save_config(&app, &cfg)?;
+    let _ = app.emit("connections-changed", ());
+    schedule_cloud_sync_notify(app.clone());
+    Ok(icon)
+}
+
+fn import_connection_icon_data_url(path: &str) -> AppResult<String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Config(
+            "Connection icon path is empty".to_string(),
+        ));
+    }
+
+    import_connection_icon_from_path(Path::new(trimmed))
+}
+
+fn connection_icon_name_from_path(path: &Path) -> String {
+    path.file_stem()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Custom icon")
+        .to_string()
+}
+
+fn current_time_ms() -> u64 {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    u64::try_from(millis).unwrap_or(u64::MAX)
+}
+
+fn import_connection_icon_from_path(path: &Path) -> AppResult<String> {
+    let _format = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .and_then(image::ImageFormat::from_extension)
+        .filter(|format| is_supported_connection_icon_format(*format))
+        .ok_or_else(|| AppError::Config("Unsupported connection icon format".to_string()))?;
+
+    let metadata = std::fs::metadata(path).map_err(|_| {
+        AppError::Config(format!(
+            "Connection icon file not found: {}",
+            path.display()
+        ))
+    })?;
+    if !metadata.is_file() {
+        return Err(AppError::Config(format!(
+            "Connection icon is not a file: {}",
+            path.display()
+        )));
+    }
+    if metadata.len() > CONNECTION_ICON_MAX_BYTES {
+        return Err(AppError::Config(format!(
+            "Connection icon is too large ({:.1} MB, max {:.0} MB)",
+            metadata.len() as f64 / (1024.0 * 1024.0),
+            CONNECTION_ICON_MAX_BYTES as f64 / (1024.0 * 1024.0),
+        )));
+    }
+
+    let image = image::open(path)
+        .map_err(|error| AppError::Config(format!("Failed to decode connection icon: {error}")))?;
+    let resized = image.thumbnail(CONNECTION_ICON_MAX_DIMENSION, CONNECTION_ICON_MAX_DIMENSION);
+    let mut cursor = Cursor::new(Vec::new());
+    resized
+        .write_to(&mut cursor, image::ImageFormat::Png)
+        .map_err(|error| AppError::Config(format!("Failed to encode connection icon: {error}")))?;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(cursor.into_inner());
+
+    Ok(format!("data:image/png;base64,{encoded}"))
+}
+
+fn is_supported_connection_icon_format(format: image::ImageFormat) -> bool {
+    matches!(
+        format,
+        image::ImageFormat::Png
+            | image::ImageFormat::Jpeg
+            | image::ImageFormat::WebP
+            | image::ImageFormat::Bmp
+            | image::ImageFormat::Gif
+    )
 }
 
 fn normalize_connection_for_save(connection: &mut SavedConnection) {
@@ -805,9 +940,14 @@ fn validate_proxy_jump_config(
         return Ok(());
     };
 
-    if !matches!(connection.config, config::ConnectionType::Ssh { .. }) {
+    if !matches!(
+        connection.config,
+        config::ConnectionType::Ssh { .. }
+            | config::ConnectionType::Rdp { .. }
+            | config::ConnectionType::Vnc { .. }
+    ) {
         return Err(AppError::Config(
-            "ProxyJump is only supported for SSH connections".to_string(),
+            "ProxyJump is only supported for SSH, RDP, and VNC connections".to_string(),
         ));
     }
 
@@ -871,12 +1011,13 @@ fn find_connection_for_proxy_jump<'a>(
 #[cfg(test)]
 mod tests {
     use super::{
-        delete_group_from_config, normalize_connection_for_save, resolve_private_key_for_save,
-        resolve_text_secret_input, update_connection_asset_from_monitoring_in_config,
-        update_connection_icon_in_config, validate_certificate_content,
-        validate_local_terminal_config, validate_private_key_content, validate_proxy_jump_config,
-        validate_sftp_settings_config, validate_ssh_agent_forwarding_identity_inputs,
-        validate_vnc_config,
+        CONNECTION_ICON_MAX_BYTES, delete_group_from_config, import_connection_icon_data_url,
+        import_connection_icon_from_path, normalize_connection_for_save,
+        resolve_private_key_for_save, resolve_text_secret_input,
+        update_connection_asset_from_monitoring_in_config, update_connection_icon_in_config,
+        validate_certificate_content, validate_local_terminal_config, validate_private_key_content,
+        validate_proxy_jump_config, validate_sftp_settings_config,
+        validate_ssh_agent_forwarding_identity_inputs, validate_vnc_config,
     };
     use crate::config::{
         AiExecutionProfile, AssetAccelerator, AssetAcceleratorType, AssetDisk, AssetDiskPurpose,
@@ -884,7 +1025,9 @@ mod tests {
         SessionsConfig, SftpSettings, SshKey, VncClipboardSettings, VncDisplaySettings,
         VncReconnectSettings, VncSecuritySettings,
     };
+    use base64::Engine;
     use std::fs;
+    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     const TEST_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----
@@ -899,6 +1042,14 @@ FkHpYgNw65KCWCTXtP7ye2czMC3zjn2r98pJLobsLYQgRiHIv/CUdAdsqbvMPECB+wl/UQ
 e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
 7/wNsnDM0T7nLv/Q==
 -----END OPENSSH PRIVATE KEY-----";
+
+    fn temp_connection_icon_path(extension: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!("nyaterm-connection-icon-{nanos}.{extension}"))
+    }
 
     fn vnc_connection() -> SavedConnection {
         SavedConnection {
@@ -1250,13 +1401,26 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
     }
 
     #[test]
-    fn rejects_proxy_jump_on_non_ssh_connections() {
+    fn rejects_proxy_jump_on_unsupported_connections() {
         let connection = telnet_connection("telnet-1", Some("jump-1"));
         let jump = ssh_connection("jump-1", None);
 
         let error = validate_proxy_jump_config(&connection, &[jump]).unwrap_err();
 
         assert!(error.to_string().contains("ProxyJump is only supported"));
+    }
+
+    #[test]
+    fn accepts_proxy_jump_on_vnc_connections() {
+        let mut connection = vnc_connection();
+        connection.id = "vnc-target".to_string();
+        connection.network = Some(ConnectionNetwork {
+            proxy_id: None,
+            proxy_jump_id: Some("jump-1".to_string()),
+        });
+        let jump = ssh_connection("jump-1", None);
+
+        validate_proxy_jump_config(&connection, &[jump]).unwrap();
     }
 
     #[test]
@@ -1373,6 +1537,7 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
                 grouped_connection("sibling-connection", Some("sibling")),
                 grouped_connection("ungrouped-connection", None),
             ],
+            custom_icons: vec![],
         };
 
         delete_group_from_config(&mut config, "root");
@@ -1400,6 +1565,7 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
         let mut config = SessionsConfig {
             groups: vec![],
             connections: vec![ssh_connection("target", None)],
+            custom_icons: vec![],
         };
 
         let changed =
@@ -1415,6 +1581,59 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
                 .unwrap();
 
         assert!(!unchanged);
+    }
+
+    #[test]
+    fn import_connection_icon_generates_png_data_url() {
+        let path = temp_connection_icon_path("png");
+        let image = image::RgbaImage::from_pixel(256, 64, image::Rgba([255, 0, 0, 255]));
+        image
+            .save_with_format(&path, image::ImageFormat::Png)
+            .expect("write source icon");
+
+        let data_url = import_connection_icon_from_path(&path).expect("import icon");
+        let encoded = data_url
+            .strip_prefix("data:image/png;base64,")
+            .expect("png data url");
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .expect("decode png");
+        let imported = image::load_from_memory_with_format(&decoded, image::ImageFormat::Png)
+            .expect("decode imported icon");
+
+        assert!(imported.width() <= 128);
+        assert!(imported.height() <= 128);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn import_connection_icon_rejects_empty_path() {
+        let error = import_connection_icon_data_url("  ").unwrap_err();
+
+        assert!(error.to_string().contains("path is empty"));
+    }
+
+    #[test]
+    fn import_connection_icon_rejects_unsupported_format() {
+        let path = temp_connection_icon_path("txt");
+        fs::write(&path, b"not an image").expect("write source file");
+
+        let error = import_connection_icon_from_path(&path).unwrap_err();
+
+        assert!(error.to_string().contains("Unsupported"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn import_connection_icon_rejects_large_file() {
+        let path = temp_connection_icon_path("png");
+        fs::write(&path, vec![0u8; CONNECTION_ICON_MAX_BYTES as usize + 1])
+            .expect("write large source file");
+
+        let error = import_connection_icon_from_path(&path).unwrap_err();
+
+        assert!(error.to_string().contains("too large"));
+        let _ = fs::remove_file(path);
     }
 
     #[test]
@@ -1471,6 +1690,7 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
         let mut config = SessionsConfig {
             groups: vec![group("group", None)],
             connections: vec![target, ssh_connection("other", None)],
+            custom_icons: vec![],
         };
 
         let changed = update_connection_asset_from_monitoring_in_config(

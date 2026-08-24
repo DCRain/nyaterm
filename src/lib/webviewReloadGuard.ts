@@ -27,6 +27,15 @@ function isReloadShortcut(event: KeyboardEvent) {
   return (event.ctrlKey || event.metaKey) && event.code === "KeyR";
 }
 
+function isHardReloadShortcut(event: KeyboardEvent) {
+  return (
+    (event.ctrlKey || event.metaKey) &&
+    event.shiftKey &&
+    !event.altKey &&
+    event.code === "KeyR"
+  );
+}
+
 function isPrintShortcut(event: KeyboardEvent) {
   if (event.code !== "KeyP" || event.altKey || event.shiftKey) return false;
 
@@ -51,11 +60,19 @@ function isReservedWebviewShortcut(event: KeyboardEvent) {
 }
 
 function preventReservedWebviewShortcut(event: KeyboardEvent) {
-  if (!isReservedWebviewShortcut(event)) return;
-  if (eventTargetIsInsideTerminalRoot(event)) return;
+  const insideTerminal = eventTargetIsInsideTerminalRoot(event);
 
-  event.preventDefault();
-  event.stopPropagation();
+  if (insideTerminal) {
+    if (isHardReloadShortcut(event)) {
+      event.preventDefault();
+    }
+    return;
+  }
+
+  if (isReservedWebviewShortcut(event)) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
 }
 
 function handleDevtoolsShortcut(event: KeyboardEvent) {

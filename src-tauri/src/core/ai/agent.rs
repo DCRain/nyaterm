@@ -1485,11 +1485,53 @@ async fn run_agent_legacy_json_step(
     settings: &AiSettings,
     cancel_rx: &mut oneshot::Receiver<()>,
 ) -> AppResult<LegacyAgentStep> {
-    let client = build_client(resolved_model, settings)?;
     let mut legacy_conversation = conversation.to_vec();
     legacy_conversation.push(ChatMessage::system(
         r#"Fallback protocol: tool calling is unavailable for this step. Return exactly one JSON object and no Markdown. For command execution use {"thought":"...","action":"execute_command","command":"...","riskLevel":"low|medium|high|critical","riskReason":"..."}. For final answer use {"thought":"...","action":"final_answer","answer":"..."}."#,
     ));
+
+    if super::responses::uses_responses_api(resolved_model) {
+        let synthetic_request = AiChatRequest {
+            stream_id: None,
+            session_id: Some(session_id.to_string()),
+            connection_id: None,
+            terminal_session_id: None,
+            owner_scope: Default::default(),
+            targets: vec![],
+            target_contexts: vec![],
+            mode: crate::config::AiMode::Agent,
+            agent_kind: crate::config::AiAgentKind::Nyaterm,
+            permission_mode: crate::config::AiPermissionMode::Confirm,
+            model_id: None,
+            model_name: None,
+            default_target_session_id: None,
+            existing_external_session_id: None,
+            attachments: vec![],
+            action: super::types::AiAction::GenerateCommand,
+            user_input: String::new(),
+            context: Default::default(),
+            options: Default::default(),
+        };
+        let stream_result =
+            super::responses::run_responses_chat_messages_stream_without_text_deltas(
+                app,
+                stream_id,
+                &synthetic_request,
+                settings,
+                resolved_model,
+                &legacy_conversation,
+                cancel_rx,
+            )
+            .await?;
+        return Ok(parse_legacy_agent_step_response(
+            stream_id,
+            session_id,
+            stream_result.text,
+            stream_result.reasoning_content.unwrap_or_default(),
+        ));
+    }
+
+    let client = build_client(resolved_model, settings)?;
     let chat_req = ChatRequest::new(legacy_conversation);
     let chat_options = build_chat_options(settings);
 
@@ -1556,6 +1598,20 @@ async fn run_agent_legacy_json_step(
         }
     }
 
+    Ok(parse_legacy_agent_step_response(
+        stream_id,
+        session_id,
+        raw_output,
+        reasoning_output,
+    ))
+}
+
+fn parse_legacy_agent_step_response(
+    stream_id: &str,
+    session_id: &str,
+    raw_output: String,
+    reasoning_output: String,
+) -> LegacyAgentStep {
     let candidate =
         extract_json_object(&raw_output).unwrap_or_else(|| raw_output.trim().to_string());
     let parsed = match serde_json::from_str(&candidate) {
@@ -1582,7 +1638,7 @@ async fn run_agent_legacy_json_step(
         }
     };
 
-    Ok(LegacyAgentStep { parsed, raw_output })
+    LegacyAgentStep { parsed, raw_output }
 }
 
 #[cfg(test)]
@@ -1945,7 +2001,11 @@ pub(super) async fn run_agent_stream(
 
     let mut final_answer: Option<String> = None;
     let mut all_steps: Vec<AgentStepPayload> = Vec::new();
-    let mut native_tool_call_mode = NativeToolCallMode::Enabled;
+    let mut native_tool_call_mode = if super::responses::uses_responses_api(&resolved_model) {
+        NativeToolCallMode::DisabledForTurn
+    } else {
+        NativeToolCallMode::Enabled
+    };
 
     for step_index in 0..max_steps {
         tracing::debug!(

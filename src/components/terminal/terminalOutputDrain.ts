@@ -17,6 +17,23 @@ interface TerminalLike {
   write(data: string, callback?: () => void): void;
 }
 
+export interface TerminalOutputBackgroundDrainStats {
+  queueBytes: number;
+  writingBytes: number;
+  unackedBytes: number;
+  backgroundCatchUp: boolean;
+  drainChunkBytes: number;
+  nextDelayMs: number;
+}
+
+export interface TerminalOutputForegroundFrameFallbackStats {
+  queueBytes: number;
+  writingBytes: number;
+  unackedBytes: number;
+  pendingBytes: number;
+  fallbackDelayMs: number;
+}
+
 interface TerminalOutputDrainTimers {
   requestAnimationFrame: (callback: FrameRequestCallback) => number;
   cancelAnimationFrame: (handle: number) => void;
@@ -38,7 +55,8 @@ interface TerminalOutputDrainOptions<TWriteContext = unknown> {
   onWriteError?: (payload: QueuedOutputChunk, error: unknown) => void;
   onPressureChange?: (pendingBytes: number) => void;
   onModeChange?: (mode: TerminalOutputDrainMode) => void;
-  onBackgroundDrain?: (queueBytes: number, writingBytes: number, unackedBytes: number) => void;
+  onBackgroundDrain?: (stats: TerminalOutputBackgroundDrainStats) => void;
+  onForegroundFrameFallback?: (stats: TerminalOutputForegroundFrameFallbackStats) => void;
   timers?: Partial<TerminalOutputDrainTimers>;
 }
 
@@ -101,9 +119,12 @@ export class TerminalOutputDrain<TWriteContext = unknown> {
   private foregroundFrame: number | null = null;
   private foregroundTimer: number | null = null;
   private backgroundTimer: number | null = null;
+  private backgroundTimerCatchUp: boolean | null = null;
+  private backgroundCatchUp = false;
   private ackTimer: number | null = null;
   private microtaskPending = false;
   private foregroundTurnStartedAt: number | null = null;
+  private foregroundScheduleGeneration = 0;
   private disposed = false;
 
   constructor(private readonly options: TerminalOutputDrainOptions<TWriteContext>) {
@@ -125,6 +146,7 @@ export class TerminalOutputDrain<TWriteContext = unknown> {
     }
     if (mode !== "background") {
       this.cancelBackground();
+      this.backgroundCatchUp = false;
     }
 
     this.schedule();
@@ -270,19 +292,41 @@ export class TerminalOutputDrain<TWriteContext = unknown> {
       return;
     }
 
+    const generation = this.beginForegroundScheduleCycle();
+    const fallbackDelayMs = XTERM_PERFORMANCE_CONFIG.output.foregroundFrameFallbackMs;
     this.foregroundFrame = this.timers.requestAnimationFrame(() => {
-      this.foregroundFrame = null;
-      this.foregroundTurnStartedAt = null;
+      if (!this.claimForegroundScheduleCycle(generation)) return;
       this.flushForeground();
     });
+    this.foregroundTimer = this.timers.setTimeout(() => {
+      if (!this.claimForegroundScheduleCycle(generation)) return;
+      this.options.onForegroundFrameFallback?.({
+        queueBytes: this.queue.bytes,
+        writingBytes: this.writingBytes,
+        unackedBytes: this.backendUnackedBytes,
+        pendingBytes: this.getPendingBytes(),
+        fallbackDelayMs,
+      });
+      this.flushForeground();
+    }, fallbackDelayMs);
   }
 
   private scheduleBackground() {
-    if (this.backgroundTimer !== null || this.disposed) return;
+    const schedule = this.resolveBackgroundSchedule();
+    if (this.disposed) return;
+    if (this.backgroundTimer !== null) {
+      if (schedule.backgroundCatchUp && this.backgroundTimerCatchUp === false) {
+        this.cancelBackground();
+      } else {
+        return;
+      }
+    }
+    this.backgroundTimerCatchUp = schedule.backgroundCatchUp;
     this.backgroundTimer = this.timers.setTimeout(() => {
       this.backgroundTimer = null;
+      this.backgroundTimerCatchUp = null;
       this.flushBackground();
-    }, XTERM_PERFORMANCE_CONFIG.output.backgroundDrainIntervalMs);
+    }, schedule.intervalMs);
   }
 
   private flushForeground() {
@@ -299,8 +343,37 @@ export class TerminalOutputDrain<TWriteContext = unknown> {
       this.schedule();
       return;
     }
-    this.options.onBackgroundDrain?.(this.queue.bytes, this.writingBytes, this.backendUnackedBytes);
-    this.flushOne(XTERM_PERFORMANCE_CONFIG.output.backgroundWriteChunkBytes);
+    const schedule = this.resolveBackgroundSchedule();
+    this.options.onBackgroundDrain?.({
+      queueBytes: this.queue.bytes,
+      writingBytes: this.writingBytes,
+      unackedBytes: this.backendUnackedBytes,
+      backgroundCatchUp: schedule.backgroundCatchUp,
+      drainChunkBytes: schedule.writeChunkBytes,
+      nextDelayMs: schedule.intervalMs,
+    });
+    this.flushOne(schedule.writeChunkBytes);
+  }
+
+  private resolveBackgroundSchedule() {
+    const { output } = XTERM_PERFORMANCE_CONFIG;
+    if (this.backgroundCatchUp) {
+      this.backgroundCatchUp = this.queue.bytes > output.lowLatencyFlushBacklogBytes;
+    } else {
+      this.backgroundCatchUp = this.queue.bytes >= output.strainedBacklogBytes;
+    }
+
+    return this.backgroundCatchUp
+      ? {
+          backgroundCatchUp: true,
+          writeChunkBytes: output.backgroundCatchUpWriteChunkBytes,
+          intervalMs: output.backgroundCatchUpIntervalMs,
+        }
+      : {
+          backgroundCatchUp: false,
+          writeChunkBytes: output.backgroundWriteChunkBytes,
+          intervalMs: output.backgroundDrainIntervalMs,
+        };
   }
 
   private flushOne(maxBytes: number) {
@@ -397,7 +470,22 @@ export class TerminalOutputDrain<TWriteContext = unknown> {
     this.options.onAck(ackBytes);
   }
 
-  private cancelForeground() {
+  private beginForegroundScheduleCycle() {
+    this.foregroundScheduleGeneration += 1;
+    return this.foregroundScheduleGeneration;
+  }
+
+  private claimForegroundScheduleCycle(generation: number) {
+    if (generation !== this.foregroundScheduleGeneration || this.disposed) {
+      return false;
+    }
+    this.foregroundScheduleGeneration += 1;
+    this.clearForegroundSchedulers();
+    this.foregroundTurnStartedAt = null;
+    return true;
+  }
+
+  private clearForegroundSchedulers() {
     if (this.foregroundFrame !== null) {
       this.timers.cancelAnimationFrame(this.foregroundFrame);
       this.foregroundFrame = null;
@@ -406,6 +494,11 @@ export class TerminalOutputDrain<TWriteContext = unknown> {
       this.timers.clearTimeout(this.foregroundTimer);
       this.foregroundTimer = null;
     }
+  }
+
+  private cancelForeground() {
+    this.foregroundScheduleGeneration += 1;
+    this.clearForegroundSchedulers();
     this.microtaskPending = false;
     this.foregroundTurnStartedAt = null;
   }
@@ -415,6 +508,7 @@ export class TerminalOutputDrain<TWriteContext = unknown> {
       this.timers.clearTimeout(this.backgroundTimer);
       this.backgroundTimer = null;
     }
+    this.backgroundTimerCatchUp = null;
   }
 
   private clearAckTimer() {

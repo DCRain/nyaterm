@@ -1,4 +1,5 @@
-use crate::config::{self, ConnectionAuth, ConnectionType};
+use crate::config::{self, ConnectionAuth, ConnectionNetwork, ConnectionType};
+use crate::core::network::{BoxedTransportStream, open_tcp_transport};
 use crate::core::rdp_clipboard_files::{
     OfferedLocalFile, build_offered_local_files, cliprdr_range_request_size, read_offered_file_chunk,
     sanitize_remote_file_name, MAX_FILE_BYTES,
@@ -9,6 +10,7 @@ use crate::core::remote_desktop::frame::{
 use crate::error::{AppError, AppResult};
 use async_trait::async_trait;
 use base64::Engine as _;
+use ironrdp::client::config::DirectTransport as IronRdpDirectTransport;
 use ironrdp::client::config::{
     ClipboardType as IronRdpClipboardType, Config as IronRdpConfig,
     ConfigBuilder as IronRdpConfigBuilder, Destination as IronRdpDestination,
@@ -42,14 +44,17 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::task::{Context, Poll};
 use std::thread::JoinHandle;
 use tauri::async_runtime::JoinHandle as TauriJoinHandle;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::time::{Duration, sleep};
 use x509_cert::der::Decode as _;
@@ -202,6 +207,7 @@ pub struct RdpConnectConfig {
     pub reconnect_enabled: bool,
     pub reconnect_max_attempts: u32,
     pub color_depth: u8,
+    pub network: Option<ConnectionNetwork>,
 }
 
 pub struct RdpSession {
@@ -265,6 +271,36 @@ pub struct IronRdpEngine;
 impl IronRdpEngine {
     pub fn new() -> Self {
         Self
+    }
+}
+
+struct IronRdpTransportStreamAdapter(BoxedTransportStream);
+
+impl AsyncRead for IronRdpTransportStreamAdapter {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for IronRdpTransportStreamAdapter {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.0).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_shutdown(cx)
     }
 }
 
@@ -599,6 +635,7 @@ impl RdpEngine for IronRdpEngine {
 
 pub fn load_saved_rdp_config(app: &AppHandle, connection_id: &str) -> AppResult<RdpConnectConfig> {
     let conn = config::load_connection_by_id(app, connection_id)?;
+    let network = conn.network.clone();
     let password = resolve_rdp_password(app, conn.auth.as_ref())?;
     let ConnectionType::Rdp {
         host,
@@ -635,6 +672,7 @@ pub fn load_saved_rdp_config(app: &AppHandle, connection_id: &str) -> AppResult<
         reconnect_enabled: reconnect.enabled,
         reconnect_max_attempts: reconnect.max_attempts,
         color_depth: display.color_depth,
+        network,
     })
 }
 
@@ -934,6 +972,12 @@ async fn build_ironrdp_config(
         );
     }
 
+    tracing::debug!(
+        session_id = %config.session_id,
+        "RDP TLS backend: {}",
+        rdp_tls_backend_label()
+    );
+
     let certificate_verifier = Arc::new(NyaTermRdpCertificateVerifier {
         app: app.clone(),
         session: session.clone(),
@@ -966,6 +1010,29 @@ async fn build_ironrdp_config(
         .with_client_name(client_name())
         .with_platform(current_platform())
         .with_server_certificate_verifier(certificate_verifier);
+
+    if let Some(network) = config.network.clone() {
+        let app = app.clone();
+        builder = builder.with_direct_transport_connector(Arc::new(move |destination| {
+            let app = app.clone();
+            let network = network.clone();
+            Box::pin(async move {
+                let transport = open_tcp_transport(
+                    &app,
+                    destination.name(),
+                    destination.port(),
+                    Some(&network),
+                    None,
+                )
+                .await
+                .map_err(|error| io::Error::other(error.to_string()))?;
+                Ok(IronRdpDirectTransport {
+                    stream: Box::new(IronRdpTransportStreamAdapter(transport.stream)),
+                    local_addr: transport.local_addr,
+                })
+            })
+        }));
+    }
 
     if config.clipboard_mode == "disabled" {
         *session.clipboard_bridge.lock().await = None;
@@ -2939,8 +3006,15 @@ fn emit_pointer_event(app: &AppHandle, session_id: &str, event: RdpPointerEvent)
 
 fn classify_connector_error(error: &ironrdp::connector::ConnectorError) -> (RdpErrorKind, bool) {
     let text = format!("{error:?}").to_ascii_lowercase();
-    if text.contains("certificate") {
+    classify_connector_error_text(&text)
+}
+
+fn classify_connector_error_text(text: &str) -> (RdpErrorKind, bool) {
+    if is_nyaterm_certificate_rejection(text) {
         return (RdpErrorKind::Certificate, false);
+    }
+    if is_tls_error_text(text) {
+        return (RdpErrorKind::Tls, true);
     }
     if text.contains("credssp")
         || text.contains("authentication")
@@ -2953,14 +3027,17 @@ fn classify_connector_error(error: &ironrdp::connector::ConnectorError) -> (RdpE
     if text.contains("negotiation") || text.contains("x224") || text.contains("nla") {
         return (RdpErrorKind::Negotiation, false);
     }
-    if text.contains("tls") {
-        return (RdpErrorKind::Tls, true);
+    if text.contains("certificate") {
+        return (RdpErrorKind::Certificate, false);
     }
     (RdpErrorKind::Transport, true)
 }
 
 fn classify_session_error<E: fmt::Debug>(error: &E) -> (RdpErrorKind, bool) {
     let text = format!("{error:?}").to_ascii_lowercase();
+    if is_tls_error_text(&text) {
+        return (RdpErrorKind::Tls, true);
+    }
     if text.contains("authentication") || text.contains("password") {
         return (RdpErrorKind::Authentication, false);
     }
@@ -2977,6 +3054,21 @@ fn classify_session_error<E: fmt::Debug>(error: &E) -> (RdpErrorKind, bool) {
         return (RdpErrorKind::Transport, true);
     }
     (RdpErrorKind::Session, true)
+}
+
+fn is_tls_error_text(text: &str) -> bool {
+    text.contains("tls")
+        || text.contains("handshake")
+        || text.contains("schannel")
+        || text.contains("connectionreset")
+        || text.contains("connection reset")
+        || text.contains("10054")
+}
+
+fn is_nyaterm_certificate_rejection(text: &str) -> bool {
+    text.contains("certificate rejected")
+        || text.contains("unknown certificate")
+        || text.contains("certificate fingerprint changed")
 }
 
 fn user_facing_connector_error(
@@ -3006,6 +3098,7 @@ fn user_facing_connector_error(
 fn user_facing_session_error<E: fmt::Debug>(error: &E, kind: RdpErrorKind) -> String {
     match kind {
         RdpErrorKind::Authentication => "RDP authentication failed".to_string(),
+        RdpErrorKind::Tls => format!("RDP TLS connection failed: {error:?}"),
         RdpErrorKind::Clipboard => format!("RDP clipboard error: {error:?}"),
         RdpErrorKind::Transport => format!("RDP transport interrupted: {error:?}"),
         _ => format!("RDP session error: {error:?}"),
@@ -3150,6 +3243,16 @@ fn current_platform() -> MajorPlatformType {
     }
 }
 
+#[cfg(windows)]
+fn rdp_tls_backend_label() -> &'static str {
+    "native-tls (Schannel)"
+}
+
+#[cfg(not(windows))]
+fn rdp_tls_backend_label() -> &'static str {
+    "rustls"
+}
+
 async fn set_state(
     session: &RdpSession,
     state: RdpSessionState,
@@ -3229,6 +3332,7 @@ mod tests {
             reconnect_enabled: true,
             reconnect_max_attempts: 3,
             color_depth: 32,
+            network: None,
         }
     }
 
@@ -3324,6 +3428,57 @@ mod tests {
                 KnownHostCheck::HostSeen
             ),
             Ok(true)
+        );
+    }
+
+    #[test]
+    fn rdp_tls_backend_label_matches_target() {
+        #[cfg(windows)]
+        assert_eq!(rdp_tls_backend_label(), "native-tls (Schannel)");
+        #[cfg(not(windows))]
+        assert_eq!(rdp_tls_backend_label(), "rustls");
+    }
+
+    #[test]
+    fn native_tls_vendor_keeps_certificate_decision_with_nyaterm() {
+        let native_tls_backend = include_str!("../../vendor/ironrdp-tls/src/native_tls.rs");
+
+        assert!(native_tls_backend.contains(".danger_accept_invalid_certs(true)"));
+        assert!(native_tls_backend.contains(".danger_accept_invalid_hostnames(true)"));
+        assert!(native_tls_backend.contains(".use_sni(false)"));
+    }
+
+    #[test]
+    fn connector_classifier_treats_tls_upgrade_reset_as_tls() {
+        let text = r#"error { context: "tlsupgrade", kind: custom, source: some(os {
+            code: 10054,
+            kind: connectionreset,
+            message: "remote host reset the connection"
+        })) }"#;
+
+        assert_eq!(
+            classify_connector_error_text(text),
+            (RdpErrorKind::Tls, true)
+        );
+    }
+
+    #[test]
+    fn classifier_keeps_nyaterm_certificate_rejections_as_certificate() {
+        assert_eq!(
+            classify_connector_error_text("tlsupgrade failed: certificate rejected"),
+            (RdpErrorKind::Certificate, false)
+        );
+        assert_eq!(
+            classify_connector_error_text("certificate fingerprint changed"),
+            (RdpErrorKind::Certificate, false)
+        );
+    }
+
+    #[test]
+    fn session_classifier_treats_handshake_failures_as_tls() {
+        assert_eq!(
+            classify_session_error(&"native-tls Schannel handshake failure"),
+            (RdpErrorKind::Tls, true)
         );
     }
 

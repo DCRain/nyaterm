@@ -191,6 +191,8 @@ pub struct ActivityBarLayout {
     #[serde(default = "default_right_bottom")]
     pub right_bottom: Vec<String>,
     #[serde(default)]
+    pub show_labels: bool,
+    #[serde(default)]
     pub show_labels_left: bool,
     #[serde(default)]
     pub show_labels_right: bool,
@@ -200,6 +202,8 @@ pub struct ActivityBarLayout {
     /// Whether the right activity bar strip is visible. Defaults to hidden.
     #[serde(default)]
     pub show_right: bool,
+    #[serde(default)]
+    pub hidden_items: Vec<String>,
 }
 
 impl Default for ActivityBarLayout {
@@ -209,10 +213,12 @@ impl Default for ActivityBarLayout {
             left_bottom: default_left_bottom(),
             right_top: default_right_top(),
             right_bottom: default_right_bottom(),
+            show_labels: false,
             show_labels_left: false,
             show_labels_right: false,
             show_left: false,
             show_right: false,
+            hidden_items: Vec::new(),
         }
     }
 }
@@ -262,6 +268,8 @@ pub struct UiConfig {
     pub terminal_window_layout: Option<RestorableTerminalWindowNode>,
     #[serde(default = "default_start_workspace_mode")]
     pub start_workspace_mode: String,
+    #[serde(default = "default_panel_open_mode")]
+    pub panel_open_mode: String,
     #[serde(default = "default_left_width")]
     pub left_width: f64,
     #[serde(default = "default_right_width")]
@@ -299,6 +307,8 @@ pub struct UiConfig {
     pub show_serial_send_panel: bool,
     #[serde(default = "default_serial_send_height")]
     pub serial_send_height: f64,
+    #[serde(default = "default_false")]
+    pub serial_send_clear_after_send: bool,
     #[serde(default = "default_zoom")]
     pub zoom_level: f64,
     #[serde(default = "default_language")]
@@ -409,6 +419,10 @@ fn default_start_workspace_mode() -> String {
     "workbench".to_string()
 }
 
+fn default_panel_open_mode() -> String {
+    "docked".to_string()
+}
+
 fn default_active_left_panel() -> Option<String> {
     Some("fileExplorer".to_string())
 }
@@ -479,6 +493,7 @@ impl Default for UiConfig {
             open_tabs: vec![],
             terminal_window_layout: None,
             start_workspace_mode: default_start_workspace_mode(),
+            panel_open_mode: default_panel_open_mode(),
             left_width: default_left_width(),
             right_width: default_right_width(),
             saved_connections_filter_width_migrated: false,
@@ -497,6 +512,7 @@ impl Default for UiConfig {
             show_quick_cmd_bar: true,
             show_serial_send_panel: false,
             serial_send_height: default_serial_send_height(),
+            serial_send_clear_after_send: false,
             zoom_level: default_zoom(),
             language: default_language(),
             header_status_mode: default_header_status_mode(),
@@ -532,8 +548,55 @@ impl Default for UiConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{RestorablePaneNode, RestorableTab};
+    use super::{ActivityBarLayout, RestorablePaneNode, RestorableTab, UiConfig};
     use serde_json::json;
+
+    #[test]
+    fn activity_bar_layout_deserializes_legacy_shape_without_hidden_items() {
+        let raw = json!({
+            "left_top": ["fileExplorer"],
+            "left_bottom": ["settings"],
+            "right_top": ["savedConnections"],
+            "right_bottom": ["lock"],
+            "show_labels": true
+        });
+
+        let layout: ActivityBarLayout =
+            serde_json::from_value(raw).expect("legacy activity bar layout");
+
+        assert!(layout.hidden_items.is_empty());
+        assert!(layout.show_labels);
+    }
+
+    #[test]
+    fn activity_bar_layout_round_trips_hidden_items() {
+        let mut layout = ActivityBarLayout::default();
+        layout.hidden_items = vec!["gpuMonitor".to_string(), "settings".to_string()];
+
+        let encoded = serde_json::to_value(&layout).expect("activity layout json");
+        let decoded: ActivityBarLayout =
+            serde_json::from_value(encoded).expect("activity layout decode");
+
+        assert_eq!(decoded.hidden_items, layout.hidden_items);
+    }
+
+    #[test]
+    fn ui_config_defaults_panel_open_mode_to_docked() {
+        let ui = UiConfig::default();
+        assert_eq!(ui.panel_open_mode, "docked");
+    }
+
+    #[test]
+    fn ui_config_deserializes_legacy_shape_without_panel_open_mode() {
+        let raw = json!({
+            "left_width": 300.0,
+            "right_width": 320.0
+        });
+
+        let ui: UiConfig = serde_json::from_value(raw).expect("legacy ui config");
+
+        assert_eq!(ui.panel_open_mode, "docked");
+    }
 
     #[test]
     fn current_leaf_schema_round_trips_terminal_fields() {

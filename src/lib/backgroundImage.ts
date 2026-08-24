@@ -180,6 +180,7 @@ export function buildSurfaceCssVariables(
       "--df-bg-panel": bgPanel,
       "--df-bg-panel-solid": colors.bgPanel,
       "--df-bg-terminal": bgTerminal,
+      "--df-terminal-surface-bg": "transparent",
       "--df-bg-hover": bgHover,
       "--df-bg-hover-solid": colors.bgHover,
       "--df-bg-input": bgInput,
@@ -206,12 +207,16 @@ export function buildSurfaceCssVariables(
   const bgInput = colorWithAlpha(colors.bgInput, surfaceOpacity);
   const bgSectionHeader = colorWithAlpha(colors.bgSectionHeader, surfaceOpacity);
   const border = softBorderColor(colors.border, surfaceOpacity);
+  const terminalSurfaceBg = isBackgroundImageEnabled(appearance)
+    ? "transparent"
+    : "var(--df-terminal-bg, var(--df-bg-terminal))";
 
   return {
     "--df-bg": bg,
     "--df-bg-panel": bgPanel,
     "--df-bg-panel-solid": colors.bgPanel,
     "--df-bg-terminal": bgTerminal,
+    "--df-terminal-surface-bg": terminalSurfaceBg,
     "--df-bg-hover": bgHover,
     "--df-bg-hover-solid": colors.bgHover,
     "--df-bg-input": bgInput,

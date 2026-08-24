@@ -4,12 +4,15 @@ sidebar_position: 0
 
 # Session Types
 
-NyaTerm is not just an SSH client. It is a desktop app that puts multiple terminal and remote-desktop workflows into one workspace. It currently supports six session types:
+NyaTerm is not just an SSH client. It is a desktop app that puts multiple terminal, remote-desktop, and object-storage workflows into one workspace. It currently supports nine session types:
 
 - **SSH**
 - **Local Terminal**
 - **Telnet**
 - **Serial**
+- **S3**
+- **FTP**
+- **WebDAV**
 - **RDP**
 - **VNC**
 
@@ -23,8 +26,11 @@ Understanding the differences helps explain why some panels or enhancements only
 | Local Terminal | Local shell work, scripts, builds | Shared terminal UI, command history, split panes |
 | Telnet | Legacy devices, lab environments, compatibility troubleshooting | Terminal workspace features with `Backspace Mode`, but not SSH-only features |
 | Serial | Routers, switches, boards, embedded debug ports | Serial port settings, `Backspace Mode`, and terminal workspace features |
-| RDP | Windows Remote Desktop or graphical administration entry points | Embedded remote desktop display, NLA/CredSSP, certificate verification, text clipboard, window fitting, reconnects; can also launch external RDP clients per platform |
-| VNC | Raw TCP VNC services, VM consoles, lightweight graphical remote desktops | Embedded Raw / ZRLE / Tight / Tight JPEG display, None / VNC Auth, window scaling, text clipboard, and reconnects; can also launch external VNC clients |
+| S3 | Object-storage browsing and cross-backend copy | Dual-pane file workspace with local / SFTP / FTP / WebDAV copy; no hidden-files toggle |
+| FTP | FTP / FTPS file sites | Dual-pane file workspace, TLS (FTPS), hidden-files filter, cross-backend copy |
+| WebDAV | NAS / Nextcloud WebDAV shares | Dual-pane file workspace with local / SFTP / S3 / FTP copy; no hidden-files toggle |
+| RDP | Windows Remote Desktop or graphical administration entry points | Embedded remote desktop display, NLA/CredSSP, certificate verification, proxy / SSH jump host, text clipboard, window fitting, reconnects; can also launch external RDP clients per platform |
+| VNC | Raw TCP VNC services, VM consoles, lightweight graphical remote desktops | Embedded Raw / ZRLE / Tight / Tight JPEG display, None / VNC Auth, proxy / SSH jump host, window scaling, text clipboard, and reconnects; can also launch external VNC clients |
 
 ## SSH
 
@@ -103,6 +109,35 @@ When creating a serial session, you can configure:
 
 Serial sessions still live inside NyaTerm's tabbed and split workspace, so you can watch serial output in one pane while running commands in an SSH or local terminal pane.
 
+## S3
+
+S3 sessions are for browsing S3-compatible object storage (including Aliyun OSS) in a dual-pane file workspace: one side is typically local or another connected source, the other is the bucket prefix. Cross-backend copy is supported. Object storage has no POSIX hidden-file semantics, so there is no hidden-files toggle. Terminal CWD auto-sync also does not apply to the S3 pane.
+
+When creating an S3 session you typically configure:
+
+- Endpoint, region, and bucket
+- Access key / secret, and an optional session token
+- Optional root prefix and virtual-hosted-style URLs (some providers enable this automatically)
+
+## FTP
+
+FTP sessions are for classic FTP / explicit FTPS sites. They also use the dual-pane file workspace, support hidden-file filtering, and can copy with local, SFTP, S3, and WebDAV panes.
+
+When creating an FTP session you typically configure:
+
+- Host, port, username, and password
+- Root path
+- Whether to enable TLS (FTPS)
+
+## WebDAV
+
+WebDAV sessions are for NAS, Nextcloud, and similar WebDAV shares. The workspace shape matches S3: dual-pane browsing and cross-backend copy, with no hidden-files toggle and no terminal CWD follow.
+
+When creating a WebDAV session you typically configure:
+
+- Endpoint
+- Optional root path, username, and password
+
 ## RDP
 
 RDP sessions are for Windows hosts or other environments that expose a Remote Desktop endpoint. They share NyaTerm's saved-connection, tab, and split-pane workspace model, but the underlying session is a graphical desktop instead of a text terminal.
@@ -112,13 +147,14 @@ When creating an RDP session, you can configure:
 - Host, port, username, password, and domain
 - Network Level Authentication (NLA / CredSSP)
 - Certificate policy: ask on unknown certificates, strict rejection, or accept for this session
+- Network: a saved proxy or SSH jump host
 - Display mode: fit to window or fixed size
 - Text clipboard mode
 - Automatic reconnect attempts
 
 When connecting to an RDP host with an unknown certificate, NyaTerm opens a certificate verification dialog. You can accept the certificate for the current connection only or accept and remember it. If a remembered certificate changes later, NyaTerm prompts again before connecting.
 
-RDP does not provide terminal command history, the SFTP file explorer, SSH proxy/jump-host behavior, or remote resource monitoring. If you need command-line enhancements, use SSH, Local Terminal, Telnet, or Serial instead.
+RDP does not provide terminal command history, the SFTP file explorer, or remote resource monitoring. If you need command-line enhancements, use SSH, Local Terminal, Telnet, or Serial instead.
 
 ### External RDP clients
 
@@ -140,12 +176,13 @@ When creating a VNC session, you can configure:
 
 - Host and port
 - Security mode: automatic, None, or classic VNC Authentication
+- Network: a saved proxy or SSH jump host
 - Display mode: fit to window, actual size, or stretch
 - Text clipboard toggle
 - Automatic reconnect attempts
 - Shared / view-only behavior
 
-The current VNC transport is direct TCP only, with no TLS / VeNCrypt. Classic VNC Authentication passwords are limited to 8 bytes; NyaTerm rejects longer passwords instead of truncating them. Framebuffer encodings are advertised by default as `DesktopSizePseudo`, ZRLE, Tight, then Raw; Tight JPEG is decoded in the backend into the same RGBA framebuffer path, and Raw remains the stable fallback. CopyRect, cursor pseudo-encoding, remote resize, proxies, and SSH transport are not supported. Text clipboard exchange is limited to Latin-1 text so binary or oversized payloads do not enter the VNC protocol path.
+The VNC protocol layer has no TLS / VeNCrypt support, but its underlying TCP connection can be established through a saved SOCKS5 / HTTP / ProxyCommand proxy or SSH jump host. Classic VNC Authentication passwords are limited to 8 bytes; NyaTerm rejects longer passwords instead of truncating them. Framebuffer encodings are advertised by default as `DesktopSizePseudo`, ZRLE, Tight, then Raw; Tight JPEG is decoded in the backend into the same RGBA framebuffer path, and Raw remains the stable fallback. CopyRect, cursor pseudo-encoding, and remote resize are not supported. Text clipboard exchange is limited to Latin-1 text so binary or oversized payloads do not enter the VNC protocol path.
 
 ### VNC Interop Matrix
 
@@ -178,6 +215,9 @@ A simple rule of thumb:
 - Need a local shell? Use **Local Terminal**
 - Need a traditional remote terminal? Use **Telnet**
 - Need a device console or debug port? Use **Serial**
+- Need object-storage browsing? Use **S3**
+- Need an FTP / FTPS site? Use **FTP**
+- Need a NAS / WebDAV share? Use **WebDAV**
 - Need a graphical Windows remote desktop? Use **RDP**
 - Need a VNC / VM console graphical desktop? Use **VNC**
 
@@ -188,6 +228,7 @@ One of NyaTerm's strengths is that you can mix these session types in the same w
 - SSH on the left to watch remote logs
 - Local Terminal on the right to run packaging or Git commands
 - A Serial tab open to watch device boot output
+- An S3 / FTP / WebDAV dual-pane workspace for cross-backend copy
 - An RDP pane open to inspect a Windows remote desktop
 - A VNC pane open to operate a VM console
 
@@ -195,6 +236,6 @@ That is why some features are documented as session-specific. The workspace is s
 
 :::tip Screenshot suggestion
 - Suggested image path: `/img/docs/session-types/new-session-tabs.png`
-- Show the SSH / Local Terminal / Telnet / Serial / RDP / VNC tabs in the new-session window
+- Show the SSH / Local Terminal / Telnet / Serial / S3 / FTP / WebDAV / RDP / VNC tabs in the new-session window
 - Keeping the default field areas visible helps readers understand the differences
 :::

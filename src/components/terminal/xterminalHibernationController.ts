@@ -13,6 +13,12 @@ interface MutableRef<T> {
   current: T;
 }
 
+interface XTerminalHibernationTimers {
+  now: () => number;
+  setTimeout: (callback: () => void, delay: number) => number;
+  clearTimeout: (handle: number) => void;
+}
+
 interface CreateXTerminalHibernationControllerParams {
   sessionId: string;
   terminal: Terminal;
@@ -36,6 +42,7 @@ interface CreateXTerminalHibernationControllerParams {
   hibernationSnapshotRef: MutableRef<TerminalReconnectSnapshot | null>;
   hibernationCleanupRef: MutableRef<boolean>;
   hibernatedRef: MutableRef<boolean>;
+  lastOutputActivityAtRef: MutableRef<number>;
   showSearchBar: boolean;
   activeMode: "buffer" | "history";
   isTerminalAlive: () => boolean;
@@ -56,6 +63,15 @@ interface CreateXTerminalHibernationControllerParams {
   maybeRecoverPerformanceMode: () => void;
   refreshOutputPressureMode: () => void;
   repaintVisibleTerminal: () => void;
+  timers?: Partial<XTerminalHibernationTimers>;
+}
+
+function defaultTimers(): XTerminalHibernationTimers {
+  return {
+    now: () => Date.now(),
+    setTimeout: (callback, delay) => window.setTimeout(callback, delay),
+    clearTimeout: (handle) => window.clearTimeout(handle),
+  };
 }
 
 export function createXTerminalHibernationController({
@@ -78,6 +94,7 @@ export function createXTerminalHibernationController({
   hibernationSnapshotRef,
   hibernationCleanupRef,
   hibernatedRef,
+  lastOutputActivityAtRef,
   showSearchBar,
   activeMode,
   isTerminalAlive,
@@ -93,7 +110,16 @@ export function createXTerminalHibernationController({
   maybeRecoverPerformanceMode,
   refreshOutputPressureMode,
   repaintVisibleTerminal,
+  timers: timerOverrides,
 }: CreateXTerminalHibernationControllerParams) {
+  const timers = { ...defaultTimers(), ...timerOverrides };
+
+  const getOutputIdleMs = () =>
+    Math.max(0, timers.now() - lastOutputActivityAtRef.current);
+
+  const hasOutputIdleTimedOut = () =>
+    getOutputIdleMs() >= XTERM_PERFORMANCE_CONFIG.lifecycle.deepHibernateDelayMs;
+
   const canHibernateRenderer = (options: { allowPending?: boolean } = {}) => {
     const phase = hibernationPhaseRef.current;
     if (
@@ -117,6 +143,7 @@ export function createXTerminalHibernationController({
     if (syncPeerSessionIdsRef.current?.length) return false;
     if (outputDrainRef.current?.isWriteInFlight()) return false;
     if (disconnectedRef.current || reconnectingRef.current) return false;
+    if (!hasOutputIdleTimedOut()) return false;
     return true;
   };
 
@@ -142,15 +169,59 @@ export function createXTerminalHibernationController({
     }
   };
 
+  const scheduleHibernate = () => {
+    if (
+      visibleRef.current ||
+      hibernateTimerRef.current !== null ||
+      hibernationPhaseRef.current !== "idle"
+    ) {
+      return;
+    }
+    const idleMs = getOutputIdleMs();
+    const remainingMs =
+      XTERM_PERFORMANCE_CONFIG.lifecycle.deepHibernateDelayMs - idleMs;
+    const delayMs = Math.max(0, remainingMs);
+    const epoch = hibernationEpochRef.current + 1;
+    hibernationEpochRef.current = epoch;
+    logHibernation("scheduled", "Scheduled terminal renderer hibernation", {
+      epoch,
+      idle_ms: idleMs,
+      delay_ms: delayMs,
+    });
+    hibernateTimerRef.current = timers.setTimeout(() => {
+      hibernateTimerRef.current = null;
+      void hibernateRenderer(epoch);
+    }, delayMs);
+  };
+
+  const cancelRecentOutputHibernate = (epoch: number) => {
+    hibernationPhaseRef.current = "idle";
+    logHibernation(
+      "cancel",
+      "Skipped terminal hibernation after recent output activity",
+      {
+        epoch,
+        reason: "recent_output_activity",
+        idle_ms: getOutputIdleMs(),
+        required_idle_ms: XTERM_PERFORMANCE_CONFIG.lifecycle.deepHibernateDelayMs,
+      },
+    );
+    scheduleHibernate();
+  };
+
   const hibernateRenderer = async (epoch: number) => {
     clearHibernateTimer();
     if (epoch !== hibernationEpochRef.current) return;
+    if (!hasOutputIdleTimedOut()) {
+      cancelRecentOutputHibernate(epoch);
+      return;
+    }
     if (!canHibernateRenderer()) {
       hibernationPhaseRef.current = "idle";
       logHibernation(
         "cancel",
         "Skipped terminal hibernation after eligibility check",
-        { epoch },
+        { epoch, reason: "eligibility_changed" },
       );
       return;
     }
@@ -170,6 +241,28 @@ export function createXTerminalHibernationController({
       );
       const drainedBeforeDetach =
         await flushFrameGateAndDrain("hibernate_before_detach");
+      if (epoch !== hibernationEpochRef.current) {
+        hibernationPhaseRef.current = "idle";
+        logHibernation(
+          "cancel",
+          "Cancelled terminal hibernation before backend detach",
+          { epoch, reason: "epoch_changed" },
+        );
+        return;
+      }
+      if (!hasOutputIdleTimedOut()) {
+        cancelRecentOutputHibernate(epoch);
+        return;
+      }
+      if (!canHibernateRenderer({ allowPending: true })) {
+        hibernationPhaseRef.current = "idle";
+        logHibernation(
+          "cancel",
+          "Cancelled terminal hibernation before backend detach",
+          { epoch, reason: "eligibility_changed" },
+        );
+        return;
+      }
       if (!drainedBeforeDetach) {
         hibernationPhaseRef.current = "idle";
         logHibernation(
@@ -204,14 +297,34 @@ export function createXTerminalHibernationController({
       if (
         epoch !== hibernationEpochRef.current ||
         !isTerminalAlive() ||
+        !hasOutputIdleTimedOut() ||
         !canHibernateRenderer({ allowPending: true })
       ) {
-        await restoreDetachedRenderer(epoch, "eligibility_changed");
+        await restoreDetachedRenderer(
+          epoch,
+          hasOutputIdleTimedOut()
+            ? "eligibility_changed"
+            : "recent_output_activity",
+        );
         return;
       }
 
       const drainedAfterDetach =
         await flushFrameGateAndDrain("hibernate_after_detach");
+      if (
+        epoch !== hibernationEpochRef.current ||
+        !isTerminalAlive() ||
+        !hasOutputIdleTimedOut() ||
+        !canHibernateRenderer({ allowPending: true })
+      ) {
+        await restoreDetachedRenderer(
+          epoch,
+          hasOutputIdleTimedOut()
+            ? "eligibility_changed"
+            : "recent_output_activity",
+        );
+        return;
+      }
       if (!drainedAfterDetach) {
         logHibernation(
           "drain_timeout",
@@ -259,23 +372,51 @@ export function createXTerminalHibernationController({
     }
   };
 
-  const scheduleHibernate = () => {
-    if (
-      visibleRef.current ||
-      hibernateTimerRef.current !== null ||
-      hibernationPhaseRef.current !== "idle"
-    ) {
+  const noteOutputActivity = () => {
+    lastOutputActivityAtRef.current = timers.now();
+    if (visibleRef.current) return;
+
+    clearHibernateTimer();
+    const phase = hibernationPhaseRef.current;
+    if (phase === "idle") {
+      scheduleHibernate();
       return;
     }
-    const epoch = hibernationEpochRef.current + 1;
-    hibernationEpochRef.current = epoch;
-    logHibernation("scheduled", "Scheduled terminal renderer hibernation", {
-      epoch,
-    });
-    hibernateTimerRef.current = window.setTimeout(() => {
-      hibernateTimerRef.current = null;
-      void hibernateRenderer(epoch);
-    }, XTERM_PERFORMANCE_CONFIG.lifecycle.deepHibernateDelayMs);
+
+    if (phase !== "preparing" && phase !== "detached") return;
+
+    hibernationEpochRef.current += 1;
+    logHibernation(
+      "cancel",
+      "Cancelled terminal hibernation after output activity",
+      {
+        reason: "recent_output_activity",
+        phase,
+      },
+    );
+
+    if (phase === "preparing") {
+      hibernationPhaseRef.current = "idle";
+      hibernationPendingRef.current = false;
+      updateOutputDrainMode();
+      scheduleHibernate();
+      return;
+    }
+
+    const detachedEpoch = detachedHibernateEpochRef.current;
+    if (detachedEpoch !== null) {
+      void restoreDetachedRenderer(detachedEpoch, "recent_output_activity").then(
+        () => {
+          if (
+            !visibleRef.current &&
+            hibernationPhaseRef.current === "idle" &&
+            isTerminalAlive()
+          ) {
+            scheduleHibernate();
+          }
+        },
+      );
+    }
   };
 
   const applyVisibilityPolicy = () => {
@@ -300,6 +441,7 @@ export function createXTerminalHibernationController({
     restoreDetachedRenderer,
     hibernateRenderer,
     scheduleHibernate,
+    noteOutputActivity,
     applyVisibilityPolicy,
   };
 }

@@ -9,8 +9,8 @@ use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
 use serde_json::Value;
 
 use crate::config::{
-    self, AI_REQUEST_USER_AGENT_DEFAULT, AiBackendKind, AiModelConfigItem, AiModelSource,
-    AiProviderCredential, AiProviderKind, AiReasoningEffort, AiSettings,
+    self, AI_REQUEST_USER_AGENT_DEFAULT, AiApiFormat, AiBackendKind, AiModelConfigItem,
+    AiModelSource, AiProviderCredential, AiProviderKind, AiReasoningEffort, AiSettings,
     ai_model_id_for_credential,
 };
 use crate::error::{AppError, AppResult};
@@ -22,6 +22,7 @@ use super::types::{AiChatRequest, AiModelDiscovery};
 pub(super) struct ResolvedAiModel {
     pub model_name: String,
     pub provider_kind: AiProviderKind,
+    pub api_format: AiApiFormat,
     pub credential: Option<AiProviderCredential>,
 }
 
@@ -124,6 +125,10 @@ pub(super) fn resolve_request_model(
     Ok(ResolvedAiModel {
         model_name: selected_model.name.clone(),
         provider_kind,
+        api_format: credential
+            .as_ref()
+            .map(|credential| credential.api_format.clone())
+            .unwrap_or_default(),
         credential,
     })
 }
@@ -285,7 +290,7 @@ fn effective_request_user_agent(settings: &AiSettings) -> &str {
     }
 }
 
-fn ai_request_headers(settings: &AiSettings) -> AppResult<HeaderMap> {
+pub(super) fn ai_request_headers(settings: &AiSettings) -> AppResult<HeaderMap> {
     let user_agent = effective_request_user_agent(settings);
     let user_agent_value = HeaderValue::from_str(user_agent).map_err(|error| {
         AppError::Config(format!("Invalid AI User-Agent header value: {error}"))
@@ -496,7 +501,8 @@ mod tests {
             id: id.to_string(),
             name: "Test Provider".to_string(),
             provider_kind: kind,
-            base_url: Some("http://localhost:11434/v1/".to_string()),
+            api_format: AiApiFormat::default(),
+            base_url: Some("https://api.example.com/v1/".to_string()),
             api_key: api_key.map(str::to_string),
             enabled: true,
         }
@@ -599,7 +605,7 @@ mod tests {
         let target = apply_service_target_overrides(
             test_service_target(AuthData::from_env("OPENAI_API_KEY")),
             None,
-            Some("http://localhost:11434/v1/".to_string()),
+            Some("https://api.example.com/v1/".to_string()),
             true,
         );
 
@@ -611,7 +617,7 @@ mod tests {
         let target = apply_service_target_overrides(
             test_service_target(AuthData::from_env("OPENAI_API_KEY")),
             Some("configured-key".to_string()),
-            Some("http://localhost:11434/v1/".to_string()),
+            Some("https://api.example.com/v1/".to_string()),
             true,
         );
 
@@ -637,6 +643,15 @@ mod tests {
             AdapterKind::Anthropic
         );
         assert_eq!(adapter_kind(&AiProviderKind::Gemini), AdapterKind::Gemini);
+    }
+
+    #[test]
+    fn ollama_uses_native_adapter_and_preserves_model_tag() {
+        assert_eq!(adapter_kind(&AiProviderKind::Ollama), AdapterKind::Ollama);
+        assert_eq!(
+            genai_model_name(&AiProviderKind::Ollama, "qwen2.5:7b-instruct"),
+            "qwen2.5:7b-instruct"
+        );
     }
 
     #[test]

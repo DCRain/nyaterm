@@ -238,7 +238,7 @@ fn test_sender_start_file_uses_complete_safe_metadata() {
 }
 
 #[test]
-fn test_sender_treats_zskip_as_file_complete() {
+fn test_sender_reports_zskip_as_file_skipped() {
     let mut sender = Sender::new().unwrap();
     sender.set_file_options(ZfileManagementOption::ZMSKNOLOC);
     sender.start_file(b"existing.bin", 1).unwrap();
@@ -248,7 +248,7 @@ fn test_sender_treats_zskip_as_file_complete() {
 
     sender.feed_incoming(&write_zskip()).unwrap();
 
-    assert_eq!(sender.poll_event(), Some(SenderEvent::FileComplete));
+    assert_eq!(sender.poll_event(), Some(SenderEvent::FileSkipped));
     assert!(sender.poll_file().is_none());
 }
 

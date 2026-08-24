@@ -400,7 +400,6 @@ pub(super) async fn run_model_stream(
     );
 
     let resolved_model = resolve_request_model(settings, request)?;
-    let client = build_client(&resolved_model, settings)?;
     let prompt = build_prompt(request, settings);
 
     let mut messages = vec![ChatMessage::system(system_prompt(
@@ -436,6 +435,21 @@ pub(super) async fn run_model_stream(
     }
 
     messages.push(ChatMessage::user(prompt));
+
+    if super::responses::uses_responses_api(&resolved_model) {
+        return super::responses::run_responses_chat_messages_stream(
+            app,
+            stream_id,
+            request,
+            settings,
+            &resolved_model,
+            &messages,
+            cancel_rx,
+        )
+        .await;
+    }
+
+    let client = build_client(&resolved_model, settings)?;
 
     tracing::debug!(
         stream_id = %stream_id,

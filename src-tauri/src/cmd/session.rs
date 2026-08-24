@@ -45,8 +45,12 @@ pub async fn create_ssh_session(
     connection_id: String,
     create_request_id: Option<String>,
     startup_command: Option<StartupCommandPayload>,
+    runtime_mode: Option<crate::config::SshRuntimeMode>,
 ) -> AppResult<String> {
-    let ssh_config = ssh::load_saved_ssh_config(&app, &connection_id)?;
+    let mut ssh_config = ssh::load_saved_ssh_config(&app, &connection_id)?;
+    if let Some(runtime_mode) = runtime_mode {
+        ssh_config.runtime_mode = runtime_mode;
+    }
     let pending_creation = state.begin_session_creation(create_request_id).await;
     let (guard, cancel_rx) = match pending_creation {
         Some((guard, cancel_rx)) => (Some(guard), Some(cancel_rx)),
@@ -197,17 +201,22 @@ pub async fn create_local_session(
             config::ConnectionType::LocalTerminal {
                 shell_path,
                 shell_args,
-                working_dir,
+                working_dir: saved_working_dir,
                 ..
-            } => Some(core::LocalSessionConfig {
-                connection_id: Some(cid.clone()),
-                shell_path,
-                shell_args,
-                working_dir,
-                name: conn.name,
-                encoding,
-                elevated: false,
-            }),
+            } => {
+                let (working_dir, fail_on_missing_working_dir) =
+                    resolve_local_working_dir(saved_working_dir, working_dir);
+                Some(core::LocalSessionConfig {
+                    connection_id: Some(cid.clone()),
+                    shell_path,
+                    shell_args,
+                    working_dir,
+                    fail_on_missing_working_dir,
+                    name: conn.name,
+                    encoding,
+                    elevated: false,
+                })
+            }
             _ => None,
         }
     } else if shell_path
@@ -217,16 +226,33 @@ pub async fn create_local_session(
         let encoding = config::load_app_settings(&app)
             .map(|settings| settings.interaction.default_encoding)
             .unwrap_or_else(|_| "UTF-8".to_string());
+        let working_dir = working_dir.filter(|value| !value.trim().is_empty());
+        let fail_on_missing_working_dir = working_dir.is_some();
         Some(core::LocalSessionConfig {
             connection_id: None,
             shell_path: shell_path.unwrap_or_default(),
             shell_args: shell_args.unwrap_or_default(),
-            working_dir: working_dir.filter(|value| !value.trim().is_empty()),
+            working_dir,
+            fail_on_missing_working_dir,
             name: name
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or_else(|| "Local Terminal".to_string()),
             encoding,
             elevated: elevated.unwrap_or(false),
+        })
+    } else if working_dir.is_some() {
+        let encoding = crate::config::load_app_settings(&app)
+            .map(|s| s.interaction.default_encoding)
+            .unwrap_or_else(|_| "UTF-8".to_string());
+        Some(core::LocalSessionConfig {
+            connection_id: None,
+            shell_path: String::new(),
+            shell_args: String::new(),
+            working_dir,
+            fail_on_missing_working_dir: true,
+            name: "Local Terminal".to_string(),
+            encoding,
+            elevated: false,
         })
     } else {
         None
@@ -247,6 +273,16 @@ pub async fn create_local_session(
         mark_connection_used(&app, &connection_id);
     }
     Ok(session_id)
+}
+
+fn resolve_local_working_dir(
+    saved_working_dir: Option<String>,
+    explicit_working_dir: Option<String>,
+) -> (Option<String>, bool) {
+    match explicit_working_dir {
+        Some(working_dir) => (Some(working_dir), true),
+        None => (saved_working_dir, false),
+    }
 }
 
 #[tauri::command]
@@ -708,10 +744,10 @@ fn default_recording_dir(app: &tauri::AppHandle) -> AppResult<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        StartupCommandPayload, normalize_temporary_ssh_config,
+        StartupCommandPayload, normalize_temporary_ssh_config, resolve_local_working_dir,
         resolve_telnet_connection_password_with, startup_command_payload_to_ssh,
     };
-    use crate::config::ConnectionAuth;
+    use crate::config::{ConnectionAuth, SshRuntimeMode};
 
     #[test]
     fn temporary_ssh_config_drops_saved_connection_features() {
@@ -742,7 +778,8 @@ mod tests {
             "post_login": {
                 "command": "uptime",
                 "delay_ms": 1000
-            }
+            },
+            "runtime_mode": "terminal"
         }))
         .expect("temporary ssh config");
 
@@ -756,6 +793,7 @@ mod tests {
         assert!(normalized.proxy.is_none());
         assert!(normalized.proxy_jump.is_none());
         assert!(normalized.post_login.is_none());
+        assert_eq!(normalized.runtime_mode, SshRuntimeMode::Terminal);
     }
 
     #[test]
@@ -767,6 +805,24 @@ mod tests {
 
         assert_eq!(command.command, "uptime");
         assert_eq!(command.delay_ms, 750);
+    }
+
+    #[test]
+    fn explicit_local_working_dir_overrides_saved_working_dir() {
+        let (working_dir, fail_on_missing_working_dir) =
+            resolve_local_working_dir(Some("saved".to_string()), Some("explicit".to_string()));
+
+        assert_eq!(working_dir.as_deref(), Some("explicit"));
+        assert!(fail_on_missing_working_dir);
+    }
+
+    #[test]
+    fn missing_local_working_dir_override_preserves_saved_working_dir() {
+        let (working_dir, fail_on_missing_working_dir) =
+            resolve_local_working_dir(Some("saved".to_string()), None);
+
+        assert_eq!(working_dir.as_deref(), Some("saved"));
+        assert!(!fail_on_missing_working_dir);
     }
 
     #[test]

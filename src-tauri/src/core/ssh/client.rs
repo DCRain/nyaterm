@@ -2,7 +2,7 @@ use super::agent::connect_agent_stream;
 use super::agent_broker::{AgentBrokerFactory, try_acquire_agent_channel_permit};
 use crate::config::{
     SftpSettings, SshAgentEndpoint, SshAgentForwardingConfig, SshAlgorithmMode,
-    SshAlgorithmPreferences, SshProfile, SshTerminalType,
+    SshAlgorithmPreferences, SshProfile, SshRuntimeMode, SshTerminalType,
 };
 use crate::error::{AppError, AppResult};
 use russh::client;
@@ -52,6 +52,8 @@ pub struct SshConfig {
     pub ssh_algorithms: Option<SshAlgorithmPreferences>,
     #[serde(default)]
     pub ssh_profile: SshProfile,
+    #[serde(default)]
+    pub runtime_mode: SshRuntimeMode,
     #[serde(default)]
     pub terminal_type: SshTerminalType,
     #[serde(default)]
@@ -1507,7 +1509,7 @@ pub(super) async fn connect_with_proxy(
     Ok(handle)
 }
 
-async fn open_proxy_command_stream(
+pub(crate) async fn open_proxy_command_stream(
     template: Option<&str>,
     host: &str,
     port: u16,
@@ -1573,7 +1575,7 @@ async fn open_proxy_command_stream(
     Ok(ProxyCommandStream { stdout, stdin })
 }
 
-struct ProxyCommandStream {
+pub(crate) struct ProxyCommandStream {
     stdout: tokio::process::ChildStdout,
     stdin: tokio::process::ChildStdin,
 }

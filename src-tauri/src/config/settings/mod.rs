@@ -12,13 +12,13 @@ mod transfer;
 mod translation;
 
 pub use ai::{
-    AI_REQUEST_USER_AGENT_DEFAULT, AgentCommandExecutionMode, AiAgentKind, AiBackendKind,
-    AiCustomActionConfig, AiMode, AiModelConfigItem, AiModelSource, AiPermissionMode,
-    AiProviderCredential, AiProviderKind, AiProviderProfile, AiReasoningEffort, AiSettings,
-    ClaudeCodeIntegrationSettings, CodexIntegrationSettings, CodexThreadMode,
-    OpenCodeIntegrationSettings, RiskLevel,
-    ai_model_id_for_credential, ai_model_id_for_provider, decrypt_ai_settings, encrypt_ai_settings,
-    mask_ai_settings, merge_masked_ai_settings, normalize_ai_settings,
+    AI_REQUEST_USER_AGENT_DEFAULT, AgentCommandExecutionMode, AiAgentKind, AiApiFormat,
+    AiBackendKind, AiCustomActionConfig, AiMode, AiModelConfigItem, AiModelSource,
+    AiPermissionMode, AiProviderCredential, AiProviderKind, AiProviderProfile, AiReasoningEffort,
+    AiSettings, ClaudeCodeIntegrationSettings, CodexIntegrationSettings, CodexThreadMode,
+    OpenCodeIntegrationSettings, RiskLevel, ai_model_id_for_credential, ai_model_id_for_provider,
+    decrypt_ai_settings, encrypt_ai_settings, mask_ai_settings, merge_masked_ai_settings,
+    normalize_ai_settings,
 };
 pub use appearance::{
     AppearanceSettings, NoteColorsConfig, TerminalColorsConfig, ThemeColorsConfig, ThemeConfig,
@@ -174,6 +174,12 @@ pub fn load_app_settings(app: &AppHandle) -> AppResult<AppSettings> {
     if let Some(ref mut panel) = settings.ui.active_left_panel {
         if panel == "keyManagement" {
             *panel = "securityAuth".to_string();
+            migrated = true;
+        }
+    }
+    for item in settings.ui.activity_bar_layout.hidden_items.iter_mut() {
+        if item == "keyManagement" {
+            *item = "securityAuth".to_string();
             migrated = true;
         }
     }

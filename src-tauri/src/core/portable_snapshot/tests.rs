@@ -145,6 +145,7 @@ mod tests {
     fn portable_settings_strip_master_password_and_preserve_device_ui_state_on_apply() {
         let mut current = AppSettings::default();
         current.security.master_password = Some("encrypted-master".to_string());
+        current.ui.panel_open_mode = "docked".to_string();
         current.ui.left_width = 444.0;
         current.ui.active_left_panel = Some("fileExplorer".to_string());
         current.ui.quick_cmd_selected_category = "local-category".to_string();
@@ -155,6 +156,7 @@ mod tests {
             PortableAppSettings::from_app_settings(&current, &PortableSnapshotKind::Backup);
         updated.general.startup_restore = false;
         updated.ui.language = Some("zh-CN".to_string());
+        updated.ui.panel_open_mode = "floating".to_string();
         updated.ui.saved_connections_sort_mode = "name-asc".to_string();
         updated.ai.active_profile_id = "synced-profile".to_string();
         updated.ai.provider_profiles[0].api_key = Some("synced-key".to_string());
@@ -171,6 +173,7 @@ mod tests {
             current.ui.quick_cmd_selected_category
         );
         assert_eq!(merged.ui.language.as_deref(), Some("zh-CN"));
+        assert_eq!(merged.ui.panel_open_mode, "floating");
         assert_eq!(merged.ui.saved_connections_sort_mode, "name-asc");
         assert_eq!(merged.ai.active_profile_id, "synced-profile");
         assert_eq!(
@@ -264,7 +267,7 @@ mod tests {
     }
 
     #[test]
-    fn sync_sessions_strip_local_terminal_and_serial_device_fields() {
+    fn sync_sessions_strip_serial_but_keep_local_terminal_fields() {
         let mut sessions = sample_sessions_with_device_local_connections();
 
         strip_device_local_sessions(&mut sessions);
@@ -283,9 +286,12 @@ mod tests {
         else {
             panic!("expected local terminal");
         };
-        assert!(shell_path.is_empty());
-        assert!(shell_args.is_empty());
-        assert!(working_dir.is_none());
+        assert_eq!(
+            shell_path,
+            "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        );
+        assert_eq!(shell_args, "-NoLogo");
+        assert_eq!(working_dir.as_deref(), Some("C:\\Users\\me"));
 
         let serial = sessions
             .connections
@@ -299,10 +305,21 @@ mod tests {
     }
 
     #[test]
-    fn applying_sync_sessions_preserves_matching_device_fields() {
-        let current = sample_sessions_with_device_local_connections();
+    fn applying_sync_sessions_uses_incoming_local_terminal_fields() {
+        let mut current = sample_sessions_with_device_local_connections();
         let mut incoming = sample_sessions_with_device_local_connections();
-        strip_device_local_sessions(&mut incoming);
+        let config::ConnectionType::LocalTerminal {
+            shell_path,
+            shell_args,
+            working_dir,
+            ..
+        } = &mut current.connections[0].config
+        else {
+            panic!("expected local terminal");
+        };
+        *shell_path = "powershell.exe".to_string();
+        *shell_args = "-NoExit".to_string();
+        *working_dir = Some("C:\\Users\\current".to_string());
 
         preserve_device_local_sessions(&mut incoming, &current);
 
@@ -327,6 +344,13 @@ mod tests {
         assert_eq!(shell_args, "-NoLogo");
         assert_eq!(working_dir.as_deref(), Some("C:\\Users\\me"));
 
+        let config::ConnectionType::Serial { port_name, .. } = &mut incoming.connections[1].config
+        else {
+            panic!("expected serial");
+        };
+        port_name.clear();
+        preserve_device_local_sessions(&mut incoming, &current);
+
         let serial = incoming
             .connections
             .iter()
@@ -336,6 +360,42 @@ mod tests {
             panic!("expected serial");
         };
         assert_eq!(port_name, "COM3");
+    }
+
+    #[test]
+    fn applying_sync_sessions_preserves_local_terminal_for_legacy_empty_snapshot() {
+        let current = sample_sessions_with_device_local_connections();
+        let mut incoming = sample_sessions_with_device_local_connections();
+        let config::ConnectionType::LocalTerminal {
+            shell_path,
+            shell_args,
+            working_dir,
+            ..
+        } = &mut incoming.connections[0].config
+        else {
+            panic!("expected local terminal");
+        };
+        shell_path.clear();
+        shell_args.clear();
+        *working_dir = None;
+
+        preserve_device_local_sessions(&mut incoming, &current);
+
+        let config::ConnectionType::LocalTerminal {
+            shell_path,
+            shell_args,
+            working_dir,
+            ..
+        } = &incoming.connections[0].config
+        else {
+            panic!("expected local terminal");
+        };
+        assert_eq!(
+            shell_path,
+            "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        );
+        assert_eq!(shell_args, "-NoLogo");
+        assert_eq!(working_dir.as_deref(), Some("C:\\Users\\me"));
     }
 
     #[test]
@@ -434,6 +494,7 @@ mod tests {
             ai: config::AiSettings::default(),
             ui: PortableUiSettings {
                 language: Some("en".to_string()),
+                panel_open_mode: "docked".to_string(),
                 header_status_visible: true,
                 show_remote_stats: false,
                 remote_stats_interval: 3,
@@ -449,6 +510,7 @@ mod tests {
                 asset_sort_key: None,
                 asset_sort_direction: None,
                 activity_bar_layout: ActivityBarLayout::default(),
+                serial_send_clear_after_send: true,
             },
         }
     }
@@ -550,6 +612,7 @@ mod tests {
                     open_on_startup: false,
                 },
             ],
+            custom_icons: Vec::new(),
         }
     }
 
@@ -612,6 +675,7 @@ mod tests {
                 last_used_at_ms: None,
                 open_on_startup: false,
             }],
+            custom_icons: Vec::new(),
         }
     }
 
@@ -895,6 +959,10 @@ mod tests {
             .as_object_mut()
             .expect("appearance object")
             .remove("panel_multi_open");
+        settings["ui"]
+            .as_object_mut()
+            .expect("ui object")
+            .remove("panel_open_mode");
 
         let mut entities = snapshot_entities(&snapshot);
         entities.remove("proxy_groups");
@@ -916,6 +984,7 @@ mod tests {
         assert_eq!(decoded.source_payload_hash, legacy_hash);
         assert_eq!(decoded.snapshot.revision_id, snapshot.revision_id);
         assert!(!decoded.snapshot.settings.appearance.panel_multi_open);
+        assert_eq!(decoded.snapshot.settings.ui.panel_open_mode, "docked");
         assert!(decoded.snapshot.notes.folders.is_empty());
         assert!(decoded.snapshot.notes.notes.is_empty());
         assert_eq!(decoded.snapshot.payload_hash, snapshot.payload_hash);

@@ -7,6 +7,7 @@ mod model;
 mod parser;
 mod prompt;
 mod redaction;
+mod responses;
 pub(crate) mod stream;
 mod types;
 

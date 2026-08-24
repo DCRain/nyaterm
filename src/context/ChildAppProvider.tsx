@@ -17,6 +17,7 @@ import {
   DEFAULT_TERMINAL_FONT_FAMILY,
   getDefaultUiFontFamily,
 } from "@/lib/defaultFonts";
+import { cloneDefaultActivityBarLayout } from "@/lib/appWorkspace";
 import {
   DEFAULT_COMMAND_SUGGESTION_MAX_CHARS,
   DEFAULT_COMMAND_SUGGESTION_MIN_CHARS,
@@ -146,6 +147,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   },
   transfer: {
     editor_type: "external",
+    internal_editor_display: "workspace",
     download_threads: 3,
     upload_threads: 3,
     duplicate_strategy: "ask",
@@ -175,6 +177,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     open_tabs: [],
     terminal_window_layout: null,
     start_workspace_mode: "workbench",
+    panel_open_mode: "docked",
     left_width: 306,
     right_width: 306,
     saved_connections_filter_width_migrated: false,
@@ -193,6 +196,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     show_quick_cmd_bar: true,
     show_serial_send_panel: false,
     serial_send_height: 180,
+    serial_send_clear_after_send: false,
     zoom_level: 1.0,
     language: "en",
     header_status_mode: "session",
@@ -222,20 +226,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     notes_expanded_folder_ids: [],
     notes_last_selected_node_id: null,
     activity_bar_layout: {
-      left_top: ["fileExplorer", "notes", "network", "securityAuth"],
-      left_bottom: ["syncBackupHistory", "settings"],
-      right_top: [
-        "savedConnections",
-        "aiAssistant",
-        "activeSessions",
-        "commandHistory",
-        "resourceMonitor",
-        "gpuMonitor",
-        "ascendNpuMonitor",
-        "processManager",
-        "dockerManager",
-      ],
-      right_bottom: ["quickCmdBar", "serialSend", "recording", "lock"],
+      ...cloneDefaultActivityBarLayout(),
       show_labels_left: false,
       show_labels_right: false,
       show_left: false,

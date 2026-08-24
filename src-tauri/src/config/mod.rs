@@ -27,19 +27,22 @@ pub use cloud_sync::{
 #[allow(unused_imports)]
 pub use connection::{
     AiExecutionProfile, AppConfig, AssetAccelerator, AssetAcceleratorType, AssetDeviceType,
-    AssetDisk, AssetDiskKind, AssetDiskPurpose, AssetMetadata, ConnectionAuth, ConnectionNetwork,
-    ConnectionRecordingSettings, ConnectionType, Group, MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS,
-    MAX_SSH_AGENT_FORWARDING_ENDPOINTS, MAX_SSH_AGENT_FORWARDING_IDENTITIES,
-    MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS, SavedConnection, SessionsConfig, SftpCwdFollowMode,
-    SftpSettings, SshAgentEndpoint, SshAgentForwardingConfig, SshAgentForwardingPolicy,
-    SshAgentForwardingSources, SshAlgorithmMode, SshAlgorithmPreferences, SshProfile,
-    SshTerminalType, TelnetAutoLoginConfig, VncClipboardSettings, VncDisplaySettings,
-    VncReconnectSettings, VncSecuritySettings, effective_cwd_follow_mode,
-    effective_cwd_follow_mode_for_profile, load_config, load_connection_by_id, load_sessions,
-    migrate_legacy_ssh_agent_settings, resolve_connection_encoding, resolve_ssh_terminal_type,
-    save_config, save_sessions, ssh_agent_endpoint_key, validate_ssh_agent_endpoint,
-    validate_ssh_agent_endpoint_shape, validate_ssh_agent_forwarding_config,
-    validate_ssh_agent_forwarding_shape, validate_ssh_agent_settings,
+    AssetDisk, AssetDiskKind, AssetDiskPurpose, AssetMetadata, ConnectionAuth,
+    ConnectionCustomIcon, ConnectionNetwork, ConnectionRecordingSettings, ConnectionType, Group,
+    MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS, MAX_SSH_AGENT_FORWARDING_ENDPOINTS,
+    MAX_SSH_AGENT_FORWARDING_IDENTITIES, MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS, SavedConnection,
+    SessionsConfig, SftpCwdFollowMode, SftpSettings, SshAgentEndpoint, SshAgentForwardingConfig,
+    SshAgentForwardingPolicy, SshAgentForwardingSources, SshAlgorithmMode, SshAlgorithmPreferences,
+    SshProfile, SshRuntimeMode, SshTerminalType, TelnetAutoLoginConfig, VncClipboardSettings,
+    VncDisplaySettings, VncReconnectSettings, VncSecuritySettings,
+    connection_custom_icon_from_data_url, connection_custom_icon_id_for_data_url,
+    effective_cwd_follow_mode, effective_cwd_follow_mode_for_profile,
+    effective_cwd_follow_mode_for_runtime, is_connection_custom_icon_data_url, load_config,
+    load_connection_by_id, load_sessions, migrate_legacy_ssh_agent_settings,
+    resolve_connection_encoding, resolve_ssh_terminal_type, save_config, save_sessions,
+    ssh_agent_endpoint_key, validate_ssh_agent_endpoint, validate_ssh_agent_endpoint_shape,
+    validate_ssh_agent_forwarding_config, validate_ssh_agent_forwarding_shape,
+    validate_ssh_agent_settings,
 };
 #[allow(unused_imports)]
 pub use credential::{
@@ -77,9 +80,9 @@ pub use quick_command::{
 #[allow(unused_imports)]
 pub use settings::{
     AI_REQUEST_USER_AGENT_DEFAULT, ActionLinksMatcherSettings, AgentCommandExecutionMode,
-    AiAgentKind, AiBackendKind, AiCustomActionConfig, AiMode, AiModelConfigItem, AiModelSource,
-    AiPermissionMode, AiProviderCredential, AiProviderKind, AiProviderProfile, AiReasoningEffort,
-    AiSettings, AppSettings, AppearanceSettings, ClaudeCodeIntegrationSettings,
+    AiAgentKind, AiApiFormat, AiBackendKind, AiCustomActionConfig, AiMode, AiModelConfigItem,
+    AiModelSource, AiPermissionMode, AiProviderCredential, AiProviderKind, AiProviderProfile,
+    AiReasoningEffort, AiSettings, AppSettings, AppearanceSettings, ClaudeCodeIntegrationSettings,
     CodexIntegrationSettings, CodexThreadMode, DiagnosticsLogLevel, DiagnosticsSettings,
     OpenCodeIntegrationSettings,
     GeneralSettings, InteractionSettings, KeywordHighlightRule, ProxySettings, RecordingSettings,

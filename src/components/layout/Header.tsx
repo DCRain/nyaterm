@@ -85,6 +85,13 @@ import type { RemoteStatsState } from "@/hooks/useRemoteStats";
 import { resolveDisplayKeys, resolveShortcutKeys } from "@/hooks/useShortcutMap";
 import { AVAILABLE_LANGUAGES } from "@/i18n";
 import { HEADER_STATUS_MODES, normalizeHeaderStatusMode } from "@/lib/headerStatus";
+import {
+  ACTIVITY_BAR_PANEL_ITEM_IDS,
+  getActivityBarItemIdsForSide,
+  isActivityItemAvailable,
+  normalizePanelOpenMode,
+  type PanelOpenMode,
+} from "@/lib/appWorkspace";
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
 import { isMacOS } from "@/lib/platform";
@@ -580,6 +587,9 @@ interface HeaderProps {
   onRefitTerminals?: () => void;
   locked?: boolean;
   onRequestQuit?: () => void;
+  onToggleActivityBarItemVisibility?: (itemId: string) => void;
+  onRequestActivityBarReset?: () => void;
+  onPanelOpenModeChange?: (mode: PanelOpenMode) => void;
 }
 
 interface MenuItem {
@@ -707,6 +717,17 @@ function addNativeAccelerator(
   };
 }
 
+function getActivityBarPanelLabel(id: string, t: (key: string, opts?: Record<string, unknown>) => string) {
+  switch (id) {
+    case "securityAuth":
+      return t("securityAuth.title");
+    case "aiAssistant":
+      return t("ai.title");
+    default:
+      return t(`panel.${id}`);
+  }
+}
+
 /** Top bar with app menu icon, status, and window controls. */
 export default function Header({
   onNewSession,
@@ -737,6 +758,9 @@ export default function Header({
   onRefitTerminals,
   locked = false,
   onRequestQuit,
+  onToggleActivityBarItemVisibility,
+  onRequestActivityBarReset,
+  onPanelOpenModeChange,
 }: HeaderProps) {
   const [appWindow] = useState(() => getCurrentWindow());
   const {
@@ -886,56 +910,28 @@ export default function Header({
     { key: "help", label: t("menu.help") },
   ];
 
-  const toggleUi = <K extends keyof typeof appSettings.ui>(key: K, value: boolean) => {
-    updateUi({ [key]: value });
+  const buildActivityBarPanelMenuItems = (side: "left" | "right"): MenuItem[] => {
+    const seen = new Set<string>();
+    const hiddenItems = new Set(appSettings.ui.activity_bar_layout.hidden_items ?? []);
+    return getActivityBarItemIdsForSide(appSettings.ui.activity_bar_layout, side)
+      .filter((id) => {
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return (
+          ACTIVITY_BAR_PANEL_ITEM_IDS.has(id) && isActivityItemAvailable(id, appSettings.ui)
+        );
+      })
+      .map((id) => ({
+        id: `view.panels.${id}`,
+        label: getActivityBarPanelLabel(id, t),
+        checked: !hiddenItems.has(id),
+        action: () => onToggleActivityBarItemVisibility?.(id),
+      }));
   };
 
-  const monitorMenuItems: MenuItem[] = [
-    {
-      id: "view.panels.notes",
-      label: t("settings.showNotesPanel"),
-      icon: "sticky_note",
-      checked: appSettings.ui.show_notes_panel ?? true,
-      action: () => toggleUi("show_notes_panel", !(appSettings.ui.show_notes_panel ?? true)),
-    },
-    {
-      id: "view.panels.remoteStats",
-      label: t("settings.showRemoteStats"),
-      icon: "monitor_heart",
-      checked: appSettings.ui.show_remote_stats ?? true,
-      action: () => toggleUi("show_remote_stats", !(appSettings.ui.show_remote_stats ?? true)),
-    },
-    {
-      id: "view.panels.gpuMonitor",
-      label: t("settings.showGpuMonitor"),
-      icon: "nvidia",
-      checked: appSettings.ui.show_gpu_monitor ?? false,
-      action: () => toggleUi("show_gpu_monitor", !(appSettings.ui.show_gpu_monitor ?? false)),
-    },
-    {
-      id: "view.panels.ascendNpuMonitor",
-      label: t("settings.showAscendNpuMonitor"),
-      icon: "ascend",
-      checked: appSettings.ui.show_ascend_npu_monitor ?? false,
-      action: () =>
-        toggleUi("show_ascend_npu_monitor", !(appSettings.ui.show_ascend_npu_monitor ?? false)),
-    },
-    {
-      id: "view.panels.processManager",
-      label: t("settings.showProcessManager"),
-      icon: "list_alt",
-      checked: appSettings.ui.show_process_manager ?? false,
-      action: () =>
-        toggleUi("show_process_manager", !(appSettings.ui.show_process_manager ?? false)),
-    },
-    {
-      id: "view.panels.dockerManager",
-      label: t("settings.showDockerManager"),
-      icon: "docker",
-      checked: appSettings.ui.show_docker_manager ?? false,
-      action: () => toggleUi("show_docker_manager", !(appSettings.ui.show_docker_manager ?? false)),
-    },
-  ];
+  const leftActivityBarPanelMenuItems = buildActivityBarPanelMenuItems("left");
+  const rightActivityBarPanelMenuItems = buildActivityBarPanelMenuItems("right");
+  const panelOpenMode = normalizePanelOpenMode(appSettings.ui.panel_open_mode);
 
   const menus: Record<string, MenuItem[]> = {
     file: [
@@ -1084,6 +1080,16 @@ export default function Header({
           },
           { label: "separator", separator: true },
           {
+            id: "view.panels.floatingMode",
+            label: t("panel.floatingMode"),
+            icon: "view_sidebar",
+            checked: panelOpenMode === "floating",
+            action: () =>
+              onPanelOpenModeChange?.(
+                panelOpenMode === "floating" ? "docked" : "floating",
+              ),
+          },
+          {
             id: "view.panels.multiOpen",
             label: t("settings.panelMultiOpen"),
             icon: "view_sidebar",
@@ -1092,7 +1098,40 @@ export default function Header({
               updateAppearance({ panel_multi_open: !appSettings.appearance.panel_multi_open }),
           },
           { label: "separator", separator: true },
-          ...monitorMenuItems,
+          {
+            id: "view.panels.left",
+            label: t("activityBar.leftSide"),
+            submenu:
+              leftActivityBarPanelMenuItems.length > 0
+                ? leftActivityBarPanelMenuItems
+                : [
+                    {
+                      id: "view.panels.left.empty",
+                      label: t("activityBar.noPanels"),
+                      disabled: true,
+                    },
+                  ],
+          },
+          {
+            id: "view.panels.right",
+            label: t("activityBar.rightSide"),
+            submenu:
+              rightActivityBarPanelMenuItems.length > 0
+                ? rightActivityBarPanelMenuItems
+                : [
+                    {
+                      id: "view.panels.right.empty",
+                      label: t("activityBar.noPanels"),
+                      disabled: true,
+                    },
+                  ],
+          },
+          { label: "separator", separator: true },
+          {
+            id: "view.panels.resetActivityBarLayout",
+            label: t("activityBar.resetLayout"),
+            action: onRequestActivityBarReset,
+          },
         ],
       },
       { label: "separator", separator: true },

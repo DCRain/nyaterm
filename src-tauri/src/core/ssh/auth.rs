@@ -618,6 +618,7 @@ fn resolve_saved_ssh_config(
         post_login,
         ssh_algorithms: conn.ssh_algorithms.clone(),
         ssh_profile: conn.ssh_profile.clone(),
+        runtime_mode: crate::config::SshRuntimeMode::Standard,
         terminal_type: crate::config::resolve_ssh_terminal_type(
             &conn.ssh_profile,
             conn.terminal_type.as_ref(),

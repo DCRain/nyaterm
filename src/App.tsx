@@ -1,12 +1,12 @@
-import { invoke as tauriInvoke } from "@tauri-apps/api/core";
-import { emit, listen } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import { downloadDir } from "@tauri-apps/api/path";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import AppLayout from "./components/app/AppLayout";
 import AppPanelContent from "./components/app/AppPanelContent";
-import ExternalConnectionMatchDialog from "./components/dialog/connections/ExternalConnectionMatchDialog";
+import ActivityBarResetDialog from "./components/dialog/app/ActivityBarResetDialog";
+import AppOverlayDialogs from "./components/dialog/app/AppOverlayDialogs";
 import type { HostKeyVerifyRequest } from "./components/dialog/connections/HostKeyVerifyDialog";
 import type { OtpRequest } from "./components/dialog/connections/OtpDialog";
 import type { FtpCertificateVerifyRequest } from "./components/dialog/connections/FtpCertificateVerifyDialog";
@@ -14,31 +14,19 @@ import type { RdpCertificateVerifyRequest } from "./components/dialog/connection
 import RemoteDesktopClientMissingDialog from "./components/dialog/connections/RemoteDesktopClientMissingDialog";
 import type { SshAgentAuthRequest } from "./components/dialog/connections/SshAgentAuthDialog";
 import type { SshAuthRequest } from "./components/dialog/connections/SshAuthDialog";
-import TemporarySshLinkDialog from "./components/dialog/connections/TemporarySshLinkDialog";
 import type { DockerSudoPasswordRequest } from "./components/dialog/docker/DockerSudoPasswordDialog";
 import LocalShellPickerDialog, {
   type LocalShellSelection,
 } from "./components/dialog/terminal/LocalShellPickerDialog";
-import UnsavedChangesDialog from "./components/dialog/remote-file-editor/UnsavedChangesDialog";
-import SessionQuickSwitcher, {
-  type QuickSwitcherSession,
-} from "./components/dialog/terminal/SessionQuickSwitcherDialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "./components/ui/alert-dialog";
+import type { QuickSwitcherSession } from "./components/dialog/terminal/SessionQuickSwitcherDialog";
 import { clearDirectoryChildrenCacheForSession } from "./components/panel/file-explorer/FileExplorerPathBar";
 import { clearFileExplorerSessionCacheForSession } from "./components/panel/file-explorer/model";
+
 import { useApp } from "./context/AppContext";
 import { TransferProvider } from "./context/TransferContext";
 import { useActivityBarController } from "./hooks/useActivityBarController";
 import { type ExternalOpenRequest, useExternalOpenRequests } from "./hooks/useExternalOpenRequests";
+import { useFileDocumentCloseGuard } from "./hooks/useFileDocumentCloseGuard";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts";
 import { useIdleLock } from "./hooks/useIdleLock";
 import { useMacSelectionGuard } from "./hooks/useMacSelectionGuard";
@@ -46,31 +34,11 @@ import { useModalChildWindows } from "./hooks/useModalChildWindows";
 import { useRemoteGpuOverview } from "./hooks/useRemoteGpuOverview";
 import { useRemoteNpuOverview } from "./hooks/useRemoteNpuOverview";
 import { useRemoteStats } from "./hooks/useRemoteStats";
+import { useSecurityPromptQueue } from "./hooks/useSecurityPromptQueue";
+import { useSessionRuntimeState } from "./hooks/useSessionRuntimeState";
 import { resolveDisplayKeys } from "./hooks/useShortcutMap";
 import { useTerminalZoom } from "./hooks/useTerminalZoom";
 import { useTabStatusIndicators } from "./hooks/useUnreadTabs";
-
-interface PendingFileDocumentClose {
-  paneIds: string[];
-  action: () => Promise<void>;
-}
-
-function collectFileDocumentPaneIds(tabs: Tab[]) {
-  return tabs.flatMap((tab) =>
-    collectSessionPanes(tab.root)
-      .filter((pane) => pane.paneKind === "file")
-      .map((pane) => pane.id),
-  );
-}
-
-function removePaneFromTabs(tabs: Tab[], tabId: string, paneId: string) {
-  return tabs.flatMap((tab) => {
-    if (tab.id !== tabId) return [tab];
-    const root = removeSessionPane(tab.root, paneId);
-    return root ? [{ ...tab, root }] : [];
-  });
-}
-
 function storageWorkspaceInvalidate(
   sessionId: string,
 ): { command: string; connectionId: string } | null {
@@ -95,36 +63,53 @@ function storageWorkspaceInvalidate(
   return null;
 }
 
-type SecurityPrompt =
-  | { kind: "host-key"; request: HostKeyVerifyRequest }
-  | { kind: "ssh-agent"; request: SshAgentAuthRequest }
-  | { kind: "otp"; request: OtpRequest }
-  | { kind: "ssh-auth"; request: SshAuthRequest };
-
-function upsertSecurityPrompt(current: SecurityPrompt[], prompt: SecurityPrompt): SecurityPrompt[] {
-  const index = current.findIndex((item) => item.request.requestId === prompt.request.requestId);
-  if (index < 0) return [...current, prompt];
-  const next = [...current];
-  next[index] = prompt;
-  return next;
-}
 
 import { AI_OPEN_EVENT, type AIOpenIntent } from "./lib/aiEvents";
+import type {
+  ExternalConnectionChoice,
+  ExternalMatchDialogState,
+  PostLoginConfirmState,
+} from "./lib/appExternalDialogs";
 import {
-  assertMatchingTemporaryConfig,
+  attachSessionBeforeClose,
+  buildStartupCommandPayload,
+  capturePaneReconnectContent,
+  closeStaleCreatedSession,
+  createExternalLocalSession,
+  createSessionForConnection,
+  createSessionForPane,
+  createTemporarySession,
+  focusTerminalSession,
+  getConnectionSessionType,
+  getRemoteDesktopPaneDisplay,
+  getTemporaryLinkSessionType,
+  isSessionCreationCancelled,
+  sendStartupCommandToSession,
+  type StartupCommandRequest,
+} from "./lib/appSessionFactory";
+import {
   buildPanelOpenUpdate,
+  canUseFloatingPanel,
   canCreateSessionFromPane,
+  clearUnavailableFloatingPanels,
   collectActiveNonSerialSessionIds,
   EXCLUSIVE_PANEL_IDS,
+  type FloatingPanelsState,
   getSideOpenPanels,
   getSideOverlayPanel,
+  getItemSide,
   getVisibleActivityIds,
   hasLiveSession,
-  isActivityItemVisible,
+  isActivityItemAvailable,
   isNonSerialSessionType,
+  moveFloatingPanelSide,
   NON_PANEL_IDS,
+  normalizePanelOpenMode,
+  type PanelOpenMode,
+  reduceFloatingPanelSelect,
   type TrayAction,
 } from "./lib/appWorkspace";
+import { collectFileDocumentPaneIds, removePaneFromTabs } from "./lib/appWorkspaceClose";
 import {
   type AssetMonitoringCacheEntry,
   buildAssetPatchFromGpuOverview,
@@ -139,11 +124,6 @@ import {
   findExternalConnectionMatches,
   parseExternalOpenUrl,
 } from "./lib/externalOpen";
-import {
-  discardFileDocuments,
-  getDirtyFileDocumentIds,
-  saveFileDocuments,
-} from "./lib/fileDocumentRegistry";
 import { normalizeHeaderStatusMode } from "./lib/headerStatus";
 import { invoke } from "./lib/invoke";
 import { logger } from "./lib/logger";
@@ -188,10 +168,7 @@ import {
   updateTerminalWindowSplitRatio,
 } from "./lib/tabWindows";
 import type { TemporaryLinkConfig } from "./lib/temporaryLink";
-import {
-  captureTerminalReconnectContent,
-  preserveTerminalReconnectContent,
-} from "./lib/terminalReconnectHistory";
+import { preserveTerminalReconnectContent } from "./lib/terminalReconnectHistory";
 import { setBackendTransferDuplicatePrompt } from "./lib/transferDuplicatePrompt";
 import { checkForUpdate, type UpdateInfo } from "./lib/updater";
 import { shellQuote } from "./lib/utils";
@@ -212,7 +189,6 @@ import {
   getActivePane,
   getReleasedSessionIds,
   getTabDisplayName,
-  removeSessionPane,
 } from "./lib/workspaceTabs";
 import type {
   AppSettings,
@@ -220,26 +196,14 @@ import type {
   CloudConflictPreview,
   PaneSplitDirection,
   RecordingMode,
-  RecordingStatus,
   SavedConnection,
   SessionInfo,
   SessionPane,
   SessionType,
+  SshRuntimeMode,
   Tab,
   WorkspaceSessionType,
 } from "./types/global";
-
-const CONNECTION_SESSION_TYPES: Partial<Record<SavedConnection["type"], WorkspaceSessionType>> = {
-  ssh: "SSH",
-  local_terminal: "Local",
-  telnet: "Telnet",
-  serial: "Serial",
-  rdp: "RDP",
-  vnc: "VNC",
-  s3: "S3",
-  ftp: "FTP",
-  webdav: "WebDAV",
-};
 
 const STARTUP_OPEN_CONNECTION_TYPES = new Set<SavedConnection["type"]>([
   "ssh",
@@ -252,195 +216,6 @@ function isStartupOpenConnection(connection: SavedConnection) {
   return Boolean(connection.open_on_startup) && STARTUP_OPEN_CONNECTION_TYPES.has(connection.type);
 }
 
-function getConnectionSessionType(
-  connection: Pick<SavedConnection, "type"> | null | undefined,
-): WorkspaceSessionType {
-  if (!connection) return "SSH";
-  return CONNECTION_SESSION_TYPES[connection.type] ?? "SSH";
-}
-
-function getRemoteDesktopPaneDisplay(connection: SavedConnection | null | undefined) {
-  if (connection?.type === "rdp") {
-    return {
-      remoteWidth: connection.display?.width ?? 1920,
-      remoteHeight: connection.display?.height ?? 1080,
-      scaleMode: connection.display?.mode === "fit-window" ? "fit" : "actual",
-      clipboardMode: connection.clipboard?.mode ?? "text-only",
-    } as const;
-  }
-  if (connection?.type === "vnc") {
-    return {
-      scaleMode: connection.display?.scale_mode ?? "fit",
-      viewOnly: connection.view_only ?? false,
-      clipboardEnabled: connection.clipboard?.enabled ?? true,
-    } as const;
-  }
-  return undefined;
-}
-
-function isSessionCreationCancelled(error: unknown) {
-  return getErrorMessage(error).toLowerCase().includes("session creation cancelled");
-}
-
-async function attachSessionBeforeClose(sessionId: string) {
-  await tauriInvoke("attach_session", { sessionId }).catch((error) => {
-    logger.debug({
-      domain: "session.lifecycle",
-      event: "session.attach_before_close_failed",
-      message: "Best-effort attach before close failed",
-      ids: { session_id: sessionId },
-      error,
-    });
-  });
-}
-
-async function closeStaleCreatedSession(sessionId: string) {
-  try {
-    await attachSessionBeforeClose(sessionId);
-    await invoke("close_session", { sessionId });
-    clearSessionCommandHistory(sessionId);
-  } catch (error) {
-    logger.error({
-      domain: "session.lifecycle",
-      event: "session.stale_close_failed",
-      message: "Failed to close stale created session",
-      ids: { session_id: sessionId },
-      error,
-    });
-  }
-}
-
-type StartupCommandRequest = {
-  command: string;
-  delayMs: number;
-};
-
-type ExternalConnectionChoice =
-  | { kind: "saved"; connection: SavedConnection }
-  | { kind: "temporary"; config: TemporaryLinkConfig }
-  | { kind: "cancelled" };
-
-type ExternalMatchDialogState = {
-  connections: SavedConnection[];
-  temporary: TemporaryLinkConfig;
-  resolve: (choice: ExternalConnectionChoice) => void;
-};
-
-type PostLoginConfirmState = {
-  connection: SavedConnection;
-  command: string;
-  resolve: (confirmed: boolean) => void;
-};
-
-async function createSessionForConnection(
-  connection: Pick<SavedConnection, "id" | "type">,
-  createRequestId?: string,
-  startupCommand?: StartupCommandRequest,
-) {
-  switch (connection.type) {
-    case "local_terminal":
-      return invoke<string>("create_local_session", {
-        connectionId: connection.id,
-        createRequestId,
-      });
-    case "telnet":
-      return invoke<string>("create_telnet_session", {
-        connectionId: connection.id,
-        createRequestId,
-        startupCommand: buildStartupCommandPayload(startupCommand),
-      });
-    case "serial":
-      return invoke<string>("create_serial_session", {
-        connectionId: connection.id,
-        createRequestId,
-      });
-    case "vnc":
-      return invoke<string>("create_vnc_session", {
-        connectionId: connection.id,
-        createRequestId,
-      });
-    case "rdp":
-      return invoke<string>("create_rdp_session", {
-        connectionId: connection.id,
-        createRequestId,
-      });
-    default:
-      return invoke<string>("create_ssh_session", {
-        connectionId: connection.id,
-        createRequestId,
-        startupCommand: buildStartupCommandPayload(startupCommand),
-      });
-  }
-}
-
-async function createTemporarySession(
-  config: TemporaryLinkConfig,
-  createRequestId?: string,
-  startupCommand?: StartupCommandRequest,
-) {
-  switch (config.protocol) {
-    case "telnet":
-      return invoke<string>("create_telnet_session", {
-        connectionId: null,
-        host: config.host,
-        port: config.port,
-        name: config.name,
-        createRequestId,
-        startupCommand: buildStartupCommandPayload(startupCommand),
-      });
-    case "serial":
-      return invoke<string>("create_serial_session", {
-        connectionId: null,
-        portName: config.portName,
-        baudRate: config.baudRate,
-        name: config.name,
-        createRequestId,
-      });
-    default: {
-      const { protocol: _protocol, ...sshConfig } = config;
-      return invoke<string>("create_temporary_ssh_session", {
-        config: sshConfig,
-        createRequestId,
-        startupCommand: buildStartupCommandPayload(startupCommand),
-      });
-    }
-  }
-}
-
-function getTemporaryLinkSessionType(config: TemporaryLinkConfig): SessionType {
-  switch (config.protocol) {
-    case "telnet":
-      return "Telnet";
-    case "serial":
-      return "Serial";
-    default:
-      return "SSH";
-  }
-}
-
-function buildStartupCommandPayload(startupCommand?: StartupCommandRequest) {
-  if (!startupCommand || !startupCommand.command.trim()) return null;
-  return {
-    command: startupCommand.command,
-    delayMs: Math.max(0, Math.min(60000, Math.round(startupCommand.delayMs))),
-  };
-}
-
-async function sendStartupCommandToSession(
-  sessionId: string,
-  startupCommand: StartupCommandRequest,
-) {
-  const delayMs = Math.max(0, Math.min(60000, Math.round(startupCommand.delayMs)));
-  if (delayMs > 0) {
-    await new Promise((resolve) => window.setTimeout(resolve, delayMs));
-  }
-  await sendSessionInput(sessionId, buildTerminalCommandInput(startupCommand.command), {
-    preview: { kind: "reset" },
-    registerSubmission: startupCommand.command,
-    origin: "startup_command",
-  });
-}
-
 function safeRecordingName(name: string) {
   return name.normalize("NFC").replace(/[^\p{L}\p{M}\p{N}._-]+/gu, "_") || "session";
 }
@@ -451,18 +226,6 @@ function joinPath(dir: string, fileName: string) {
 
 function eventTargetsCurrentWindow(targetWindowLabel?: string | null) {
   return !targetWindowLabel || targetWindowLabel === getOwnerMainWindowLabel();
-}
-
-function focusTerminalSession(sessionId?: string | null) {
-  if (!sessionId) return;
-  requestAnimationFrame(() => {
-    void emit(`focus-terminal-${sessionId}`);
-  });
-}
-
-function capturePaneReconnectContent(pane: SessionPane) {
-  if (pane.connecting || pane.connectError) return null;
-  return captureTerminalReconnectContent(pane.sessionId);
 }
 
 /** Root layout: header, activity bars, sidebars, terminal area, dialogs. */
@@ -524,6 +287,7 @@ function App() {
     [remoteStatsEnabled],
   );
   const multiPanelOpen = appSettings.appearance.panel_multi_open;
+  const panelOpenMode = normalizePanelOpenMode(uiConfig.panel_open_mode);
   const { t, i18n } = useTranslation();
 
   useEffect(() => {
@@ -572,9 +336,20 @@ function App() {
   const [showUpdateDialog, setShowUpdateDialog] = useState(false);
   const [showSyncGroupDialog, setShowSyncGroupDialog] = useState(false);
   const [showQuitConfirm, setShowQuitConfirm] = useState(false);
-  const [pendingFileDocumentClose, setPendingFileDocumentClose] =
-    useState<PendingFileDocumentClose | null>(null);
-  const [savingFileDocuments, setSavingFileDocuments] = useState(false);
+  const [showActivityBarResetConfirm, setShowActivityBarResetConfirm] = useState(false);
+  const [floatingPanels, setFloatingPanels] = useState<FloatingPanelsState>({
+    left: null,
+    right: null,
+  });
+  const [lastFloatingSide, setLastFloatingSide] = useState<"left" | "right" | null>(null);
+  const {
+    pendingFileDocumentClose,
+    savingFileDocuments,
+    requestFileDocumentClose,
+    handleSaveFileDocumentsAndClose,
+    handleDiscardFileDocumentsAndClose,
+    handlePendingFileDocumentCloseOpenChange,
+  } = useFileDocumentCloseGuard();
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [helpDotVisible, setHelpDotVisible] = useState(false);
   const [sendCommandDraft, setSendCommandDraft] = useState<SendCommandPanelDraft | null>(null);
@@ -592,43 +367,6 @@ function App() {
   } | null>(null);
   const allowProgrammaticWindowCloseRef = useRef(false);
 
-  const requestFileDocumentClose = useCallback(
-    async (paneIds: string[], action: () => Promise<void>) => {
-      const dirtyPaneIds = getDirtyFileDocumentIds(new Set(paneIds));
-      if (dirtyPaneIds.length === 0) {
-        await action();
-        return;
-      }
-      setPendingFileDocumentClose({ paneIds: dirtyPaneIds, action });
-    },
-    [],
-  );
-
-  const handleSaveFileDocumentsAndClose = useCallback(async () => {
-    const pending = pendingFileDocumentClose;
-    if (!pending || savingFileDocuments) return;
-
-    setSavingFileDocuments(true);
-    try {
-      if (!(await saveFileDocuments(pending.paneIds))) {
-        setPendingFileDocumentClose(null);
-        return;
-      }
-      setPendingFileDocumentClose(null);
-      await pending.action();
-    } finally {
-      setSavingFileDocuments(false);
-    }
-  }, [pendingFileDocumentClose, savingFileDocuments]);
-
-  const handleDiscardFileDocumentsAndClose = useCallback(() => {
-    const pending = pendingFileDocumentClose;
-    if (!pending) return;
-    discardFileDocuments(pending.paneIds);
-    setPendingFileDocumentClose(null);
-    void pending.action();
-  }, [pendingFileDocumentClose]);
-
   const handleSendCommandDraftConsumed = useCallback(() => {
     setSendCommandDraft(null);
   }, []);
@@ -640,91 +378,24 @@ function App() {
     });
   }, [updateUi]);
 
-  // Recording state: active file recording statuses reported by the backend.
-  const [recordingStatuses, setRecordingStatuses] = useState<RecordingStatus[]>([]);
-  const recordingSessions = useMemo(
-    () => new Set(recordingStatuses.map((status) => status.sessionId)),
-    [recordingStatuses],
-  );
-  const [liveSessionIds, setLiveSessionIds] = useState<Set<string> | null>(null);
-  const [liveSessionsById, setLiveSessionsById] = useState<Map<string, SessionInfo> | null>(null);
+  const {
+    recordingStatuses,
+    recordingSessions,
+    liveSessionIds,
+    liveSessionsById,
+    refreshRecordingStatuses,
+  } = useSessionRuntimeState(appSettings.recording.memory_limit_bytes, settingsLoaded);
   const assetMonitoringCacheRef = useRef<Map<string, AssetMonitoringCacheEntry>>(new Map());
   const assetMonitoringFlushesRef = useRef<Set<string>>(new Set());
 
-  const refreshRecordingStatuses = useCallback(async () => {
-    try {
-      const statuses = await invoke<RecordingStatus[]>("list_recording_statuses");
-      setRecordingStatuses(statuses);
-    } catch (error) {
-      logger.error({
-        domain: "session.lifecycle",
-        event: "recording.list_failed",
-        message: "Failed to list recording sessions",
-        error,
-      });
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshRecordingStatuses();
-    const unlistenSessions = listen("sessions-changed", () => {
-      void refreshRecordingStatuses();
-    });
-    const unlistenRecording = listen<RecordingStatus>("recording-status-changed", () => {
-      void refreshRecordingStatuses();
-    });
-    return () => {
-      unlistenSessions.then((dispose) => dispose());
-      unlistenRecording.then((dispose) => dispose());
-    };
-  }, [refreshRecordingStatuses]);
-
-  useEffect(() => {
-    let disposed = false;
-
-    const refreshLiveSessions = async () => {
-      try {
-        const sessions = await invoke<SessionInfo[]>("list_sessions");
-        if (!disposed) {
-          setLiveSessionIds(new Set(sessions.map((session) => session.id)));
-          setLiveSessionsById(new Map(sessions.map((session) => [session.id, session])));
-        }
-      } catch (error) {
-        logger.error({
-          domain: "session.lifecycle",
-          event: "session.live_list_failed",
-          message: "Failed to refresh live session ids",
-          error,
-        });
-      }
-    };
-
-    void refreshLiveSessions();
-    const unlisten = listen("sessions-changed", () => {
-      void refreshLiveSessions();
-    });
-
-    return () => {
-      disposed = true;
-      unlisten.then((dispose) => dispose());
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!settingsLoaded) return;
-    void invoke("set_recording_memory_limit", {
-      maxBytes: Math.max(1, appSettings.recording.memory_limit_bytes || 5 * 1024 * 1024),
-    }).catch((error) => {
-      logger.error({
-        domain: "settings.persistence",
-        event: "recording.memory_limit_sync_failed",
-        message: "Failed to sync recording memory limit",
-        error,
-      });
-    });
-  }, [appSettings.recording.memory_limit_bytes, settingsLoaded]);
-
-  const [securityPromptQueue, setSecurityPromptQueue] = useState<SecurityPrompt[]>([]);
+  const {
+    activeHostKeyRequest,
+    activeSshAgentRequest,
+    activeOtpRequest,
+    activeSshAuthRequest,
+    queueSecurityPrompt,
+    removeSecurityPrompt,
+  } = useSecurityPromptQueue();
   const [dockerSudoPasswordRequest, setDockerSudoPasswordRequest] =
     useState<DockerSudoPasswordRequest | null>(null);
   const [rdpCertificateRequests, setRdpCertificateRequests] = useState<
@@ -760,12 +431,103 @@ function App() {
     return () => clearTimeout(timer);
   }, [portable, runtimeInfoLoaded]);
 
+  const closeFloatingPanel = useCallback(
+    (side: "left" | "right") => {
+      if (!floatingPanels[side]) return;
+      const next = { ...floatingPanels, [side]: null };
+      setFloatingPanels(next);
+      if (lastFloatingSide !== side) return;
+      setLastFloatingSide(
+        side === "left" ? (next.right ? "right" : null) : next.left ? "left" : null,
+      );
+    },
+    [floatingPanels, lastFloatingSide],
+  );
+
+  const handleFloatingPanelSelect = useCallback(
+    (panelId: string, side: "left" | "right") => {
+      const next = reduceFloatingPanelSelect(floatingPanels, panelId, side);
+      const otherSide = side === "left" ? "right" : "left";
+      setFloatingPanels(next);
+      setLastFloatingSide(next[side] ? side : next[otherSide] ? otherSide : null);
+    },
+    [floatingPanels],
+  );
+
+  const handleFloatingPanelMove = useCallback(
+    (panelId: string, targetSide: "left" | "right") => {
+      const next = moveFloatingPanelSide(floatingPanels, panelId, targetSide);
+      if (next === floatingPanels) return;
+      setFloatingPanels(next);
+      setLastFloatingSide(targetSide);
+    },
+    [floatingPanels],
+  );
+
+  const handlePanelOpenModeChange = useCallback(
+    (mode: PanelOpenMode) => {
+      const nextMode = normalizePanelOpenMode(mode);
+      setFloatingPanels({ left: null, right: null });
+      setLastFloatingSide(null);
+      updateUi(
+        nextMode === "floating"
+          ? {
+              active_left_panel: null,
+              active_right_panel: null,
+              left_open_panels: [],
+              right_open_panels: [],
+              panel_open_mode: "floating",
+            }
+          : { panel_open_mode: "docked" },
+      );
+    },
+    [updateUi],
+  );
+
+  const openPanel = useCallback(
+    (panelId: string, fallbackSide: "left" | "right" = "left") => {
+      const side = getItemSide(panelId, uiConfig.activity_bar_layout) ?? fallbackSide;
+      if (panelOpenMode === "floating" && canUseFloatingPanel(panelId)) {
+        handleFloatingPanelSelect(panelId, side);
+        return;
+      }
+      updateUi((prev) => buildPanelOpenUpdate(prev, panelId, multiPanelOpen, fallbackSide));
+    },
+    [
+      handleFloatingPanelSelect,
+      multiPanelOpen,
+      panelOpenMode,
+      uiConfig.activity_bar_layout,
+      updateUi,
+    ],
+  );
+
   const handleOpenPanel = useCallback(
     (panelId: "activeSessions" | "syncBackupHistory") => {
-      updateUi((prev) => buildPanelOpenUpdate(prev, panelId, multiPanelOpen));
+      openPanel(panelId);
     },
-    [multiPanelOpen, updateUi],
+    [openPanel],
   );
+
+  useEffect(() => {
+    if (!settingsLoaded || panelOpenMode !== "floating") return;
+    updateUi((prev) => {
+      if (
+        !prev.active_left_panel &&
+        !prev.active_right_panel &&
+        (prev.left_open_panels?.length ?? 0) === 0 &&
+        (prev.right_open_panels?.length ?? 0) === 0
+      ) {
+        return {};
+      }
+      return {
+        active_left_panel: null,
+        active_right_panel: null,
+        left_open_panels: [],
+        right_open_panels: [],
+      };
+    });
+  }, [panelOpenMode, settingsLoaded, updateUi]);
 
   // Cross-window event listeners
   useEffect(() => {
@@ -822,68 +584,54 @@ function App() {
     unsubs.push(
       listen<OtpRequest>("otp-request", (event) => {
         if (!eventTargetsCurrentWindow(event.payload.targetWindowLabel)) return;
-        setSecurityPromptQueue((current) =>
-          upsertSecurityPrompt(current, {
-            kind: "otp",
-            request: event.payload,
-          }),
-        );
+        queueSecurityPrompt({
+          kind: "otp",
+          request: event.payload,
+        });
       }),
     );
 
     unsubs.push(
       listen<SshAuthRequest>("ssh-auth-request", (event) => {
         if (!eventTargetsCurrentWindow(event.payload.targetWindowLabel)) return;
-        setSecurityPromptQueue((current) =>
-          upsertSecurityPrompt(current, {
-            kind: "ssh-auth",
-            request: event.payload,
-          }),
-        );
+        queueSecurityPrompt({
+          kind: "ssh-auth",
+          request: event.payload,
+        });
       }),
     );
 
     unsubs.push(
       listen<SshAgentAuthRequest>("ssh-agent-auth-pending", (event) => {
         if (!eventTargetsCurrentWindow(event.payload.targetWindowLabel)) return;
-        setSecurityPromptQueue((current) =>
-          upsertSecurityPrompt(current, {
-            kind: "ssh-agent",
-            request: event.payload,
-          }),
-        );
+        queueSecurityPrompt({
+          kind: "ssh-agent",
+          request: event.payload,
+        });
       }),
     );
     unsubs.push(
       listen<SshAgentAuthRequest>("ssh-agent-auth-failed", (event) => {
         if (!eventTargetsCurrentWindow(event.payload.targetWindowLabel)) return;
-        setSecurityPromptQueue((current) =>
-          upsertSecurityPrompt(current, {
-            kind: "ssh-agent",
-            request: event.payload,
-          }),
-        );
+        queueSecurityPrompt({
+          kind: "ssh-agent",
+          request: event.payload,
+        });
       }),
     );
     unsubs.push(
       listen<{ requestId: string }>("ssh-agent-auth-resolved", (event) => {
-        setSecurityPromptQueue((current) =>
-          current.filter((item) => item.request.requestId !== event.payload.requestId),
-        );
+        removeSecurityPrompt(event.payload.requestId);
       }),
     );
     unsubs.push(
       listen<{ requestId: string }>("host-key-verify-resolved", (event) => {
-        setSecurityPromptQueue((current) =>
-          current.filter((item) => item.request.requestId !== event.payload.requestId),
-        );
+        removeSecurityPrompt(event.payload.requestId);
       }),
     );
     unsubs.push(
       listen<{ requestId: string }>("security-prompt-resolved", (event) => {
-        setSecurityPromptQueue((current) =>
-          current.filter((item) => item.request.requestId !== event.payload.requestId),
-        );
+        removeSecurityPrompt(event.payload.requestId);
       }),
     );
 
@@ -897,12 +645,10 @@ function App() {
     unsubs.push(
       listen<HostKeyVerifyRequest>("host-key-verify", (event) => {
         if (!eventTargetsCurrentWindow(event.payload.targetWindowLabel)) return;
-        setSecurityPromptQueue((current) =>
-          upsertSecurityPrompt(current, {
-            kind: "host-key",
-            request: event.payload,
-          }),
-        );
+        queueSecurityPrompt({
+          kind: "host-key",
+          request: event.payload,
+        });
       }),
     );
 
@@ -1128,7 +874,9 @@ function App() {
     markPaneConnecting,
     markPaneConnectionFailed,
     markTabConnectionFailed,
+    queueSecurityPrompt,
     recordRecentConnection,
+    removeSecurityPrompt,
     setActivePane,
     setActiveTabId,
     t,
@@ -1498,7 +1246,13 @@ function App() {
   );
 
   const connectSavedConnection = useCallback(
-    async (connection: SavedConnection, options?: { failureContext?: string }) => {
+    async (
+      connection: SavedConnection,
+      options?: {
+        failureContext?: string;
+        runtimeModeOverride?: SshRuntimeMode;
+      },
+    ) => {
       if (connection.type === "s3") {
         openS3Workspace(connection);
         return;
@@ -1548,6 +1302,7 @@ function App() {
       }
 
       const pending = beginPendingSession(
+
         connection.name,
         getConnectionSessionType(connection),
         connection.id,
@@ -1557,8 +1312,14 @@ function App() {
       const { tabId, paneId, createRequestId } = pending;
 
       try {
-        const sessionId = await createSessionForConnection(connection, createRequestId);
+        const sessionId = await createSessionForConnection(
+          connection,
+          createRequestId,
+          undefined,
+          options?.runtimeModeOverride,
+        );
         if (paneId ? !hasPane(tabId, paneId) : !hasTab(tabId)) {
+
           await closeStaleCreatedSession(sessionId);
           return;
         }
@@ -1813,12 +1574,51 @@ function App() {
     ],
   );
 
+  const connectExternalLocalSession = useCallback(
+    async (workingDir: string | null) => {
+      const pending = addPendingTab(
+        t("menu.newLocalTerminal"),
+        "Local",
+        undefined,
+      );
+      const { tabId, createRequestId } = pending;
+
+      try {
+        const sessionId = await createExternalLocalSession(
+          workingDir,
+          createRequestId,
+        );
+        if (!hasTab(tabId)) {
+          await closeStaleCreatedSession(sessionId);
+          return;
+        }
+        updateTabSession(tabId, sessionId);
+        focusTerminalSession(sessionId);
+      } catch (error) {
+        if (isSessionCreationCancelled(error) || !hasTab(tabId)) {
+          return;
+        }
+        const errorMessage = getErrorMessage(error);
+        logger.error({
+          domain: "session.lifecycle",
+          event: "external_local.open_failed",
+          message: "External local terminal failed",
+          error,
+        });
+        markTabConnectionFailed(tabId, errorMessage);
+        toast.error(t("savedConnections.connectionFailed", { error: errorMessage }));
+      }
+    },
+    [addPendingTab, hasTab, markTabConnectionFailed, t, updateTabSession],
+  );
+
   const chooseExternalConnection = useCallback(
     (resolution: Extract<ExternalConnectionResolution, { kind: "ambiguous" }>) =>
       new Promise<ExternalConnectionChoice>((resolve) => {
         setExternalMatchDialog({
           connections: resolution.connections,
           temporary: resolution.temporary,
+          runtimeModeOverride: resolution.runtimeModeOverride,
           resolve,
         });
       }),
@@ -1871,6 +1671,23 @@ function App() {
         return;
       }
 
+      if (parsed.intent.protocol === "local") {
+        logger.info({
+          domain: "app.lifecycle",
+          event: "external_open.local_terminal_created",
+          message: "External open will create a local terminal",
+          ids: { request_id: request.id },
+          data: {
+            scheme: parsed.intent.protocol,
+            source: request.source,
+            target_window_label: request.targetWindowLabel,
+            has_working_dir: parsed.intent.workingDir !== null,
+          },
+        });
+        await connectExternalLocalSession(parsed.intent.workingDir);
+        return;
+      }
+
       const latestConnections = await invoke<SavedConnection[]>("get_saved_connections");
       const resolution = findExternalConnectionMatches(latestConnections, parsed.intent);
 
@@ -1890,6 +1707,7 @@ function App() {
         if (await confirmExternalPostLogin(resolution.connection)) {
           await connectSavedConnection(resolution.connection, {
             failureContext: "External open saved connection failed",
+            runtimeModeOverride: resolution.runtimeModeOverride,
           });
         }
         return;
@@ -1913,6 +1731,7 @@ function App() {
           if (await confirmExternalPostLogin(choice.connection)) {
             await connectSavedConnection(choice.connection, {
               failureContext: "External open saved connection failed",
+              runtimeModeOverride: choice.runtimeModeOverride,
             });
           }
         } else if (choice.kind === "temporary") {
@@ -1940,6 +1759,7 @@ function App() {
     [
       chooseExternalConnection,
       confirmExternalPostLogin,
+      connectExternalLocalSession,
       connectSavedConnection,
       connectTemporaryConnection,
       openExternalMarkdownTab,
@@ -2103,11 +1923,11 @@ function App() {
       const detail = (event as CustomEvent<AIOpenIntent>).detail;
       if (!detail) return;
       setAiIntent(detail);
-      updateUi((prev) => buildPanelOpenUpdate(prev, "aiAssistant", multiPanelOpen, "right"));
+      openPanel("aiAssistant", "right");
     };
     window.addEventListener(AI_OPEN_EVENT, handler);
     return () => window.removeEventListener(AI_OPEN_EVENT, handler);
-  }, [multiPanelOpen, updateUi]);
+  }, [openPanel]);
 
   useEffect(() => {
     const handler = (event: Event) => {
@@ -2349,91 +2169,6 @@ function App() {
     [updateSplitRatio],
   );
 
-  const createSessionForPane = useCallback(
-    async (
-      pane: Pick<SessionPane, "type" | "connectionId" | "temporaryConfig">,
-      createRequestId?: string,
-      startupCommand?: StartupCommandRequest,
-    ) => {
-      switch (pane.type) {
-        case "Local":
-          return invoke<string>("create_local_session", {
-            connectionId: pane.connectionId || null,
-            createRequestId,
-          });
-        case "Telnet":
-          if (pane.connectionId) {
-            return invoke<string>("create_telnet_session", {
-              connectionId: pane.connectionId,
-              createRequestId,
-              startupCommand: buildStartupCommandPayload(startupCommand),
-            });
-          }
-          assertMatchingTemporaryConfig(pane);
-          if (pane.temporaryConfig?.protocol === "telnet") {
-            return invoke<string>("create_telnet_session", {
-              connectionId: null,
-              host: pane.temporaryConfig.host,
-              port: pane.temporaryConfig.port,
-              name: pane.temporaryConfig.name,
-              createRequestId,
-              startupCommand: buildStartupCommandPayload(startupCommand),
-            });
-          }
-          throw new Error("Missing Telnet connection id");
-        case "Serial":
-          if (pane.connectionId) {
-            return invoke<string>("create_serial_session", {
-              connectionId: pane.connectionId,
-              createRequestId,
-            });
-          }
-          assertMatchingTemporaryConfig(pane);
-          if (pane.temporaryConfig?.protocol === "serial") {
-            return invoke<string>("create_serial_session", {
-              connectionId: null,
-              portName: pane.temporaryConfig.portName,
-              baudRate: pane.temporaryConfig.baudRate,
-              name: pane.temporaryConfig.name,
-              createRequestId,
-            });
-          }
-          throw new Error("Missing Serial connection id");
-        case "VNC":
-          if (!pane.connectionId) throw new Error("Missing VNC connection id");
-          return invoke<string>("create_vnc_session", {
-            connectionId: pane.connectionId,
-            createRequestId,
-          });
-        case "RDP":
-          if (!pane.connectionId) throw new Error("Missing RDP connection id");
-          return invoke<string>("create_rdp_session", {
-            connectionId: pane.connectionId,
-            createRequestId,
-          });
-        default:
-          if (pane.connectionId) {
-            return invoke<string>("create_ssh_session", {
-              connectionId: pane.connectionId,
-              createRequestId,
-              startupCommand: buildStartupCommandPayload(startupCommand),
-            });
-          }
-          assertMatchingTemporaryConfig(pane);
-          if (pane.temporaryConfig?.protocol === "ssh") {
-            const { protocol: _protocol, ...sshConfig } = pane.temporaryConfig;
-            return invoke<string>("create_temporary_ssh_session", {
-              config: sshConfig,
-              createRequestId,
-              startupCommand: buildStartupCommandPayload(startupCommand),
-            });
-          }
-          throw new Error("Missing SSH connection id");
-      }
-    },
-    [],
-  );
-
   const closePaneBackendSession = useCallback(
     async (
       pane: Pick<
@@ -2587,15 +2322,10 @@ function App() {
   );
 
   const requestCloseTabs = useCallback(
-    async (
-      tabsToClose: Tab[],
-      options?: { nextActiveTabId?: string | null },
-    ) => {
+    async (tabsToClose: Tab[], options?: { nextActiveTabId?: string | null }) => {
       const tabIds = tabsToClose.map((tab) => tab.id);
       const paneIds = collectFileDocumentPaneIds(tabsToClose);
-      await requestFileDocumentClose(paneIds, () =>
-        executeCloseTabs(tabIds, options),
-      );
+      await requestFileDocumentClose(paneIds, () => executeCloseTabs(tabIds, options));
     },
     [executeCloseTabs, requestFileDocumentClose],
   );
@@ -2617,9 +2347,7 @@ function App() {
   const requestClosePane = useCallback(
     async (tab: Tab, pane: SessionPane) => {
       const paneIds = pane.paneKind === "file" ? [pane.id] : [];
-      await requestFileDocumentClose(paneIds, () =>
-        executeClosePane(tab.id, pane.id),
-      );
+      await requestFileDocumentClose(paneIds, () => executeClosePane(tab.id, pane.id));
     },
     [executeClosePane, requestFileDocumentClose],
   );
@@ -2674,8 +2402,7 @@ function App() {
 
   const handleHistoryCommand = useCallback(
     (command: string, execute: boolean = true) => {
-      if (activePane?.paneKind !== "terminal" || !hasLiveSession(activePane))
-        return;
+      if (activePane?.paneKind !== "terminal" || !hasLiveSession(activePane)) return;
 
       const { sessionId } = activePane;
       const data = buildTerminalCommandInput(command, execute);
@@ -2728,7 +2455,7 @@ function App() {
       const pane = tab ? findPaneBySessionId(tab, oldSessionId) : null;
       if (!pane) return;
       replaceSessionReferences(oldSessionId, newSessionId);
-        updateAutoIconForSessionStart(pane.connectionId, newSessionId);
+      updateAutoIconForSessionStart(pane.connectionId, newSessionId);
     },
     [replaceSessionReferences, tabs, updateAutoIconForSessionStart],
   );
@@ -2796,6 +2523,18 @@ function App() {
   );
 
   const handleToggleLeftSidebar = useCallback(() => {
+    if (panelOpenMode === "floating") {
+      if (floatingPanels.left) {
+        closeFloatingPanel("left");
+        return;
+      }
+      const first = getVisibleActivityIds(
+        [...uiConfig.activity_bar_layout.left_top, ...uiConfig.activity_bar_layout.left_bottom],
+        uiConfig,
+      ).find(canUseFloatingPanel);
+      if (first) handleFloatingPanelSelect(first, "left");
+      return;
+    }
     updateUi((prev) => {
       if (multiPanelOpen) {
         if ((prev.left_open_panels?.length ?? 0) > 0 || prev.active_left_panel) {
@@ -2817,9 +2556,29 @@ function App() {
       ).find((id) => !NON_PANEL_IDS.has(id));
       return { active_left_panel: first ?? null };
     });
-  }, [multiPanelOpen, updateUi]);
+  }, [
+    closeFloatingPanel,
+    floatingPanels.left,
+    handleFloatingPanelSelect,
+    multiPanelOpen,
+    panelOpenMode,
+    uiConfig,
+    updateUi,
+  ]);
 
   const handleToggleRightSidebar = useCallback(() => {
+    if (panelOpenMode === "floating") {
+      if (floatingPanels.right) {
+        closeFloatingPanel("right");
+        return;
+      }
+      const first = getVisibleActivityIds(
+        [...uiConfig.activity_bar_layout.right_top, ...uiConfig.activity_bar_layout.right_bottom],
+        uiConfig,
+      ).find(canUseFloatingPanel);
+      if (first) handleFloatingPanelSelect(first, "right");
+      return;
+    }
     updateUi((prev) => {
       if (multiPanelOpen) {
         if ((prev.right_open_panels?.length ?? 0) > 0 || prev.active_right_panel) {
@@ -2841,7 +2600,15 @@ function App() {
       ).find((id) => !NON_PANEL_IDS.has(id));
       return { active_right_panel: first ?? null };
     });
-  }, [multiPanelOpen, updateUi]);
+  }, [
+    closeFloatingPanel,
+    floatingPanels.right,
+    handleFloatingPanelSelect,
+    multiPanelOpen,
+    panelOpenMode,
+    uiConfig,
+    updateUi,
+  ]);
 
   const { handleZoomIn, handleZoomOut, handleResetZoom } = useTerminalZoom(
     updateAppSettings,
@@ -2871,13 +2638,8 @@ function App() {
     const terminalWindowLayout =
       appSettings.general.startup_restore_window_layout === false
         ? null
-        : serializeTerminalWindowLayout(
-            terminalWindowsRef.current,
-            restorableTabs,
-          );
-    lastPersistedTerminalWindowLayoutKeyRef.current = JSON.stringify(
-      terminalWindowLayout ?? null,
-    );
+        : serializeTerminalWindowLayout(terminalWindowsRef.current, restorableTabs);
+    lastPersistedTerminalWindowLayoutKeyRef.current = JSON.stringify(terminalWindowLayout ?? null);
     await persistTabsNow({ terminal_window_layout: terminalWindowLayout });
   }, [
     appSettings.general.startup_restore_window_layout,
@@ -2888,20 +2650,17 @@ function App() {
 
   const handleQuitApplication = useCallback(() => {
     setShowQuitConfirm(false);
-    void requestFileDocumentClose(
-      collectFileDocumentPaneIds(tabs),
-      async () => {
-        await persistWorkspaceLayoutNow().catch((error) => {
-          logger.error({
-            domain: "settings.persistence",
-            event: "workspace_layout.persist_before_quit_failed",
-            message: "Failed to persist workspace layout before quit",
-            error,
-          });
+    void requestFileDocumentClose(collectFileDocumentPaneIds(tabs), async () => {
+      await persistWorkspaceLayoutNow().catch((error) => {
+        logger.error({
+          domain: "settings.persistence",
+          event: "workspace_layout.persist_before_quit_failed",
+          message: "Failed to persist workspace layout before quit",
+          error,
         });
-        await invoke<void>("quit_application");
-      },
-    );
+      });
+      await invoke<void>("quit_application");
+    });
   }, [persistWorkspaceLayoutNow, requestFileDocumentClose, tabs]);
 
   useEffect(() => {
@@ -2929,34 +2688,28 @@ function App() {
             return;
           }
 
-          if (
-            tabs.length > 0 &&
-            appSettings.general.confirm_on_close !== false
-          ) {
+          if (tabs.length > 0 && appSettings.general.confirm_on_close !== false) {
             setShowQuitConfirm(true);
             return;
           }
 
-          await requestFileDocumentClose(
-            collectFileDocumentPaneIds(tabs),
-            async () => {
-              await persistWorkspaceLayoutNow().catch((error) => {
-                logger.error({
-                  domain: "settings.persistence",
-                  event: "workspace_layout.persist_before_close_failed",
-                  message: "Failed to persist workspace layout before close",
-                  error,
-                });
+          await requestFileDocumentClose(collectFileDocumentPaneIds(tabs), async () => {
+            await persistWorkspaceLayoutNow().catch((error) => {
+              logger.error({
+                domain: "settings.persistence",
+                event: "workspace_layout.persist_before_close_failed",
+                message: "Failed to persist workspace layout before close",
+                error,
               });
-              allowProgrammaticWindowCloseRef.current = true;
-              await currentWindow.close().catch(() => {
-                allowProgrammaticWindowCloseRef.current = false;
-              });
-              window.setTimeout(() => {
-                allowProgrammaticWindowCloseRef.current = false;
-              }, 1000);
-            },
-          );
+            });
+            allowProgrammaticWindowCloseRef.current = true;
+            await currentWindow.close().catch(() => {
+              allowProgrammaticWindowCloseRef.current = false;
+            });
+            window.setTimeout(() => {
+              allowProgrammaticWindowCloseRef.current = false;
+            }, 1000);
+          });
         });
       })
       .then((unlisten) => {
@@ -2998,11 +2751,7 @@ function App() {
     void import("@tauri-apps/api/window").then(({ getCurrentWindow }) =>
       getCurrentWindow().close(),
     );
-  }, [
-    appSettings.general.confirm_on_close,
-    appSettings.general.minimize_to_tray,
-    tabs.length,
-  ]);
+  }, [appSettings.general.confirm_on_close, appSettings.general.minimize_to_tray, tabs.length]);
 
   useEffect(() => {
     const unlisten = listen<TrayAction>("tray-action", ({ payload }) => {
@@ -3122,7 +2871,6 @@ function App() {
     },
     [
       addPendingTab,
-      createSessionForPane,
       hasTab,
       markTabConnectionFailed,
       maybePromptConnectionEdit,
@@ -3403,7 +3151,6 @@ function App() {
     },
     [
       closePaneBackendSession,
-      createSessionForPane,
       hasFileDocumentDependency,
       hasPane,
       maybePromptConnectionEdit,
@@ -3418,13 +3165,7 @@ function App() {
   const handleDisconnectSession = useCallback(
     async (tab: Tab) => {
       const pane = getActivePane(tab);
-      if (
-        !pane ||
-        pane.connecting ||
-        pane.connectError ||
-        pane.paneKind === "file"
-      )
-        return;
+      if (!pane || pane.connecting || pane.connectError || pane.paneKind === "file") return;
       if (hasFileDocumentDependency(pane.sessionId)) {
         notifyFileDocumentDependency();
         return;
@@ -3438,20 +3179,14 @@ function App() {
 
       toast.success(t("tabCtx.disconnectSuccess"));
     },
-    [
-      closePaneBackendSession,
-      hasFileDocumentDependency,
-      notifyFileDocumentDependency,
-      t,
-    ],
+    [closePaneBackendSession, hasFileDocumentDependency, notifyFileDocumentDependency, t],
   );
 
   const handleReconnectSessionById = useCallback(
     async (sessionId: string) => {
       const tab = findTabBySessionId(tabs, sessionId);
       const pane = tab ? findPaneBySessionId(tab, sessionId) : null;
-      if (!tab || !pane || pane.connecting || !canCreateSessionFromPane(pane))
-        return;
+      if (!tab || !pane || pane.connecting || !canCreateSessionFromPane(pane)) return;
       if (hasFileDocumentDependency(pane.sessionId)) {
         notifyFileDocumentDependency();
         return;
@@ -3509,7 +3244,6 @@ function App() {
     },
     [
       closePaneBackendSession,
-      createSessionForPane,
       hasFileDocumentDependency,
       hasPane,
       maybePromptConnectionEdit,
@@ -3530,6 +3264,7 @@ function App() {
       const leaf = terminalWindows
         ? findTerminalWindowLeafByTabId(terminalWindows, tab.id)
         : null;
+
       if (!leaf) {
         toast.error(t("tabCtx.splitFailed"));
         return;
@@ -3597,7 +3332,6 @@ function App() {
     },
     [
       addPendingTab,
-      createSessionForPane,
       hasTab,
       markTabConnectionFailed,
       maybePromptConnectionEdit,
@@ -3687,7 +3421,6 @@ function App() {
     },
     [
       closePaneBackendSession,
-      createSessionForPane,
       hasFileDocumentDependency,
       hasPane,
       markPaneConnectionFailed,
@@ -3744,13 +3477,7 @@ function App() {
 
       await requestClosePane(tab, pane);
     },
-    [
-      hasFileDocumentDependency,
-      notifyFileDocumentDependency,
-      requestClosePane,
-      t,
-      tabs,
-    ],
+    [hasFileDocumentDependency, notifyFileDocumentDependency, requestClosePane, t, tabs],
   );
 
   const canReconnectSessionById = useCallback(
@@ -3825,9 +3552,9 @@ function App() {
 
   const handleOpenChat = useCallback(() => {
     if (!isLocked) {
-      updateUi((prev) => buildPanelOpenUpdate(prev, "aiAssistant", multiPanelOpen, "right"));
+      openPanel("aiAssistant", "right");
     }
-  }, [isLocked, multiPanelOpen, updateUi]);
+  }, [isLocked, openPanel]);
 
   const handleShowAllCommands = useCallback(() => {
     if (!isLocked) {
@@ -4063,6 +3790,8 @@ function App() {
     showLabelsRight,
     showLeft: showLeftActivityBar,
     showRight: showRightActivityBar,
+    leftHiddenItems,
+    rightHiddenItems,
     toggleActiveIds,
     handleItemSelect,
     handleReorder,
@@ -4070,10 +3799,18 @@ function App() {
     handleToggleLabel,
     handleToggleVisibility,
     handleSetVisibility,
+    handleHideItem,
+    handleShowItem,
+    handleToggleItemVisibility,
+    handleResetActivityBarLayout,
+
   } = useActivityBarController({
     uiConfig,
     recordingSessions,
     multiPanelOpen,
+    panelOpenMode,
+    onFloatingPanelSelect: handleFloatingPanelSelect,
+    onFloatingPanelMove: handleFloatingPanelMove,
     updateUi,
     setIsLocked,
     t,
@@ -4177,55 +3914,72 @@ function App() {
     [tabsById, terminalWindows],
   );
   const sendCommandSessionTargets = useMemo(() => {
-    if (!terminalWindows) return [];
-
-    const targets: {
-      id: string;
-      name: string;
-      tabName: string;
-      type: SessionType;
-    }[] = [];
-    const seen = new Set<string>();
-
-    const visit = (node: TerminalWindowNode) => {
-      if (node.kind === "split") {
-        visit(node.first);
-        visit(node.second);
-        return;
+    const currentWindowLabel = getOwnerMainWindowLabel();
+    const targetsById = new Map<
+      string,
+      {
+        id: string;
+        name: string;
+        tabName: string;
+        type: SessionType;
+        ownerWindowLabel?: string | null;
       }
+    >();
 
-      for (const tabId of node.tabIds) {
-        const tab = tabsById.get(tabId);
-        if (!tab) continue;
+    if (terminalWindows) {
+      const visit = (node: TerminalWindowNode) => {
+        if (node.kind === "split") {
+          visit(node.first);
+          visit(node.second);
+          return;
 
-        for (const pane of collectSessionPanes(tab.root)) {
-          if (
-            pane.paneKind !== "terminal" ||
-            pane.type === "S3" ||
-            pane.type === "FTP" ||
-            pane.type === "WebDAV" ||
-            pane.view === "s3" ||
-            pane.view === "ftp" ||
-            pane.view === "webdav" ||
-            !hasLiveSession(pane) ||
-            seen.has(pane.sessionId)
-          ) {
-            continue;
-          }
-          seen.add(pane.sessionId);
-          targets.push({
-            id: pane.sessionId,
-            name: pane.name,
-            tabName: getTabDisplayName(tab),
-            type: pane.type,
-          });
         }
-      }
-    };
 
-    visit(terminalWindows);
-    return targets;
-  }, [tabsById, terminalWindows]);
+        for (const tabId of node.tabIds) {
+          const tab = tabsById.get(tabId);
+          if (!tab) continue;
+
+          for (const pane of collectSessionPanes(tab.root)) {
+            if (
+              pane.paneKind !== "terminal" ||
+              pane.type === "S3" ||
+              pane.type === "FTP" ||
+              pane.type === "WebDAV" ||
+              pane.view === "s3" ||
+              pane.view === "ftp" ||
+              pane.view === "webdav" ||
+              !hasLiveSession(pane)
+            ) {
+              continue;
+            }
+            targetsById.set(pane.sessionId, {
+              id: pane.sessionId,
+              name: pane.name,
+              tabName: getTabDisplayName(tab),
+              type: pane.type,
+              ownerWindowLabel: currentWindowLabel,
+            });
+          }
+        }
+      };
+
+      visit(terminalWindows);
+    }
+
+    for (const session of liveSessionsById?.values() ?? []) {
+      if (!["SSH", "Local", "Telnet", "Serial"].includes(session.session_type)) continue;
+      if (targetsById.has(session.id)) continue;
+      targetsById.set(session.id, {
+        id: session.id,
+        name: session.name,
+        tabName: session.name,
+        type: session.session_type as SessionType,
+        ownerWindowLabel: session.owner_window_label ?? null,
+      });
+    }
+
+    return [...targetsById.values()];
+  }, [liveSessionsById, tabsById, terminalWindows]);
 
   const activeBottomPanel = uiConfig.show_serial_send_panel
     ? "serialSend"
@@ -4391,25 +4145,116 @@ function App() {
     () => (multiPanelOpen ? new Set(rightPanelIds) : undefined),
     [multiPanelOpen, rightPanelIds],
   );
+  const dockedLeftPanelIds = panelOpenMode === "floating" ? [] : leftPanelIds;
+  const dockedRightPanelIds = panelOpenMode === "floating" ? [] : rightPanelIds;
+  const dockedLeftOverlayPanelId = panelOpenMode === "floating" ? null : leftOverlayPanelId;
+  const dockedRightOverlayPanelId = panelOpenMode === "floating" ? null : rightOverlayPanelId;
+  const visibleFloatingPanels =
+    panelOpenMode === "floating" ? floatingPanels : { left: null, right: null };
+  const leftActivityActiveIds = useMemo(() => {
+    if (panelOpenMode !== "floating") return leftActiveIds;
+    return floatingPanels.left ? new Set([floatingPanels.left]) : undefined;
+  }, [floatingPanels.left, leftActiveIds, panelOpenMode]);
+  const rightActivityActiveIds = useMemo(() => {
+    if (panelOpenMode !== "floating") return rightActiveIds;
+    return floatingPanels.right ? new Set([floatingPanels.right]) : undefined;
+  }, [floatingPanels.right, panelOpenMode, rightActiveIds]);
+
+  useEffect(() => {
+    if (panelOpenMode !== "floating") return;
+    const next = clearUnavailableFloatingPanels(floatingPanels, uiConfig);
+    if (next === floatingPanels) return;
+    setFloatingPanels(next);
+    setLastFloatingSide((current) => {
+      if (current && next[current]) return current;
+      return next.right ? "right" : next.left ? "left" : null;
+    });
+  }, [floatingPanels, panelOpenMode, uiConfig]);
+
+  useEffect(() => {
+    if (panelOpenMode !== "floating") return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (isLocked || modalChildWindowCount > 0) return;
+      if (
+        showAbout ||
+        showUpdateDialog ||
+        showSyncGroupDialog ||
+        showQuitConfirm ||
+        showActivityBarResetConfirm ||
+        showSessionQuickSwitcher ||
+        showTemporarySshLink ||
+        Boolean(externalMatchDialog) ||
+        Boolean(postLoginConfirm) ||
+        Boolean(pendingFileDocumentClose) ||
+        Boolean(activeHostKeyRequest) ||
+        Boolean(activeSshAgentRequest) ||
+        Boolean(activeOtpRequest) ||
+        Boolean(activeSshAuthRequest) ||
+        Boolean(dockerSudoPasswordRequest) ||
+        rdpCertificateRequests.length > 0
+      ) {
+        return;
+      }
+
+      const sideToClose =
+        lastFloatingSide && floatingPanels[lastFloatingSide]
+          ? lastFloatingSide
+          : floatingPanels.right
+            ? "right"
+            : floatingPanels.left
+              ? "left"
+              : null;
+      if (!sideToClose) return;
+      event.preventDefault();
+      closeFloatingPanel(sideToClose);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    activeHostKeyRequest,
+    activeOtpRequest,
+    activeSshAgentRequest,
+    activeSshAuthRequest,
+    closeFloatingPanel,
+    dockerSudoPasswordRequest,
+    externalMatchDialog,
+    floatingPanels,
+    isLocked,
+    lastFloatingSide,
+    modalChildWindowCount,
+    panelOpenMode,
+    pendingFileDocumentClose,
+    postLoginConfirm,
+    rdpCertificateRequests.length,
+    showAbout,
+    showActivityBarResetConfirm,
+    showQuitConfirm,
+    showSessionQuickSwitcher,
+    showSyncGroupDialog,
+    showTemporarySshLink,
+    showUpdateDialog,
+  ]);
 
   // When multi-open mode is first enabled, seed the stacks from the active panels.
   useEffect(() => {
-    if (!settingsLoaded || !multiPanelOpen) return;
+    if (!settingsLoaded || !multiPanelOpen || panelOpenMode === "floating") return;
     updateUi((prev) => ({
       ...((prev.left_open_panels?.length ?? 0) === 0 &&
       prev.active_left_panel &&
-      isActivityItemVisible(prev.active_left_panel, prev) &&
+      isActivityItemAvailable(prev.active_left_panel, prev) &&
       !EXCLUSIVE_PANEL_IDS.has(prev.active_left_panel)
         ? { left_open_panels: [prev.active_left_panel] }
         : {}),
       ...((prev.right_open_panels?.length ?? 0) === 0 &&
       prev.active_right_panel &&
-      isActivityItemVisible(prev.active_right_panel, prev) &&
+      isActivityItemAvailable(prev.active_right_panel, prev) &&
       !EXCLUSIVE_PANEL_IDS.has(prev.active_right_panel)
         ? { right_open_panels: [prev.active_right_panel] }
         : {}),
     }));
-  }, [multiPanelOpen, settingsLoaded, updateUi]);
+  }, [multiPanelOpen, panelOpenMode, settingsLoaded, updateUi]);
 
   const handlePanelStackResize = useCallback(
     (
@@ -4445,6 +4290,22 @@ function App() {
     [updateUi],
   );
 
+  const getPanelTitle = useCallback(
+    (panelId: string) => {
+      switch (panelId) {
+        case "securityAuth":
+          return t("securityAuth.title");
+        case "aiAssistant":
+          return t("ai.title");
+        case "recording":
+          return t("recording.panelTitle");
+        default:
+          return t(`panel.${panelId}`);
+      }
+    },
+    [t],
+  );
+
   const renderPanelContent = useCallback(
     (panelId: string | null) => (
       <AppPanelContent
@@ -4452,7 +4313,7 @@ function App() {
         activePane={activePane}
         activeConnection={activeConnection}
         activeSessionId={activeSessionId}
-        activeSshSessionId={activeLiveSshSessionId}
+        activeStatsSessionId={activeStatsSessionId}
         remoteStatsEnabled={activeRemoteStatsEnabled}
         remoteStats={remoteStats}
         gpuMonitorEnabled={uiConfig.show_gpu_monitor ?? false}
@@ -4482,7 +4343,7 @@ function App() {
     ),
     [
       activeConnection,
-      activeLiveSshSessionId,
+      activeStatsSessionId,
       activePane,
       activeSessionId,
       aiIntent,
@@ -4523,7 +4384,11 @@ function App() {
 
   const handleExternalMatchConnection = useCallback((connection: SavedConnection) => {
     setExternalMatchDialog((current) => {
-      current?.resolve({ kind: "saved", connection });
+      current?.resolve({
+        kind: "saved",
+        connection,
+        runtimeModeOverride: current.runtimeModeOverride,
+      });
       return null;
     });
   }, []);
@@ -4549,21 +4414,6 @@ function App() {
       return null;
     });
   }, []);
-
-  const activeSecurityPrompt = securityPromptQueue[0] ?? null;
-  const activeHostKeyRequest =
-    activeSecurityPrompt?.kind === "host-key" ? activeSecurityPrompt.request : null;
-  const activeSshAgentRequest =
-    activeSecurityPrompt?.kind === "ssh-agent" ? activeSecurityPrompt.request : null;
-  const activeOtpRequest =
-    activeSecurityPrompt?.kind === "otp" ? activeSecurityPrompt.request : null;
-  const activeSshAuthRequest =
-    activeSecurityPrompt?.kind === "ssh-auth" ? activeSecurityPrompt.request : null;
-  const removeSecurityPrompt = (requestId: string) => {
-    setSecurityPromptQueue((current) =>
-      current.filter((item) => item.request.requestId !== requestId),
-    );
-  };
 
   return (
     <TransferProvider>
@@ -4629,44 +4479,64 @@ function App() {
             window.dispatchEvent(new CustomEvent("nyaterm:refresh-terminals")),
           locked: isLocked,
           onRequestQuit: handleRequestQuit,
+          onToggleActivityBarItemVisibility: handleToggleItemVisibility,
+          onRequestActivityBarReset: () => setShowActivityBarResetConfirm(true),
+          onPanelOpenModeChange: handlePanelOpenModeChange,
         }}
         leftActivityBar={{
           items: leftTopItems,
           bottomItems: leftBottomItems,
-          activeId: uiConfig.active_left_panel,
-          activeIds: leftActiveIds,
+          hiddenItems: leftHiddenItems,
+          activeId: panelOpenMode === "floating" ? null : uiConfig.active_left_panel,
+          activeIds: leftActivityActiveIds,
           activeBottomIds: toggleActiveIds,
           onSelect: handleItemSelect,
           onReorder: (zoneKey, ids) => handleReorder("left", zoneKey, ids),
           onMoveItem: handleMoveItem,
+          onHideItem: handleHideItem,
+          onShowItem: handleShowItem,
+          onRequestResetLayout: () => setShowActivityBarResetConfirm(true),
+          panelOpenMode,
+          onPanelOpenModeChange: handlePanelOpenModeChange,
           onToggleLabel: () => handleToggleLabel("left"),
           onHide: () => handleSetVisibility("left", false),
           onShow: () => handleSetVisibility("left", true),
           showLabels: showLabelsLeft,
           visible: showLeftActivityBar,
+
         }}
         rightActivityBar={{
           items: rightTopItems,
           bottomItems: rightBottomItems,
-          activeId: uiConfig.active_right_panel,
-          activeIds: rightActiveIds,
+          hiddenItems: rightHiddenItems,
+          activeId: panelOpenMode === "floating" ? null : uiConfig.active_right_panel,
+          activeIds: rightActivityActiveIds,
           activeBottomIds: toggleActiveIds,
           onSelect: handleItemSelect,
           onReorder: (zoneKey, ids) => handleReorder("right", zoneKey, ids),
           onMoveItem: handleMoveItem,
+          onHideItem: handleHideItem,
+          onShowItem: handleShowItem,
+          onRequestResetLayout: () => setShowActivityBarResetConfirm(true),
+          panelOpenMode,
+          onPanelOpenModeChange: handlePanelOpenModeChange,
           onToggleLabel: () => handleToggleLabel("right"),
           onHide: () => handleSetVisibility("right", false),
           onShow: () => handleSetVisibility("right", true),
           showLabels: showLabelsRight,
           visible: showRightActivityBar,
+
         }}
         onLeftResize={handleLeftResize}
         onRightResize={handleRightResize}
         panelContent={renderPanelContent}
-        leftPanelIds={leftPanelIds}
-        rightPanelIds={rightPanelIds}
-        leftOverlayPanelId={leftOverlayPanelId}
-        rightOverlayPanelId={rightOverlayPanelId}
+        panelTitle={getPanelTitle}
+        leftPanelIds={dockedLeftPanelIds}
+        rightPanelIds={dockedRightPanelIds}
+        floatingPanelIds={visibleFloatingPanels}
+        onCloseFloatingPanel={closeFloatingPanel}
+        leftOverlayPanelId={dockedLeftOverlayPanelId}
+        rightOverlayPanelId={dockedRightOverlayPanelId}
         panelStackSizes={uiConfig.panel_stack_sizes ?? {}}
         onPanelStackResize={handlePanelStackResize}
         workspace={{
@@ -4706,15 +4576,18 @@ function App() {
           activePanel: activeBottomPanel,
           quickCmdHeight: uiConfig.quick_cmd_height || 180,
           serialSendHeight: uiConfig.serial_send_height || 180,
+          clearAfterSend: uiConfig.serial_send_clear_after_send ?? false,
           activeSerialSessionId,
           activeNonSerialSessionId,
           activeNonSerialSessionIds,
           syncGroups,
+          currentWindowLabel: getOwnerMainWindowLabel(),
           sessionTargets: sendCommandSessionTargets,
           sendCommandDraft,
           onSendCommandDraftConsumed: handleSendCommandDraftConsumed,
           onQuickCmdResize: handleQuickCmdResize,
           onSerialSendResize: handleSerialSendResize,
+          onClearAfterSendChange: (enabled) => updateUi({ serial_send_clear_after_send: enabled }),
           onCommandSend: handleHistoryCommand,
           onSendToAllSessions: handleSendToAllSessions,
         }}
@@ -4759,35 +4632,39 @@ function App() {
           onRequestClose: handleRequestWindowClose,
         }}
       />
-      <SessionQuickSwitcher
-        open={showSessionQuickSwitcher}
-        scope={sessionSwitcherScope}
-        activeSessionId={activePane?.sessionId ?? activeSessionId ?? null}
-        workspaceSessions={quickSwitcherSessions}
+      <AppOverlayDialogs
+        t={t}
+        showSessionQuickSwitcher={showSessionQuickSwitcher}
+        sessionSwitcherScope={sessionSwitcherScope}
+        activeSessionId={activeSessionId}
+        quickSwitcherSessions={quickSwitcherSessions}
+
         savedConnections={savedConnections}
-        onClose={handleCloseSessionQuickSwitcher}
-        onSelectSession={handleQuickSwitchSession}
-        onOpenConnection={handleQuickOpenConnection}
-        onNewSshSession={handleQuickSwitcherNewSshSession}
+        onCloseSessionQuickSwitcher={handleCloseSessionQuickSwitcher}
+        onQuickSwitchSession={handleQuickSwitchSession}
+        onQuickOpenConnection={handleQuickOpenConnection}
+        onQuickSwitcherNewSshSession={handleQuickSwitcherNewSshSession}
+        showTemporarySshLink={showTemporarySshLink}
+        onTemporarySshLinkOpenChange={setShowTemporarySshLink}
+        onTemporarySshConnect={handleTemporarySshConnect}
+        externalMatchDialog={externalMatchDialog}
+        savedGroups={savedGroups}
+        onExternalMatchOpenChange={handleExternalMatchOpenChange}
+        onExternalMatchConnection={handleExternalMatchConnection}
+        onExternalMatchTemporary={handleExternalMatchTemporary}
+        pendingFileDocumentClose={pendingFileDocumentClose}
+        savingFileDocuments={savingFileDocuments}
+        onPendingFileDocumentCloseOpenChange={handlePendingFileDocumentCloseOpenChange}
+        onSaveFileDocumentsAndClose={handleSaveFileDocumentsAndClose}
+        onDiscardFileDocumentsAndClose={handleDiscardFileDocumentsAndClose}
+        postLoginConfirm={postLoginConfirm}
+        onPostLoginConfirmOpenChange={handlePostLoginConfirmOpenChange}
+        onPostLoginContinue={handlePostLoginContinue}
       />
       <LocalShellPickerDialog
         open={showLocalShellPicker}
         onClose={handleCloseLocalShellPicker}
         onSelect={handleSelectLocalShell}
-      />
-      <TemporarySshLinkDialog
-        open={showTemporarySshLink}
-        onOpenChange={setShowTemporarySshLink}
-        onConnect={handleTemporarySshConnect}
-      />
-      <ExternalConnectionMatchDialog
-        open={externalMatchDialog !== null}
-        connections={externalMatchDialog?.connections ?? []}
-        groups={savedGroups}
-        temporary={externalMatchDialog?.temporary ?? null}
-        onOpenChange={handleExternalMatchOpenChange}
-        onSelectConnection={handleExternalMatchConnection}
-        onUseTemporary={handleExternalMatchTemporary}
       />
       <RemoteDesktopClientMissingDialog
         open={remoteDesktopMissing !== null}
@@ -4795,41 +4672,16 @@ function App() {
         recommendations={remoteDesktopMissing?.recommendations ?? []}
         onClose={() => setRemoteDesktopMissing(null)}
       />
-      <UnsavedChangesDialog
-        open={pendingFileDocumentClose !== null}
-        dirtyCount={pendingFileDocumentClose?.paneIds.length ?? 0}
-        hasPendingTab={false}
-        saving={savingFileDocuments}
-        onOpenChange={(open) => {
-          if (!open && !savingFileDocuments) setPendingFileDocumentClose(null);
+      <ActivityBarResetDialog
+        t={t}
+        open={showActivityBarResetConfirm}
+        onOpenChange={setShowActivityBarResetConfirm}
+        onConfirm={() => {
+          setShowActivityBarResetConfirm(false);
+          handleResetActivityBarLayout();
+
         }}
-        onSaveAndClose={handleSaveFileDocumentsAndClose}
-        onDiscard={handleDiscardFileDocumentsAndClose}
       />
-      <AlertDialog
-        open={postLoginConfirm !== null}
-        onOpenChange={handlePostLoginConfirmOpenChange}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("externalOpen.postLoginConfirmTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t("externalOpen.postLoginConfirmDescription", {
-                name: postLoginConfirm?.connection.name ?? "",
-              })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <pre className="max-h-40 overflow-auto rounded-md border bg-muted p-3 font-mono text-xs whitespace-pre-wrap">
-            {postLoginConfirm?.command ?? ""}
-          </pre>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
-            <AlertDialogAction onClick={handlePostLoginContinue}>
-              {t("externalOpen.continueConnection")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </TransferProvider>
   );
 }

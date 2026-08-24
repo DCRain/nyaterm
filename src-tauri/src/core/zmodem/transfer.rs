@@ -28,6 +28,7 @@ enum TransferState {
         files: Vec<PathBuf>,
         file_index: usize,
         current_file: Option<SendFile>,
+        conflict_mode: ZmodemUploadConflictMode,
         preserve_timestamps: bool,
         stats: TransferStats,
     },
@@ -316,6 +317,7 @@ impl ZmodemTransfer {
             files,
             file_index: 0,
             current_file: None,
+            conflict_mode,
             preserve_timestamps,
             stats: TransferStats::new(),
         };
@@ -536,6 +538,7 @@ impl ZmodemTransfer {
             files,
             file_index,
             current_file,
+            conflict_mode,
             preserve_timestamps,
             stats,
         } = &mut self.state
@@ -659,6 +662,48 @@ impl ZmodemTransfer {
                         tracing::warn!("finish_session error: {e}");
                     }
                 }
+                zmodem2::SenderEvent::FileSkipped => {
+                    if *conflict_mode != ZmodemUploadConflictMode::Skip {
+                        let file_name = current_file
+                            .as_ref()
+                            .map(|file| file.name.clone())
+                            .unwrap_or_else(|| "file".to_string());
+                        self.state = TransferState::Done;
+                        actions.push(ZmodemAction::SendToRemote(cancel_sequence()));
+                        actions.push(ZmodemAction::EmitEvent(ZmodemEvent::Failed {
+                            reason: format!(
+                                "Remote refused {file_name}; the destination may be unwritable."
+                            ),
+                        }));
+                        return actions;
+                    }
+
+                    *current_file = None;
+                    *file_index += 1;
+                    if *file_index < files.len() {
+                        self.progress_throttle.reset();
+                        actions.extend(Self::start_file_for_sender(
+                            sender,
+                            files,
+                            *file_index,
+                            current_file,
+                            *preserve_timestamps,
+                        ));
+                        if let Some(sf) = current_file {
+                            if self.progress_throttle.should_emit(0, true) {
+                                actions.push(ZmodemAction::EmitEvent(ZmodemEvent::Progress {
+                                    file_name: sf.name.clone(),
+                                    bytes_transferred: 0,
+                                    total_size: sf.size,
+                                    local_path: None,
+                                    direction: ZmodemDirection::Upload,
+                                }));
+                            }
+                        }
+                    } else if let Err(e) = sender.finish_session() {
+                        tracing::warn!("finish_session error: {e}");
+                    }
+                }
                 zmodem2::SenderEvent::SessionComplete => {
                     log_transfer_complete(ZmodemDirection::Upload, self.file_count, stats);
                     self.state = TransferState::Done;
@@ -683,6 +728,7 @@ impl ZmodemTransfer {
             files,
             file_index,
             current_file,
+            conflict_mode: _,
             preserve_timestamps,
             ..
         } = &mut self.state

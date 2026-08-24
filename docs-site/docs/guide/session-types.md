@@ -4,12 +4,15 @@ sidebar_position: 0
 
 # 会话类型
 
-NyaTerm 不只是 SSH 客户端，而是一个把多类终端与远程桌面工作流放到同一工作区中的桌面应用。当前支持六类会话：
+NyaTerm 不只是 SSH 客户端，而是一个把多类终端、远程桌面与对象存储工作流放到同一工作区中的桌面应用。当前支持九类会话：
 
 - **SSH**
 - **本地终端**
 - **Telnet**
 - **串口**
+- **S3**
+- **FTP**
+- **WebDAV**
 - **RDP**
 - **VNC**
 
@@ -23,8 +26,11 @@ NyaTerm 不只是 SSH 客户端，而是一个把多类终端与远程桌面工�
 | 本地终端 | 本地 shell、脚本调试、构建命令 | 共享同一套终端 UI、命令历史、分屏 |
 | Telnet | 旧设备、实验环境、兼容性排障 | 终端工作区能力，支持 `Backspace Mode`，但不包含 SSH 专属特性 |
 | 串口 | 路由器、交换机、板卡、嵌入式调试口 | 串口参数配置、`Backspace Mode` 与终端工作区能力 |
-| RDP | Windows 远程桌面、图形化运维入口 | 内嵌远程桌面画面、NLA/CredSSP、证书验证、文本剪贴板、窗口适配与重连；也可按平台启动外部 RDP 客户端 |
-| VNC | 裸 TCP VNC 服务、虚拟机控制台、轻量图形远程桌面 | 内嵌 Raw / ZRLE / Tight / Tight JPEG 显示、None / VNC Auth、窗口适配、文本剪贴板与重连；也可启动外部 VNC 客户端 |
+| S3 | 对象存储浏览与跨后端拷贝 | 双栏文件工作区、与本地 / SFTP / FTP / WebDAV 互拷；无隐藏文件开关 |
+| FTP | FTP / FTPS 文件站点 | 双栏文件工作区、TLS（FTPS）、隐藏文件过滤、跨后端拷贝 |
+| WebDAV | NAS / Nextcloud 等 WebDAV 网盘 | 双栏文件工作区、与本地 / SFTP / S3 / FTP 互拷；无隐藏文件开关 |
+| RDP | Windows 远程桌面、图形化运维入口 | 内嵌远程桌面画面、NLA/CredSSP、证书验证、代理 / SSH 跳板机、文本剪贴板、窗口适配与重连；也可按平台启动外部 RDP 客户端 |
+| VNC | 裸 TCP VNC 服务、虚拟机控制台、轻量图形远程桌面 | 内嵌 Raw / ZRLE / Tight / Tight JPEG 显示、None / VNC Auth、代理 / SSH 跳板机、窗口适配、文本剪贴板与重连；也可启动外部 VNC 客户端 |
 
 ## SSH
 
@@ -105,6 +111,35 @@ Telnet 会话适合：
 
 串口会话同样可以放进 NyaTerm 的标签页与分屏工作区中，适合边看一个串口输出，边在另一个 SSH 或本地终端里执行命令。
 
+## S3
+
+S3 会话适合浏览兼容 S3 的对象存储（含阿里云 OSS 等），以双栏文件工作区打开：一侧通常是本机或其它已连接的文件来源，另一侧是存储桶前缀。支持跨后端拷贝，但对象存储没有 POSIX 隐藏文件语义，因此不提供隐藏文件开关。终端 CWD 自动同步也不会作用于 S3 窗格。
+
+创建 S3 会话时通常需要：
+
+- Endpoint、Region、Bucket
+- Access Key / Secret、可选 Session Token
+- 可选根路径前缀与虚拟主机风格（部分厂商会自动启用）
+
+## FTP
+
+FTP 会话适合传统 FTP / 显式 FTPS 站点，同样使用双栏文件工作区，并支持隐藏文件过滤以及与本地、SFTP、S3、WebDAV 之间的拷贝。
+
+创建 FTP 会话时通常需要：
+
+- 主机、端口、用户名、密码
+- 根路径
+- 是否启用 TLS（FTPS）
+
+## WebDAV
+
+WebDAV 会话适合 NAS、Nextcloud 等 WebDAV 网盘。工作区形态与 S3 类似：双栏浏览与跨后端拷贝，但不提供隐藏文件开关，也不跟随终端 CWD。
+
+创建 WebDAV 会话时通常需要：
+
+- Endpoint
+- 可选根路径、用户名与密码
+
 ## RDP
 
 RDP 会话适合连接 Windows 主机或提供 RDP 服务的远程桌面环境。它和终端会话共享同一套标签页、分屏和保存连接体系，但底层是图形远程桌面，而不是文本终端。
@@ -114,13 +149,14 @@ RDP 会话适合连接 Windows 主机或提供 RDP 服务的远程桌面环境�
 - 主机、端口、用户名、密码和域
 - 是否启用网络级身份验证（NLA / CredSSP）
 - 证书策略：未知证书时询问、严格拒绝或仅本次接受
+- 网络：已保存代理或 SSH 跳板机
 - 显示模式：适应窗口或固定尺寸
 - 文本剪贴板模式
 - 自动重连次数
 
 首次连接未知证书的 RDP 主机时，NyaTerm 会显示证书验证对话框。你可以只接受本次连接，也可以接受并记住该证书；如果已保存的证书后续发生变化，连接前会再次提示。
 
-RDP 目前不提供终端命令历史、SFTP 文件浏览器、SSH 代理 / 跳板机或远程资源监控。如果你需要命令行增强能力，应优先使用 SSH、本地终端、Telnet 或串口会话。
+RDP 目前不提供终端命令历史、SFTP 文件浏览器或远程资源监控。如果你需要命令行增强能力，应优先使用 SSH、本地终端、Telnet 或串口会话。
 
 ### 外部 RDP 客户端
 
@@ -142,12 +178,13 @@ VNC 会话适合连接提供传统 RFB / VNC 服务的虚拟机控制台、实�
 
 - 主机和端口
 - 安全模式：自动、None 或 classic VNC Authentication
+- 网络：已保存代理或 SSH 跳板机
 - 显示模式：适应窗口、实际尺寸或拉伸
 - 文本剪贴板开关
 - 自动重连次数
 - shared / view-only 行为
 
-当前 VNC 传输仅支持 direct TCP，没有 TLS / VeNCrypt。classic VNC Authentication 的密码限制为 8 字节以内，NyaTerm 会拒绝超长密码而不会截断。画面编码默认按 `DesktopSizePseudo`、ZRLE、Tight、Raw 顺序声明；Tight JPEG 会在后端解码成统一 RGBA framebuffer，Raw 仍保留为稳定 fallback。暂不支持 CopyRect、cursor pseudo-encoding、远程 resize、代理和 SSH transport。文本剪贴板限定为 Latin-1 文本，避免把二进制或超大内容塞进 VNC 协议路径。
+VNC 协议层没有 TLS / VeNCrypt 支持，但底层 TCP 连接可以通过已保存 SOCKS5 / HTTP / ProxyCommand 代理或 SSH 跳板机建立。classic VNC Authentication 的密码限制为 8 字节以内，NyaTerm 会拒绝超长密码而不会截断。画面编码默认按 `DesktopSizePseudo`、ZRLE、Tight、Raw 顺序声明；Tight JPEG 会在后端解码成统一 RGBA framebuffer，Raw 仍保留为稳定 fallback。暂不支持 CopyRect、cursor pseudo-encoding 和远程 resize。文本剪贴板限定为 Latin-1 文本，避免把二进制或超大内容塞进 VNC 协议路径。
 
 ### VNC 互通矩阵
 
@@ -180,6 +217,9 @@ VNC 会话适合连接提供传统 RFB / VNC 服务的虚拟机控制台、实�
 - 要本机 shell：用 **本地终端**
 - 要兼容传统远程终端：用 **Telnet**
 - 要接调试口 / 设备串口：用 **串口**
+- 要对象存储文件浏览：用 **S3**
+- 要 FTP / FTPS 站点：用 **FTP**
+- 要 NAS / WebDAV 网盘：用 **WebDAV**
 - 要 Windows 图形远程桌面：用 **RDP**
 - 要 VNC / 虚拟机控制台图形桌面：用 **VNC**
 
@@ -190,6 +230,7 @@ NyaTerm 的优势之一，是允许你把这些类型混合放进同一工作区
 - 左边 SSH 看远端日志
 - 右边本地终端执行打包脚本
 - 再开一个串口标签观察设备启动信息
+- 再开 S3 / FTP / WebDAV 双栏工作区做跨后端拷贝
 - 另一个分屏中打开 RDP 查看 Windows 远程桌面状态
 - 再开一个 VNC pane 操作虚拟机控制台
 

@@ -28,12 +28,14 @@ import {
   getProviderLabel,
   isBuiltinProvider,
   requiresManualCustomModelEntry,
+  supportsApiFormatSelection,
   supportsCustomModelDiscovery,
 } from "@/lib/aiSettings";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import type {
   AICustomActionConfig,
+  AIApiFormat,
   AIModelConfigItem,
   AIPermissionMode,
   AIProviderCredential,
@@ -68,6 +70,7 @@ function newCredential(): AIProviderCredential {
     id: `credential-${crypto.randomUUID()}`,
     name: "",
     provider_kind: "openai_compatible",
+    api_format: "chat_completions",
     base_url: "",
     api_key: "",
     enabled: true,
@@ -344,7 +347,9 @@ export function AiAgentsTab() {
 
   const updateClaudeCode = useCallback(
     (patch: Partial<ClaudeCodeIntegrationSettings>) =>
-      updateAppSettings({ ai: { ...ai, claude_code: { ...claudeCode, ...patch } } }),
+      updateAppSettings({
+        ai: { ...ai, claude_code: { ...claudeCode, ...patch } },
+      }),
     [ai, claudeCode, updateAppSettings],
   );
 
@@ -490,7 +495,9 @@ export function AiAgentsTab() {
     async (flow: "browser" | "deviceCode") => {
       setBusy(true);
       try {
-        const result = await invoke<CodexLoginStart>("start_codex_login", { flow });
+        const result = await invoke<CodexLoginStart>("start_codex_login", {
+          flow,
+        });
         setDeviceLogin(flow === "deviceCode" ? result : null);
         if (result.authUrl) {
           await openUrl(result.authUrl);
@@ -583,9 +590,7 @@ export function AiAgentsTab() {
                 label={t("ai.codexPath")}
                 value={codex.executable_path ?? ""}
                 placeholder="codex"
-                onChange={(event) =>
-                  updateCodex({ executable_path: event.target.value || null })
-                }
+                onChange={(event) => updateCodex({ executable_path: event.target.value || null })}
                 fieldClassName="lg:col-span-2"
               />
               <SettingSelect
@@ -604,10 +609,12 @@ export function AiAgentsTab() {
                 label={t("ai.codexDefaultModel")}
                 value={codex.default_model ?? "__none__"}
                 onValueChange={(value) =>
-                  updateCodex({ default_model: value === "__none__" ? null : value })
+                  updateCodex({
+                    default_model: value === "__none__" ? null : value,
+                  })
                 }
               >
-                <SelectItem value="__none__">{t("ai.useModelPicker")}</SelectItem>
+                <SelectItem value="__none__">{t("ai.useCodexDefaultModel")}</SelectItem>
                 {codexModels.map((model) => (
                   <SelectItem key={model.id} value={model.name}>
                     {model.name}
@@ -618,7 +625,9 @@ export function AiAgentsTab() {
                 label={t("ai.permissionMode")}
                 value={codex.permission_mode ?? "confirm"}
                 onValueChange={(permission_mode) =>
-                  updateCodex({ permission_mode: permission_mode as AIPermissionMode })
+                  updateCodex({
+                    permission_mode: permission_mode as AIPermissionMode,
+                  })
                 }
               >
                 <SelectItem value="observer">{t("ai.permissionObserver")}</SelectItem>
@@ -716,7 +725,9 @@ export function AiAgentsTab() {
                 value={claudeCode.executable_path ?? ""}
                 placeholder="claude"
                 onChange={(event) =>
-                  updateClaudeCode({ executable_path: event.target.value || null })
+                  updateClaudeCode({
+                    executable_path: event.target.value || null,
+                  })
                 }
                 fieldClassName="lg:col-span-2"
               />
@@ -725,7 +736,9 @@ export function AiAgentsTab() {
                 value={claudeCode.config_directory ?? ""}
                 placeholder="~/.claude"
                 onChange={(event) =>
-                  updateClaudeCode({ config_directory: event.target.value || null })
+                  updateClaudeCode({
+                    config_directory: event.target.value || null,
+                  })
                 }
               />
               <SettingInput
@@ -733,14 +746,18 @@ export function AiAgentsTab() {
                 value={claudeCode.default_model ?? ""}
                 placeholder="sonnet"
                 onChange={(event) =>
-                  updateClaudeCode({ default_model: event.target.value || null })
+                  updateClaudeCode({
+                    default_model: event.target.value || null,
+                  })
                 }
               />
               <SettingSelect
                 label={t("ai.permissionMode")}
                 value={claudeCode.permission_mode ?? "confirm"}
                 onValueChange={(permission_mode) =>
-                  updateClaudeCode({ permission_mode: permission_mode as AIPermissionMode })
+                  updateClaudeCode({
+                    permission_mode: permission_mode as AIPermissionMode,
+                  })
                 }
               >
                 <SelectItem value="observer">{t("ai.permissionObserver")}</SelectItem>
@@ -910,7 +927,12 @@ function groupModels(
   }
   return Array.from(groups.entries()).map(([groupKey, items]) => {
     if (groupKey === "codex") {
-      return { groupKey, label: "OpenAI Codex", backend: "codex", models: items };
+      return {
+        groupKey,
+        label: "OpenAI Codex",
+        backend: "codex",
+        models: items,
+      };
     }
     const cred = credentialMap.get(groupKey);
     const label =
@@ -1109,6 +1131,12 @@ export function AiModelsTab() {
   };
 
   const updateCredential = (id: string, patch: Partial<AIProviderCredential>) => {
+    if (
+      patch.provider_kind &&
+      !supportsApiFormatSelection({ provider_kind: patch.provider_kind })
+    ) {
+      patch = { ...patch, api_format: "chat_completions" };
+    }
     const nextCredentials = ai.provider_credentials.map((credential) =>
       credential.id === id ? { ...credential, ...patch } : credential,
     );
@@ -1156,7 +1184,9 @@ export function AiModelsTab() {
   };
 
   const addCredential = () => {
-    update({ provider_credentials: [newCredential(), ...ai.provider_credentials] });
+    update({
+      provider_credentials: [newCredential(), ...ai.provider_credentials],
+    });
   };
 
   const removeCredential = (id: string) => {
@@ -1331,22 +1361,44 @@ export function AiModelsTab() {
                 </div>
               </div>
               {builtin ? (
-                <SettingInput
-                  label={t("settings.apiKey")}
-                  type="password"
-                  placeholder={credential.api_key === "__SET__" ? "__SET__" : "sk-..."}
-                  value={credential.api_key ?? ""}
-                  onChange={(event) =>
-                    updateCredential(credential.id, { api_key: event.target.value })
-                  }
-                />
+                <SettingFieldGrid>
+                  <SettingInput
+                    label={t("settings.apiKey")}
+                    type="password"
+                    placeholder={credential.api_key === "__SET__" ? "__SET__" : "sk-..."}
+                    value={credential.api_key ?? ""}
+                    onChange={(event) =>
+                      updateCredential(credential.id, {
+                        api_key: event.target.value,
+                      })
+                    }
+                  />
+                  {supportsApiFormatSelection(credential) ? (
+                    <SettingSelect
+                      label={t("ai.apiFormat")}
+                      value={credential.api_format ?? "chat_completions"}
+                      onValueChange={(api_format) =>
+                        updateCredential(credential.id, {
+                          api_format: api_format as AIApiFormat,
+                        })
+                      }
+                    >
+                      <SelectItem value="chat_completions">
+                        {t("ai.apiFormatChatCompletions")}
+                      </SelectItem>
+                      <SelectItem value="responses">{t("ai.apiFormatResponses")}</SelectItem>
+                    </SettingSelect>
+                  ) : null}
+                </SettingFieldGrid>
               ) : (
                 <SettingFieldGrid>
                   <SettingInput
                     label={t("ai.profileName")}
                     value={credential.name}
                     onChange={(event) =>
-                      updateCredential(credential.id, { name: event.target.value })
+                      updateCredential(credential.id, {
+                        name: event.target.value,
+                      })
                     }
                   />
                   <SettingSelect
@@ -1371,16 +1423,36 @@ export function AiModelsTab() {
                     placeholder={getCustomProviderBaseUrlPlaceholder(credential.provider_kind)}
                     value={credential.base_url ?? ""}
                     onChange={(event) =>
-                      updateCredential(credential.id, { base_url: event.target.value })
+                      updateCredential(credential.id, {
+                        base_url: event.target.value,
+                      })
                     }
                   />
+                  {supportsApiFormatSelection(credential) ? (
+                    <SettingSelect
+                      label={t("ai.apiFormat")}
+                      value={credential.api_format ?? "chat_completions"}
+                      onValueChange={(api_format) =>
+                        updateCredential(credential.id, {
+                          api_format: api_format as AIApiFormat,
+                        })
+                      }
+                    >
+                      <SelectItem value="chat_completions">
+                        {t("ai.apiFormatChatCompletions")}
+                      </SelectItem>
+                      <SelectItem value="responses">{t("ai.apiFormatResponses")}</SelectItem>
+                    </SettingSelect>
+                  ) : null}
                   <SettingInput
                     label={t("settings.apiKey")}
                     type="password"
                     placeholder={credential.api_key === "__SET__" ? "__SET__" : "sk-..."}
                     value={credential.api_key ?? ""}
                     onChange={(event) =>
-                      updateCredential(credential.id, { api_key: event.target.value })
+                      updateCredential(credential.id, {
+                        api_key: event.target.value,
+                      })
                     }
                   />
                 </SettingFieldGrid>

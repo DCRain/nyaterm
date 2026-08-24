@@ -8,7 +8,7 @@ use super::client::{
 use super::io::{open_shell_channel, ssh_io_loop};
 use crate::config::{
     AiExecutionProfile, SshAgentForwardingConfig, SshAgentForwardingPolicy, SshProfile,
-    effective_cwd_follow_mode_for_profile,
+    SshRuntimeMode, effective_cwd_follow_mode_for_runtime,
 };
 use crate::core::{
     SessionCommand, SessionHandle, SessionInfo, SessionManager, SessionReadyHook, SessionType,
@@ -16,9 +16,12 @@ use crate::core::{
 };
 use crate::error::{AppError, AppResult};
 use std::future::Future;
+use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use tauri::{AppHandle, Manager};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::{mpsc, oneshot};
 
 async fn create_authenticated_connection(
@@ -272,6 +275,81 @@ fn set_owner_window_label(config: &mut SshConfig, owner_window_label: Option<Str
     }
 }
 
+pub(crate) struct SshForwardedStream {
+    stream: russh::ChannelStream<russh::client::Msg>,
+    _ssh_handle: SshHandle,
+}
+
+impl AsyncRead for SshForwardedStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for SshForwardedStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.stream).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_shutdown(cx)
+    }
+}
+
+pub(crate) async fn open_ssh_direct_tcpip_stream(
+    app: &AppHandle,
+    jump_connection_id: &str,
+    target_host: &str,
+    target_port: u16,
+    owner_window_label: Option<String>,
+) -> AppResult<SshForwardedStream> {
+    let mut ssh_config = load_saved_ssh_config(app, jump_connection_id)?;
+    set_owner_window_label(&mut ssh_config, owner_window_label);
+    let (ssh_handle, _x11_rx) = loop {
+        match create_authenticated_connection(app, &ssh_config, false).await {
+            Err(error) if is_agent_auth_retry(&error) => continue,
+            result => break result,
+        }
+    }?;
+
+    let channel = {
+        let handle = ssh_handle.target_handle();
+        let handle = handle.lock().await;
+        handle
+            .channel_open_direct_tcpip(target_host, target_port.into(), "127.0.0.1", 0)
+            .await
+            .map_err(|error| {
+                AppError::Channel(format!(
+                    "Failed to open SSH ProxyJump direct-tcpip channel to {target_host}:{target_port}: {error}"
+                ))
+            })?
+    };
+
+    tracing::info!(
+        jump_connection_id = %jump_connection_id,
+        target_host = %target_host,
+        target_port = target_port,
+        "SSH direct-tcpip stream opened"
+    );
+
+    Ok(SshForwardedStream {
+        stream: channel.into_stream(),
+        _ssh_handle: ssh_handle,
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SshRuntimeCapabilities {
     remote_file_browser_enabled: bool,
@@ -281,9 +359,12 @@ struct SshRuntimeCapabilities {
 
 fn resolve_runtime_capabilities(config: &SshConfig) -> SshRuntimeCapabilities {
     let network_device_profile = config.ssh_profile == SshProfile::NetworkDevice;
+    let terminal_only = config.runtime_mode == SshRuntimeMode::Terminal;
     SshRuntimeCapabilities {
-        remote_file_browser_enabled: config.sftp.enabled && !network_device_profile,
-        remote_stats_enabled: !network_device_profile,
+        remote_file_browser_enabled: config.sftp.enabled
+            && !network_device_profile
+            && !terminal_only,
+        remote_stats_enabled: !network_device_profile && !terminal_only,
         network_device_profile,
     }
 }
@@ -414,13 +495,17 @@ async fn create_ssh_session_inner(
     }?;
     diagnostics.set_stage(SshDiagnosticStage::Authenticated);
     let capabilities = resolve_runtime_capabilities(&config);
-    let effective_cwd_follow_mode =
-        effective_cwd_follow_mode_for_profile(&config.sftp, &config.ssh_profile);
+    let effective_cwd_follow_mode = effective_cwd_follow_mode_for_runtime(
+        &config.sftp,
+        &config.ssh_profile,
+        &config.runtime_mode,
+    );
     tracing::info!(
         session_id = %session_id,
         host = %config.host,
         port = config.port,
         ssh_profile = ?config.ssh_profile,
+        runtime_mode = ?config.runtime_mode,
         terminal_type = %config.terminal_type.as_str(),
         sftp_enabled = config.sftp.enabled,
         cwd_follow_mode = ?config.sftp.cwd_follow_mode,
@@ -591,14 +676,18 @@ pub async fn create_multiplexed_ssh_session(
     let diagnostics = SshDiagnosticContext::new(Some(session_id.clone()));
     diagnostics.set_stage(SshDiagnosticStage::Authenticated);
     let capabilities = resolve_runtime_capabilities(&config);
-    let effective_cwd_follow_mode =
-        effective_cwd_follow_mode_for_profile(&config.sftp, &config.ssh_profile);
+    let effective_cwd_follow_mode = effective_cwd_follow_mode_for_runtime(
+        &config.sftp,
+        &config.ssh_profile,
+        &config.runtime_mode,
+    );
     tracing::info!(
         session_id = %session_id,
         source_session_id,
         host = %config.host,
         port = config.port,
         ssh_profile = ?config.ssh_profile,
+        runtime_mode = ?config.runtime_mode,
         terminal_type = %config.terminal_type.as_str(),
         sftp_enabled = config.sftp.enabled,
         cwd_follow_mode = ?config.sftp.cwd_follow_mode,
@@ -728,7 +817,7 @@ mod tests {
     };
     use crate::config::{
         SftpSettings, SshAgentEndpoint, SshAgentForwardingConfig, SshAgentForwardingPolicy,
-        SshAgentForwardingSources, SshProfile, SshTerminalType,
+        SshAgentForwardingSources, SshProfile, SshRuntimeMode, SshTerminalType,
     };
     use crate::core::ssh::client::{SshAuth, SshConfig};
     use crate::error::AppError;
@@ -800,6 +889,7 @@ mod tests {
             post_login: None,
             ssh_algorithms: None,
             ssh_profile: profile,
+            runtime_mode: SshRuntimeMode::Standard,
             terminal_type: SshTerminalType::default(),
             sftp: SftpSettings::default(),
             encoding: "UTF-8".to_string(),
@@ -830,5 +920,31 @@ mod tests {
         assert!(resolve_runtime_capabilities(&enabled).remote_file_browser_enabled);
         assert!(!resolve_runtime_capabilities(&disabled).remote_file_browser_enabled);
         assert!(resolve_runtime_capabilities(&enabled).remote_stats_enabled);
+    }
+
+    #[test]
+    fn terminal_runtime_capabilities_disable_background_ssh_features() {
+        let mut config = test_config(SshProfile::Standard);
+        config.runtime_mode = SshRuntimeMode::Terminal;
+
+        let capabilities = resolve_runtime_capabilities(&config);
+
+        assert!(!capabilities.remote_file_browser_enabled);
+        assert!(!capabilities.remote_stats_enabled);
+        assert!(!capabilities.network_device_profile);
+    }
+
+    #[test]
+    fn ssh_runtime_mode_defaults_to_standard() {
+        let config: SshConfig = serde_json::from_value(serde_json::json!({
+            "name": "test",
+            "host": "example.com",
+            "port": 22,
+            "username": "root",
+            "auth": { "type": "none" }
+        }))
+        .expect("ssh config");
+
+        assert_eq!(config.runtime_mode, SshRuntimeMode::Standard);
     }
 }

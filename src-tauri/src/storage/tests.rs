@@ -1,6 +1,7 @@
 use super::*;
 use crate::config::{
-    ConnectionAuth, ConnectionType, Group, SavedConnection, SessionsConfig, SftpSettings,
+    ConnectionAuth, ConnectionCustomIcon, ConnectionType, Group, SavedConnection, SessionsConfig,
+    SftpSettings,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -70,6 +71,15 @@ fn sample_connection(id: &str, group_id: Option<&str>, sort_order: i32) -> Saved
         updated_at_ms: None,
         last_used_at_ms: None,
         open_on_startup: false,
+    }
+}
+fn sample_custom_icon(id: &str, data_url: &str) -> ConnectionCustomIcon {
+    ConnectionCustomIcon {
+        id: id.to_string(),
+        name: id.to_string(),
+        data_url: data_url.to_string(),
+        created_at_ms: 10,
+        updated_at_ms: 10,
     }
 }
 #[test]
@@ -234,6 +244,7 @@ fn v1_migration_splits_sessions_deletes_legacy_tables_and_keeps_external_backup(
             let sessions = SessionsConfig {
                 groups: vec![sample_group("group-a", 1)],
                 connections: vec![sample_connection("conn-a", Some("group-a"), 1)],
+                custom_icons: vec![],
             };
             json.insert(
                 tables::LEGACY_JSON_SETTINGS,
@@ -286,6 +297,10 @@ fn replace_sessions_splits_entities() {
     let config = SessionsConfig {
         groups: vec![sample_group("group-a", 1)],
         connections: vec![sample_connection("conn-a", Some("group-a"), 1)],
+        custom_icons: vec![sample_custom_icon(
+            "custom-icon-a",
+            "data:image/png;base64,AAAA",
+        )],
     };
     storage.replace_sessions(&config).expect("save sessions");
     assert!(
@@ -295,6 +310,39 @@ fn replace_sessions_splits_entities() {
     );
     assert_eq!(storage.list_groups().expect("groups").len(), 1);
     assert_eq!(storage.list_connections().expect("connections").len(), 1);
+    assert_eq!(
+        storage
+            .list_connection_custom_icons()
+            .expect("custom icons")
+            .len(),
+        1
+    );
+    let loaded = storage.load_sessions().expect("load sessions");
+    assert_eq!(loaded.custom_icons[0].id, "custom-icon-a");
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn load_sessions_migrates_connection_data_url_icons_into_custom_icon_library() {
+    let (dir, storage) = test_storage("custom-icon-migration");
+    let data_url = "data:image/png;base64,AAAA";
+    let mut connection = sample_connection("conn-a", None, 1);
+    connection.icon = Some(data_url.to_string());
+    storage
+        .save_connection(&connection)
+        .expect("save connection with data url icon");
+
+    let loaded = storage.load_sessions().expect("load sessions");
+
+    assert_eq!(loaded.custom_icons.len(), 1);
+    assert_eq!(loaded.custom_icons[0].data_url, data_url);
+    assert_eq!(
+        storage
+            .list_connection_custom_icons()
+            .expect("stored custom icons")
+            .len(),
+        1
+    );
     let _ = fs::remove_dir_all(dir);
 }
 #[test]

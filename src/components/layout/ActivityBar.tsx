@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import type { PanelOpenMode } from "@/lib/appWorkspace";
 import type { ActivityBarZone } from "@/types/global";
 
 export interface ActivityBarItem {
@@ -99,6 +100,7 @@ const ZONE_LABELS: { zone: ActivityBarZone; key: string; icon: ReactNode }[] = [
 interface ActivityBarProps {
   items: ActivityBarItem[];
   bottomItems?: ActivityBarItem[];
+  hiddenItems?: ActivityBarItem[];
   activeId: string | null;
   /** Additional active panel ids (multi-open panel mode). */
   activeIds?: Set<string>;
@@ -106,10 +108,15 @@ interface ActivityBarProps {
   onSelect: (id: string) => void;
   onReorder: (zone: "top" | "bottom", orderedIds: string[]) => void;
   onMoveItem: (itemId: string, targetZone: ActivityBarZone) => void;
+  onHideItem: (itemId: string) => void;
+  onShowItem: (itemId: string) => void;
   onToggleLabel: () => void;
   onHide?: () => void;
   /** Reveal the activity bar when it is currently hidden. */
   onShow?: () => void;
+  onRequestResetLayout: () => void;
+  panelOpenMode: PanelOpenMode;
+  onPanelOpenModeChange: (mode: PanelOpenMode) => void;
   showLabels: boolean;
   /** When false, the activity bar strip is not rendered by the layout. */
   visible?: boolean;
@@ -121,14 +128,20 @@ interface ActivityBarProps {
 export default function ActivityBar({
   items,
   bottomItems,
+  hiddenItems = [],
   activeId,
   activeIds,
   activeBottomIds,
   onSelect,
   onReorder,
   onMoveItem,
+  onHideItem,
+  onShowItem,
   onToggleLabel,
   onHide,
+  onRequestResetLayout,
+  panelOpenMode,
+  onPanelOpenModeChange,
   showLabels,
   side,
   zone,
@@ -149,6 +162,8 @@ export default function ActivityBar({
 
   return (
     <TooltipProvider delayDuration={400}>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
       <div
         className={cn(
           "flex shrink-0 select-none flex-col overflow-hidden transition-[width] duration-200",
@@ -171,6 +186,7 @@ export default function ActivityBar({
           onSelect={onSelect}
           onReorder={onReorder}
           onMoveItem={onMoveItem}
+          onHideItem={onHideItem}
           onToggleLabel={onToggleLabel}
           onHide={onHide}
           showLabels={showLabels}
@@ -262,6 +278,45 @@ export default function ActivityBar({
           </div>
         </div>
       </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuCheckboxItem
+            checked={panelOpenMode === "floating"}
+            onCheckedChange={(checked) =>
+              onPanelOpenModeChange(checked ? "floating" : "docked")
+            }
+          >
+            {t("panel.floatingMode")}
+          </ContextMenuCheckboxItem>
+          <ContextMenuSeparator />
+          <ContextMenuSub>
+            <ContextMenuSubTrigger disabled={hiddenItems.length === 0}>
+              {t("activityBar.hiddenItems")}
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent>
+              {hiddenItems.length === 0 ? (
+                <ContextMenuItem disabled>{t("activityBar.noHiddenItems")}</ContextMenuItem>
+              ) : (
+                hiddenItems.map((item) => (
+                  <ContextMenuItem key={item.id} onClick={() => onShowItem(item.id)}>
+                    {item.icon}
+                    {item.tooltip}
+                  </ContextMenuItem>
+                ))
+              )}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+          <ContextMenuSeparator />
+          <ContextMenuCheckboxItem checked={showLabels} onCheckedChange={onToggleLabel}>
+            {t("activityBar.showLabel")}
+          </ContextMenuCheckboxItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem onClick={onRequestResetLayout}>
+            {t("activityBar.resetLayout")}
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+
     </TooltipProvider>
   );
 }
@@ -276,6 +331,7 @@ interface DropZoneProps {
   onSelect: (id: string) => void;
   onReorder: (zone: "top" | "bottom", orderedIds: string[]) => void;
   onMoveItem: (itemId: string, targetZone: ActivityBarZone) => void;
+  onHideItem: (itemId: string) => void;
   onToggleLabel: () => void;
   onHide?: () => void;
   showLabels: boolean;
@@ -294,6 +350,7 @@ function DropZone({
   onSelect,
   onReorder,
   onMoveItem,
+  onHideItem,
   onToggleLabel,
   onHide,
   showLabels,
@@ -504,6 +561,7 @@ function DropZone({
           tooltipSide={tooltipSide}
           currentZone={zoneName}
           onMoveItem={onMoveItem}
+          onHideItem={onHideItem}
           onToggleLabel={onToggleLabel}
           onHide={onHide}
           dropZoneName={zoneName}
@@ -543,6 +601,7 @@ function ActivityBarButton({
   tooltipSide,
   currentZone,
   onMoveItem,
+  onHideItem,
   onToggleLabel,
   onHide,
   dropZoneName,
@@ -567,6 +626,7 @@ function ActivityBarButton({
   tooltipSide: "left" | "right";
   currentZone: ActivityBarZone;
   onMoveItem: (itemId: string, targetZone: ActivityBarZone) => void;
+  onHideItem: (itemId: string) => void;
   onToggleLabel: () => void;
   onHide?: () => void;
   dropZoneName: ActivityBarZone;
@@ -602,6 +662,7 @@ function ActivityBarButton({
               onPointerMove={onPointerMove}
               onPointerUp={onPointerEnd}
               onPointerCancel={onPointerCancel}
+              onContextMenu={(event) => event.stopPropagation()}
               className={`relative flex w-full transition-colors ${
                 showLabel
                   ? "h-9 flex-row items-center justify-start gap-2 rounded-md px-2 hover:bg-[var(--df-bg-hover)]"
@@ -667,6 +728,10 @@ function ActivityBarButton({
             ))}
           </ContextMenuSubContent>
         </ContextMenuSub>
+        <ContextMenuSeparator />
+        <ContextMenuItem onClick={() => onHideItem(item.id)}>
+          {t("activityBar.hideItem", { name: item.tooltip })}
+        </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuCheckboxItem checked={showLabel} onCheckedChange={onToggleLabel}>
           {t("activityBar.showLabel")}

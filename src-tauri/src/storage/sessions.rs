@@ -1,5 +1,6 @@
 use crate::error::AppResult;
 use redb::{ReadableDatabase, ReadableTable};
+use std::collections::HashSet;
 
 use super::Storage;
 use super::tables::*;
@@ -10,9 +11,11 @@ impl Storage {
         let groups = self.list_groups()?;
         let mut connections = self.list_connections()?;
         self.hydrate_connection_passwords(&mut connections)?;
+        let custom_icons = self.load_connection_custom_icons_with_legacy_migration(&connections)?;
         Ok(crate::config::SessionsConfig {
             groups,
             connections,
+            custom_icons,
         })
     }
     pub fn replace_sessions(&self, config: &crate::config::SessionsConfig) -> AppResult<()> {
@@ -79,6 +82,60 @@ impl Storage {
         txn.commit().map_err(storage_error)?;
         Ok(())
     }
+    pub fn list_connection_custom_icons(
+        &self,
+    ) -> AppResult<Vec<crate::config::ConnectionCustomIcon>> {
+        let mut icons =
+            self.list_json_by_prefix(CONNECTIONS_TABLE, CONNECTION_CUSTOM_ICON_PREFIX)?;
+        sort_connection_custom_icons(&mut icons);
+        Ok(icons)
+    }
+    pub fn save_connection_custom_icon(
+        &self,
+        icon: &crate::config::ConnectionCustomIcon,
+    ) -> AppResult<()> {
+        let key = entity_key(CONNECTION_CUSTOM_ICON_PREFIX, &icon.id);
+        self.write_json(CONNECTIONS_TABLE, &key, icon)
+    }
+    pub fn delete_connection_custom_icon(&self, icon_id: &str) -> AppResult<()> {
+        self.remove_key(
+            CONNECTIONS_TABLE,
+            &entity_key(CONNECTION_CUSTOM_ICON_PREFIX, icon_id),
+        )
+    }
+    fn load_connection_custom_icons_with_legacy_migration(
+        &self,
+        connections: &[crate::config::SavedConnection],
+    ) -> AppResult<Vec<crate::config::ConnectionCustomIcon>> {
+        let mut icons = self.list_connection_custom_icons()?;
+        let mut seen = icons
+            .iter()
+            .map(|icon| icon.id.clone())
+            .collect::<HashSet<_>>();
+        let now = current_time_ms();
+        let mut migrated = Vec::new();
+
+        for connection in connections {
+            let Some(icon) = connection.icon.as_deref() else {
+                continue;
+            };
+            let Some(record) = crate::config::connection_custom_icon_from_data_url(
+                icon,
+                "Migrated custom icon",
+                now,
+            ) else {
+                continue;
+            };
+            if seen.insert(record.id.clone()) {
+                self.save_connection_custom_icon(&record)?;
+                migrated.push(record);
+            }
+        }
+
+        icons.extend(migrated);
+        sort_connection_custom_icons(&mut icons);
+        Ok(icons)
+    }
     pub fn mark_connection_used(&self, connection_id: &str) -> AppResult<()> {
         let txn = self.db.begin_write().map_err(storage_error)?;
         let key = entity_key(CONNECTION_PREFIX, connection_id);
@@ -141,6 +198,7 @@ pub(super) fn replace_sessions_in_txn(
 ) -> AppResult<()> {
     clear_prefix_in_txn(txn, GROUPS_TABLE, GROUP_PREFIX)?;
     clear_prefix_in_txn(txn, CONNECTIONS_TABLE, CONNECTION_PREFIX)?;
+    clear_prefix_in_txn(txn, CONNECTIONS_TABLE, CONNECTION_CUSTOM_ICON_PREFIX)?;
     clear_prefix_in_txn(txn, CREDENTIALS_TABLE, CONNECTION_PASSWORD_PREFIX)?;
     clear_string_prefix_in_txn(txn, IDX_CONNECTIONS_BY_GROUP_TABLE, "")?;
     clear_string_prefix_in_txn(txn, IDX_CONNECTIONS_BY_LAST_USED_TABLE, "")?;
@@ -150,6 +208,9 @@ pub(super) fn replace_sessions_in_txn(
     }
     for connection in &config.connections {
         save_connection_in_txn(txn, connection)?;
+    }
+    for icon in &config.custom_icons {
+        save_connection_custom_icon_in_txn(txn, icon)?;
     }
     Ok(())
 }
@@ -209,6 +270,17 @@ pub(super) fn save_connection_in_txn(
     write_json_in_txn(txn, CONNECTIONS_TABLE, &connection_key, &connection)?;
     insert_connection_indexes(txn, &connection)?;
     Ok(())
+}
+pub(super) fn save_connection_custom_icon_in_txn(
+    txn: &redb::WriteTransaction,
+    icon: &crate::config::ConnectionCustomIcon,
+) -> AppResult<()> {
+    write_json_in_txn(
+        txn,
+        CONNECTIONS_TABLE,
+        &entity_key(CONNECTION_CUSTOM_ICON_PREFIX, &icon.id),
+        icon,
+    )
 }
 fn hydrate_connection_password_in_txn(
     txn: &redb::WriteTransaction,
@@ -398,6 +470,14 @@ pub(super) fn sort_connections(connections: &mut [crate::config::SavedConnection
             .then(left.id.cmp(&right.id))
     });
 }
+pub(super) fn sort_connection_custom_icons(icons: &mut [crate::config::ConnectionCustomIcon]) {
+    icons.sort_by(|left, right| {
+        left.created_at_ms
+            .cmp(&right.created_at_ms)
+            .then(left.name.cmp(&right.name))
+            .then(left.id.cmp(&right.id))
+    });
+}
 fn padded_i64(value: i64) -> String {
     let shifted = i128::from(value) - i128::from(i64::MIN);
     format!("{shifted:020}")
@@ -428,8 +508,15 @@ pub(super) fn parse_sessions_config(content: &str) -> AppResult<crate::config::S
             }
         }
     }
+    let custom_icons = raw
+        .get("custom_icons")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?
+        .unwrap_or_default();
     Ok(crate::config::SessionsConfig {
         groups,
         connections,
+        custom_icons,
     })
 }

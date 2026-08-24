@@ -1,4 +1,5 @@
-use crate::config::{self, ConnectionAuth, ConnectionType};
+use crate::config::{self, ConnectionAuth, ConnectionNetwork, ConnectionType};
+use crate::core::network::open_tcp_transport;
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
@@ -108,6 +109,7 @@ pub struct VncConnectConfig {
     pub reconnect_max_attempts: u32,
     pub shared: bool,
     pub view_only: bool,
+    pub network: Option<ConnectionNetwork>,
 }
 
 struct VncFramebuffer {
@@ -447,8 +449,14 @@ async fn run_protocol_generation(
     cancel_rx: &mut watch::Receiver<bool>,
 ) -> Result<(), (VncErrorKind, String, bool)> {
     let (host, port) = vnc_connect_target(&session.config);
-    let stream = tokio::select! {
-        result = timeout(CONNECT_TIMEOUT, tokio::net::TcpStream::connect((host, port))) => {
+    let transport = tokio::select! {
+        result = timeout(CONNECT_TIMEOUT, open_tcp_transport(
+            app,
+            host,
+            port,
+            session.config.network.as_ref(),
+            None,
+        )) => {
             result.map_err(|_| (VncErrorKind::Transport, "VNC connection timed out".to_string(), true))?
                 .map_err(|error| (VncErrorKind::Transport, format!("Unable to connect to the VNC server: {error}"), true))?
         }
@@ -457,6 +465,7 @@ async fn run_protocol_generation(
             return Ok(());
         }
     };
+    let stream = transport.stream;
 
     set_state(session, VncSessionState::Authenticating, None, None).await;
     emit_state(app, session, VncSessionState::Authenticating, None, None);
@@ -965,6 +974,7 @@ fn validate_rectangle(rect: Rect, desktop_width: u16, desktop_height: u16) -> Ap
 
 pub fn load_saved_vnc_config(app: &AppHandle, connection_id: &str) -> AppResult<VncConnectConfig> {
     let connection = config::load_connection_by_id(app, connection_id)?;
+    let network = connection.network.clone();
     let password = resolve_vnc_password(app, connection.auth.as_ref())?;
     let ConnectionType::Vnc {
         host,
@@ -1008,6 +1018,7 @@ pub fn load_saved_vnc_config(app: &AppHandle, connection_id: &str) -> AppResult<
         reconnect_max_attempts: reconnect.max_attempts,
         shared,
         view_only,
+        network,
     })
 }
 
@@ -1106,6 +1117,7 @@ mod tests {
             reconnect_max_attempts: 0,
             shared: true,
             view_only: false,
+            network: None,
         };
 
         assert_eq!(vnc_connect_target(&config), ("::1", 5900));
@@ -1128,6 +1140,7 @@ mod tests {
                 reconnect_max_attempts: 0,
                 shared: true,
                 view_only: false,
+                network: None,
             },
             state: Mutex::new(VncSessionState::Connecting),
             message: Mutex::new(None),

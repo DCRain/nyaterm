@@ -282,7 +282,7 @@ export const BUILTIN_PROVIDERS: Partial<Record<AIProviderKind, BuiltinProviderIn
   },
   ollama: {
     label: "Ollama",
-    defaultBaseUrl: "http://localhost:11434/v1/",
+    defaultBaseUrl: "http://localhost:11434/",
     models: ["llama3-7b"],
   },
   xai: {
@@ -442,6 +442,12 @@ export function requiresManualCustomModelEntry(
   return !isBuiltinProvider(credential.id) && credential.provider_kind !== "openai_compatible";
 }
 
+export function supportsApiFormatSelection(
+  credential: Pick<AIProviderCredential, "provider_kind">,
+): boolean {
+  return credential.provider_kind === "openai" || credential.provider_kind === "openai_compatible";
+}
+
 const DEFAULT_PROVIDER_PROFILES: AIProviderProfile[] = [
   {
     id: "openai",
@@ -484,7 +490,7 @@ const DEFAULT_PROVIDER_PROFILES: AIProviderProfile[] = [
     name: "Ollama",
     provider_kind: "ollama",
     model: "llama3-7b",
-    base_url: "http://localhost:11434/v1/",
+    base_url: "http://localhost:11434/",
     api_key: null,
     enabled: false,
   },
@@ -583,6 +589,7 @@ function credentialFromProfile(profile: AIProviderProfile): AIProviderCredential
     id: profile.id,
     name: profile.name,
     provider_kind: profile.provider_kind,
+    api_format: "chat_completions",
     base_url: profile.base_url,
     api_key: profile.api_key,
     enabled: profile.enabled,
@@ -590,7 +597,7 @@ function credentialFromProfile(profile: AIProviderProfile): AIProviderCredential
 }
 
 export const DEFAULT_AI_SETTINGS: AISettings = {
-  schema_version: 5,
+  schema_version: 6,
   enabled: false,
   context_line_limit: 200,
   redaction_enabled: true,

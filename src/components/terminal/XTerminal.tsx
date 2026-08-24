@@ -1,4 +1,4 @@
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { SerializeAddon } from "@xterm/addon-serialize";
@@ -23,6 +23,7 @@ import {
   renderAiCommandEnd,
   renderAiCommandStart,
 } from "@/lib/aiTerminalRenderer";
+import { createAsyncUnlistenBag } from "@/lib/asyncUnlistenBag";
 import {
   buildTerminalThemeColors,
   isTerminalTransparencyEnabled,
@@ -86,6 +87,7 @@ import {
   type TerminalFitScheduler,
   TerminalResizeDeduper,
 } from "./terminalFitScheduler";
+import { installTerminalImageAddon } from "./terminalImageAddon";
 import {
   getSelectedInputRange,
   type InputSelectionRange,
@@ -230,6 +232,7 @@ export default function XTerminal({
   const hibernationPhaseRef = useRef<HibernationPhase>("idle");
   const hibernationEpochRef = useRef(0);
   const detachedHibernateEpochRef = useRef<number | null>(null);
+  const lastOutputActivityAtRef = useRef(Date.now());
   const hibernatedRef = useRef(hibernated);
   const pendingWakeEventsRef = useRef<PendingWakeEvent[]>([]);
   const zmodemActiveRef = useRef(false);
@@ -424,16 +427,16 @@ export default function XTerminal({
     if (!hibernated) return;
 
     let disposed = false;
-    const unlisteners: UnlistenFn[] = [];
+    const unlistenBag = createAsyncUnlistenBag();
     const wake = (event: PendingWakeEvent) => {
       pendingWakeEventsRef.current.push(event);
       if (disposed) return;
       requestWake(event.type);
     };
 
-    const setupWakeListeners = async () => {
-      unlisteners.push(
-        await listen<string>(`session-error-${sessionId}`, (event) => {
+    const setupWakeListeners = () => {
+      unlistenBag.add(
+        listen<string>(`session-error-${sessionId}`, (event) => {
           wake({
             type: "error",
             message: String(
@@ -442,38 +445,33 @@ export default function XTerminal({
           });
         }),
       );
-      unlisteners.push(
-        await listen<void>(`session-closed-${sessionId}`, () => {
+      unlistenBag.add(
+        listen<void>(`session-closed-${sessionId}`, () => {
           wake({ type: "closed" });
         }),
       );
-      unlisteners.push(
-        await listen<ZmodemEventPayload>(
-          `zmodem-event-${sessionId}`,
-          (event) => {
-            wake({ type: "zmodem", payload: event.payload });
-          },
-        ),
+      unlistenBag.add(
+        listen<ZmodemEventPayload>(`zmodem-event-${sessionId}`, (event) => {
+          wake({ type: "zmodem", payload: event.payload });
+        }),
       );
-      unlisteners.push(
-        await listen<AiCaptureEvent>(`ai-capture-${sessionId}`, (event) => {
+      unlistenBag.add(
+        listen<AiCaptureEvent>(`ai-capture-${sessionId}`, (event) => {
           wake({ type: "ai", payload: event.payload });
         }),
       );
-      unlisteners.push(
-        await listen<void>(`focus-terminal-${sessionId}`, () => {
+      unlistenBag.add(
+        listen<void>(`focus-terminal-${sessionId}`, () => {
           wake({ type: "focus" });
         }),
       );
     };
 
-    void setupWakeListeners();
+    setupWakeListeners();
 
     return () => {
       disposed = true;
-      for (const unlisten of unlisteners) {
-        unlisten();
-      }
+      unlistenBag.dispose();
     };
   }, [hibernated, requestWake, sessionId]);
 
@@ -793,6 +791,7 @@ export default function XTerminal({
     terminal.loadAddon(searchAddon);
     terminal.loadAddon(serializeAddon);
     terminal.loadAddon(unicodeGraphemesAddon);
+    installTerminalImageAddon(terminal, { sessionId, sessionType });
     terminal.open(containerRef.current);
 
     const trimDisposable = (
@@ -1406,15 +1405,17 @@ export default function XTerminal({
 
         logger.debug({
           domain: "terminal.input",
-          event: "serial.remote_color_osc_blocked",
-          message: "Blocked remote color OSC for serial session",
+          event: "terminal.remote_color_osc_blocked",
+          message: "Blocked remote color OSC",
           ids: { session_id: sessionId },
           data: {
             session_type: sessionTypeRef.current,
+            terminal_transparency_enabled: terminalTransparencyEnabled,
             osc_id: oscId,
           },
         });
       },
+      { blockDefaultBackground: terminalTransparencyEnabled },
     );
 
     const oscDisposable = terminal.parser.registerOscHandler(133, (data) => {
@@ -1422,11 +1423,13 @@ export default function XTerminal({
 
       if (data.startsWith("A")) {
         si.enabled = true;
+        si.commandRunning = false;
         return false;
       }
 
       if (data.startsWith("B")) {
         si.enabled = true;
+        si.commandRunning = false;
         resetCommandSuggestionSuppression();
         return false;
       }
@@ -1805,7 +1808,8 @@ export default function XTerminal({
       }
     };
 
-    const { applyVisibilityPolicy } = createXTerminalHibernationController({
+    const { applyVisibilityPolicy, noteOutputActivity } =
+      createXTerminalHibernationController({
       sessionId,
       terminal,
       outputDrain,
@@ -1825,6 +1829,7 @@ export default function XTerminal({
       hibernationSnapshotRef,
       hibernationCleanupRef,
       hibernatedRef,
+      lastOutputActivityAtRef,
       showSearchBar,
       activeMode,
       isTerminalAlive,
@@ -1865,6 +1870,7 @@ export default function XTerminal({
       enterDisconnectedState,
       enterDisconnectedStateIfAttachSessionMissing,
       noteSkippedOutput,
+      noteOutputActivity,
       updateCredentialPromptInputMode,
       feedCredentialOutput,
       maybeRecoverPerformanceMode,
@@ -2375,11 +2381,11 @@ export default function XTerminal({
     duplicateStrategy: terminalAppSettings.transfer.duplicate_strategy,
   });
 
-  const terminalBackground = "var(--df-terminal-bg, var(--df-bg-terminal))";
+  const terminalBackground = "var(--df-terminal-surface-bg)";
 
   return (
     <div
-      className="nyaterm-wallpaper-transparent-surface h-full w-full relative flex box-border overflow-hidden"
+      className="nyaterm-wallpaper-transparent-surface nyaterm-terminal-surface h-full w-full relative flex box-border overflow-hidden"
       style={{
         display: visible ? "flex" : "none",
         backgroundColor: terminalBackground,
@@ -2399,7 +2405,7 @@ export default function XTerminal({
         />
       )}
       <div
-        className="nyaterm-wallpaper-transparent-surface flex-1 min-h-0 min-w-0 relative"
+        className="nyaterm-wallpaper-transparent-surface nyaterm-terminal-surface flex-1 min-h-0 min-w-0 relative"
         style={{ backgroundColor: terminalBackground }}
       >
         <TerminalContextMenu
@@ -2415,13 +2421,15 @@ export default function XTerminal({
           onSaveTranscript={onSaveTranscript}
         >
           <div
-            className="nyaterm-wallpaper-transparent-surface h-full w-full"
+            className={`nyaterm-wallpaper-transparent-surface nyaterm-terminal-surface h-full w-full ${
+              showContentPadding ? "pl-2" : ""
+            }`}
             style={{ backgroundColor: terminalBackground }}
           >
             <div
               ref={containerRef}
               data-terminal-root="true"
-              className="nyaterm-wallpaper-transparent-surface h-full w-full"
+              className="nyaterm-wallpaper-transparent-surface nyaterm-terminal-surface h-full w-full"
               style={{ backgroundColor: terminalBackground }}
             />
           </div>

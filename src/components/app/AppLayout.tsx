@@ -7,6 +7,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import FloatingPanel from "@/components/app/FloatingPanel";
 import { MdChevronLeft, MdChevronRight, MdTerminal } from "react-icons/md";
 import PanelStack from "@/components/app/PanelStack";
 import AboutDialog from "@/components/dialog/app/AboutDialog";
@@ -85,9 +86,15 @@ interface AppLayoutProps {
   onLeftResize: (delta: number) => void;
   onRightResize: (delta: number) => void;
   panelContent: (panelId: string | null) => ReactNode;
+  panelTitle: (panelId: string) => string;
   /** Panels visible per side, ordered top-to-bottom (single id in single-open mode). */
   leftPanelIds: string[];
   rightPanelIds: string[];
+  floatingPanelIds: {
+    left: string | null;
+    right: string | null;
+  };
+  onCloseFloatingPanel: (side: "left" | "right") => void;
   /** Exclusive panel (e.g. AI assistant) shown alone instead of the stack (multi-open mode). */
   leftOverlayPanelId: string | null;
   rightOverlayPanelId: string | null;
@@ -120,20 +127,24 @@ interface AppLayoutProps {
     activePanel: "quickCmdBar" | "serialSend" | null;
     quickCmdHeight: number;
     serialSendHeight: number;
+    clearAfterSend: boolean;
     activeSerialSessionId: string | null;
     activeNonSerialSessionId: string | null;
     activeNonSerialSessionIds: string[];
     syncGroups: SyncGroup[];
+    currentWindowLabel: string;
     sessionTargets: {
       id: string;
       name: string;
       tabName: string;
       type: SessionType;
+      ownerWindowLabel?: string | null;
     }[];
     sendCommandDraft: SendCommandPanelDraft | null;
     onSendCommandDraftConsumed: () => void;
     onQuickCmdResize: (delta: number) => void;
     onSerialSendResize: (delta: number) => void;
+    onClearAfterSendChange: (enabled: boolean) => void;
     onCommandSend: (command: string, execute?: boolean) => void;
     onSendToAllSessions: (command: string, execute?: boolean) => void;
   };
@@ -181,8 +192,11 @@ export default function AppLayout({
   onLeftResize,
   onRightResize,
   panelContent,
+  panelTitle,
   leftPanelIds,
   rightPanelIds,
+  floatingPanelIds,
+  onCloseFloatingPanel,
   leftOverlayPanelId,
   rightOverlayPanelId,
   panelStackSizes,
@@ -329,9 +343,13 @@ export default function AppLayout({
     [effectiveAppearance, theme.colors, windowTransparencyEnabled],
   );
   const hasLeftActivityItems =
-    leftActivityBar.items.length > 0 || (leftActivityBar.bottomItems?.length ?? 0) > 0;
+    leftActivityBar.items.length > 0 ||
+    (leftActivityBar.bottomItems?.length ?? 0) > 0 ||
+    (leftActivityBar.hiddenItems?.length ?? 0) > 0;
   const hasRightActivityItems =
-    rightActivityBar.items.length > 0 || (rightActivityBar.bottomItems?.length ?? 0) > 0;
+    rightActivityBar.items.length > 0 ||
+    (rightActivityBar.bottomItems?.length ?? 0) > 0 ||
+    (rightActivityBar.hiddenItems?.length ?? 0) > 0;
   const leftActivityBarVisible = Boolean(leftActivityBar.visible);
   const rightActivityBarVisible = Boolean(rightActivityBar.visible);
   const leftPanelOpen =
@@ -474,6 +492,30 @@ export default function AppLayout({
                   </div>
                 </div>
               )}
+              {floatingPanelIds.left && (
+                <FloatingPanel
+                  side="left"
+                  panelId={floatingPanelIds.left}
+                  width={uiConfig.left_width}
+                  title={panelTitle(floatingPanelIds.left)}
+                  onClose={() => onCloseFloatingPanel("left")}
+                  onResize={onLeftResize}
+                >
+                  {panelContent(floatingPanelIds.left)}
+                </FloatingPanel>
+              )}
+              {floatingPanelIds.right && (
+                <FloatingPanel
+                  side="right"
+                  panelId={floatingPanelIds.right}
+                  width={uiConfig.right_width}
+                  title={panelTitle(floatingPanelIds.right)}
+                  onClose={() => onCloseFloatingPanel("right")}
+                  onResize={onRightResize}
+                >
+                  {panelContent(floatingPanelIds.right)}
+                </FloatingPanel>
+              )}
             </div>
 
             {bottomPanel.activePanel === "quickCmdBar" && (
@@ -499,30 +541,31 @@ export default function AppLayout({
             )}
 
             {serialSendMounted && (
-              <>
-                <div
-                  style={{
-                    ...(serialSendVisible
-                      ? {
-                          height: bottomPanel.serialSendHeight,
-                          backgroundColor: "var(--df-bg-panel)",
-                        }
-                      : {}),
-                  }}
-                  className={serialSendVisible ? "shrink-0 overflow-hidden" : "hidden"}
-                >
-                  <SerialSendPanel
-                    serialSessionId={bottomPanel.activeSerialSessionId}
-                    currentShellSessionId={bottomPanel.activeNonSerialSessionId}
-                    shellSessionIds={bottomPanel.activeNonSerialSessionIds}
-                    syncGroups={bottomPanel.syncGroups}
-                    sessionTargets={bottomPanel.sessionTargets}
-                    draft={bottomPanel.sendCommandDraft}
-                    onDraftConsumed={bottomPanel.onSendCommandDraftConsumed}
-                    onSendingChange={setSerialSendRunning}
-                  />
-                </div>
-              </>
+              <div
+                style={{
+                  ...(serialSendVisible
+                    ? {
+                        height: bottomPanel.serialSendHeight,
+                        backgroundColor: "var(--df-bg-panel)",
+                      }
+                    : {}),
+                }}
+                className={serialSendVisible ? "shrink-0 overflow-hidden" : "hidden"}
+              >
+                <SerialSendPanel
+                  serialSessionId={bottomPanel.activeSerialSessionId}
+                  currentShellSessionId={bottomPanel.activeNonSerialSessionId}
+                  shellSessionIds={bottomPanel.activeNonSerialSessionIds}
+                  syncGroups={bottomPanel.syncGroups}
+                  currentWindowLabel={bottomPanel.currentWindowLabel}
+                  sessionTargets={bottomPanel.sessionTargets}
+                  clearAfterSend={bottomPanel.clearAfterSend}
+                  draft={bottomPanel.sendCommandDraft}
+                  onDraftConsumed={bottomPanel.onSendCommandDraftConsumed}
+                  onSendingChange={setSerialSendRunning}
+                  onClearAfterSendChange={bottomPanel.onClearAfterSendChange}
+                />
+              </div>
             )}
           </section>
 

@@ -4,7 +4,7 @@ export const OPEN_SEND_COMMAND_PANEL_EVENT = "nyaterm:open-send-command-panel";
 
 export type SendCommandDataType = "text" | "hex";
 export type SendCommandMode = "line" | "character" | "byte" | "packet";
-export type SendCommandTarget = "current" | "all";
+export type SendCommandTarget = "current" | "all" | "allWindows";
 export type SendCommandCount = number | null;
 
 export interface SendCommandPanelDraft {

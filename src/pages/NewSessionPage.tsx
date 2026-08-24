@@ -1,12 +1,26 @@
 ﻿import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { type ComponentType, useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { MdAdd, MdChevronLeft, MdCloud, MdExpandMore, MdFolder, MdLan, MdMonitor, MdTerminal } from "react-icons/md";
+import {
+  MdAdd,
+  MdChevronLeft,
+  MdClose,
+  MdCloud,
+  MdExpandMore,
+  MdFolder,
+  MdImage,
+  MdLan,
+  MdMonitor,
+  MdTerminal,
+} from "react-icons/md";
 import { TbNetwork, TbPlugConnected, TbServer } from "react-icons/tb";
 import { toast } from "sonner";
+
 import {
   DEFAULT_CONNECTION_ICON,
+  isCustomConnectionIcon,
   LINUX_ICONS,
   resolveConnectionIcon,
   SERVER_ICONS,
@@ -53,6 +67,7 @@ import { invoke } from "@/lib/invoke";
 import { isValidSerialBaudRate, MAX_SERIAL_BAUD_RATE, MIN_SERIAL_BAUD_RATE } from "@/lib/serial";
 import { validateSshAgentForwardingEndpoints } from "@/lib/sshAgent";
 import type {
+  ConnectionCustomIcon,
   Group,
   OtpEntry,
   ProxyConfig,
@@ -76,6 +91,8 @@ const MAX_POST_LOGIN_DELAY_MS = 60_000;
 const DEFAULT_SFTP_SHELL_DETECTION_TIMEOUT_MS = 3000;
 const MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS = 100;
 const MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS = 60_000;
+const CUSTOM_ICON_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "bmp", "gif"];
+
 const DEFAULT_SSH_ALGORITHMS: SshAlgorithmPreferences = {
   mode: "compatible",
   kex: [],
@@ -293,6 +310,7 @@ export default function NewSessionPage() {
   const [error, setError] = useState("");
   const [groups, setGroups] = useState<Group[]>([]);
   const [savedConnections, setSavedConnections] = useState<SavedConnection[]>([]);
+  const [customIcons, setCustomIcons] = useState<ConnectionCustomIcon[]>([]);
   const [showGroupDropdown, setShowGroupDropdown] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupParentId, setNewGroupParentId] = useState("");
@@ -560,6 +578,9 @@ export default function NewSessionPage() {
         }
       })
       .catch((e) => setError(getErrorMessage(e)));
+    invoke<ConnectionCustomIcon[]>("get_connection_custom_icons")
+      .then(setCustomIcons)
+      .catch((e) => setError(getErrorMessage(e)));
   }, [appSettings.recording.auto_start, appSettings.recording.default_mode, editId, t]);
 
   const loadSerialPorts = useCallback(async () => {
@@ -695,7 +716,56 @@ export default function NewSessionPage() {
   const iconAutoDetectDisabled = !remoteStatsEnabled;
   const iconAutoDetectTooltip = !remoteStatsEnabled
     ? t("dialog.iconAutoDetectRemoteStatsDisabledTooltip")
-    : t("dialog.iconAutoDetectTooltip");
+    : currentTab === "ssh" && sshProfile === "network_device"
+      ? t("dialog.iconAutoDetectNetworkDeviceTooltip")
+      : t("dialog.iconAutoDetectTooltip");
+  const hasCustomIcon = isCustomConnectionIcon(iconKey);
+
+  const handleImportCustomIcon = useCallback(async () => {
+    try {
+      const selected = await openDialog({
+        directory: false,
+        multiple: false,
+        filters: [
+          {
+            name: t("dialog.connectionIconFiles"),
+            extensions: CUSTOM_ICON_EXTENSIONS,
+          },
+        ],
+        title: t("dialog.selectConnectionIcon"),
+      });
+      const selectedPath = Array.isArray(selected) ? selected[0] : selected;
+      if (typeof selectedPath !== "string" || !selectedPath) {
+        return;
+      }
+
+      const importedIcon = await invoke<ConnectionCustomIcon>("import_connection_icon", {
+        path: selectedPath,
+      });
+      setCustomIcons((icons) => {
+        const next = icons.filter((icon) => icon.id !== importedIcon.id);
+        next.push(importedIcon);
+        return next;
+      });
+      setIconKey(importedIcon.data_url);
+      setIconAutoDetect(false);
+      setShowIconPicker(false);
+      setError("");
+    } catch (e) {
+      setError(getErrorMessage(e));
+    }
+  }, [t]);
+
+  const handleDeleteCustomIcon = useCallback(async (iconId: string) => {
+    try {
+      await invoke("delete_connection_custom_icon", { id: iconId });
+      setCustomIcons((icons) => icons.filter((icon) => icon.id !== iconId));
+      setError("");
+    } catch (e) {
+      setError(getErrorMessage(e));
+    }
+  }, []);
+
 
   const newGroupParentLabel = useMemo(() => {
     if (!groupId || groupId === "new") {
@@ -1077,7 +1147,7 @@ export default function NewSessionPage() {
                         ? "webdav"
                     : "serial";
       const network =
-        currentTab === "ssh"
+        currentTab === "ssh" || currentTab === "rdp" || currentTab === "vnc"
           ? (() => {
               const nextNetwork: NonNullable<SavedConnection["network"]> = {};
               if (proxyId) {
@@ -1324,6 +1394,7 @@ export default function NewSessionPage() {
                   ? "__SET__"
                   : undefined,
               virtual_host_style: s3VirtualHostStyle,
+
             }
           : {}),
         ...(currentTab === "ftp"
@@ -1358,6 +1429,7 @@ export default function NewSessionPage() {
                 : webdavHasPassword
                   ? "__SET__"
                   : "",
+
             }
           : {}),
       };
@@ -1634,6 +1706,7 @@ export default function NewSessionPage() {
                 onClick={() => {
                   setWizardStep("pick");
                   setTestResult(null);
+
                 }}
               >
                 <MdChevronLeft className="size-4" />
@@ -2119,6 +2192,12 @@ export default function NewSessionPage() {
                 setPreferredClient={setRdpPreferredClient}
                 redirects={rdpRedirects}
                 setRedirects={(patch) => setRdpRedirects((prev) => ({ ...prev, ...patch }))}
+                proxyId={proxyId}
+                setProxyId={setProxyId}
+                proxies={proxies}
+                jumpHostId={jumpHostId}
+                setJumpHostId={setJumpHostId}
+                jumpHostOptions={jumpHostOptions}
                 connectionId={initialData?.id || editId}
               />
             </TabsContent>
@@ -2261,6 +2340,7 @@ export default function NewSessionPage() {
             }`}
           >
             {testing ? t("dialog.testingConnection", "Testing…") : testResult?.message}
+
           </div>
         </div>
       ) : null}

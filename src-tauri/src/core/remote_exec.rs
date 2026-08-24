@@ -19,6 +19,7 @@ pub async fn exec_ssh_session_command(
     command: &[u8],
     timeout: Duration,
 ) -> AppResult<RemoteCommandOutput> {
+    ensure_remote_exec_enabled(manager, session_id).await?;
     let ssh_handle = get_ssh_handle(manager, session_id).await?;
     exec_ssh_command(&ssh_handle, command, None, timeout).await
 }
@@ -30,8 +31,31 @@ pub async fn exec_ssh_session_command_with_stdin(
     stdin: &[u8],
     timeout: Duration,
 ) -> AppResult<RemoteCommandOutput> {
+    ensure_remote_exec_enabled(manager, session_id).await?;
     let ssh_handle = get_ssh_handle(manager, session_id).await?;
     exec_ssh_command(&ssh_handle, command, Some(stdin), timeout).await
+}
+
+async fn ensure_remote_exec_enabled(
+    manager: &Arc<SessionManager>,
+    session_id: &str,
+) -> AppResult<()> {
+    let sessions = manager.sessions.lock().await;
+    let session = sessions
+        .get(session_id)
+        .ok_or_else(|| AppError::SessionNotFound(format!("Session '{session_id}' not found")))?;
+
+    if session.ssh_handle.is_none() {
+        return Err(AppError::Config("Not an SSH session".to_string()));
+    }
+
+    if session.info.remote_stats_enabled {
+        Ok(())
+    } else {
+        Err(AppError::Config(
+            "Remote exec probes are disabled for this SSH runtime mode".to_string(),
+        ))
+    }
 }
 
 async fn get_ssh_handle(

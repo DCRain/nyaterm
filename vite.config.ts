@@ -100,6 +100,7 @@ export default defineConfig(async () => ({
           xterm: [
             "@xterm/xterm",
             "@xterm/addon-fit",
+            "@xterm/addon-image",
             "@xterm/addon-web-links",
             "@xterm/addon-webgl",
             "@xterm/addon-search",

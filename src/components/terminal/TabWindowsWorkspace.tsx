@@ -254,10 +254,10 @@ function LeafWindow({
 
   return (
     <div
-      className="nyaterm-wallpaper-transparent-surface flex h-full min-h-0 min-w-0 flex-col overflow-hidden border"
+      className="nyaterm-wallpaper-transparent-surface nyaterm-terminal-surface flex h-full min-h-0 min-w-0 flex-col overflow-hidden border"
       style={{
         borderColor: "var(--df-border)",
-        backgroundColor: "var(--df-terminal-bg, var(--df-bg-terminal))",
+        backgroundColor: "var(--df-terminal-surface-bg)",
       }}
       onMouseDown={() => {
         if (activeTab) {

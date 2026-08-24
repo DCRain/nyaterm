@@ -80,6 +80,7 @@
   --radius: 0.5rem;
   /* Match / slightly exceed Win11 window corner so chrome doesn't cover the border. */
   --nyaterm-window-radius: 12px;
+  --df-terminal-surface-bg: var(--df-terminal-bg, var(--df-bg-terminal));
   --background: var(--df-bg);
   --foreground: var(--df-text);
   --card: var(--df-bg-panel);
@@ -417,8 +418,12 @@ html[data-window-transparency="true"] [data-slot="alert-dialog-overlay"] {
   background-color: rgb(0 0 0 / 0.28);
 }
 
+.nyaterm-wallpaper-shell[data-window-transparency="true"] .nyaterm-terminal-surface {
+  background-color: transparent !important;
+}
+
 .nyaterm-wallpaper-shell[data-wallpaper-enabled="true"] .nyaterm-wallpaper-terminal-surface {
-  background-color: var(--df-bg-terminal) !important;
+  background-color: var(--df-terminal-surface-bg) !important;
 }
 
 .nyaterm-wallpaper-shell[data-wallpaper-enabled="true"] .nyaterm-wallpaper-card {

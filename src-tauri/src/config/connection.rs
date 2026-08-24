@@ -6,6 +6,7 @@ use crate::core::{RecordingMode, RotationPolicy};
 use crate::error::{AppError, AppResult};
 use crate::storage;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use tauri::AppHandle;
 
@@ -383,6 +384,14 @@ pub enum SshProfile {
     NetworkDevice,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SshRuntimeMode {
+    #[default]
+    Standard,
+    Terminal,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum SshTerminalType {
     #[default]
@@ -455,6 +464,18 @@ pub fn effective_cwd_follow_mode_for_profile(
         SftpCwdFollowMode::Off
     } else {
         effective_cwd_follow_mode(settings)
+    }
+}
+
+pub fn effective_cwd_follow_mode_for_runtime(
+    settings: &SftpSettings,
+    profile: &SshProfile,
+    runtime_mode: &SshRuntimeMode,
+) -> SftpCwdFollowMode {
+    if *runtime_mode == SshRuntimeMode::Terminal {
+        SftpCwdFollowMode::Off
+    } else {
+        effective_cwd_follow_mode_for_profile(settings, profile)
     }
 }
 
@@ -1236,6 +1257,16 @@ pub struct Group {
     pub updated_at_ms: Option<u64>,
 }
 
+/// Custom icon imported into the shared connection icon library.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConnectionCustomIcon {
+    pub id: String,
+    pub name: String,
+    pub data_url: String,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+}
+
 /// Root config for groups and saved connections.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SessionsConfig {
@@ -1243,10 +1274,64 @@ pub struct SessionsConfig {
     pub groups: Vec<Group>,
     #[serde(default)]
     pub connections: Vec<SavedConnection>,
+    #[serde(default)]
+    pub custom_icons: Vec<ConnectionCustomIcon>,
 }
 
 /// Alias for the main app config (sessions + groups).
 pub type AppConfig = SessionsConfig;
+
+pub fn is_connection_custom_icon_data_url(value: &str) -> bool {
+    let Some((header, encoded)) = value.trim().split_once(',') else {
+        return false;
+    };
+    if encoded.is_empty()
+        || !encoded
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
+    {
+        return false;
+    }
+
+    matches!(
+        header.to_ascii_lowercase().as_str(),
+        "data:image/png;base64"
+            | "data:image/jpeg;base64"
+            | "data:image/jpg;base64"
+            | "data:image/webp;base64"
+            | "data:image/bmp;base64"
+            | "data:image/gif;base64"
+    )
+}
+
+pub fn connection_custom_icon_id_for_data_url(data_url: &str) -> String {
+    let digest = Sha256::digest(data_url.trim().as_bytes());
+    format!("custom-icon-{}", hex::encode(digest))
+}
+
+pub fn connection_custom_icon_from_data_url(
+    data_url: &str,
+    name: impl Into<String>,
+    now_ms: u64,
+) -> Option<ConnectionCustomIcon> {
+    let data_url = data_url.trim();
+    if !is_connection_custom_icon_data_url(data_url) {
+        return None;
+    }
+
+    let name = name.into();
+    Some(ConnectionCustomIcon {
+        id: connection_custom_icon_id_for_data_url(data_url),
+        name: if name.trim().is_empty() {
+            "Custom icon".to_string()
+        } else {
+            name.trim().to_string()
+        },
+        data_url: data_url.to_string(),
+        created_at_ms: now_ms,
+        updated_at_ms: now_ms,
+    })
+}
 
 // ── Loading / saving ────────────────────────────────────────────────────────
 
@@ -2414,6 +2499,28 @@ mod tests {
         assert_eq!(reconnect.max_attempts, 5);
         assert!(shared);
         assert!(!view_only);
+    }
+
+    #[test]
+    fn rdp_and_vnc_old_configs_default_to_no_network() {
+        let rdp: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "rdp-1",
+            "name": "Windows",
+            "type": "rdp",
+            "host": "192.168.1.20",
+            "username": "Administrator"
+        }))
+        .expect("rdp connection");
+        let vnc: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "vnc-1",
+            "name": "Linux desktop",
+            "type": "vnc",
+            "host": "192.168.1.30"
+        }))
+        .expect("vnc connection");
+
+        assert!(rdp.network.is_none());
+        assert!(vnc.network.is_none());
     }
 
     #[test]

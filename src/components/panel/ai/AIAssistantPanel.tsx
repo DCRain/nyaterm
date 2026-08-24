@@ -43,7 +43,7 @@ import { useApp } from "@/context/AppContext";
 import { useTheme } from "@/context/ThemeContext";
 import type { AIErrorDetectedDetail } from "@/lib/aiEvents";
 import { AI_ERROR_DETECTED_EVENT } from "@/lib/aiEvents";
-import { DEFAULT_AI_SETTINGS, getEnabledAIModels, resolveAILanguage, selectDefaultAIModel } from "@/lib/aiSettings";
+import { DEFAULT_AI_SETTINGS, resolveAILanguage, selectDefaultAIModel } from "@/lib/aiSettings";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import { getNextQuickCommandCategorySortOrder } from "@/lib/quickCommandCategories";
@@ -101,12 +101,12 @@ interface AIStreamRuntime {
 
 const EMPTY_DRAFT: AIDraft = { text: "", quotedText: null, targetPaneIds: [] };
 
-function isCodexModel(model: AIModelConfigItem | null | undefined) {
-  return model?.backend === "codex";
-}
-
 function isGenaiModel(model: AIModelConfigItem | null | undefined) {
   return (model?.backend ?? "genai") === "genai";
+}
+
+function getEnabledGenaiModels(settings: { models?: AIModelConfigItem[] | null }) {
+  return (settings.models ?? []).filter((model) => model.enabled && isGenaiModel(model));
 }
 
 function resolveRunMode(mode: AIMode, agentKind: AIAgentKind | null | undefined): AIRunMode {
@@ -170,6 +170,8 @@ function AIAssistantPanel({
   >({});
   const [showHistory, setShowHistory] = useState(false);
   const [historyQuery, setHistoryQuery] = useState("");
+  const [historyLoadingSessionId, setHistoryLoadingSessionId] = useState<string | null>(null);
+  const [historyLoadError, setHistoryLoadError] = useState<string | null>(null);
   const [clearHistoryOpen, setClearHistoryOpen] = useState(false);
   const [clearingHistory, setClearingHistory] = useState(false);
   const [detectedError, setDetectedError] = useState<AIErrorDetectedDetail | null>(null);
@@ -187,31 +189,32 @@ function AIAssistantPanel({
     useState<AIAgentCommandExecutionMode | null>(null);
   const [openCodeModels, setOpenCodeModels] = useState<AIModelConfigItem[]>([]);
   const handledIntentIdRef = useRef<string | null>(null);
+  const historyLoadRequestRef = useRef(0);
   const executionMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const executionMenuRef = useRef<HTMLDivElement | null>(null);
   const historyButtonRef = useRef<HTMLButtonElement | null>(null);
   const historyCardRef = useRef<HTMLDivElement | null>(null);
   const mentionPopoverRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const isComposingRef = useRef(false);
   const streamUnlistenersRef = useRef<Map<string, UnlistenFn>>(new Map());
   const streamSessionByStreamIdRef = useRef<Map<string, string>>(new Map());
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
 
-  const enabledModels = useMemo(() => getEnabledAIModels(aiSettings), [aiSettings]);
   const storedSelectedModel = useMemo(() => selectDefaultAIModel(aiSettings), [aiSettings]);
   const prismStyle = useMemo(() => buildPrismThemeFromColors(theme.colors), [theme.colors]);
   const mode = aiSettings.default_mode ?? "ask";
   const agentKind = aiSettings.default_agent_kind ?? "nyaterm";
-  const runMode = resolveRunMode(mode, agentKind);
-  const codexModels = useMemo(
-    () => enabledModels.filter((model) => isCodexModel(model)),
-    [enabledModels],
-  );
-  const genaiModels = useMemo(
-    () => enabledModels.filter((model) => isGenaiModel(model)),
-    [enabledModels],
-  );
+  const configuredRunMode = resolveRunMode(mode, agentKind);
+  const codexAgentEnabled = aiSettings.codex?.enabled ?? false;
+  const claudeCodeAgentEnabled = aiSettings.claude_code?.enabled ?? false;
+  const runMode =
+    (configuredRunMode === "codex_agent" && !codexAgentEnabled) ||
+    (configuredRunMode === "claude_code_agent" && !claudeCodeAgentEnabled)
+      ? "ask"
+      : configuredRunMode;
+  const genaiModels = useMemo(() => getEnabledGenaiModels(aiSettings), [aiSettings]);
   const selectedModel = useMemo(() => {
     if (isClaudeCodeAgentMode(runMode)) return null;
     if (isOpenCodeAgentMode(runMode)) {
@@ -262,7 +265,9 @@ function AIAssistantPanel({
         : genaiModels;
   const externalModelLabel = isClaudeCodeAgentMode(runMode)
     ? (aiSettings.claude_code?.default_model ?? "Claude Code")
-    : null;
+    : runMode === "codex_agent"
+      ? (aiSettings.codex?.default_model ?? "Codex")
+      : null;
   const agentExecutionMode = aiSettings.agent_command_execution_mode ?? "confirm_each";
   const agentBackgroundExecutionEnabled = aiSettings.agent_background_execution_enabled ?? false;
   const scopeKey = useMemo(() => buildAIScopeKey(activePane), [activePane]);
@@ -283,6 +288,14 @@ function AIAssistantPanel({
   const currentStreamRuntime = currentSessionId ? streamRuntimeBySession[currentSessionId] : null;
   const loading = !!currentStreamRuntime;
   const streamingAssistantId = currentStreamRuntime?.assistantMessageId ?? null;
+  const isExternalAgentMode = runMode === "codex_agent" || runMode === "claude_code_agent";
+
+  useEffect(() => {
+    if (configuredRunMode === runMode) return;
+    updateAppSettings({
+      ai: { ...aiSettings, default_mode: "ask", default_agent_kind: "nyaterm" },
+    });
+  }, [aiSettings, configuredRunMode, runMode, updateAppSettings]);
 
   const allSessionPanes = useMemo(() => {
     const panes: SessionPane[] = [];
@@ -330,8 +343,18 @@ function AIAssistantPanel({
   }, [activePane, targetPanes]);
   const panelMeta =
     effectivePanes.length > 1 && activePane
-      ? t("ai.panelMetaMultiTarget", { target: activePane.name, count: effectivePanes.length - 1 })
+      ? t("ai.panelMetaMultiTarget", {
+          target: activePane.name,
+          count: effectivePanes.length - 1,
+        })
       : (activePane?.name ?? selectedModel?.name ?? externalModelLabel ?? t("ai.notConfigured"));
+  useEffect(() => {
+    if (!selectedModel || selectedModel.id === aiSettings.default_model_id) return;
+    updateAppSettings({
+      ai: { ...aiSettings, default_model_id: selectedModel.id },
+    });
+  }, [aiSettings, selectedModel, updateAppSettings]);
+
   const filteredSessions = useMemo(() => {
     const keyword = historyQuery.trim().toLowerCase();
     if (!keyword) return sessions;
@@ -470,20 +493,32 @@ function AIAssistantPanel({
     void loadSessions();
   }, [loadSessions]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: invalidate pending history loads whenever the AI scope changes.
+  useEffect(() => {
+    historyLoadRequestRef.current += 1;
+    setHistoryLoadingSessionId(null);
+    setHistoryLoadError(null);
+  }, [scopeKey]);
+
   const loadSessionMessages = useCallback(
-    async (sessionId: string) => {
-      try {
-        const items = await invoke<AIMessage[]>("get_ai_messages", { sessionId });
-        setMessagesBySessionId((prev) => ({ ...prev, [sessionId]: items }));
-        setActiveSessionIdByScope((prev) => ({ ...prev, [scopeKey]: sessionId }));
-        setPanelViewByScope((prev) => ({
-          ...prev,
-          [scopeKey]: { mode: "session", sessionId },
-        }));
-        setShowHistory(false);
-      } catch (error) {
-        toast.error(getErrorMessage(error));
-      }
+    async (sessionId: string, requestId: number) => {
+      const items = await invoke<AIMessage[]>("get_ai_messages", {
+        sessionId,
+      });
+      if (historyLoadRequestRef.current !== requestId) return false;
+      setMessagesBySessionId((prev) => ({ ...prev, [sessionId]: items }));
+      setActiveSessionIdByScope((prev) => ({
+        ...prev,
+        [scopeKey]: sessionId,
+      }));
+      setPanelViewByScope((prev) => ({
+        ...prev,
+        [scopeKey]: { mode: "session", sessionId },
+      }));
+      setHistoryLoadingSessionId(null);
+      setHistoryLoadError(null);
+      setShowHistory(false);
+      return true;
     },
     [scopeKey],
   );
@@ -517,13 +552,17 @@ function AIAssistantPanel({
     (nextMode: AIRunMode) => {
       if (nextMode === "ask") {
         updateAppSettings({
-          ai: { ...aiSettings, default_mode: "ask", default_agent_kind: "nyaterm" },
+          ai: {
+            ...aiSettings,
+            default_mode: "ask",
+            default_agent_kind: "nyaterm",
+          },
         });
         return;
       }
 
       if (nextMode === "nyaterm_agent") {
-        const nextModel = isGenaiModel(selectedModel) ? selectedModel : genaiModels[0];
+        const nextModel = getEnabledGenaiModels(aiSettings)[0];
         if (!nextModel) {
           toast.error(t("ai.noGenaiAgentModel"));
           return;
@@ -540,8 +579,13 @@ function AIAssistantPanel({
       }
 
       if (nextMode === "claude_code_agent") {
+        if (!claudeCodeAgentEnabled) return;
         updateAppSettings({
-          ai: { ...aiSettings, default_mode: "agent", default_agent_kind: "claude_code" },
+          ai: {
+            ...aiSettings,
+            default_mode: "agent",
+            default_agent_kind: "claude_code",
+          },
         });
         return;
       }
@@ -562,6 +606,8 @@ function AIAssistantPanel({
         return;
       }
 
+      if (!codexAgentEnabled) return;
+
       const configuredModel = aiSettings.codex?.default_model ?? null;
       const nextModel =
         (isCodexModel(selectedModel) ? selectedModel : null) ??
@@ -580,12 +626,11 @@ function AIAssistantPanel({
           ...aiSettings,
           default_mode: "agent",
           default_agent_kind: "codex",
-          default_model_id: nextModel.id,
         },
       });
       return;
     },
-    [aiSettings, codexModels, genaiModels, selectedModel, t, updateAppSettings],
+    [aiSettings, claudeCodeAgentEnabled, codexAgentEnabled, t, updateAppSettings],
   );
 
   const buildMergedContext = useCallback(
@@ -780,6 +825,13 @@ function AIAssistantPanel({
         );
         return;
       }
+      const requestModelId = requestAgentKind === "nyaterm" ? (requestModel?.id ?? null) : null;
+      const requestModelName =
+        requestAgentKind === "codex"
+          ? (aiSettings.codex?.default_model ?? null)
+          : requestAgentKind === "claude_code"
+            ? (aiSettings.claude_code?.default_model ?? null)
+            : (requestModel?.name ?? null);
       const requestMode: AIMode = runMode === "ask" ? "ask" : "agent";
       const requestSessionId =
         currentSession?.agentKind && currentSession.agentKind !== requestAgentKind
@@ -800,7 +852,10 @@ function AIAssistantPanel({
         reasoningContent: null,
         commandCards: [],
       };
-      setActiveSessionIdByScope((prev) => ({ ...prev, [scopeKey]: resolvedSessionId }));
+      setActiveSessionIdByScope((prev) => ({
+        ...prev,
+        [scopeKey]: resolvedSessionId,
+      }));
       setPanelViewByScope((prev) => ({
         ...prev,
         [scopeKey]: { mode: "session", sessionId: resolvedSessionId },
@@ -833,7 +888,10 @@ function AIAssistantPanel({
             ...rest,
             [nextSessionId]: [
               ...existingMessages,
-              ...pendingMessages.map((message) => ({ ...message, sessionId: nextSessionId })),
+              ...pendingMessages.map((message) => ({
+                ...message,
+                sessionId: nextSessionId,
+              })),
             ],
           };
         });
@@ -893,7 +951,10 @@ function AIAssistantPanel({
               updateMessagesForSession(resolvedSessionId, (prev) =>
                 prev.map((message) =>
                   message.id === assistantId
-                    ? { ...message, content: `${message.content}${payload.textDelta}` }
+                    ? {
+                        ...message,
+                        content: `${message.content}${payload.textDelta}`,
+                      }
                     : message,
                 ),
               );
@@ -997,14 +1058,12 @@ function AIAssistantPanel({
             action,
             userInput,
             mode: requestMode,
-            modelId: requestModel?.id ?? null,
+            modelId: requestModelId,
             modelName:
-              requestModel?.name ??
-              (requestAgentKind === "claude_code"
-                ? (aiSettings.claude_code?.default_model ?? null)
-                : requestAgentKind === "opencode"
-                  ? (aiSettings.opencode?.default_model ?? null)
-                  : null),
+              requestModelName ??
+              (requestAgentKind === "opencode"
+                ? (aiSettings.opencode?.default_model ?? requestModel?.name ?? null)
+                : requestModel?.name ?? null),
             context,
             options: {
               maxOutputCommands: 2,
@@ -1016,7 +1075,9 @@ function AIAssistantPanel({
         bindRealSessionId(result.sessionId);
         appendAudit({ action: `ai.${action}`, userInput });
       } catch (error) {
-        void invoke("cancel_ai_chat_stream", { streamId: requestStreamId }).catch(() => {});
+        void invoke("cancel_ai_chat_stream", {
+          streamId: requestStreamId,
+        }).catch(() => {});
         cleanupStreamListener(requestStreamId);
         updateMessagesForSession(resolvedSessionId, (prev) =>
           prev.map((message) =>
@@ -1028,8 +1089,9 @@ function AIAssistantPanel({
     },
     [
       activeConnection,
-      aiSettings.claude_code?.permission_mode,
       aiSettings.claude_code?.default_model,
+      aiSettings.claude_code?.permission_mode,
+      aiSettings.codex?.default_model,
       aiSettings.codex?.permission_mode,
       aiSettings.enabled,
       aiSettings.external_agent_permission_mode,
@@ -1066,7 +1128,12 @@ function AIAssistantPanel({
     const value = input.trim();
     if (!value || loading) return;
     const fullInput = quotedText ? `> ${quotedText.text}\n\n${value}` : value;
-    updateDraftForScope((draft) => ({ ...draft, text: "", quotedText: null, targetPaneIds: [] }));
+    updateDraftForScope((draft) => ({
+      ...draft,
+      text: "",
+      quotedText: null,
+      targetPaneIds: [],
+    }));
     shouldAutoScrollRef.current = true;
     void startChat("generate_command", fullInput);
   }, [input, loading, quotedText, startChat, updateDraftForScope]);
@@ -1177,7 +1244,10 @@ function AIAssistantPanel({
   );
 
   const clearHistory = useCallback(async () => {
-    if (loading) return;
+    if (loading || historyLoadingSessionId) return;
+    historyLoadRequestRef.current += 1;
+    setHistoryLoadingSessionId(null);
+    setHistoryLoadError(null);
     setClearingHistory(true);
     try {
       await invoke("clear_ai_history");
@@ -1198,15 +1268,22 @@ function AIAssistantPanel({
     } finally {
       setClearingHistory(false);
     }
-  }, [loadSessions, loading]);
+  }, [historyLoadingSessionId, loadSessions, loading]);
 
   const deleteSession = useCallback(
     async (sessionId: string) => {
+      if (historyLoadingSessionId === sessionId) return;
       try {
         await invoke("delete_ai_session", { sessionId });
         if (currentSessionId === sessionId) {
+          historyLoadRequestRef.current += 1;
+          setHistoryLoadingSessionId(null);
+          setHistoryLoadError(null);
           setActiveSessionIdByScope((prev) => ({ ...prev, [scopeKey]: null }));
-          setPanelViewByScope((prev) => ({ ...prev, [scopeKey]: { mode: "draft" } }));
+          setPanelViewByScope((prev) => ({
+            ...prev,
+            [scopeKey]: { mode: "draft" },
+          }));
         }
         setMessagesBySessionId((prev) => {
           const { [sessionId]: _, ...rest } = prev;
@@ -1217,7 +1294,7 @@ function AIAssistantPanel({
         toast.error(getErrorMessage(error));
       }
     },
-    [currentSessionId, loadSessions, scopeKey],
+    [currentSessionId, historyLoadingSessionId, loadSessions, scopeKey],
   );
 
   const historySections = useMemo(() => {
@@ -1239,8 +1316,16 @@ function AIAssistantPanel({
       }
     }
     return [
-      { key: "current", label: t("ai.historyCurrentTerminal"), sessions: current },
-      { key: "same", label: t("ai.historySameConnection"), sessions: sameConnection },
+      {
+        key: "current",
+        label: t("ai.historyCurrentTerminal"),
+        sessions: current,
+      },
+      {
+        key: "same",
+        label: t("ai.historySameConnection"),
+        sessions: sameConnection,
+      },
       { key: "other", label: t("ai.historyOtherSessions"), sessions: other },
     ];
   }, [activePane?.connectionId, activePane?.sessionId, filteredSessions, t]);
@@ -1255,33 +1340,52 @@ function AIAssistantPanel({
 
   const openHistorySession = useCallback(
     async (session: AISession) => {
-      if (!activePane) {
-        await loadSessionMessages(session.id);
-        return;
-      }
-      const exactScope =
-        session.scope?.type === "terminal" && session.scope.targetId === activePane.sessionId;
-      if (!exactScope) {
-        await invoke<AISession>("rebind_ai_session", {
-          sessionId: session.id,
-          ownerScope,
-        });
-        setActiveSessionIdByScope((prev) => {
-          const next = { ...prev, [scopeKey]: session.id };
-          for (const [key, value] of Object.entries(next)) {
-            if (key !== scopeKey && value === session.id) next[key] = null;
+      const requestId = ++historyLoadRequestRef.current;
+      setHistoryLoadingSessionId(session.id);
+      setHistoryLoadError(null);
+      try {
+        if (activePane) {
+          const exactScope =
+            session.scope?.type === "terminal" && session.scope.targetId === activePane.sessionId;
+          if (!exactScope) {
+            await invoke<AISession>("rebind_ai_session", {
+              sessionId: session.id,
+              ownerScope,
+            });
+            if (historyLoadRequestRef.current !== requestId) return;
+            setActiveSessionIdByScope((prev) => {
+              const next = { ...prev, [scopeKey]: session.id };
+              for (const [key, value] of Object.entries(next)) {
+                if (key !== scopeKey && value === session.id) next[key] = null;
+              }
+              return next;
+            });
+            try {
+              const nextSessions = await invoke<AISession[]>("get_ai_sessions");
+              if (historyLoadRequestRef.current !== requestId) return;
+              setSessions(nextSessions);
+            } catch {
+              if (historyLoadRequestRef.current !== requestId) return;
+            }
           }
-          return next;
-        });
-        await loadSessions();
+        }
+        await loadSessionMessages(session.id, requestId);
+      } catch (error) {
+        if (historyLoadRequestRef.current !== requestId) return;
+        const message = getErrorMessage(error);
+        setHistoryLoadError(message);
+        setHistoryLoadingSessionId(null);
+        toast.error(`${t("ai.historyLoadFailed")}: ${message}`);
       }
-      await loadSessionMessages(session.id);
     },
-    [activePane, loadSessionMessages, loadSessions, ownerScope, scopeKey],
+    [activePane, loadSessionMessages, ownerScope, scopeKey, t],
   );
 
   const newChat = useCallback(() => {
     if (loading) return;
+    historyLoadRequestRef.current += 1;
+    setHistoryLoadingSessionId(null);
+    setHistoryLoadError(null);
     setActiveSessionIdByScope((prev) => ({ ...prev, [scopeKey]: null }));
     setPanelViewByScope((prev) => ({ ...prev, [scopeKey]: { mode: "draft" } }));
     updateDraftForScope(() => EMPTY_DRAFT);
@@ -1342,7 +1446,10 @@ function AIAssistantPanel({
       const textBeforeCursor = input.slice(0, cursorPos);
       const textAfterCursor = input.slice(cursorPos);
       const cleaned = textBeforeCursor.replace(/@\S*$/, "");
-      updateDraftForScope((draft) => ({ ...draft, text: `${cleaned}${textAfterCursor}` }));
+      updateDraftForScope((draft) => ({
+        ...draft,
+        text: `${cleaned}${textAfterCursor}`,
+      }));
       setShowMentionPopover(false);
       setMentionQuery("");
       textareaRef.current?.focus();
@@ -1616,12 +1723,22 @@ function AIAssistantPanel({
             <Button
               size="xs"
               variant="ghost"
-              disabled={sessions.length === 0 || loading || clearingHistory}
+              disabled={
+                sessions.length === 0 ||
+                loading ||
+                clearingHistory ||
+                historyLoadingSessionId !== null
+              }
               onClick={() => setClearHistoryOpen(true)}
             >
               {t("ai.clearHistory")}
             </Button>
           </div>
+          {historyLoadError ? (
+            <div className="border-b border-border/70 px-3 py-2 text-[0.6875rem] text-destructive">
+              {t("ai.historyLoadFailed")}: {historyLoadError}
+            </div>
+          ) : null}
           <div className="min-h-0 overflow-auto p-2 terminal-scroll">
             {filteredSessions.length === 0 ? (
               <div className="py-4 text-center text-xs text-muted-foreground">
@@ -1637,6 +1754,7 @@ function AIAssistantPanel({
                     </div>
                     {section.sessions.map((session) => {
                       const inUse = isSessionUsedByAnotherScope(session.id);
+                      const isLoadingHistory = historyLoadingSessionId === session.id;
                       const exactScope =
                         session.scope?.type === "terminal" &&
                         session.scope.targetId === activePane?.sessionId;
@@ -1648,11 +1766,16 @@ function AIAssistantPanel({
                           <button
                             type="button"
                             className="min-w-0 flex-1 text-left text-xs"
-                            disabled={inUse && !exactScope}
+                            disabled={isLoadingHistory || (inUse && !exactScope)}
+                            aria-busy={isLoadingHistory}
                             onClick={() => void openHistorySession(session)}
                           >
                             <div className="truncate font-medium">{session.title}</div>
-                            {inUse && !exactScope ? (
+                            {isLoadingHistory ? (
+                              <div className="truncate text-[0.625rem] text-muted-foreground">
+                                {t("ai.historyLoading")}
+                              </div>
+                            ) : inUse && !exactScope ? (
                               <div className="truncate text-[0.625rem] text-muted-foreground">
                                 {t("ai.historyInUse")}
                               </div>
@@ -1665,6 +1788,7 @@ function AIAssistantPanel({
                           <button
                             type="button"
                             className="shrink-0 rounded p-0.5 text-muted-foreground/50 opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+                            disabled={isLoadingHistory || clearingHistory}
                             title={t("ai.deleteSession")}
                             onClick={(e) => {
                               e.stopPropagation();
@@ -1715,7 +1839,7 @@ function AIAssistantPanel({
                     <MdAutoAwesome className="text-3xl" />
                     <div>{t("ai.goToSettingsToEnable")}</div>
                   </>
-                ) : !isClaudeCodeAgentMode(runMode) && !selectedModel ? (
+                ) : !isExternalAgentMode && !isOpenCodeAgentMode(runMode) && !selectedModel ? (
                   <div className="flex flex-col items-center gap-4 px-4">
                     <div className="flex size-12 items-center justify-center rounded-full border border-amber-500/30 bg-amber-500/10">
                       <MdErrorOutline className="text-2xl text-amber-500" />
@@ -1920,7 +2044,12 @@ function AIAssistantPanel({
                 <button
                   type="button"
                   className="mr-1.5 shrink-0 rounded p-0.5 text-muted-foreground/70 hover:text-foreground"
-                  onClick={() => updateDraftForScope((draft) => ({ ...draft, quotedText: null }))}
+                  onClick={() =>
+                    updateDraftForScope((draft) => ({
+                      ...draft,
+                      quotedText: null,
+                    }))
+                  }
                 >
                   <MdClose className="text-xs" />
                 </button>
@@ -1933,7 +2062,14 @@ function AIAssistantPanel({
               placeholder={aiSettings.enabled ? t("ai.placeholder") : t("ai.goToSettingsToEnable")}
               className="max-h-32 min-h-16 resize-none overflow-y-auto text-xs terminal-scroll"
               onChange={handleInputChange}
+              onCompositionStart={() => {
+                isComposingRef.current = true;
+              }}
+              onCompositionEnd={() => {
+                isComposingRef.current = false;
+              }}
               onKeyDown={(event) => {
+                const isComposing = isComposingRef.current || event.nativeEvent.isComposing || event.keyCode === 229;
                 if (showMentionPopover) {
                   if (event.key === "Escape") {
                     event.preventDefault();
@@ -1956,7 +2092,7 @@ function AIAssistantPanel({
                     );
                     return;
                   }
-                  if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                  if (event.key === "Enter" && !isComposing) {
                     event.preventDefault();
                     const target = filteredMentionPanes[mentionIndex];
                     if (target) selectMentionPane(target);
@@ -1964,7 +2100,7 @@ function AIAssistantPanel({
                     return;
                   }
                 }
-                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                if (event.key === "Enter" && !event.shiftKey && !isComposing) {
                   event.preventDefault();
                   submit();
                 }
@@ -1983,8 +2119,10 @@ function AIAssistantPanel({
                     <SelectContent position="popper">
                       <SelectItem value="ask">{t("ai.modeAsk")}</SelectItem>
                       <SelectItem value="nyaterm_agent">{t("ai.modeNyatermAgent")}</SelectItem>
-                      <SelectItem value="codex_agent">{t("ai.modeCodexAgent")}</SelectItem>
-                      <SelectItem value="claude_code_agent">
+                      <SelectItem value="codex_agent" disabled={!codexAgentEnabled}>
+                        {t("ai.modeCodexAgent")}
+                      </SelectItem>
+                      <SelectItem value="claude_code_agent" disabled={!claudeCodeAgentEnabled}>
                         {t("ai.modeClaudeCodeAgent")}
                       </SelectItem>
                       <SelectItem value="opencode_agent">
@@ -1995,35 +2133,47 @@ function AIAssistantPanel({
                 </div>
 
                 <div className="w-2/3 min-w-0">
-                  <ModelCombobox
-                    models={selectableModels}
-                    credentials={aiSettings.provider_credentials}
-                    selectedModel={selectedModel}
-                    selectedReasoningEffort={aiSettings.default_reasoning_effort ?? "auto"}
-                    open={modelPopoverOpen}
-                    onOpenChange={setModelPopoverOpen}
-                    onSelect={(model) => {
-                      if (isOpenCodeAgentMode(runMode)) {
-                        updateAppSettings({
-                          ai: {
-                            ...aiSettings,
-                            opencode: {
-                              ...DEFAULT_AI_SETTINGS.opencode,
-                              ...aiSettings.opencode,
-                              enabled: true,
-                              default_model: model.name,
+                  {externalModelLabel && !isOpenCodeAgentMode(runMode) ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-8 w-full min-w-0 justify-start px-2 text-xs"
+                      disabled
+                    >
+                      <span className="truncate">{externalModelLabel}</span>
+                    </Button>
+                  ) : (
+                    <ModelCombobox
+                      models={selectableModels}
+                      credentials={aiSettings.provider_credentials}
+                      selectedModel={selectedModel}
+                      selectedReasoningEffort={aiSettings.default_reasoning_effort ?? "auto"}
+                      open={modelPopoverOpen}
+                      onOpenChange={setModelPopoverOpen}
+                      onSelect={(model) => {
+                        if (isOpenCodeAgentMode(runMode)) {
+                          updateAppSettings({
+                            ai: {
+                              ...aiSettings,
+                              opencode: {
+                                ...DEFAULT_AI_SETTINGS.opencode,
+                                ...aiSettings.opencode,
+                                enabled: true,
+                                default_model: model.name,
+                              },
                             },
-                          },
-                        });
-                        return;
+                          });
+                          return;
+                        }
+                        updateAppSettings({ ai: { ...aiSettings, default_model_id: model.id } });
+                      }}
+                      onSelectReasoningEffort={(default_reasoning_effort) =>
+                        updateAppSettings({ ai: { ...aiSettings, default_reasoning_effort } })
                       }
-                      updateAppSettings({ ai: { ...aiSettings, default_model_id: model.id } });
-                    }}
-                    onSelectReasoningEffort={(default_reasoning_effort) =>
-                      updateAppSettings({ ai: { ...aiSettings, default_reasoning_effort } })
-                    }
-                    className="w-full truncate"
-                  />
+                      className="w-full truncate"
+                    />
+                  )}
                 </div>
               </div>
 
@@ -2038,7 +2188,7 @@ function AIAssistantPanel({
                     onClick={submit}
                     disabled={
                       !input.trim() ||
-                      (!selectedModel && !isClaudeCodeAgentMode(runMode)) ||
+                      (!selectedModel && !isExternalAgentMode && !isOpenCodeAgentMode(runMode)) ||
                       !aiSettings.enabled
                     }
                   >

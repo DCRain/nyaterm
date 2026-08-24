@@ -870,6 +870,76 @@ export function isParentDirectoryEntry(entry: FileEntry) {
   return entry.name === PARENT_DIRECTORY_ENTRY_NAME;
 }
 
+export interface SyncExplorerDirectoryToTerminalCwdOptions {
+  enabled: boolean;
+  canBrowseFiles: boolean;
+  sessionId: string | null;
+  backend: FileExplorerBackendKind;
+  currentPath: string;
+  readTerminalCwd: (sessionId: string) => Promise<string | null>;
+  loadDirectory: (
+    path: string,
+    options?: LoadDirectoryOptions,
+  ) => Promise<boolean>;
+}
+
+export interface SyncExplorerDirectoryToTerminalCwdChangeOptions {
+  backend: FileExplorerBackendKind;
+  currentPath: string;
+  cwd: string;
+  loadDirectory: (
+    path: string,
+    options?: LoadDirectoryOptions,
+  ) => Promise<boolean>;
+}
+
+export function syncExplorerDirectoryToTerminalCwdChange({
+  backend,
+  currentPath,
+  cwd,
+  loadDirectory,
+}: SyncExplorerDirectoryToTerminalCwdChangeOptions) {
+  if (isStorageExplorerBackend(backend)) {
+    return false;
+  }
+  const normalizedCwd = normalizeExplorerPath(cwd, backend);
+  if (
+    !normalizedCwd ||
+    normalizedCwd === normalizeExplorerPath(currentPath, backend)
+  ) {
+    return false;
+  }
+
+  void loadDirectory(normalizedCwd, { silent: true });
+  return true;
+}
+
+export async function syncExplorerDirectoryToTerminalCwd({
+  enabled,
+  canBrowseFiles,
+  sessionId,
+  backend,
+  currentPath,
+  readTerminalCwd,
+  loadDirectory,
+}: SyncExplorerDirectoryToTerminalCwdOptions) {
+  if (!enabled || !canBrowseFiles || !sessionId) return false;
+  if (isStorageExplorerBackend(backend)) return false;
+
+  try {
+    const cwd = normalizeExplorerPath(
+      (await readTerminalCwd(sessionId)) ?? "",
+      backend,
+    );
+    if (!cwd || cwd === normalizeExplorerPath(currentPath, backend)) {
+      return false;
+    }
+    return loadDirectory(cwd, { silent: true });
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Records a freshly visited directory into the in-memory visited list.
  * Deduplicates by path (moving an existing entry to the top), keeps the most

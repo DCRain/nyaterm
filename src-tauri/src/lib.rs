@@ -90,7 +90,7 @@ pub fn run() {
     }));
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let builder = builder.plugin(tauri_plugin_deep_link::init());
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[cfg(not(any(target_os = "android", target_os = "ios", target_vendor = "win7")))]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
 
     let runtime_for_setup = runtime.clone();
@@ -357,6 +357,9 @@ pub fn run() {
             cmd::connection::get_saved_connections,
             cmd::connection::get_supported_ssh_algorithms,
             cmd::connection::get_ssh_agent_forwarding_identities,
+            cmd::connection::import_connection_icon,
+            cmd::connection::get_connection_custom_icons,
+            cmd::connection::delete_connection_custom_icon,
             cmd::connection::save_connection,
             cmd::connection_test::test_connection_endpoint,
             cmd::connection::update_connection_icon,
