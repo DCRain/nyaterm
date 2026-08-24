@@ -147,6 +147,8 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
   >({});
   const [showHistory, setShowHistory] = useState(false);
   const [historyQuery, setHistoryQuery] = useState("");
+  const [historyLoadingSessionId, setHistoryLoadingSessionId] = useState<string | null>(null);
+  const [historyLoadError, setHistoryLoadError] = useState<string | null>(null);
   const [clearHistoryOpen, setClearHistoryOpen] = useState(false);
   const [clearingHistory, setClearingHistory] = useState(false);
   const [detectedError, setDetectedError] = useState<AIErrorDetectedDetail | null>(null);
@@ -163,6 +165,7 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
   const [pendingExecutionMode, setPendingExecutionMode] =
     useState<AIAgentCommandExecutionMode | null>(null);
   const handledIntentIdRef = useRef<string | null>(null);
+  const historyLoadRequestRef = useRef(0);
   const executionMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const executionMenuRef = useRef<HTMLDivElement | null>(null);
   const historyButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -382,25 +385,32 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
     void loadSessions();
   }, [loadSessions]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: invalidate pending history loads whenever the AI scope changes.
+  useEffect(() => {
+    historyLoadRequestRef.current += 1;
+    setHistoryLoadingSessionId(null);
+    setHistoryLoadError(null);
+  }, [scopeKey]);
+
   const loadSessionMessages = useCallback(
-    async (sessionId: string) => {
-      try {
-        const items = await invoke<AIMessage[]>("get_ai_messages", {
-          sessionId,
-        });
-        setMessagesBySessionId((prev) => ({ ...prev, [sessionId]: items }));
-        setActiveSessionIdByScope((prev) => ({
-          ...prev,
-          [scopeKey]: sessionId,
-        }));
-        setPanelViewByScope((prev) => ({
-          ...prev,
-          [scopeKey]: { mode: "session", sessionId },
-        }));
-        setShowHistory(false);
-      } catch (error) {
-        toast.error(getErrorMessage(error));
-      }
+    async (sessionId: string, requestId: number) => {
+      const items = await invoke<AIMessage[]>("get_ai_messages", {
+        sessionId,
+      });
+      if (historyLoadRequestRef.current !== requestId) return false;
+      setMessagesBySessionId((prev) => ({ ...prev, [sessionId]: items }));
+      setActiveSessionIdByScope((prev) => ({
+        ...prev,
+        [scopeKey]: sessionId,
+      }));
+      setPanelViewByScope((prev) => ({
+        ...prev,
+        [scopeKey]: { mode: "session", sessionId },
+      }));
+      setHistoryLoadingSessionId(null);
+      setHistoryLoadError(null);
+      setShowHistory(false);
+      return true;
     },
     [scopeKey],
   );
@@ -1083,7 +1093,10 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
   );
 
   const clearHistory = useCallback(async () => {
-    if (loading) return;
+    if (loading || historyLoadingSessionId) return;
+    historyLoadRequestRef.current += 1;
+    setHistoryLoadingSessionId(null);
+    setHistoryLoadError(null);
     setClearingHistory(true);
     try {
       await invoke("clear_ai_history");
@@ -1104,13 +1117,17 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
     } finally {
       setClearingHistory(false);
     }
-  }, [loadSessions, loading]);
+  }, [historyLoadingSessionId, loadSessions, loading]);
 
   const deleteSession = useCallback(
     async (sessionId: string) => {
+      if (historyLoadingSessionId === sessionId) return;
       try {
         await invoke("delete_ai_session", { sessionId });
         if (currentSessionId === sessionId) {
+          historyLoadRequestRef.current += 1;
+          setHistoryLoadingSessionId(null);
+          setHistoryLoadError(null);
           setActiveSessionIdByScope((prev) => ({ ...prev, [scopeKey]: null }));
           setPanelViewByScope((prev) => ({
             ...prev,
@@ -1126,7 +1143,7 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
         toast.error(getErrorMessage(error));
       }
     },
-    [currentSessionId, loadSessions, scopeKey],
+    [currentSessionId, historyLoadingSessionId, loadSessions, scopeKey],
   );
 
   const historySections = useMemo(() => {
@@ -1172,33 +1189,52 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
 
   const openHistorySession = useCallback(
     async (session: AISession) => {
-      if (!activePane) {
-        await loadSessionMessages(session.id);
-        return;
-      }
-      const exactScope =
-        session.scope?.type === "terminal" && session.scope.targetId === activePane.sessionId;
-      if (!exactScope) {
-        await invoke<AISession>("rebind_ai_session", {
-          sessionId: session.id,
-          ownerScope,
-        });
-        setActiveSessionIdByScope((prev) => {
-          const next = { ...prev, [scopeKey]: session.id };
-          for (const [key, value] of Object.entries(next)) {
-            if (key !== scopeKey && value === session.id) next[key] = null;
+      const requestId = ++historyLoadRequestRef.current;
+      setHistoryLoadingSessionId(session.id);
+      setHistoryLoadError(null);
+      try {
+        if (activePane) {
+          const exactScope =
+            session.scope?.type === "terminal" && session.scope.targetId === activePane.sessionId;
+          if (!exactScope) {
+            await invoke<AISession>("rebind_ai_session", {
+              sessionId: session.id,
+              ownerScope,
+            });
+            if (historyLoadRequestRef.current !== requestId) return;
+            setActiveSessionIdByScope((prev) => {
+              const next = { ...prev, [scopeKey]: session.id };
+              for (const [key, value] of Object.entries(next)) {
+                if (key !== scopeKey && value === session.id) next[key] = null;
+              }
+              return next;
+            });
+            try {
+              const nextSessions = await invoke<AISession[]>("get_ai_sessions");
+              if (historyLoadRequestRef.current !== requestId) return;
+              setSessions(nextSessions);
+            } catch {
+              if (historyLoadRequestRef.current !== requestId) return;
+            }
           }
-          return next;
-        });
-        await loadSessions();
+        }
+        await loadSessionMessages(session.id, requestId);
+      } catch (error) {
+        if (historyLoadRequestRef.current !== requestId) return;
+        const message = getErrorMessage(error);
+        setHistoryLoadError(message);
+        setHistoryLoadingSessionId(null);
+        toast.error(`${t("ai.historyLoadFailed")}: ${message}`);
       }
-      await loadSessionMessages(session.id);
     },
-    [activePane, loadSessionMessages, loadSessions, ownerScope, scopeKey],
+    [activePane, loadSessionMessages, ownerScope, scopeKey, t],
   );
 
   const newChat = useCallback(() => {
     if (loading) return;
+    historyLoadRequestRef.current += 1;
+    setHistoryLoadingSessionId(null);
+    setHistoryLoadError(null);
     setActiveSessionIdByScope((prev) => ({ ...prev, [scopeKey]: null }));
     setPanelViewByScope((prev) => ({ ...prev, [scopeKey]: { mode: "draft" } }));
     updateDraftForScope(() => EMPTY_DRAFT);
@@ -1536,12 +1572,22 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
             <Button
               size="xs"
               variant="ghost"
-              disabled={sessions.length === 0 || loading || clearingHistory}
+              disabled={
+                sessions.length === 0 ||
+                loading ||
+                clearingHistory ||
+                historyLoadingSessionId !== null
+              }
               onClick={() => setClearHistoryOpen(true)}
             >
               {t("ai.clearHistory")}
             </Button>
           </div>
+          {historyLoadError ? (
+            <div className="border-b border-border/70 px-3 py-2 text-[0.6875rem] text-destructive">
+              {t("ai.historyLoadFailed")}: {historyLoadError}
+            </div>
+          ) : null}
           <div className="min-h-0 overflow-auto p-2 terminal-scroll">
             {filteredSessions.length === 0 ? (
               <div className="py-4 text-center text-xs text-muted-foreground">
@@ -1557,6 +1603,7 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
                     </div>
                     {section.sessions.map((session) => {
                       const inUse = isSessionUsedByAnotherScope(session.id);
+                      const isLoadingHistory = historyLoadingSessionId === session.id;
                       const exactScope =
                         session.scope?.type === "terminal" &&
                         session.scope.targetId === activePane?.sessionId;
@@ -1568,11 +1615,16 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
                           <button
                             type="button"
                             className="min-w-0 flex-1 text-left text-xs"
-                            disabled={inUse && !exactScope}
+                            disabled={isLoadingHistory || (inUse && !exactScope)}
+                            aria-busy={isLoadingHistory}
                             onClick={() => void openHistorySession(session)}
                           >
                             <div className="truncate font-medium">{session.title}</div>
-                            {inUse && !exactScope ? (
+                            {isLoadingHistory ? (
+                              <div className="truncate text-[0.625rem] text-muted-foreground">
+                                {t("ai.historyLoading")}
+                              </div>
+                            ) : inUse && !exactScope ? (
                               <div className="truncate text-[0.625rem] text-muted-foreground">
                                 {t("ai.historyInUse")}
                               </div>
@@ -1585,6 +1637,7 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
                           <button
                             type="button"
                             className="shrink-0 rounded p-0.5 text-muted-foreground/50 opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+                            disabled={isLoadingHistory || clearingHistory}
                             title={t("ai.deleteSession")}
                             onClick={(e) => {
                               e.stopPropagation();
