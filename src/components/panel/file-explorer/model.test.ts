@@ -5,6 +5,7 @@ import {
   buildMoveTargetPath,
   isMoveToSameDirectory,
   syncExplorerDirectoryToTerminalCwd,
+  syncExplorerDirectoryToTerminalCwdChange,
 } from "./model";
 
 describe("file explorer move path helpers", () => {
@@ -218,6 +219,36 @@ describe("file explorer terminal cwd sync", () => {
     ).resolves.toBe(false);
 
     expect(readTerminalCwd).toHaveBeenCalledWith("session-1");
+    expect(loadDirectory).not.toHaveBeenCalled();
+  });
+
+  it("loads cwd change events silently when the path changed", () => {
+    const loadDirectory = vi.fn().mockResolvedValue(true);
+
+    expect(
+      syncExplorerDirectoryToTerminalCwdChange({
+        backend: "remote",
+        currentPath: "/old",
+        cwd: "/new",
+        loadDirectory,
+      }),
+    ).toBe(true);
+
+    expect(loadDirectory).toHaveBeenCalledWith("/new", { silent: true });
+  });
+
+  it("ignores cwd change events for the visible directory", () => {
+    const loadDirectory = vi.fn().mockResolvedValue(true);
+
+    expect(
+      syncExplorerDirectoryToTerminalCwdChange({
+        backend: "remote",
+        currentPath: "/old",
+        cwd: "/old/",
+        loadDirectory,
+      }),
+    ).toBe(false);
+
     expect(loadDirectory).not.toHaveBeenCalled();
   });
 });

@@ -137,6 +137,7 @@ import {
   type RemoteTextFile,
   type ResolvedLocalDropPathEntry,
   syncExplorerDirectoryToTerminalCwd,
+  syncExplorerDirectoryToTerminalCwdChange,
   type TextFileOpenResult,
 } from "./model";
 import { useExternalFileDrop } from "./useExternalFileDrop";
@@ -2290,14 +2291,12 @@ function FileExplorerPane({
     const unlisten = listen<string>(
       `cwd-changed-${activeSessionId}`,
       (event) => {
-      const backend = explorerBackendRef.current;
-      const newCwd = normalizeExplorerPath(event.payload, backend);
-        if (
-          newCwd &&
-          newCwd !== normalizeExplorerPath(currentPathRef.current, backend)
-        ) {
-        loadDirectory(newCwd);
-      }
+        syncExplorerDirectoryToTerminalCwdChange({
+          backend: explorerBackendRef.current,
+          currentPath: currentPathRef.current,
+          cwd: event.payload,
+          loadDirectory,
+        });
       },
     );
     return () => {

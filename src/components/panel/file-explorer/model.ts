@@ -848,6 +848,34 @@ export interface SyncExplorerDirectoryToTerminalCwdOptions {
   ) => Promise<boolean>;
 }
 
+export interface SyncExplorerDirectoryToTerminalCwdChangeOptions {
+  backend: FileExplorerBackendKind;
+  currentPath: string;
+  cwd: string;
+  loadDirectory: (
+    path: string,
+    options?: LoadDirectoryOptions,
+  ) => Promise<boolean>;
+}
+
+export function syncExplorerDirectoryToTerminalCwdChange({
+  backend,
+  currentPath,
+  cwd,
+  loadDirectory,
+}: SyncExplorerDirectoryToTerminalCwdChangeOptions) {
+  const normalizedCwd = normalizeExplorerPath(cwd, backend);
+  if (
+    !normalizedCwd ||
+    normalizedCwd === normalizeExplorerPath(currentPath, backend)
+  ) {
+    return false;
+  }
+
+  void loadDirectory(normalizedCwd, { silent: true });
+  return true;
+}
+
 export async function syncExplorerDirectoryToTerminalCwd({
   enabled,
   canBrowseFiles,
