@@ -172,6 +172,7 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
   const historyCardRef = useRef<HTMLDivElement | null>(null);
   const mentionPopoverRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const isComposingRef = useRef(false);
   const streamUnlistenersRef = useRef<Map<string, UnlistenFn>>(new Map());
   const streamSessionByStreamIdRef = useRef<Map<string, string>>(new Map());
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -1911,7 +1912,14 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
               placeholder={aiSettings.enabled ? t("ai.placeholder") : t("ai.goToSettingsToEnable")}
               className="max-h-32 min-h-16 resize-none overflow-y-auto text-xs terminal-scroll"
               onChange={handleInputChange}
+              onCompositionStart={() => {
+                isComposingRef.current = true;
+              }}
+              onCompositionEnd={() => {
+                isComposingRef.current = false;
+              }}
               onKeyDown={(event) => {
+                const isComposing = isComposingRef.current || event.nativeEvent.isComposing || event.keyCode === 229;
                 if (showMentionPopover) {
                   if (event.key === "Escape") {
                     event.preventDefault();
@@ -1934,7 +1942,7 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
                     );
                     return;
                   }
-                  if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                  if (event.key === "Enter" && !isComposing) {
                     event.preventDefault();
                     const target = filteredMentionPanes[mentionIndex];
                     if (target) selectMentionPane(target);
@@ -1942,7 +1950,7 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
                     return;
                   }
                 }
-                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                if (event.key === "Enter" && !event.shiftKey && !isComposing) {
                   event.preventDefault();
                   submit();
                 }
