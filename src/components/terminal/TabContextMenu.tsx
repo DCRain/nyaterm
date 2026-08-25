@@ -110,47 +110,45 @@ export default function TabContextMenu({
   const activePane = getActivePane(tab);
   const tabIndex = tabs.findIndex((item) => item.id === tab.id);
   const isTerminalPane = activePane?.paneKind === "terminal";
-  const canSpawnSession =
+  const supportsSessionSpawn =
     !!activePane &&
     isTerminalPane &&
     (activePane.type === "Local" ||
       !!activePane.connectionId ||
       hasMatchingTemporaryConfig(activePane));
-  const canReconnect =
-    !!activePane &&
-    isTerminalPane &&
-    !activePane.connecting &&
-    (activePane.type === "Local" ||
-      !!activePane.connectionId ||
-      hasMatchingTemporaryConfig(activePane));
-  const canMultiplexSsh =
+  const supportsSshMultiplex =
     !!activePane &&
     isTerminalPane &&
     activePane.type === "SSH" &&
-    (!!activePane.connectionId || activePane.temporaryConfig?.protocol === "ssh") &&
+    (!!activePane.connectionId ||
+      activePane.temporaryConfig?.protocol === "ssh");
+  const supportsReconnect = supportsSessionSpawn;
+  const supportsDisconnect = !!activePane && isTerminalPane;
+  const supportsAI = !!activePane && isTerminalPane;
+  const supportsSplit = supportsSessionSpawn;
+  const supportsSessionInfo = !!activePane?.connectionId && isTerminalPane;
+  const showSessionActionsGroup =
+    supportsSessionSpawn ||
+    supportsSshMultiplex ||
+    supportsDisconnect ||
+    supportsAI;
+  const showSplitActionsGroup = supportsSplit;
+  const canSpawnSession = supportsSessionSpawn;
+  const canReconnect = supportsReconnect && !activePane.connecting;
+  const canMultiplexSsh =
+    supportsSshMultiplex &&
     !activePane.connecting &&
     !activePane.connectError &&
     !!activePane.sessionId;
   const canDisconnect =
-    !!activePane &&
-    isTerminalPane &&
-    !activePane.connecting &&
-    !activePane.connectError;
-  const canSplit =
-    !!activePane &&
-    isTerminalPane &&
-    (activePane.type === "Local" ||
-      !!activePane.connectionId ||
-      hasMatchingTemporaryConfig(activePane));
+    supportsDisconnect && !activePane.connecting && !activePane.connectError;
+  const canSplit = supportsSplit;
   const canUseAI =
-    !!activePane &&
-    isTerminalPane &&
-    !activePane.connecting &&
-    !activePane.connectError;
+    supportsAI && !activePane.connecting && !activePane.connectError;
   const canCloseInactive = tabs.length > 1;
   const canCloseRight = tabIndex !== -1 && tabIndex < tabs.length - 1;
   const canCloseTab = !!activePane && !tab.locked;
-  const canSessionInfo = !!activePane?.connectionId && isTerminalPane;
+  const canSessionInfo = supportsSessionInfo;
   const iconClass = "mr-2 text-[0.875rem] text-muted-foreground";
 
   const handleSetColor = useCallback(
@@ -262,115 +260,136 @@ export default function TabContextMenu({
           {t("tabCtx.copyName")}
         </ContextMenuItem>
 
-        <ContextMenuItem
-          disabled={!canCopyIp}
-          onClick={() => void onCopyServerIp(tab)}
-        >
-          <MdContentCopy className={iconClass} />
-          {t("tabCtx.copyIp")}
-        </ContextMenuItem>
-
-        <ContextMenuSeparator />
-
-        <ContextMenuItem
-          disabled={!canSpawnSession}
-          onClick={() => void onDuplicateSession(tab)}
-        >
-          <MdPlayArrow className={iconClass} />
-          {t("tabCtx.duplicate")}
-        </ContextMenuItem>
-
-        <ContextMenuItem
-          disabled={!canSpawnSession}
-          onClick={() => void onDuplicateSessionWithCommand(tab)}
-        >
-          <MdInput className={iconClass} />
-          {t("tabCtx.duplicateWithCommand")}
-        </ContextMenuItem>
-
-        <ContextMenuSub>
-          <ContextMenuSubTrigger disabled={!canMultiplexSsh}>
-            <MdCallSplit className={iconClass} />
-            {t("tabCtx.sshAdvanced")}
-          </ContextMenuSubTrigger>
-          <ContextMenuSubContent>
-            <ContextMenuItem
-              disabled={!canMultiplexSsh}
-              onClick={() => void onMultiplexSshSession(tab)}
-            >
-              <MdCallSplit className={iconClass} />
-              {t("tabCtx.multiplexSsh")}
-            </ContextMenuItem>
-            <ContextMenuItem
-              disabled={!canMultiplexSsh}
-              onClick={() => void onMultiplexSshSessionWithCommand(tab)}
-            >
-              <MdInput className={iconClass} />
-              {t("tabCtx.multiplexSshWithCommand")}
-            </ContextMenuItem>
-          </ContextMenuSubContent>
-        </ContextMenuSub>
-
-        <ContextMenuItem
-          disabled={!canReconnect}
-          onClick={() => void onReconnectSession(tab)}
-        >
-          <MdRefresh className={iconClass} />
-          {t("tabCtx.reconnect")}
-        </ContextMenuItem>
-
-        <ContextMenuItem
-          disabled={!canDisconnect}
-          onClick={() => void onDisconnectSession(tab)}
-        >
-          <MdLinkOff className={iconClass} />
-          {t("tabCtx.disconnect")}
-        </ContextMenuItem>
-
-        <ContextMenuSub>
-          <ContextMenuSubTrigger>
-            <MdAutoAwesome className={iconClass} />
-            {t("ai.title")}
-          </ContextMenuSubTrigger>
-          <ContextMenuSubContent>
-            <ContextMenuItem
-              disabled={!canUseAI}
-              onClick={() => handleOpenAI("explain_output")}
-            >
-              {t("ai.explainRecent")}
-            </ContextMenuItem>
-            <ContextMenuItem
-              disabled={!canUseAI}
-              onClick={() => handleOpenAI("analyze_error")}
-            >
-              {t("ai.analyzeError")}
-            </ContextMenuItem>
-          </ContextMenuSubContent>
-        </ContextMenuSub>
-
-        <ContextMenuSeparator />
-
-        <ContextMenuItem
-          disabled={!canSplit}
-          onClick={() => void onSplitSession(tab, "horizontal")}
-        >
-          <MdHorizontalSplit className={iconClass} />
-          {t("tabCtx.splitHorizontal")}
-        </ContextMenuItem>
-
-        <ContextMenuItem
-          disabled={!canSplit}
-          onClick={() => void onSplitSession(tab, "vertical")}
-        >
-          <MdVerticalSplit className={iconClass} />
-          {t("tabCtx.splitVertical")}
-        </ContextMenuItem>
-
-        {onUnsplit && (
-          <ContextMenuItem onClick={onUnsplit}>
-            <MdMerge className={iconClass} />
-            {t("tabCtx.unsplit")}
+        {canCopyIp && (
+          <ContextMenuItem onClick={() => void onCopyServerIp(tab)}>
+            <MdContentCopy className={iconClass} />
+            {t("tabCtx.copyIp")}
           </ContextMenuItem>
+        )}
+
+        {showSessionActionsGroup && (
+          <>
+            <ContextMenuSeparator />
+
+            {supportsSessionSpawn && (
+              <>
+                <ContextMenuItem
+                  disabled={!canSpawnSession}
+                  onClick={() => void onDuplicateSession(tab)}
+                >
+                  <MdPlayArrow className={iconClass} />
+                  {t("tabCtx.duplicate")}
+                </ContextMenuItem>
+                <ContextMenuItem
+                  disabled={!canSpawnSession}
+                  onClick={() => void onDuplicateSessionWithCommand(tab)}
+                >
+                  <MdInput className={iconClass} />
+                  {t("tabCtx.duplicateWithCommand")}
+                </ContextMenuItem>
+              </>
+            )}
+
+            {supportsSshMultiplex && (
+              <ContextMenuSub>
+                <ContextMenuSubTrigger disabled={!canMultiplexSsh}>
+                  <MdCallSplit className={iconClass} />
+                  {t("tabCtx.sshAdvanced")}
+                </ContextMenuSubTrigger>
+                <ContextMenuSubContent>
+                  <ContextMenuItem
+                    disabled={!canMultiplexSsh}
+                    onClick={() => void onMultiplexSshSession(tab)}
+                  >
+                    <MdCallSplit className={iconClass} />
+                    {t("tabCtx.multiplexSsh")}
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    disabled={!canMultiplexSsh}
+                    onClick={() => void onMultiplexSshSessionWithCommand(tab)}
+                  >
+                    <MdInput className={iconClass} />
+                    {t("tabCtx.multiplexSshWithCommand")}
+                  </ContextMenuItem>
+                </ContextMenuSubContent>
+              </ContextMenuSub>
+            )}
+
+            {supportsReconnect && (
+              <ContextMenuItem
+                disabled={!canReconnect}
+                onClick={() => void onReconnectSession(tab)}
+              >
+                <MdRefresh className={iconClass} />
+                {t("tabCtx.reconnect")}
+              </ContextMenuItem>
+            )}
+
+            {supportsDisconnect && (
+              <ContextMenuItem
+                disabled={!canDisconnect}
+                onClick={() => void onDisconnectSession(tab)}
+              >
+                <MdLinkOff className={iconClass} />
+                {t("tabCtx.disconnect")}
+              </ContextMenuItem>
+            )}
+
+            {supportsAI && (
+              <ContextMenuSub>
+                <ContextMenuSubTrigger>
+                  <MdAutoAwesome className={iconClass} />
+                  {t("ai.title")}
+                </ContextMenuSubTrigger>
+                <ContextMenuSubContent>
+                  <ContextMenuItem
+                    disabled={!canUseAI}
+                    onClick={() => handleOpenAI("explain_output")}
+                  >
+                    {t("ai.explainRecent")}
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    disabled={!canUseAI}
+                    onClick={() => handleOpenAI("analyze_error")}
+                  >
+                    {t("ai.analyzeError")}
+                  </ContextMenuItem>
+                </ContextMenuSubContent>
+              </ContextMenuSub>
+            )}
+          </>
+        )}
+
+        {showSplitActionsGroup && (
+          <>
+            <ContextMenuSeparator />
+
+            {supportsSplit && (
+              <>
+                <ContextMenuItem
+                  disabled={!canSplit}
+                  onClick={() => void onSplitSession(tab, "horizontal")}
+                >
+                  <MdHorizontalSplit className={iconClass} />
+                  {t("tabCtx.splitHorizontal")}
+                </ContextMenuItem>
+                <ContextMenuItem
+                  disabled={!canSplit}
+                  onClick={() => void onSplitSession(tab, "vertical")}
+                >
+                  <MdVerticalSplit className={iconClass} />
+                  {t("tabCtx.splitVertical")}
+                </ContextMenuItem>
+              </>
+            )}
+
+            {onUnsplit && (
+              <ContextMenuItem onClick={onUnsplit}>
+                <MdMerge className={iconClass} />
+                {t("tabCtx.unsplit")}
+              </ContextMenuItem>
+            )}
+          </>
         )}
 
         <ContextMenuSeparator />
@@ -404,13 +423,15 @@ export default function TabContextMenu({
           {t("tabCtx.closeRight")}
         </ContextMenuItem>
 
-        <ContextMenuItem
-          disabled={!canSessionInfo}
-          onClick={() => void onSessionInfo(tab)}
-        >
-          <MdInfoOutline className={iconClass} />
-          {t("tabCtx.sessionInfo")}
-        </ContextMenuItem>
+        {supportsSessionInfo && (
+          <ContextMenuItem
+            disabled={!canSessionInfo}
+            onClick={() => void onSessionInfo(tab)}
+          >
+            <MdInfoOutline className={iconClass} />
+            {t("tabCtx.sessionInfo")}
+          </ContextMenuItem>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   );
