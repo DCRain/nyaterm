@@ -25,6 +25,7 @@ pub mod remote_exec;
 mod session;
 pub mod sftp;
 pub mod ssh;
+pub mod ssh_config;
 pub(crate) mod terminal_session;
 pub mod translate;
 pub mod vnc;
