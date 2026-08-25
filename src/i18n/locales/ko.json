@@ -1672,6 +1672,7 @@
     "importSelectSource": "가져오기 소스 선택",
     "importSessions": "가져오기",
     "importSuccess": "세션 {{count}}개를 가져왔습니다",
+    "sshConfigSource": "SSH 설정",
     "jumpHostChain": "점프 체인",
     "jumpHostCycle": "루프가 감지되었습니다",
     "jumpHostMissing": "점프 호스트가 없습니다",

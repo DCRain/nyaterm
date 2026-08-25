@@ -1672,6 +1672,7 @@
     "importSelectSource": "请选择要导入的配置来源",
     "importSessions": "导入配置",
     "importSuccess": "成功导入 {{count}} 个会话",
+    "sshConfigSource": "SSH 配置",
     "jumpHostChain": "跳板链路",
     "jumpHostCycle": "检测到循环",
     "jumpHostMissing": "跳板机已缺失",

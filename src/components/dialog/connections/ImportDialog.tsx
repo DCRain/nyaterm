@@ -33,6 +33,7 @@ interface ImportSource {
   hint?: string;
   type: "backup" | "sessions" | "ssh_config";
   picker?: "file" | "directory";
+  labelKey?: string;
 }
 
 const IMPORT_SOURCES: ImportSource[] = [
@@ -114,6 +115,7 @@ const IMPORT_SOURCES: ImportSource[] = [
     icon: MdTerminal,
     hint: "~/.ssh/config",
     type: "ssh_config",
+    labelKey: "savedConnections.sshConfigSource",
   },
 ];
 
@@ -296,7 +298,7 @@ export default function ImportDialog({ open, onClose }: ImportDialogProps) {
               >
                 {renderSourceIcon(source)}
                 <span className="text-xs font-medium" style={{ color: "var(--df-text)" }}>
-                  {source.name}
+                  {source.labelKey ? t(source.labelKey) : source.name}
                 </span>
                 {source.hint && (
                   <span

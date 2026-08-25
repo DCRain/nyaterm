@@ -1673,6 +1673,7 @@
     "importSelectSource": "Select import source",
     "importSessions": "Import",
     "importSuccess": "Imported {{count}} sessions",
+    "sshConfigSource": "SSH Config",
     "jumpHostChain": "Jump chain",
     "jumpHostCycle": "Loop detected",
     "jumpHostMissing": "Missing jump host",
