@@ -70,7 +70,7 @@ describe("terminal surface background variables", () => {
     expect(terminalColors.background).toBe(themeColors.terminal.background);
   });
 
-  it("keeps background-image transparency for xterm and terminal wrappers", async () => {
+  it("keeps background-image transparency for xterm while terminal wrappers provide tint", async () => {
     const { buildSurfaceCssVariables, buildTerminalThemeColors } = await importBackgroundImage();
     const withWallpaper = appearance({
       background_image_path: "C:\\wallpapers\\terminal.png",
@@ -81,7 +81,7 @@ describe("terminal surface background variables", () => {
     const terminalColors = buildTerminalThemeColors(themeColors.terminal, withWallpaper);
 
     expect(cssVars["--df-bg-terminal"]).toBe("rgba(13, 17, 23, 0.5)");
-    expect(cssVars["--df-terminal-surface-bg"]).toBe("transparent");
+    expect(cssVars["--df-terminal-surface-bg"]).toBe("var(--df-bg-terminal)");
     expect(terminalColors.background).toBe("rgba(0, 0, 0, 0)");
   });
 

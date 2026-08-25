@@ -192,7 +192,7 @@ export function buildSurfaceCssVariables(
   const bgInput = colorWithAlpha(colors.bgInput, surfaceOpacity);
   const bgSectionHeader = colorWithAlpha(colors.bgSectionHeader, surfaceOpacity);
   const terminalSurfaceBg = isBackgroundImageEnabled(appearance)
-    ? "transparent"
+    ? "var(--df-bg-terminal)"
     : "var(--df-terminal-bg, var(--df-bg-terminal))";
 
   return {
