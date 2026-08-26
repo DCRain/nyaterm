@@ -1422,6 +1422,7 @@
     "notes": "筆記",
     "processManager": "處理程序管理",
     "quickCommands": "快捷命令",
+    "recording": "錄製",
     "resourceMonitor": "資源監控",
     "resourceMonitorDisabled": "請在設定中啟用「顯示遠端資源統計」以使用此功能",
     "resourceMonitorError": "取得資源統計失敗",

@@ -1422,6 +1422,7 @@
     "notes": "노트",
     "processManager": "프로세스",
     "quickCommands": "명령",
+    "recording": "녹화",
     "resourceMonitor": "리소스",
     "resourceMonitorDisabled": "설정에서 원격 리소스 통계를 활성화하세요",
     "resourceMonitorError": "통계를 가져오지 못했습니다",

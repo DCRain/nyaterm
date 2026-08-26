@@ -1422,6 +1422,7 @@
     "notes": "笔记",
     "processManager": "进程管理",
     "quickCommands": "快捷命令",
+    "recording": "录制",
     "resourceMonitor": "资源监控",
     "resourceMonitorDisabled": "请在设置中启用「显示远程资源统计」以使用此功能",
     "resourceMonitorError": "获取资源统计失败",

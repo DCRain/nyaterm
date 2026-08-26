@@ -1423,6 +1423,7 @@
     "notes": "Notes",
     "processManager": "Processes",
     "quickCommands": "Commands",
+    "recording": "Recording",
     "resourceMonitor": "Resources",
     "resourceMonitorDisabled": "Enable remote resource stats in Settings",
     "resourceMonitorError": "Failed to fetch stats",
