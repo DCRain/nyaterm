@@ -393,6 +393,53 @@ function preserveAppSettingsReferences(prev: AppSettings, next: AppSettings): Ap
   };
 }
 
+const WORKSPACE_UI_KEYS = [
+  "active_left_panel",
+  "active_right_panel",
+  "left_open_panels",
+  "right_open_panels",
+  "show_quick_cmd_bar",
+  "show_serial_send_panel",
+  "activity_bar_layout",
+  "left_width",
+  "right_width",
+  "quick_cmd_height",
+  "quick_cmd_category_width",
+  "serial_send_height",
+  "transfer_height",
+  "panel_stack_sizes",
+] as const;
+
+function isWorkspaceUiPatch(updates: Partial<UiConfig>) {
+  return WORKSPACE_UI_KEYS.some((key) => Object.hasOwn(updates, key));
+}
+
+function preserveWorkspaceUiOnReload(current: UiConfig, incoming: UiConfig): UiConfig {
+  return {
+    ...incoming,
+    active_left_panel: current.active_left_panel,
+    active_right_panel: current.active_right_panel,
+    left_open_panels: current.left_open_panels,
+    right_open_panels: current.right_open_panels,
+    show_quick_cmd_bar: current.show_quick_cmd_bar,
+    show_serial_send_panel: current.show_serial_send_panel,
+    left_width: current.left_width,
+    right_width: current.right_width,
+    quick_cmd_height: current.quick_cmd_height,
+    quick_cmd_category_width: current.quick_cmd_category_width,
+    serial_send_height: current.serial_send_height,
+    transfer_height: current.transfer_height,
+    panel_stack_sizes: current.panel_stack_sizes,
+    activity_bar_layout: {
+      ...incoming.activity_bar_layout,
+      show_left: current.activity_bar_layout.show_left,
+      show_right: current.activity_bar_layout.show_right,
+      show_labels_left: current.activity_bar_layout.show_labels_left,
+      show_labels_right: current.activity_bar_layout.show_labels_right,
+    },
+  };
+}
+
 /** Provides tabs, appSettings, savedConnections, and dialog state to the app. */
 export function AppProvider({ children }: { children: ReactNode }) {
   // Tabs State
@@ -522,10 +569,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
       clearTimeout(appSettingsSaveTimerRef.current);
       appSettingsSaveTimerRef.current = null;
     }
+    if (uiSaveTimerRef.current) {
+      clearTimeout(uiSaveTimerRef.current);
+      uiSaveTimerRef.current = null;
+    }
     setAppSettings((current) => {
+      const merged: AppSettings = {
+        ...next,
+        ui: preserveWorkspaceUiOnReload(current.ui, next.ui),
+      };
       const normalized = preserveAppSettingsReferences(
         current,
-        normalizeQuickCommandAppSettings(next),
+        normalizeQuickCommandAppSettings(merged),
       );
       appSettingsRef.current = normalized;
       setLoggerLevel(normalized.diagnostics.level);
@@ -546,7 +601,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         appSettingsRef.current = next;
         if (appSettingsLoaded.current) {
           if (uiSaveTimerRef.current) clearTimeout(uiSaveTimerRef.current);
-          uiSaveTimerRef.current = setTimeout(() => {
+          const persistUi = () => {
+            uiSaveTimerRef.current = null;
             invoke("save_app_ui_settings", { ui: nextUi }).catch((e) =>
               logger.error({
                 domain: "settings.persistence",
@@ -555,7 +611,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 error: e,
               }),
             );
-          }, 500);
+          };
+          if (isWorkspaceUiPatch(nextUpdates)) {
+            persistUi();
+          } else {
+            uiSaveTimerRef.current = setTimeout(persistUi, 500);
+          }
         }
         return next;
       });

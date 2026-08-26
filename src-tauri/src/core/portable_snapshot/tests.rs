@@ -148,6 +148,9 @@ mod tests {
         current.ui.panel_open_mode = "docked".to_string();
         current.ui.left_width = 444.0;
         current.ui.active_left_panel = Some("fileExplorer".to_string());
+        current.ui.left_open_panels = vec!["fileExplorer".to_string()];
+        current.ui.activity_bar_layout.show_left = true;
+        current.ui.activity_bar_layout.show_right = false;
         current.ui.quick_cmd_selected_category = "local-category".to_string();
         current.ai.active_profile_id = "local-profile".to_string();
         current.ai.provider_profiles[0].api_key = Some("local-key".to_string());
@@ -158,6 +161,8 @@ mod tests {
         updated.ui.language = Some("zh-CN".to_string());
         updated.ui.panel_open_mode = "floating".to_string();
         updated.ui.saved_connections_sort_mode = "name-asc".to_string();
+        updated.ui.activity_bar_layout.show_left = false;
+        updated.ui.activity_bar_layout.show_right = true;
         updated.ai.active_profile_id = "synced-profile".to_string();
         updated.ai.provider_profiles[0].api_key = Some("synced-key".to_string());
 
@@ -168,6 +173,9 @@ mod tests {
         );
         assert_eq!(merged.ui.left_width, current.ui.left_width);
         assert_eq!(merged.ui.active_left_panel, current.ui.active_left_panel);
+        assert_eq!(merged.ui.left_open_panels, current.ui.left_open_panels);
+        assert!(merged.ui.activity_bar_layout.show_left);
+        assert!(!merged.ui.activity_bar_layout.show_right);
         assert_eq!(
             merged.ui.quick_cmd_selected_category,
             current.ui.quick_cmd_selected_category

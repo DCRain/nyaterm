@@ -78,6 +78,10 @@ function AscendIcon() {
   );
 }
 
+function boolFlag(value: boolean | undefined, fallback = false) {
+  return typeof value === "boolean" ? value : fallback;
+}
+
 function normalizeActivityBarState(uiConfig: UiConfig): Partial<UiConfig> | null {
   const originalLeftOpenPanels = uiConfig.left_open_panels ?? [];
   const originalRightOpenPanels = uiConfig.right_open_panels ?? [];
@@ -94,24 +98,18 @@ function normalizeActivityBarState(uiConfig: UiConfig): Partial<UiConfig> | null
   const legacyShowLabels = (
     uiConfig.activity_bar_layout as ActivityBarLayout & { show_labels?: boolean }
   ).show_labels;
-  const originalShowLabelsLeft =
-    typeof uiConfig.activity_bar_layout.show_labels_left === "boolean"
-      ? uiConfig.activity_bar_layout.show_labels_left
-      : (legacyShowLabels ?? false);
-  const originalShowLabelsRight =
-    typeof uiConfig.activity_bar_layout.show_labels_right === "boolean"
-      ? uiConfig.activity_bar_layout.show_labels_right
-      : (legacyShowLabels ?? false);
+  const originalShowLabelsLeft = boolFlag(
+    uiConfig.activity_bar_layout.show_labels_left,
+    legacyShowLabels ?? false,
+  );
+  const originalShowLabelsRight = boolFlag(
+    uiConfig.activity_bar_layout.show_labels_right,
+    legacyShowLabels ?? false,
+  );
   layout.show_labels_left = originalShowLabelsLeft;
   layout.show_labels_right = originalShowLabelsRight;
-  layout.show_left =
-    typeof uiConfig.activity_bar_layout.show_left === "boolean"
-      ? uiConfig.activity_bar_layout.show_left
-      : false;
-  layout.show_right =
-    typeof uiConfig.activity_bar_layout.show_right === "boolean"
-      ? uiConfig.activity_bar_layout.show_right
-      : false;
+  layout.show_left = boolFlag(uiConfig.activity_bar_layout.show_left);
+  layout.show_right = boolFlag(uiConfig.activity_bar_layout.show_right);
 
   for (const zone of ACTIVITY_LAYOUT_ZONES) {
     for (const id of uiConfig.activity_bar_layout[zone]) {
@@ -216,10 +214,10 @@ function normalizeActivityBarState(uiConfig: UiConfig): Partial<UiConfig> | null
         layout[zone].length !== uiConfig.activity_bar_layout[zone].length ||
         layout[zone].some((id, index) => id !== uiConfig.activity_bar_layout[zone][index]),
     ) ||
-    layout.show_labels_left !== uiConfig.activity_bar_layout.show_labels_left ||
-    layout.show_labels_right !== uiConfig.activity_bar_layout.show_labels_right ||
-    layout.show_left !== uiConfig.activity_bar_layout.show_left ||
-    layout.show_right !== uiConfig.activity_bar_layout.show_right;
+    layout.show_labels_left !== originalShowLabelsLeft ||
+    layout.show_labels_right !== originalShowLabelsRight ||
+    layout.show_left !== boolFlag(uiConfig.activity_bar_layout.show_left) ||
+    layout.show_right !== boolFlag(uiConfig.activity_bar_layout.show_right);
   const originalHiddenItems = uiConfig.activity_bar_layout.hidden_items ?? [];
   const hiddenItemsChanged =
     layout.hidden_items.length !== originalHiddenItems.length ||
@@ -307,10 +305,9 @@ export function useActivityBarController({
   const layout = uiConfig.activity_bar_layout;
 
   useEffect(() => {
-    if (!normalizeActivityBarState(uiConfig)) return;
-    updateUi((prev) => {
-      return normalizeActivityBarState(prev) ?? {};
-    });
+    const patch = normalizeActivityBarState(uiConfig);
+    if (!patch || Object.keys(patch).length === 0) return;
+    updateUi((prev) => normalizeActivityBarState(prev) ?? {});
   }, [uiConfig, updateUi]);
 
   const buildItems = useCallback(
@@ -542,10 +539,10 @@ export function useActivityBarController({
     leftBottomItems,
     rightTopItems,
     rightBottomItems,
-    showLabelsLeft: layout.show_labels_left,
-    showLabelsRight: layout.show_labels_right,
-    showLeft: layout.show_left,
-    showRight: layout.show_right,
+    showLabelsLeft: layout.show_labels_left ?? false,
+    showLabelsRight: layout.show_labels_right ?? false,
+    showLeft: layout.show_left ?? false,
+    showRight: layout.show_right ?? false,
     leftHiddenItems,
     rightHiddenItems,
     toggleActiveIds,

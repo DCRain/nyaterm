@@ -206,6 +206,7 @@ export default function ActivityBar({
             onSelect={onSelect}
             onReorder={onReorder}
             onMoveItem={onMoveItem}
+            onHideItem={onHideItem}
             onToggleLabel={onToggleLabel}
             onHide={onHide}
             showLabels={showLabels}

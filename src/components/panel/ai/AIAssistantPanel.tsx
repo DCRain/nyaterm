@@ -43,7 +43,7 @@ import { useApp } from "@/context/AppContext";
 import { useTheme } from "@/context/ThemeContext";
 import type { AIErrorDetectedDetail } from "@/lib/aiEvents";
 import { AI_ERROR_DETECTED_EVENT } from "@/lib/aiEvents";
-import { DEFAULT_AI_SETTINGS, resolveAILanguage, selectDefaultAIModel } from "@/lib/aiSettings";
+import { DEFAULT_AI_SETTINGS, getEnabledAIModels, resolveAILanguage, selectDefaultAIModel } from "@/lib/aiSettings";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import { getNextQuickCommandCategorySortOrder } from "@/lib/quickCommandCategories";
@@ -100,6 +100,10 @@ interface AIStreamRuntime {
 }
 
 const EMPTY_DRAFT: AIDraft = { text: "", quotedText: null, targetPaneIds: [] };
+
+function isCodexModel(model: AIModelConfigItem | null | undefined) {
+  return model?.backend === "codex";
+}
 
 function isGenaiModel(model: AIModelConfigItem | null | undefined) {
   return (model?.backend ?? "genai") === "genai";
@@ -215,6 +219,11 @@ function AIAssistantPanel({
       ? "ask"
       : configuredRunMode;
   const genaiModels = useMemo(() => getEnabledGenaiModels(aiSettings), [aiSettings]);
+  const enabledModels = useMemo(() => getEnabledAIModels(aiSettings), [aiSettings]);
+  const codexModels = useMemo(
+    () => enabledModels.filter((model) => isCodexModel(model)),
+    [enabledModels],
+  );
   const selectedModel = useMemo(() => {
     if (isClaudeCodeAgentMode(runMode)) return null;
     if (isOpenCodeAgentMode(runMode)) {
@@ -630,7 +639,7 @@ function AIAssistantPanel({
       });
       return;
     },
-    [aiSettings, claudeCodeAgentEnabled, codexAgentEnabled, t, updateAppSettings],
+    [aiSettings, claudeCodeAgentEnabled, codexAgentEnabled, codexModels, selectedModel, t, updateAppSettings],
   );
 
   const buildMergedContext = useCallback(

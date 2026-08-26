@@ -379,8 +379,16 @@ impl CloudSyncManager {
                 trigger,
                 "Cloud sync remote check skipped because another operation is running"
             );
+            {
+                let mut state = self.state.lock().await;
+                state.last_checked_at_ms = Some(current_time_ms());
+            }
             return Ok(RemoteCheckOutcome::Skipped);
         };
+        {
+            let mut state = self.state.lock().await;
+            state.last_checked_at_ms = Some(current_time_ms());
+        }
         let settings = self.settings.lock().await.clone();
         if !settings.enabled {
             self.set_status("disabled", String::new(), None, None).await;
@@ -603,6 +611,20 @@ impl CloudSyncManager {
         let settings = self.settings.lock().await.clone();
         if !settings.enabled || should_skip_runtime_network_check(&settings) {
             return;
+        }
+
+        if trigger == "focus_check" {
+            let last_checked_at_ms = self.state.lock().await.last_checked_at_ms;
+            if last_checked_at_ms.is_some_and(|last_checked_at_ms| {
+                current_time_ms().saturating_sub(last_checked_at_ms)
+                    < CLOUD_SYNC_FOCUS_CHECK_THROTTLE_MS
+            }) {
+                tracing::debug!(
+                    trigger,
+                    "Cloud sync focus check skipped by throttle"
+                );
+                return;
+            }
         }
 
         match self.automatic_retry_gate().await {

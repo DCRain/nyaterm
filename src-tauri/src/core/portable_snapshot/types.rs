@@ -411,6 +411,12 @@ impl PortableAppSettings {
         current.ui.asset_sort_key = self.ui.asset_sort_key;
         current.ui.asset_sort_direction = self.ui.asset_sort_direction;
         current.ui.activity_bar_layout = self.ui.activity_bar_layout;
+        current.ui.activity_bar_layout.show_left = ui_state.activity_bar_layout.show_left;
+        current.ui.activity_bar_layout.show_right = ui_state.activity_bar_layout.show_right;
+        current.ui.activity_bar_layout.show_labels_left =
+            ui_state.activity_bar_layout.show_labels_left;
+        current.ui.activity_bar_layout.show_labels_right =
+            ui_state.activity_bar_layout.show_labels_right;
 
         // Preserve device-local UI state.
         current.ui.open_tabs = ui_state.open_tabs;
@@ -421,6 +427,8 @@ impl PortableAppSettings {
         current.ui.quick_cmd_selected_category = ui_state.quick_cmd_selected_category;
         current.ui.active_left_panel = ui_state.active_left_panel;
         current.ui.active_right_panel = ui_state.active_right_panel;
+        current.ui.left_open_panels = ui_state.left_open_panels;
+        current.ui.right_open_panels = ui_state.right_open_panels;
         current.ui.show_quick_cmd_bar = ui_state.show_quick_cmd_bar;
         current.ui.show_serial_send_panel = ui_state.show_serial_send_panel;
         current.ui.serial_send_height = ui_state.serial_send_height;

@@ -20,7 +20,6 @@ import { toast } from "sonner";
 
 import {
   DEFAULT_CONNECTION_ICON,
-  isCustomConnectionIcon,
   LINUX_ICONS,
   resolveConnectionIcon,
   SERVER_ICONS,
@@ -719,7 +718,6 @@ export default function NewSessionPage() {
     : currentTab === "ssh" && sshProfile === "network_device"
       ? t("dialog.iconAutoDetectNetworkDeviceTooltip")
       : t("dialog.iconAutoDetectTooltip");
-  const hasCustomIcon = isCustomConnectionIcon(iconKey);
 
   const handleImportCustomIcon = useCallback(async () => {
     try {
@@ -1807,6 +1805,61 @@ export default function NewSessionPage() {
                           </button>
                         );
                       })}
+                      {customIcons.map((customIcon) => {
+                        const def = resolveConnectionIcon(customIcon.data_url);
+                        const IconComp = def.icon;
+                        const isActive = iconKey === customIcon.data_url;
+                        return (
+                          <div
+                            key={customIcon.id}
+                            className="group relative h-7 w-7"
+                            title={customIcon.name || t("dialog.customIcon")}
+                          >
+                            <button
+                              type="button"
+                              className={`flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${isActive ? "bg-primary/15 ring-1 ring-primary/40" : ""}`}
+                              aria-label={customIcon.name || t("dialog.customIcon")}
+                              onClick={() => {
+                                setIconKey(customIcon.data_url);
+                                setIconAutoDetect(false);
+                                setShowIconPicker(false);
+                              }}
+                            >
+                              <IconComp
+                                style={{ color: def.color }}
+                                className="h-4 w-4 rounded-sm text-sm"
+                              />
+                            </button>
+                            <button
+                              type="button"
+                              className="absolute -right-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-background text-[0.6rem] text-muted-foreground opacity-0 shadow ring-1 ring-border transition-opacity hover:text-destructive group-hover:opacity-100 group-focus-within:opacity-100"
+                              title={t("dialog.removeCustomIcon")}
+                              aria-label={t("dialog.removeCustomIcon")}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                void handleDeleteCustomIcon(customIcon.id);
+                              }}
+                            >
+                              <MdClose />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-2 border-t pt-2">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-full justify-start text-xs"
+                        onClick={() => {
+                          void handleImportCustomIcon();
+                        }}
+                      >
+                        <MdImage className="text-sm" />
+                        <span className="truncate">{t("dialog.selectCustomIcon")}</span>
+                      </Button>
                     </div>
                     {currentTab === "ssh" && (
                       <div className="mt-2 border-t pt-2">
@@ -2228,6 +2281,12 @@ export default function NewSessionPage() {
                 setReconnectEnabled={setVncReconnectEnabled}
                 reconnectMaxAttempts={vncReconnectMaxAttempts}
                 setReconnectMaxAttempts={setVncReconnectMaxAttempts}
+                proxyId={proxyId}
+                setProxyId={setProxyId}
+                proxies={proxies}
+                jumpHostId={jumpHostId}
+                setJumpHostId={setJumpHostId}
+                jumpHostOptions={jumpHostOptions}
                 connectionId={initialData?.id || editId}
               />
             </TabsContent>
