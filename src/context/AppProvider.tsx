@@ -123,7 +123,8 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   },
   security: {
     use_os_keyring: true,
-    enable_screen_lock: false,
+    enable_startup_lock: false,
+    enable_idle_lock: false,
     idle_lock_minutes: 0,
     host_key_policy: "prompt",
   },
@@ -453,7 +454,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setLoggerLevel(normalized.diagnostics.level);
         appSettingsLoaded.current = true;
         setSettingsLoaded(true);
-        if (isPrimaryMainWindow() && normalized.security?.enable_screen_lock) {
+        if (isPrimaryMainWindow() && normalized.security?.enable_startup_lock) {
           setIsLocked(true);
         }
       })
@@ -1184,7 +1185,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setActiveTabId(restoredTabs[restoredTabs.length - 1].id);
       }
 
-      if (appSettings.security.enable_screen_lock && isLocked) {
+      if (appSettings.security.enable_startup_lock && isLocked) {
         pendingLockedStartupRestoreTabsRef.current = restoredTabs;
       } else {
         restoreSessionsForTabs(restoredTabs);

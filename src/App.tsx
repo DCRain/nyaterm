@@ -316,7 +316,7 @@ function App() {
 
   // Idle auto-lock
   useIdleLock(
-    appSettings.security.enable_screen_lock ? appSettings.security.idle_lock_minutes : 0,
+    appSettings.security.enable_idle_lock ? appSettings.security.idle_lock_minutes : 0,
     isLocked,
     () => setIsLocked(true),
   );
@@ -1936,10 +1936,14 @@ function App() {
   }, []);
 
   const handleLockScreen = useCallback(() => {
-    if (appSettings.security.enable_screen_lock) {
+    if (appSettings.security.enable_startup_lock || appSettings.security.enable_idle_lock) {
       setIsLocked(true);
     }
-  }, [appSettings.security.enable_screen_lock, setIsLocked]);
+  }, [
+    appSettings.security.enable_idle_lock,
+    appSettings.security.enable_startup_lock,
+    setIsLocked,
+  ]);
 
   const persistWorkspaceLayoutNow = useCallback(async () => {
     if (!settingsLoaded || !startupRestoreComplete || !terminalWindowsRestoredRef.current) {

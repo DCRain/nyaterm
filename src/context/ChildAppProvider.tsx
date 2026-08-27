@@ -83,7 +83,8 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   },
   security: {
     use_os_keyring: true,
-    enable_screen_lock: false,
+    enable_startup_lock: false,
+    enable_idle_lock: false,
     idle_lock_minutes: 0,
     host_key_policy: "prompt",
   },
@@ -317,7 +318,7 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
   }, [appSettings.ui?.language]);
 
   useIdleLock(
-    appSettings.security.enable_screen_lock
+    appSettings.security.enable_idle_lock
       ? appSettings.security.idle_lock_minutes
       : 0,
     isLocked,

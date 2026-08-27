@@ -1273,7 +1273,8 @@ export interface TranslateResult {
 
 export interface SecuritySettings {
   use_os_keyring: boolean;
-  enable_screen_lock: boolean;
+  enable_startup_lock: boolean;
+  enable_idle_lock: boolean;
   idle_lock_minutes: number;
   master_password?: string;
   host_key_policy: string;

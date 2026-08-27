@@ -183,6 +183,26 @@ mod tests {
     }
 
     #[test]
+    fn portable_settings_migrate_legacy_screen_lock_modes() {
+        let portable = sample_portable_settings();
+        let mut raw = serde_json::to_value(portable).expect("portable settings should serialize");
+        let security = raw
+            .get_mut("security")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("security settings should be an object");
+        security.remove("enable_startup_lock");
+        security.remove("enable_idle_lock");
+        security.insert("enable_screen_lock".to_string(), serde_json::json!(true));
+
+        let decoded: PortableAppSettings =
+            serde_json::from_value(raw).expect("legacy portable settings should deserialize");
+        let merged = decoded.apply_to(AppSettings::default(), &PortableSnapshotKind::Backup);
+
+        assert!(merged.security.enable_startup_lock);
+        assert!(merged.security.enable_idle_lock);
+    }
+
+    #[test]
     fn sync_portable_settings_strip_device_local_paths() {
         let mut current = AppSettings::default();
         current.appearance.background_image_path = Some("D:\\background.png".to_string());

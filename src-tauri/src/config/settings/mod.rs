@@ -125,6 +125,9 @@ pub fn load_app_settings(app: &AppHandle) -> AppResult<AppSettings> {
     if normalize_ai_settings(&mut settings.ai) {
         migrated = true;
     }
+    if settings.security.migrate_legacy_screen_lock() {
+        migrated = true;
+    }
     if migrate_terminal_timestamp_format(&raw_settings, &mut settings.terminal) {
         migrated = true;
     }
