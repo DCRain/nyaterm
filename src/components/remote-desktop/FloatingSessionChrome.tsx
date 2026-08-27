@@ -29,10 +29,19 @@ export const TOGGLE_REMOTE_DESKTOP_CHROME_EVENT = "nyaterm:toggle-remote-desktop
 
 type FloatingChromeMode = "expanded" | "collapsed" | "hidden";
 
+export type RemoteDesktopNetworkQuality = "good" | "fair" | "poor" | "unknown";
+
+export interface RemoteDesktopNetworkStatus {
+  latencyMs: number | null;
+  fps: number;
+  quality: RemoteDesktopNetworkQuality;
+}
+
 export interface FloatingSessionChromeProps {
   sessionId: string;
   title: string;
   subtitle?: string | null;
+  networkStatus?: RemoteDesktopNetworkStatus | null;
   boundsRef: RefObject<HTMLElement | null>;
   enabled: boolean;
   active?: boolean;
@@ -121,10 +130,37 @@ function dockPosition(edge: DockEdge, along: number, mode: FloatingChromeMode): 
   }
 }
 
+function qualityTone(quality: RemoteDesktopNetworkQuality): string {
+  switch (quality) {
+    case "good":
+      return "#4ade80";
+    case "fair":
+      return "#fbbf24";
+    case "poor":
+      return "#f87171";
+    default:
+      return "rgba(255,255,255,0.45)";
+  }
+}
+
+function qualityLabelKey(quality: RemoteDesktopNetworkQuality): string {
+  switch (quality) {
+    case "good":
+      return "dialog.rdpNetworkGood";
+    case "fair":
+      return "dialog.rdpNetworkFair";
+    case "poor":
+      return "dialog.rdpNetworkPoor";
+    default:
+      return "dialog.rdpNetworkUnknown";
+  }
+}
+
 export function FloatingSessionChrome({
   sessionId,
   title,
   subtitle = null,
+  networkStatus = null,
   boundsRef,
   enabled,
   active = false,
@@ -233,7 +269,7 @@ export function FloatingSessionChrome({
       alongRef.current = next;
       setAlong(next);
     }
-  }, [boundsRef, edge, enabled, measureSize, mode, title, subtitle]);
+  }, [boundsRef, edge, enabled, measureSize, mode, title, subtitle, networkStatus]);
 
   const prevEnabledRef = useRef(false);
   useEffect(() => {
@@ -428,6 +464,25 @@ export function FloatingSessionChrome({
   const motion = `${CHROME_MOTION_MS}ms`;
   const arrowSize = collapsedHitSize(edge);
   const transform = settled ? restTransform(edge) : enterTransform(edge);
+  const qualityColor = networkStatus ? qualityTone(networkStatus.quality) : null;
+  const networkParts: string[] = [];
+  if (networkStatus) {
+    if (networkStatus.latencyMs != null) {
+      networkParts.push(`${networkStatus.latencyMs}ms`);
+    }
+    networkParts.push(`${networkStatus.fps}fps`);
+  }
+  const networkText = networkParts.join(" · ");
+  const networkAria = networkStatus
+    ? t("dialog.rdpNetworkStatus", {
+        quality: t(qualityLabelKey(networkStatus.quality)),
+        latency:
+          networkStatus.latencyMs != null
+            ? t("dialog.rdpNetworkLatency", { ms: networkStatus.latencyMs })
+            : t("dialog.rdpNetworkLatencyUnavailable"),
+        fps: t("dialog.rdpNetworkFps", { fps: networkStatus.fps }),
+      })
+    : undefined;
 
   return (
     <div
@@ -467,7 +522,7 @@ export function FloatingSessionChrome({
           type="button"
           data-chrome-drag-handle="true"
           className={cn(
-            "flex h-full w-full cursor-grab items-center justify-center border border-white/10 bg-black/30 text-white/70 outline-none transition-colors",
+            "relative flex h-full w-full cursor-grab items-center justify-center border border-white/10 bg-black/30 text-white/70 outline-none transition-colors",
             "hover:bg-black/45 hover:text-white/90",
             "focus-visible:ring-1 focus-visible:ring-white/40",
             edge === "top" && "rounded-b-sm",
@@ -475,10 +530,21 @@ export function FloatingSessionChrome({
             edge === "left" && "rounded-r-sm",
             edge === "right" && "rounded-l-sm",
           )}
-          aria-label={t("dialog.remoteDesktopChromeExpand")}
+          aria-label={
+            networkAria
+              ? `${t("dialog.remoteDesktopChromeExpand")} · ${networkAria}`
+              : t("dialog.remoteDesktopChromeExpand")
+          }
           onPointerDown={beginDrag}
         >
           <ExpandChevron edge={edge} />
+          {qualityColor ? (
+            <span
+              className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full"
+              style={{ backgroundColor: qualityColor }}
+              aria-hidden="true"
+            />
+          ) : null}
         </button>
       ) : (
         <>
@@ -500,6 +566,21 @@ export function FloatingSessionChrome({
           {subtitle ? (
             <span className="shrink-0 text-white/55 select-none" onPointerDown={beginDrag}>
               {subtitle}
+            </span>
+          ) : null}
+          {networkStatus ? (
+            <span
+              className="flex shrink-0 items-center gap-1 select-none"
+              title={networkAria}
+              aria-label={networkAria}
+              onPointerDown={beginDrag}
+            >
+              <span
+                className="size-1.5 rounded-full"
+                style={{ backgroundColor: qualityColor ?? undefined }}
+                aria-hidden="true"
+              />
+              <span className="font-mono tabular-nums text-white/70">{networkText}</span>
             </span>
           ) : null}
           {onSendCtrlAltDel ? (

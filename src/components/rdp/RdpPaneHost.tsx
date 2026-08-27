@@ -15,6 +15,7 @@ import {
 import { useTranslation } from "react-i18next";
 import ExternalFileDropOverlay from "@/components/ExternalFileDropOverlay";
 import { FloatingSessionChrome } from "@/components/remote-desktop/FloatingSessionChrome";
+import type { RemoteDesktopNetworkStatus } from "@/components/remote-desktop/FloatingSessionChrome";
 import {
   createRemoteDesktopRenderer,
   type RemoteDesktopRenderer,
@@ -62,6 +63,13 @@ interface RdpStatePayload {
   state: RdpSessionState;
   message?: string | null;
   errorKind?: string | null;
+}
+
+interface RdpNetworkPayload {
+  sessionId: string;
+  latencyMs?: number | null;
+  fps: number;
+  quality: RemoteDesktopNetworkStatus["quality"];
 }
 
 type RdpPointerPayload =
@@ -174,6 +182,7 @@ function RdpPaneHost({
   const dynamicResizeDisabledRef = useRef(false);
   const [state, setState] = useState<RdpSessionState>(pane.connectError ? "failed" : "connecting");
   const [message, setMessage] = useState<string | null>(pane.connectError ?? null);
+  const [networkStatus, setNetworkStatus] = useState<RemoteDesktopNetworkStatus | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [desktopSize, setDesktopSize] = useState({
     width: pane.display?.remoteWidth ?? 1920,
@@ -275,6 +284,9 @@ function RdpPaneHost({
     const unlisten = listen<RdpStatePayload>(`rdp-state-${pane.sessionId}`, (event) => {
       setState(event.payload.state);
       setMessage(event.payload.message ?? null);
+      if (event.payload.state !== "active") {
+        setNetworkStatus(null);
+      }
       if (
         shouldDisableDynamicResizeAfterState({
           state: event.payload.state,
@@ -292,6 +304,23 @@ function RdpPaneHost({
       void unlisten.then((dispose) => dispose());
     };
   }, [onConnectionError, pane.sessionId]);
+
+  useEffect(() => {
+    if (state !== "active") {
+      setNetworkStatus(null);
+      return;
+    }
+    const unlisten = listen<RdpNetworkPayload>(`rdp-network-${pane.sessionId}`, (event) => {
+      setNetworkStatus({
+        latencyMs: event.payload.latencyMs ?? null,
+        fps: event.payload.fps,
+        quality: event.payload.quality,
+      });
+    });
+    return () => {
+      void unlisten.then((dispose) => dispose());
+    };
+  }, [pane.sessionId, state]);
 
   const applyCursorPosition = useCallback(() => {
     cursorRafRef.current = null;
@@ -710,6 +739,7 @@ function RdpPaneHost({
         sessionId={pane.sessionId}
         title={pane.name}
         subtitle={`${desktopSize.width}x${desktopSize.height}`}
+        networkStatus={networkStatus}
         boundsRef={containerRef}
         enabled={state === "active"}
         active={active}

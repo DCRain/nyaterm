@@ -1,5 +1,7 @@
 use crate::config::{self, ConnectionAuth, ConnectionNetwork, ConnectionType};
-use crate::core::network::{BoxedTransportStream, open_tcp_transport};
+use crate::core::network::{
+    BoxedTransportStream, TransportRouteKind, open_tcp_transport, resolve_transport_route,
+};
 use crate::core::rdp_clipboard_files::{
     OfferedLocalFile, build_offered_local_files, cliprdr_range_request_size, read_offered_file_chunk,
     sanitize_remote_file_name, MAX_FILE_BYTES,
@@ -51,12 +53,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::task::{Context, Poll};
 use std::thread::JoinHandle;
+use std::time::Instant;
 use tauri::async_runtime::JoinHandle as TauriJoinHandle;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::{Mutex, mpsc, oneshot};
-use tokio::time::{Duration, sleep};
+use tokio::time::{Duration, sleep, timeout};
 use x509_cert::der::Decode as _;
 
 const MAX_FRAME_QUEUE: usize = 2;
@@ -73,6 +76,13 @@ const RDP_MIN_HEIGHT: u32 = 200;
 const RDP_MAX_WIDTH: u32 = 7680;
 const RDP_MAX_HEIGHT: u32 = 4320;
 const RDP_RIGHT_SHIFT_SCAN_CODE: u16 = 0x36;
+const RDP_NETWORK_EMIT_INTERVAL: Duration = Duration::from_secs(1);
+const RDP_NETWORK_PROBE_INTERVAL: Duration = Duration::from_secs(2);
+const RDP_NETWORK_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+const RDP_NETWORK_GOOD_LATENCY_MS: u32 = 50;
+const RDP_NETWORK_FAIR_LATENCY_MS: u32 = 120;
+const RDP_NETWORK_STALE_FAIR: Duration = Duration::from_secs(1);
+const RDP_NETWORK_STALE_POOR: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -108,6 +118,29 @@ pub struct RdpStateEvent {
     pub state: RdpSessionState,
     pub message: Option<String>,
     pub error_kind: Option<RdpErrorKind>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RdpNetworkQuality {
+    Good,
+    Fair,
+    Poor,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RdpNetworkStatsEvent {
+    pub session_id: String,
+    pub latency_ms: Option<u32>,
+    pub fps: u32,
+    pub quality: RdpNetworkQuality,
+}
+
+struct RdpFrameTiming {
+    marks: Mutex<VecDeque<Instant>>,
+    last_frame_at: Mutex<Option<Instant>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -708,6 +741,155 @@ fn emit_state(
     let _ = app.emit(format!("rdp-state-{session_id}").as_str(), payload);
 }
 
+fn emit_network_stats(app: &AppHandle, payload: RdpNetworkStatsEvent) {
+    let session_id = payload.session_id.clone();
+    let _ = app.emit(format!("rdp-network-{session_id}").as_str(), payload);
+}
+
+fn rdp_allows_direct_rtt_probe(network: Option<&ConnectionNetwork>) -> bool {
+    matches!(
+        resolve_transport_route(network).kind,
+        TransportRouteKind::Direct
+    )
+}
+
+async fn note_rdp_frame(timing: &RdpFrameTiming) {
+    let now = Instant::now();
+    {
+        let mut marks = timing.marks.lock().await;
+        marks.push_back(now);
+        while marks
+            .front()
+            .is_some_and(|mark| now.duration_since(*mark) > Duration::from_secs(1))
+        {
+            marks.pop_front();
+        }
+    }
+    *timing.last_frame_at.lock().await = Some(now);
+}
+
+async fn rdp_frame_window_stats(timing: &RdpFrameTiming) -> (u32, Option<Duration>) {
+    let now = Instant::now();
+    let fps = {
+        let mut marks = timing.marks.lock().await;
+        while marks
+            .front()
+            .is_some_and(|mark| now.duration_since(*mark) > Duration::from_secs(1))
+        {
+            marks.pop_front();
+        }
+        marks.len() as u32
+    };
+    let last_age = timing
+        .last_frame_at
+        .lock()
+        .await
+        .map(|mark| now.duration_since(mark));
+    (fps, last_age)
+}
+
+fn classify_rdp_network_quality(
+    latency_ms: Option<u32>,
+    fps: u32,
+    last_frame_age: Option<Duration>,
+) -> RdpNetworkQuality {
+    if let Some(ms) = latency_ms {
+        return if ms < RDP_NETWORK_GOOD_LATENCY_MS {
+            RdpNetworkQuality::Good
+        } else if ms < RDP_NETWORK_FAIR_LATENCY_MS {
+            RdpNetworkQuality::Fair
+        } else {
+            RdpNetworkQuality::Poor
+        };
+    }
+
+    match last_frame_age {
+        None => RdpNetworkQuality::Unknown,
+        Some(age) if age >= RDP_NETWORK_STALE_POOR => RdpNetworkQuality::Poor,
+        Some(age) if age >= RDP_NETWORK_STALE_FAIR => RdpNetworkQuality::Fair,
+        Some(_) if fps >= 10 => RdpNetworkQuality::Good,
+        Some(_) if fps >= 3 => RdpNetworkQuality::Fair,
+        Some(_) => RdpNetworkQuality::Poor,
+    }
+}
+
+async fn probe_direct_tcp_rtt(host: &str, port: u16) -> Option<u32> {
+    let started = Instant::now();
+    match timeout(
+        RDP_NETWORK_PROBE_TIMEOUT,
+        tokio::net::TcpStream::connect((host, port)),
+    )
+    .await
+    {
+        Ok(Ok(_stream)) => {
+            let ms = started.elapsed().as_millis();
+            Some(u32::try_from(ms).unwrap_or(u32::MAX))
+        }
+        _ => None,
+    }
+}
+
+fn spawn_rdp_network_monitor(
+    app: AppHandle,
+    session: Arc<RdpSession>,
+    generation: u64,
+    frame_timing: Arc<RdpFrameTiming>,
+) -> TauriJoinHandle<()> {
+    let allow_probe = rdp_allows_direct_rtt_probe(session.config.network.as_ref());
+    let host = session.config.host.clone();
+    let port = session.config.port;
+    let session_id = session.config.session_id.clone();
+
+    tauri::async_runtime::spawn(async move {
+        let mut last_probe_at: Option<Instant> = None;
+        let mut latency_ms: Option<u32> = None;
+
+        loop {
+            if *session.generation.lock().await != generation {
+                break;
+            }
+            if !matches!(*session.state.lock().await, RdpSessionState::Active) {
+                break;
+            }
+
+            if allow_probe {
+                let should_probe = last_probe_at
+                    .map(|at| at.elapsed() >= RDP_NETWORK_PROBE_INTERVAL)
+                    .unwrap_or(true);
+                if should_probe {
+                    last_probe_at = Some(Instant::now());
+                    if let Some(ms) = probe_direct_tcp_rtt(&host, port).await {
+                        latency_ms = Some(ms);
+                    }
+                }
+            } else {
+                latency_ms = None;
+            }
+
+            if *session.generation.lock().await != generation {
+                break;
+            }
+            if !matches!(*session.state.lock().await, RdpSessionState::Active) {
+                break;
+            }
+
+            let (fps, last_frame_age) = rdp_frame_window_stats(&frame_timing).await;
+            let quality = classify_rdp_network_quality(latency_ms, fps, last_frame_age);
+            emit_network_stats(
+                &app,
+                RdpNetworkStatsEvent {
+                    session_id: session_id.clone(),
+                    latency_ms,
+                    fps,
+                    quality,
+                },
+            );
+
+            sleep(RDP_NETWORK_EMIT_INTERVAL).await;
+        }
+    })
+}
+
 fn spawn_ironrdp_engine(app: AppHandle, session: Arc<RdpSession>, generation: u64) {
     tauri::async_runtime::spawn(async move {
         shutdown_worker(&session).await;
@@ -778,6 +960,11 @@ fn spawn_ironrdp_engine(app: AppHandle, session: Arc<RdpSession>, generation: u6
                 });
             }
             let mut saw_terminal_event = false;
+            let frame_timing = Arc::new(RdpFrameTiming {
+                marks: Mutex::new(VecDeque::new()),
+                last_frame_at: Mutex::new(None),
+            });
+            let mut network_monitor: Option<TauriJoinHandle<()>> = None;
 
             while let Some(event) = output_receiver.recv().await {
                 if *session.generation.lock().await != generation {
@@ -802,7 +989,16 @@ fn spawn_ironrdp_engine(app: AppHandle, session: Arc<RdpSession>, generation: u6
                             set_state(&session, RdpSessionState::Active, None, None).await;
                             emit_state(&app, &session_id, RdpSessionState::Active, None, None);
                             let _ = app.emit("sessions-changed", ());
+                            if network_monitor.is_none() {
+                                network_monitor = Some(spawn_rdp_network_monitor(
+                                    app.clone(),
+                                    session.clone(),
+                                    generation,
+                                    frame_timing.clone(),
+                                ));
+                            }
                         }
+                        note_rdp_frame(&frame_timing).await;
                         let sequence = next_frame_sequence(&session).await;
                         match build_frame_from_ironrdp_image(
                             &buffer,
@@ -928,6 +1124,9 @@ fn spawn_ironrdp_engine(app: AppHandle, session: Arc<RdpSession>, generation: u6
                 }
             }
 
+            if let Some(handle) = network_monitor.take() {
+                handle.abort();
+            }
             shutdown_worker(&session).await;
             if !saw_terminal_event && *session.generation.lock().await == generation {
                 set_state(
@@ -3355,6 +3554,46 @@ mod tests {
             close_requested: AtomicBool::new(false),
             pending_certificates: Arc::new(Mutex::new(HashMap::new())),
         })
+    }
+
+    #[test]
+    fn network_quality_prefers_latency_thresholds() {
+        assert_eq!(
+            classify_rdp_network_quality(Some(20), 0, None),
+            RdpNetworkQuality::Good
+        );
+        assert_eq!(
+            classify_rdp_network_quality(Some(80), 0, None),
+            RdpNetworkQuality::Fair
+        );
+        assert_eq!(
+            classify_rdp_network_quality(Some(200), 30, Some(Duration::from_millis(10))),
+            RdpNetworkQuality::Poor
+        );
+    }
+
+    #[test]
+    fn network_quality_falls_back_to_frame_freshness() {
+        assert_eq!(
+            classify_rdp_network_quality(None, 0, None),
+            RdpNetworkQuality::Unknown
+        );
+        assert_eq!(
+            classify_rdp_network_quality(None, 15, Some(Duration::from_millis(100))),
+            RdpNetworkQuality::Good
+        );
+        assert_eq!(
+            classify_rdp_network_quality(None, 5, Some(Duration::from_millis(100))),
+            RdpNetworkQuality::Fair
+        );
+        assert_eq!(
+            classify_rdp_network_quality(None, 20, Some(Duration::from_secs(2))),
+            RdpNetworkQuality::Fair
+        );
+        assert_eq!(
+            classify_rdp_network_quality(None, 20, Some(Duration::from_secs(4))),
+            RdpNetworkQuality::Poor
+        );
     }
 
     #[test]
