@@ -17,6 +17,8 @@ const target =
 if (!target)
   throw new Error("Unable to determine the Rust target triple for nyaterm-mcp");
 
+const buildStd = process.env.NYATERM_MCP_BUILD_STD;
+
 const args = [
   "build",
   "--release",
@@ -26,6 +28,7 @@ const args = [
   targetDir,
 ];
 if (target !== host) args.push("--target", target);
+if (buildStd) args.push("-Z", `build-std=${buildStd}`);
 execFileSync("cargo", args, { cwd: root, stdio: "inherit" });
 
 const windowsTarget = target.includes("windows");
