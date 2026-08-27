@@ -1868,11 +1868,11 @@ mod tests {
 
     #[tokio::test]
     async fn background_execution_rejects_unsupported_session_types() {
-        use crate::core::{SessionHandle, SessionInfo};
-        use tokio::sync::{Mutex, mpsc};
+        use crate::core::{SessionHandle, SessionInfo, session_command_channel};
+        use tokio::sync::Mutex;
 
         let manager = SessionManager::new();
-        let (cmd_tx, _cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
+        let (cmd_tx, _cmd_rx) = session_command_channel("serial-1");
         manager
             .add_session(SessionHandle {
                 info: SessionInfo {

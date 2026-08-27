@@ -3,10 +3,9 @@ use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::mpsc;
 use tokio::time::{Duration, sleep};
 
-use super::SessionCommand;
+use super::{SessionCommand, SessionCommandSender};
 
 const OUTPUT_FLUSH_INTERVAL_MS: u64 = 4;
 const OUTPUT_NORMAL_BATCH_BYTES: usize = 64 * 1024;
@@ -54,7 +53,7 @@ struct FlushResult {
 /// renderer/IPC backlog is too high.
 pub struct SessionOutputCoalescer {
     sink: Arc<OutputSink>,
-    flow_control_tx: Option<mpsc::UnboundedSender<SessionCommand>>,
+    flow_control_tx: Option<SessionCommandSender>,
     state: Mutex<OutputState>,
 }
 
@@ -62,7 +61,7 @@ impl SessionOutputCoalescer {
     pub fn for_app(
         app: AppHandle,
         output_event: String,
-        flow_control_tx: mpsc::UnboundedSender<SessionCommand>,
+        flow_control_tx: SessionCommandSender,
     ) -> Arc<Self> {
         Self::with_flow_sink(flow_control_tx, move |payload| {
             let _ = app.emit(&output_event, &payload);
@@ -81,10 +80,7 @@ impl SessionOutputCoalescer {
         })
     }
 
-    pub fn with_flow_sink<F>(
-        flow_control_tx: mpsc::UnboundedSender<SessionCommand>,
-        sink: F,
-    ) -> Arc<Self>
+    pub fn with_flow_sink<F>(flow_control_tx: SessionCommandSender, sink: F) -> Arc<Self>
     where
         F: Fn(TerminalOutputPayload) + Send + Sync + 'static,
     {
@@ -467,9 +463,8 @@ mod tests {
         OUTPUT_NORMAL_BATCH_BYTES, OUTPUT_PAUSE_HIGH_WATERMARK_BYTES,
         OUTPUT_RESUME_LOW_WATERMARK_BYTES, SessionOutputCoalescer, TerminalOutputPayload,
     };
-    use crate::core::SessionCommand;
+    use crate::core::{SessionCommand, session_command_channel};
     use std::sync::{Arc, Mutex};
-    use tokio::sync::mpsc;
     use tokio::time::{Duration, Instant, advance, sleep};
 
     fn collect_sink() -> (
@@ -602,7 +597,7 @@ mod tests {
     #[tokio::test]
     async fn high_and_low_watermarks_pause_and_resume_once() {
         let (emitted, sink) = collect_sink();
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
+        let (cmd_tx, mut cmd_rx) = session_command_channel("output-flow-test");
         let output = SessionOutputCoalescer::with_flow_sink(cmd_tx, sink);
 
         output.attach();
@@ -672,7 +667,7 @@ mod tests {
     #[tokio::test]
     async fn catastrophic_backlog_sends_explicit_close_instead_of_dropping() {
         let (_emitted, sink) = collect_sink();
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
+        let (cmd_tx, mut cmd_rx) = session_command_channel("output-close-test");
         let output = SessionOutputCoalescer::with_flow_sink(cmd_tx, sink);
 
         output.push_owned("x".repeat(OUTPUT_CATASTROPHIC_BACKLOG_BYTES));
@@ -687,7 +682,7 @@ mod tests {
     #[tokio::test]
     async fn attach_clears_stale_unacked_bytes() {
         let (emitted, sink) = collect_sink();
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
+        let (cmd_tx, mut cmd_rx) = session_command_channel("output-resume-test");
         let output = SessionOutputCoalescer::with_flow_sink(cmd_tx, sink);
 
         output.attach();
