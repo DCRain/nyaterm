@@ -2110,6 +2110,8 @@ export default function XTerminal({
       terminal,
       containerEl,
       isMacOS,
+      activeRef,
+      visibleRef,
       terminalAppSettingsRef,
       pendingSearchSelectionRef,
       searchSelectionTextRef,

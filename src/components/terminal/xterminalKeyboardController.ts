@@ -104,7 +104,6 @@ export function installXTerminalKeyboardController({
     if (e.type !== "keydown") return true;
 
     if (isModifierOnlyKeyEvent(e)) {
-      e.preventDefault();
       return false;
     }
 
