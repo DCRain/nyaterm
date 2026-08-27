@@ -26,7 +26,7 @@ export function useNoteDocument({
   onMarkdownApplied,
 }: UseNoteDocumentOptions) {
   const { t } = useTranslation();
-  const { getFolderPassword, lockFolder, unlockFolder } = useEncryptedNotesSession();
+  const { unlockFolder } = useEncryptedNotesSession();
   const latestMarkdownRef = useRef("");
   const latestTitleRef = useRef("");
   const revisionRef = useRef(0);
@@ -105,28 +105,9 @@ export function useNoteDocument({
       try {
         const next = await invoke<NoteDocument>("get_note", { noteId });
         if (next.encrypted) {
-          const rootFolderId =
-            next.encryption?.root_folder_id ?? next.root_folder_id ?? null;
-          const folderPassword = rootFolderId ? getFolderPassword(rootFolderId) : null;
-
-          if (folderPassword) {
-            try {
-              const unlockedNote = await invoke<NoteDocument>("unlock_note", {
-                noteId,
-                password: folderPassword,
-              });
-              passwordRef.current = folderPassword;
-              encryptedRef.current = true;
-              setNeedsPassword(false);
-              setUnlocked(true);
-              applyLoadedNote(unlockedNote, applyToEditor);
-              return;
-            } catch {
-              if (rootFolderId) lockFolder(rootFolderId);
-              // Fall through to password prompt.
-            }
-          }
-
+          // Always require password when opening an encrypted note in the editor.
+          // Folder-session unlock is only for tree browsing; closing a note tab
+          // must not leave content readable on the next open.
           passwordRef.current = null;
           encryptedRef.current = true;
           setUnlocked(false);
@@ -160,15 +141,7 @@ export function useNoteDocument({
         setLoading(false);
       }
     },
-    [
-      applyLoadedNote,
-      clearSessionSecrets,
-      getFolderPassword,
-      lockFolder,
-      noteId,
-      onMarkdownApplied,
-      onTitleChange,
-    ],
+    [applyLoadedNote, clearSessionSecrets, noteId, onMarkdownApplied, onTitleChange],
   );
 
   const unlockWithPassword = useCallback(

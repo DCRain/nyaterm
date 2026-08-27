@@ -14,6 +14,10 @@ export function localizeNotePasswordError(
   }
 
   const normalized = raw.toLowerCase();
+  if (raw.startsWith("password_required:") || normalized.includes("password_required")) {
+    return t("notes.password.required");
+  }
+
   // AppError::Crypto serializes as "Crypto error: wrong_password"
   if (
     raw === "wrong_password" ||

@@ -1611,6 +1611,8 @@
       "decryptDescription": "\"{{name}}\"을(를) 복호화하려면 비밀번호를 입력하세요.",
       "decryptSuccess": "복호화되었습니다",
       "decryptTitle": "복호화",
+      "deleteDescription": "비밀번호를 입력하여 \"{{name}}\"을(를) 영구 삭제합니다. 이 작업은 취소할 수 없습니다.",
+      "deleteTitle": "암호화 항목 삭제",
       "encryptDescription": "\"{{name}}\"을(를) 암호화할 비밀번호를 설정하세요. 비밀번호를 분실하면 복구할 수 없습니다.",
       "encryptSuccess": "암호화되었습니다",
       "encryptTitle": "암호화",

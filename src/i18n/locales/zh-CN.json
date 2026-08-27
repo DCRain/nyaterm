@@ -1611,6 +1611,8 @@
       "decryptDescription": "请输入密码以解密“{{name}}”。",
       "decryptSuccess": "解密成功",
       "decryptTitle": "解密",
+      "deleteDescription": "请输入密码以永久删除“{{name}}”。此操作无法撤销。",
+      "deleteTitle": "删除加密项",
       "encryptDescription": "为“{{name}}”设置加密密码。密码丢失后无法恢复内容。",
       "encryptSuccess": "加密成功",
       "encryptTitle": "加密",

@@ -13,7 +13,13 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-export type NotePasswordMode = "unlock" | "encrypt" | "decrypt" | "change" | "cross-move";
+export type NotePasswordMode =
+  | "unlock"
+  | "encrypt"
+  | "decrypt"
+  | "change"
+  | "cross-move"
+  | "delete";
 
 export interface NotePasswordDialogProps {
   open: boolean;
@@ -62,7 +68,9 @@ export default function NotePasswordDialog({
           ? "notes.password.decryptTitle"
           : mode === "cross-move"
             ? "notes.move.crossMoveTitle"
-            : "notes.password.changeTitle";
+            : mode === "delete"
+              ? "notes.password.deleteTitle"
+              : "notes.password.changeTitle";
 
   const descriptionKey =
     mode === "unlock"
@@ -73,7 +81,9 @@ export default function NotePasswordDialog({
           ? "notes.password.decryptDescription"
           : mode === "cross-move"
             ? "notes.move.crossMoveDescription"
-            : "notes.password.changeDescription";
+            : mode === "delete"
+              ? "notes.password.deleteDescription"
+              : "notes.password.changeDescription";
 
   const handleSubmit = () => {
     if (submitting) return;
@@ -230,8 +240,17 @@ export default function NotePasswordDialog({
           <Button type="button" variant="ghost" onClick={onCancel} disabled={submitting}>
             {t("common.cancel")}
           </Button>
-          <Button type="button" onClick={handleSubmit} disabled={submitting}>
-            {submitting ? t("common.loading") : t("common.confirm")}
+          <Button
+            type="button"
+            variant={mode === "delete" ? "destructive" : "default"}
+            onClick={handleSubmit}
+            disabled={submitting}
+          >
+            {submitting
+              ? t("common.loading")
+              : mode === "delete"
+                ? t("notes.delete")
+                : t("common.confirm")}
           </Button>
         </DialogFooter>
       </DialogContent>

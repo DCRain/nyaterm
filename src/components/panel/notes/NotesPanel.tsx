@@ -93,6 +93,12 @@ function isStandaloneEncrypted(node: NoteTreeNode): boolean {
   return Boolean(node.encrypted && node.kind === "note" && !node.rootFolderId);
 }
 
+/** True if this node or any descendant is encrypted (needs password to delete). */
+function nodeRequiresDeletePassword(node: NoteTreeNode): boolean {
+  if (node.encrypted) return true;
+  return node.children.some(nodeRequiresDeletePassword);
+}
+
 type MoveOutPending = {
   node: NoteTreeNode;
   parentId: string | null;
@@ -104,6 +110,7 @@ type PasswordAction =
   | { kind: "encrypt"; node: NoteTreeNode }
   | { kind: "decrypt"; node: NoteTreeNode }
   | { kind: "change"; node: NoteTreeNode }
+  | { kind: "delete"; node: NoteTreeNode }
   | { kind: "create-note"; parentId: string }
   | {
       kind: "move-out";
@@ -406,6 +413,15 @@ export default function NotesPanel() {
     });
   };
 
+  const requestDelete = (node: NoteTreeNode) => {
+    if (nodeRequiresDeletePassword(node)) {
+      setPasswordError("");
+      setPasswordAction({ kind: "delete", node });
+      return;
+    }
+    setDeleteTarget(node);
+  };
+
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!selectedNode) return;
     if (event.key === "Enter") {
@@ -417,7 +433,7 @@ export default function NotesPanel() {
       setEditingNodeId(selectedNode.id);
     } else if (event.key === "Delete") {
       event.preventDefault();
-      setDeleteTarget(selectedNode);
+      requestDelete(selectedNode);
     } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       const index = visibleRows.findIndex(({ node }) => node.id === selectedNode.id);
@@ -476,9 +492,11 @@ export default function NotesPanel() {
         ? "decrypt"
         : passwordAction?.kind === "change"
           ? "change"
-          : passwordAction?.kind === "move-rebind" && passwordAction.needsSourcePassword
-            ? "cross-move"
-            : "unlock";
+          : passwordAction?.kind === "delete"
+            ? "delete"
+            : passwordAction?.kind === "move-rebind" && passwordAction.needsSourcePassword
+              ? "cross-move"
+              : "unlock";
 
   const passwordTargetName =
     passwordAction && "node" in passwordAction
@@ -498,6 +516,18 @@ export default function NotesPanel() {
         setEditingNodeId(note.id);
         setPasswordAction(null);
         await refresh();
+        return;
+      }
+      if (kind === "delete") {
+        await deleteNode(passwordAction.node.kind, passwordAction.node.id, password);
+        const clearDeletedEncryptionRoots = (node: NoteTreeNode) => {
+          if (node.kind === "folder" && node.encrypted && !node.rootFolderId) {
+            lockFolder(node.id);
+          }
+          for (const child of node.children) clearDeletedEncryptionRoots(child);
+        };
+        clearDeletedEncryptionRoots(passwordAction.node);
+        setPasswordAction(null);
         return;
       }
       if (kind === "move-out") {
@@ -723,7 +753,7 @@ export default function NotesPanel() {
             onCreateNote={startCreateNote}
             onCreateFolder={startCreateFolder}
             onMove={moveToParent}
-            onDelete={setDeleteTarget}
+            onDelete={requestDelete}
             onEncrypt={(node) => {
               setPasswordError("");
               setPasswordAction({ kind: "encrypt", node });

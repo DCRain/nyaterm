@@ -211,8 +211,12 @@ export function useNotesTree() {
   );
 
   const deleteNode = useCallback(
-    async (nodeKind: NoteNodeKind, nodeId: string) => {
-      const result = await invoke<DeleteNoteNodeResult>("delete_note_node", { nodeKind, nodeId });
+    async (nodeKind: NoteNodeKind, nodeId: string, password?: string | null) => {
+      const result = await invoke<DeleteNoteNodeResult>("delete_note_node", {
+        nodeKind,
+        nodeId,
+        password: password ?? null,
+      });
       if (selectedNodeId === nodeId) setSelectedNodeId(null);
       const ids = new Set(result.ids);
       setFolders((current) => current.filter((folder) => !ids.has(folder.id)));

@@ -359,8 +359,9 @@ pub(crate) fn move_note_node(
 pub(crate) fn delete_note_node(
     node_kind: &str,
     node_id: &str,
+    password: Option<&str>,
 ) -> AppResult<crate::config::DeleteNoteNodeResult> {
-    storage()?.delete_note_node(node_kind, node_id)
+    storage()?.delete_note_node(node_kind, node_id, password)
 }
 
 pub(crate) fn load_notes_snapshot() -> AppResult<crate::config::NotesSnapshot> {

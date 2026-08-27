@@ -314,8 +314,10 @@ pub fn delete_note_node(
     app: tauri::AppHandle,
     node_kind: String,
     node_id: String,
+    password: Option<String>,
 ) -> AppResult<DeleteNoteNodeResult> {
-    let result = crate::storage::delete_note_node(&node_kind, &node_id)?;
+    let result =
+        crate::storage::delete_note_node(&node_kind, &node_id, password.as_deref())?;
     if result.folder_count > 0 || result.note_count > 0 {
         emit_notes_changed(
             &app,

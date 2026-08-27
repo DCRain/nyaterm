@@ -1612,6 +1612,8 @@
       "decryptDescription": "Enter the password to decrypt \"{{name}}\".",
       "decryptSuccess": "Decrypted successfully",
       "decryptTitle": "Decrypt",
+      "deleteDescription": "Enter the password to permanently delete \"{{name}}\". This cannot be undone.",
+      "deleteTitle": "Delete encrypted item",
       "encryptDescription": "Set a password to encrypt \"{{name}}\". The password cannot be recovered if lost.",
       "encryptSuccess": "Encrypted successfully",
       "encryptTitle": "Encrypt",

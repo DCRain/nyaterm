@@ -440,6 +440,7 @@ impl Storage {
         &self,
         node_kind: &str,
         node_id: &str,
+        password: Option<&str>,
     ) -> AppResult<DeleteNoteNodeResult> {
         self.ensure_note_summary_index()?;
         let txn = self.db.begin_write().map_err(storage_error)?;
@@ -466,10 +467,41 @@ impl Storage {
                         note_ids.insert(note.id.clone());
                     }
                 }
+                ensure_subtree_delete_passwords(
+                    &txn,
+                    &folders,
+                    &notes,
+                    &folder_ids,
+                    &note_ids,
+                    password,
+                )?;
             }
             "note" => {
-                if !notes.iter().any(|note| note.id == node_id) {
-                    return Err(AppError::Config(format!("Note '{node_id}' does not exist")));
+                let note = notes
+                    .iter()
+                    .find(|note| note.id == node_id)
+                    .ok_or_else(|| AppError::Config(format!("Note '{node_id}' does not exist")))?;
+                if note.encrypted {
+                    if let Some(root_folder_id) = note.root_folder_id.as_deref() {
+                        ensure_encrypted_delete_password(
+                            &folders,
+                            None,
+                            root_folder_id,
+                            true,
+                            password,
+                        )?;
+                    } else {
+                        let full = read_note_in_txn(&txn, node_id)?.ok_or_else(|| {
+                            AppError::Config(format!("Note '{node_id}' does not exist"))
+                        })?;
+                        ensure_encrypted_delete_password(
+                            &folders,
+                            Some(&full),
+                            node_id,
+                            false,
+                            password,
+                        )?;
+                    }
                 }
                 note_ids.insert(node_id.to_string());
             }
@@ -1279,6 +1311,91 @@ fn require_password<'a>(password: Option<&'a str>, label: &str) -> AppResult<&'a
     password
         .filter(|value| !value.is_empty())
         .ok_or_else(|| AppError::Config(format!("password_required:{label}")))
+}
+
+/// Verify password before deleting an encrypted folder or note.
+///
+/// - `is_folder`: verify against the encryption-root folder verifier.
+/// - standalone encrypted note: attempt decrypt with the provided password.
+fn ensure_encrypted_delete_password(
+    folders: &[NoteFolder],
+    standalone_note: Option<&NoteDocument>,
+    id: &str,
+    is_folder: bool,
+    password: Option<&str>,
+) -> AppResult<()> {
+    let password = require_password(password, "delete")?;
+    if is_folder {
+        let root = find_encryption_root_from_list(folders, id)?;
+        let meta = root.encryption.as_ref().ok_or_else(|| {
+            AppError::Config("Encrypted folder is missing encryption metadata".to_string())
+        })?;
+        let verifier = meta.verifier.as_deref().ok_or_else(|| {
+            AppError::Config("Encrypted folder root is missing password verifier".to_string())
+        })?;
+        if !crate::core::note_crypto::verify_folder_password(password, verifier)? {
+            return Err(AppError::Crypto("wrong_password".into()));
+        }
+        return Ok(());
+    }
+
+    let note = standalone_note.ok_or_else(|| {
+        AppError::Config(format!("Encrypted note '{id}' is missing document data"))
+    })?;
+    let meta = note.encryption.as_ref().ok_or_else(|| {
+        AppError::Config("Encrypted note is missing encryption metadata".to_string())
+    })?;
+    crate::core::note_crypto::decrypt_markdown(meta, password)?;
+    Ok(())
+}
+
+/// Require and verify passwords for every encrypted folder root / standalone note
+/// that would be removed by a folder subtree delete.
+fn ensure_subtree_delete_passwords(
+    txn: &redb::WriteTransaction,
+    folders: &[NoteFolder],
+    notes: &[NoteSummary],
+    folder_ids: &HashSet<String>,
+    note_ids: &HashSet<String>,
+    password: Option<&str>,
+) -> AppResult<()> {
+    let mut folder_root_ids = HashSet::new();
+    for folder in folders {
+        if !folder_ids.contains(&folder.id) || !folder.encrypted {
+            continue;
+        }
+        let root = find_encryption_root_from_list(folders, &folder.id)?;
+        folder_root_ids.insert(root.id.clone());
+    }
+
+    let mut standalone_note_ids = Vec::new();
+    for note in notes {
+        if !note_ids.contains(&note.id) || !note.encrypted {
+            continue;
+        }
+        if let Some(root_folder_id) = note.root_folder_id.as_deref() {
+            // Bound notes are covered by verifying their encryption root.
+            folder_root_ids.insert(root_folder_id.to_string());
+        } else {
+            standalone_note_ids.push(note.id.clone());
+        }
+    }
+
+    if folder_root_ids.is_empty() && standalone_note_ids.is_empty() {
+        return Ok(());
+    }
+
+    let password = require_password(password, "delete")?;
+    for root_id in &folder_root_ids {
+        ensure_encrypted_delete_password(folders, None, root_id, true, Some(password))?;
+    }
+    for note_id in &standalone_note_ids {
+        let full = read_note_in_txn(txn, note_id)?.ok_or_else(|| {
+            AppError::Config(format!("Note '{note_id}' does not exist"))
+        })?;
+        ensure_encrypted_delete_password(folders, Some(&full), note_id, false, Some(password))?;
+    }
+    Ok(())
 }
 
 fn apply_note_move_encryption(
@@ -2124,7 +2241,7 @@ mod tests {
             .expect("leaf note");
 
         let result = storage
-            .delete_note_node("folder", &root.id)
+            .delete_note_node("folder", &root.id, None)
             .expect("delete folder");
 
         assert_eq!(result.folder_count, 2);
@@ -2132,6 +2249,158 @@ mod tests {
         assert!(storage.list_note_folders().expect("folders").is_empty());
         assert!(storage.list_notes().expect("notes").is_empty());
         assert!(storage.list_note_summaries().expect("summaries").is_empty());
+    }
+
+    #[test]
+    fn delete_encrypted_folder_requires_password() {
+        let storage = temp_storage();
+        let folder = storage
+            .create_note_folder(None, Some("Vault".to_string()))
+            .expect("folder");
+        storage
+            .create_note(
+                Some(folder.id.clone()),
+                Some("Secret".to_string()),
+                Some("body".to_string()),
+                None,
+            )
+            .expect("note");
+        storage
+            .encrypt_note_folder(&folder.id, "vault-pass")
+            .expect("encrypt");
+
+        let missing = storage.delete_note_node("folder", &folder.id, None);
+        assert!(missing.is_err(), "delete without password should fail");
+
+        let wrong = storage.delete_note_node("folder", &folder.id, Some("wrong"));
+        assert!(wrong.is_err(), "delete with wrong password should fail");
+
+        let result = storage
+            .delete_note_node("folder", &folder.id, Some("vault-pass"))
+            .expect("delete with password");
+        assert_eq!(result.folder_count, 1);
+        assert_eq!(result.note_count, 1);
+        assert!(storage.list_note_folders().expect("folders").is_empty());
+        assert!(storage.list_notes().expect("notes").is_empty());
+    }
+
+    #[test]
+    fn delete_standalone_encrypted_note_requires_password() {
+        let storage = temp_storage();
+        let note = storage
+            .create_note(None, Some("Secret".to_string()), Some("body".to_string()), None)
+            .expect("note");
+        storage.encrypt_note(&note.id, "note-pass").expect("encrypt");
+
+        assert!(storage.delete_note_node("note", &note.id, None).is_err());
+        assert!(storage
+            .delete_note_node("note", &note.id, Some("wrong"))
+            .is_err());
+
+        let result = storage
+            .delete_note_node("note", &note.id, Some("note-pass"))
+            .expect("delete");
+        assert_eq!(result.note_count, 1);
+        assert!(storage.list_notes().expect("notes").is_empty());
+    }
+
+    #[test]
+    fn delete_note_inside_encrypted_folder_requires_folder_password() {
+        let storage = temp_storage();
+        let folder = storage
+            .create_note_folder(None, Some("Vault".to_string()))
+            .expect("folder");
+        let note = storage
+            .create_note(
+                Some(folder.id.clone()),
+                Some("Secret".to_string()),
+                Some("body".to_string()),
+                None,
+            )
+            .expect("note");
+        storage
+            .encrypt_note_folder(&folder.id, "vault-pass")
+            .expect("encrypt");
+
+        assert!(storage.delete_note_node("note", &note.id, None).is_err());
+        assert!(storage
+            .delete_note_node("note", &note.id, Some("wrong"))
+            .is_err());
+
+        let result = storage
+            .delete_note_node("note", &note.id, Some("vault-pass"))
+            .expect("delete");
+        assert_eq!(result.note_count, 1);
+        assert_eq!(storage.list_notes().expect("notes").len(), 0);
+        assert_eq!(storage.list_note_folders().expect("folders").len(), 1);
+    }
+
+    #[test]
+    fn delete_plain_folder_with_encrypted_child_requires_password() {
+        let storage = temp_storage();
+        let parent = storage
+            .create_note_folder(None, Some("Parent".to_string()))
+            .expect("parent");
+        let vault = storage
+            .create_note_folder(Some(parent.id.clone()), Some("Vault".to_string()))
+            .expect("vault");
+        storage
+            .create_note(
+                Some(vault.id.clone()),
+                Some("Secret".to_string()),
+                Some("body".to_string()),
+                None,
+            )
+            .expect("note");
+        storage
+            .encrypt_note_folder(&vault.id, "vault-pass")
+            .expect("encrypt");
+
+        assert!(
+            storage.delete_note_node("folder", &parent.id, None).is_err(),
+            "plain parent with encrypted child must require password"
+        );
+        assert!(storage
+            .delete_note_node("folder", &parent.id, Some("wrong"))
+            .is_err());
+
+        let result = storage
+            .delete_note_node("folder", &parent.id, Some("vault-pass"))
+            .expect("delete with child vault password");
+        assert_eq!(result.folder_count, 2);
+        assert_eq!(result.note_count, 1);
+        assert!(storage.list_note_folders().expect("folders").is_empty());
+        assert!(storage.list_notes().expect("notes").is_empty());
+    }
+
+    #[test]
+    fn delete_plain_folder_with_standalone_encrypted_note_requires_password() {
+        let storage = temp_storage();
+        let parent = storage
+            .create_note_folder(None, Some("Parent".to_string()))
+            .expect("parent");
+        let note = storage
+            .create_note(
+                Some(parent.id.clone()),
+                Some("Secret".to_string()),
+                Some("body".to_string()),
+                None,
+            )
+            .expect("note");
+        storage.encrypt_note(&note.id, "note-pass").expect("encrypt");
+
+        assert!(storage.delete_note_node("folder", &parent.id, None).is_err());
+        assert!(storage
+            .delete_note_node("folder", &parent.id, Some("wrong"))
+            .is_err());
+
+        let result = storage
+            .delete_note_node("folder", &parent.id, Some("note-pass"))
+            .expect("delete with note password");
+        assert_eq!(result.folder_count, 1);
+        assert_eq!(result.note_count, 1);
+        assert!(storage.list_note_folders().expect("folders").is_empty());
+        assert!(storage.list_notes().expect("notes").is_empty());
     }
 
     #[test]
