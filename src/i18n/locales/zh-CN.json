@@ -1161,7 +1161,7 @@
     "uptimeMinutes": "{{count}}分钟"
   },
   "lockScreen": {
-    "message": "由于长时间无操作，应用程序已自动锁定",
+    "message": "应用程序已锁定",
     "passwordPlaceholder": "请输入解锁密码",
     "title": "应用程序已锁定",
     "unlock": "解锁",
@@ -1898,10 +1898,12 @@
     "editorTypeInternal": "内置编辑器",
     "enableCloudSync": "启用云同步",
     "enableCloudSyncDesc": "允许当前设备推送、拉取并检查加密的云同步快照。",
+    "enableIdleLock": "空闲超时锁定",
+    "enableIdleLockDesc": "在设定的无操作时间后自动锁定应用程序。",
     "enableProxy": "启用代理",
     "enableProxyDesc": "启用应用程序的代理。",
-    "enableScreenLock": "启用锁屏保护",
-    "enableScreenLockDesc": "开启后，应用程序会在启动时或空闲一段设定时间后自动锁定。",
+    "enableStartupLock": "启动时锁定",
+    "enableStartupLockDesc": "应用程序启动时自动锁定。",
     "encoding": "数据编码",
     "engineName": "引擎名称",
     "engineUrl": "URL 模板 (用 %s 代替查询词)",

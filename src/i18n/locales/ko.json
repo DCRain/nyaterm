@@ -1161,7 +1161,7 @@
     "uptimeMinutes": "{{count}}분"
   },
   "lockScreen": {
-    "message": "비활성 상태로 잠겼습니다",
+    "message": "애플리케이션이 잠겼습니다",
     "passwordPlaceholder": "잠금 해제 비밀번호",
     "title": "잠김",
     "unlock": "잠금 해제",
@@ -1898,10 +1898,12 @@
     "editorTypeInternal": "내장 편집기",
     "enableCloudSync": "클라우드 동기화 사용",
     "enableCloudSyncDesc": "이 장치가 암호화된 클라우드 동기화 스냅샷을 업로드, 다운로드, 확인할 수 있도록 허용합니다.",
+    "enableIdleLock": "유휴 시간 초과 시 잠금",
+    "enableIdleLockDesc": "설정한 시간 동안 활동이 없으면 애플리케이션을 자동으로 잠급니다.",
     "enableProxy": "프록시 사용",
     "enableProxyDesc": "앱 프록시를 활성화합니다.",
-    "enableScreenLock": "화면 잠금 사용",
-    "enableScreenLockDesc": "시작 시 또는 비활성 상태일 때 잠급니다.",
+    "enableStartupLock": "시작 시 잠금",
+    "enableStartupLockDesc": "애플리케이션이 시작될 때 잠급니다.",
     "encoding": "인코딩",
     "engineName": "엔진 이름",
     "engineUrl": "URL 템플릿(검색어에는 %s)",

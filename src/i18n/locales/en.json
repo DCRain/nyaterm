@@ -1162,7 +1162,7 @@
     "uptimeMinutes": "{{count}}m"
   },
   "lockScreen": {
-    "message": "Locked due to inactivity",
+    "message": "The application is locked",
     "passwordPlaceholder": "Unlock password",
     "title": "Locked",
     "unlock": "Unlock",
@@ -1899,10 +1899,12 @@
     "editorTypeInternal": "Built-in Editor",
     "enableCloudSync": "Enable Cloud Sync",
     "enableCloudSyncDesc": "Allow this device to push, pull, and check the encrypted cloud sync snapshot.",
+    "enableIdleLock": "Lock on Idle Timeout",
+    "enableIdleLockDesc": "Automatically lock the application after the configured period of inactivity.",
     "enableProxy": "Enable Proxy",
     "enableProxyDesc": "Enable app proxy.",
-    "enableScreenLock": "Enable Screen Lock",
-    "enableScreenLockDesc": "Lock on startup or after inactivity.",
+    "enableStartupLock": "Lock on Startup",
+    "enableStartupLockDesc": "Lock the application when it starts.",
     "encoding": "Encoding",
     "engineName": "Engine Name",
     "engineUrl": "URL Template (%s for query)",

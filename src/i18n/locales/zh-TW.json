@@ -1161,7 +1161,7 @@
     "uptimeMinutes": "{{count}}分鐘"
   },
   "lockScreen": {
-    "message": "由於長時間無操作，應用程式已自動鎖定",
+    "message": "應用程式已鎖定",
     "passwordPlaceholder": "請輸入解鎖密碼",
     "title": "應用程式已鎖定",
     "unlock": "解鎖",
@@ -1893,10 +1893,12 @@
     "editorTypeInternal": "內建編輯器",
     "enableCloudSync": "啟用雲端同步",
     "enableCloudSyncDesc": "允許目前裝置推送、拉取並檢查加密的雲端同步快照。",
+    "enableIdleLock": "閒置逾時鎖定",
+    "enableIdleLockDesc": "在設定的無操作時間後自動鎖定應用程式。",
     "enableProxy": "啟用代理",
     "enableProxyDesc": "啟用應用程式的代理。",
-    "enableScreenLock": "啟用鎖屏保護",
-    "enableScreenLockDesc": "開啟後，應用程式會在啟動時或空閒一段設定時間後自動鎖定。",
+    "enableStartupLock": "啟動時鎖定",
+    "enableStartupLockDesc": "應用程式啟動時自動鎖定。",
     "encoding": "資料編碼",
     "engineName": "引擎名稱",
     "engineUrl": "URL 模板 (用 %s 代替查詢詞)",
