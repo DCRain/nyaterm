@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import AppLayout from "./components/app/AppLayout";
 import AppPanelContent from "./components/app/AppPanelContent";
 import ActivityBarResetDialog from "./components/dialog/app/ActivityBarResetDialog";
+import { McpApprovalHost } from "./components/dialog/app/McpApprovalHost";
 import AppOverlayDialogs from "./components/dialog/app/AppOverlayDialogs";
 import type { HostKeyVerifyRequest } from "./components/dialog/connections/HostKeyVerifyDialog";
 import type { OtpRequest } from "./components/dialog/connections/OtpDialog";
@@ -3748,6 +3749,7 @@ function App() {
           onRequestClose: handleRequestWindowClose,
         }}
       />
+      <McpApprovalHost />
       <AppOverlayDialogs
         t={t}
         showSessionQuickSwitcher={showSessionQuickSwitcher}

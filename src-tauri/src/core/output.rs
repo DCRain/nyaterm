@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::time::{Duration, sleep};
 
 use super::{SessionCommand, SessionCommandSender};
@@ -63,7 +63,16 @@ impl SessionOutputCoalescer {
         output_event: String,
         flow_control_tx: SessionCommandSender,
     ) -> Arc<Self> {
+        let session_id = output_event
+            .strip_prefix("terminal-output-")
+            .map(str::to_string);
+        let session_manager = app
+            .try_state::<Arc<crate::core::SessionManager>>()
+            .map(|state| state.inner().clone());
         Self::with_flow_sink(flow_control_tx, move |payload| {
+            if let (Some(manager), Some(session_id)) = (&session_manager, &session_id) {
+                manager.append_recent_output(session_id, &payload.data);
+            }
             let _ = app.emit(&output_event, &payload);
         })
     }

@@ -6,6 +6,7 @@
 use super::history::{CommandHistoryStore, sanitize_history_command};
 use super::{InputOrigin, InputSensitivity, RecordingManager};
 use crate::config::{AiExecutionProfile, SshProfile};
+use crate::core::capabilities::RecentOutputStore;
 use crate::core::capture::CapturedOutput;
 use crate::core::zmodem::{ZmodemPreparedUpload, ZmodemUploadConflictMode};
 use crate::error::{AppError, AppResult};
@@ -472,6 +473,7 @@ pub struct SessionManager {
     pending_creations: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>>,
     app_handle: OnceLock<tauri::AppHandle>,
     recording_manager: OnceLock<Arc<RecordingManager>>,
+    recent_output: Arc<RecentOutputStore>,
 }
 
 impl SessionManager {
@@ -489,6 +491,7 @@ impl SessionManager {
             pending_creations: Arc::new(Mutex::new(HashMap::new())),
             app_handle: OnceLock::new(),
             recording_manager: OnceLock::new(),
+            recent_output: Arc::new(RecentOutputStore::default()),
         }
     }
 
@@ -578,6 +581,7 @@ impl SessionManager {
     pub async fn remove_session(&self, id: &str) -> bool {
         let removed = self.sessions.lock().await.remove(id).is_some();
         if removed {
+            self.recent_output.remove(id);
             self.flush_pending_submission(id).await;
             self.command_submissions.lock().await.remove(id);
             self.pending_zmodem_uploads.lock().await.remove(id);
@@ -641,6 +645,26 @@ impl SessionManager {
             .get(id)
             .map(|handle| handle.info.clone())
             .ok_or_else(|| AppError::SessionNotFound(format!("Session '{}' not found", id)))
+    }
+
+    /// Returns the best-effort working directory currently tracked for a session.
+    pub async fn session_cwd(&self, id: &str) -> AppResult<Option<String>> {
+        let cwd = {
+            let sessions = self.sessions.lock().await;
+            sessions
+                .get(id)
+                .map(|handle| handle.cwd.clone())
+                .ok_or_else(|| AppError::SessionNotFound(format!("Session '{}' not found", id)))?
+        };
+        Ok(cwd.lock().await.clone())
+    }
+
+    pub fn append_recent_output(&self, session_id: &str, text: &str) {
+        self.recent_output.append(session_id, text);
+    }
+
+    pub fn recent_output(&self, session_id: &str, lines: usize) -> String {
+        self.recent_output.read(session_id, lines)
     }
 
     /// Appends a command to persistent history and schedules a coalesced save.

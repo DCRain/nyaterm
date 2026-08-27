@@ -5,11 +5,13 @@
 
 pub mod ai;
 pub mod backup;
+pub mod capabilities;
 pub mod capture;
 pub mod cloud_sync;
 pub mod history;
 pub mod importer;
 pub(crate) mod input;
+pub mod mcp;
 pub mod monitoring;
 pub mod network;
 mod output;
