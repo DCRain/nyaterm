@@ -228,13 +228,14 @@ Two input forms are supported:
 
 - `ssh://user@host:port` URLs
 - `ssh://user:password@host:port` URLs; the password is used only for this temporary SSH session and is not saved
+- `ssh2://...` (alias of `ssh://`)
 - `ssh [-p port] [-l user] user@host` command strings
 
 Conventions and limits:
 
 - Default username is `root` and default port is `22`
 - Uses password authentication, with no proxy, jump host, post-login command, or X11
-- For safety, only `ssh://` URLs may include one-time passwords; command-style inline passwords (`user:pass@host`) and unsupported options such as `-J`, `-L/-R/-D`, `-i`, and `-o ProxyJump/ProxyCommand` are rejected
+- For safety, only `ssh://` / `ssh2://` URLs may include one-time passwords; command-style inline passwords (`user:pass@host`) and unsupported options such as `-J`, `-L/-R/-D`, `-i`, and `-o ProxyJump/ProxyCommand` are rejected
 
 A temporary session never becomes a saved connection: NyaTerm strips the connection ID, proxy, jump host, post-login command, X11, and algorithm preferences, so it stays a one-off session.
 
@@ -246,12 +247,13 @@ Supported entry points:
 
 - Program invocation: pass a link as a NyaTerm startup argument, for example `NyaTerm.exe ssh://root@example.com:22`
 - Local terminal invocation: use `NyaTerm.exe --local`, or `NyaTerm.exe --local --cwd "D:\Projects\foo"` to set the initial working directory
-- Protocol invocation: open an `ssh://`, `telnet://`, or `nyaterm://` link through the operating system URL scheme handler
+- Protocol invocation: open an `ssh://`, `ssh2://`, `telnet://`, or `nyaterm://` link through the operating system URL scheme handler
 
 Supported link formats:
 
 - `ssh://user@host:port`
 - `ssh://user:password@host:port`; the password is used only for this temporary SSH session and is not saved
+- `ssh2://...` (alias of `ssh://`, for SecureCRT-style links)
 - `telnet://host:port`
 - `nyaterm://connect/ssh?host=host&port=22&username=user`
 - `nyaterm://connect/telnet?host=host&port=23`
@@ -264,8 +266,25 @@ Handling rules:
 - External local terminal requests do not match or create saved connections; `cwd` only controls the initial working directory and does not execute arbitrary startup commands
 - NyaTerm first looks for saved connections with the same protocol, host, and port; when an SSH link includes a username, the username must match exactly
 - If multiple saved connections match, NyaTerm shows a chooser; if none match, it opens a temporary connection
-- `ssh://` links with one-time passwords always open as temporary connections, so an externally supplied password is not attached to a saved connection
+- `ssh://` / `ssh2://` links with one-time passwords always open as temporary connections, so an externally supplied password is not attached to a saved connection
 - `nyaterm://` links do not accept `password`, post-login command, proxy, jump host, port forwarding, or private-key parameters; save a connection first if you need those capabilities
+
+### Bastion hosts / Sangfor (Xshell + SecureCRT compatibility)
+
+Sangfor OSM / bastion portals typically launch Xshell or SecureCRT through a local **SSO client control**, not a custom `xshell://` scheme. To route one-click asset login into NyaTerm while keeping both tool buttons working:
+
+1. Install the Sangfor SSO / client control (download it from the bastion web UI on first use).
+2. In the control settings, set both the **Xshell path** and the **SecureCRT path** to the NyaTerm executable (for example `NyaTerm.exe` in the install directory). Some installs store the same paths in `db_path.ini`, `somp.ini`, or `isomp.ini`.
+3. On the bastion web UI, click the Xshell or CRT (SecureCRT) action for an SSH asset. The control starts NyaTerm with a temporary host, port, username, and password.
+4. NyaTerm normalizes those arguments into a one-off `ssh://` temporary session; the password is not saved. Authorization and auditing stay on the bastion.
+
+Common launch argument shapes NyaTerm understands (useful for troubleshooting):
+
+- Xshell-style: `NyaTerm.exe -url "ssh://user:password@host:port"`, or `-url user:password@host:port`, or `-host` / `-user` / `-port` / `-pw`
+- SecureCRT-style: `NyaTerm.exe /SSH2 /L user /PASSWORD password /P port host` (optional `/T`)
+- Protocol links: `ssh://...`, `ssh2://...`
+
+If nothing happens after a click, confirm the control points at the real `NyaTerm.exe` (not a shortcut), then check Task Manager for the exact command line. If a Sangfor build uses a slightly different argv shape, share that command line so parsing can be extended.
 
 ## Session input synchronization
 

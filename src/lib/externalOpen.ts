@@ -81,8 +81,11 @@ export function parseExternalOpenUrl(rawUrl: string): ExternalOpenParseResult {
   const scheme = schemeOf(trimmed);
   if (!scheme) return invalid("externalOpen.invalidUrl", "invalid_url");
 
-  if (scheme === "ssh" || scheme === "telnet") {
-    return parseExternalTemporaryUrl(trimmed, scheme);
+  if (scheme === "ssh" || scheme === "ssh2" || scheme === "telnet") {
+    const normalized =
+      scheme === "ssh2" ? trimmed.replace(/^ssh2:/i, "ssh:") : trimmed;
+    const protocol = scheme === "telnet" ? "telnet" : "ssh";
+    return parseExternalTemporaryUrl(normalized, protocol);
   }
 
   if (scheme === "nyaterm") {

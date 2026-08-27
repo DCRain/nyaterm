@@ -1033,7 +1033,7 @@
   },
   "externalOpen": {
     "continueConnection": "연결 계속",
-    "inlinePassword": "이 링크 형식은 비밀번호를 전달할 수 없습니다. 일회성 SSH 비밀번호는 ssh://user:password@host:port 형식만 사용하세요.",
+    "inlinePassword": "이 링크 형식은 비밀번호를 전달할 수 없습니다. 일회성 SSH 비밀번호는 ssh://user:password@host:port 또는 ssh2:// 형식만 사용하세요.",
     "invalidMode": "외부 SSH 링크 모드는 standard 또는 terminal이어야 합니다.",
     "invalidPort": "외부 링크 포트는 1에서 65535 사이여야 합니다.",
     "invalidUrl": "잘못된 외부 연결 링크입니다.",
@@ -3082,7 +3082,7 @@
     "connect": "연결",
     "description": "프로토콜을 선택하고 저장하지 않는 임시 세션을 바로 엽니다.",
     "empty": "연결 대상을 입력하세요.",
-    "inlinePassword": "ssh:// URL만 일회성 비밀번호를 포함할 수 있습니다. 명령 형식의 인라인 비밀번호는 지원되지 않습니다.",
+    "inlinePassword": "ssh:// 또는 ssh2:// URL만 일회성 비밀번호를 포함할 수 있습니다. 명령 형식의 인라인 비밀번호는 지원되지 않습니다.",
     "invalidBaudRate": "올바른 보드레이트를 입력하세요.",
     "invalidInput": "올바른 명령, URL, 또는 호스트를 입력하세요.",
     "invalidMode": "SSH URL 모드는 standard 또는 terminal이어야 합니다.",

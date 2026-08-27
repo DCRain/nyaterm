@@ -180,10 +180,12 @@ export function parseTemporaryTelnetLink(
 }
 
 function parseSshUrl(text: string): TemporaryLinkParseResult | null {
-  if (!/^ssh:\/\//i.test(text)) return null;
+  if (!/^ssh2?:\/\//i.test(text)) return null;
+
+  const normalized = text.replace(/^ssh2:\/\//i, "ssh://");
 
   try {
-    const url = new URL(text);
+    const url = new URL(normalized);
     if (!url.hostname)
       return { ok: false, errorKey: "temporarySsh.missingHost" };
     const port = url.port ? Number(url.port) : DEFAULT_SSH_PORT;
@@ -229,7 +231,7 @@ function buildConfig(
   explicitUsername: string | null,
   explicitPort: number | null,
 ): TemporaryLinkParseResult {
-  if (hostSpec.includes("://") && !/^ssh:\/\//i.test(hostSpec)) {
+  if (hostSpec.includes("://") && !/^ssh2?:\/\//i.test(hostSpec)) {
     return { ok: false, errorKey: "temporarySsh.invalidInput" };
   }
 

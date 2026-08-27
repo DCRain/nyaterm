@@ -15,6 +15,19 @@ describe("parseExternalOpenUrl", () => {
     expect(sshRuntimeMode(networkIntent(result))).toBe("standard");
   });
 
+  it("treats ssh2:// as an ssh:// alias", () => {
+    const result = parseExternalOpenUrl("ssh2://root:secret@example.com:2222");
+    expect(result.ok).toBe(true);
+    expect(networkIntent(result)).toMatchObject({
+      protocol: "ssh",
+      host: "example.com",
+      port: 2222,
+      username: "root",
+      passwordSpecified: true,
+    });
+    expect(sshPassword(networkIntent(result))).toBe("secret");
+  });
+
   it("preserves SSH terminal runtime mode through normalization", () => {
     const result = parseExternalOpenUrl("ssh://root@example.com?mode=terminal");
     expect(result.ok).toBe(true);

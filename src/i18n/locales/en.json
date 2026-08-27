@@ -1034,7 +1034,7 @@
   },
   "externalOpen": {
     "continueConnection": "Continue Connection",
-    "inlinePassword": "This link format cannot pass passwords. Use ssh://user:password@host:port only for one-time SSH passwords.",
+    "inlinePassword": "This link format cannot pass passwords. Use ssh://user:password@host:port or ssh2:// only for one-time SSH passwords.",
     "invalidMode": "External SSH link mode must be standard or terminal.",
     "invalidPort": "External link port must be between 1 and 65535.",
     "invalidUrl": "Invalid external connection link.",
@@ -3094,7 +3094,7 @@
     "connect": "Connect",
     "description": "Choose a protocol and open a temporary session without saving it.",
     "empty": "Enter a target.",
-    "inlinePassword": "Only ssh:// URLs can include one-time passwords. Command-style inline passwords are not supported.",
+    "inlinePassword": "Only ssh:// or ssh2:// URLs can include one-time passwords. Command-style inline passwords are not supported.",
     "invalidBaudRate": "Enter a valid baud rate.",
     "invalidInput": "Enter a valid command, URL, or host.",
     "invalidMode": "SSH URL mode must be standard or terminal.",

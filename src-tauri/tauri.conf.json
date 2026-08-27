@@ -69,6 +69,7 @@
         "schemes": [
           "nyaterm",
           "ssh",
+          "ssh2",
           "telnet"
         ]
       }

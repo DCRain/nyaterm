@@ -10,10 +10,12 @@ use uuid::Uuid;
 use crate::observability::{self, StructuredLog, StructuredLogLevel};
 
 pub const EXTERNAL_OPEN_AVAILABLE_EVENT: &str = "external-open-available";
-const ALLOWED_SCHEMES: &[&str] = &["ssh", "telnet", "nyaterm"];
+const ALLOWED_SCHEMES: &[&str] = &["ssh", "ssh2", "telnet", "nyaterm"];
 const MAX_URL_LENGTH: usize = 4096;
 const MAX_URLS_PER_BATCH: usize = 10;
 const DEDUPLICATION_WINDOW: Duration = Duration::from_millis(500);
+const DEFAULT_SSH_PORT: u16 = 22;
+const DEFAULT_SSH_USERNAME: &str = "root";
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -272,12 +274,25 @@ pub(crate) struct ExternalOpenCandidate {
 pub fn extract_external_open_candidates(
     args: impl IntoIterator<Item = String>,
 ) -> Vec<ExternalOpenCandidate> {
+    let args: Vec<String> = args.into_iter().collect();
     let mut accepted = Vec::new();
     let mut local_requested = false;
     let mut local_cwd = None;
     let mut expecting_cwd_value = false;
+    let mut skip_indices = std::collections::HashSet::new();
 
-    for arg in args {
+    if let Some((url, consumed)) = try_normalize_bastion_cli(&args) {
+        skip_indices.extend(consumed);
+        if let Some(candidate) = sanitize_external_open_arg(&url) {
+            accepted.push(candidate);
+        }
+    }
+
+    for (index, arg) in args.into_iter().enumerate() {
+        if skip_indices.contains(&index) {
+            continue;
+        }
+
         if expecting_cwd_value {
             local_cwd = Some(arg);
             expecting_cwd_value = false;
@@ -298,11 +313,11 @@ pub fn extract_external_open_candidates(
             continue;
         }
 
+        if accepted.len() >= MAX_URLS_PER_BATCH {
+            break;
+        }
         if let Some(url) = sanitize_external_open_arg(&arg) {
             accepted.push(url);
-            if accepted.len() >= MAX_URLS_PER_BATCH {
-                return accepted;
-            }
         }
     }
 
@@ -315,6 +330,423 @@ pub fn extract_external_open_candidates(
     }
 
     accepted
+}
+
+/// Normalize Xshell / SecureCRT-style argv into a single `ssh://` URL.
+///
+/// Returns `(url, consumed_arg_indices)` so those args are not double-counted.
+fn try_normalize_bastion_cli(args: &[String]) -> Option<(String, Vec<usize>)> {
+    if let Some(result) = try_normalize_xshell_cli(args) {
+        return Some(result);
+    }
+    try_normalize_securecrt_cli(args)
+}
+
+fn try_normalize_xshell_cli(args: &[String]) -> Option<(String, Vec<usize>)> {
+    let mut consumed = Vec::new();
+    let mut url_value: Option<String> = None;
+    let mut host: Option<String> = None;
+    let mut user: Option<String> = None;
+    let mut port: Option<u16> = None;
+    let mut password: Option<String> = None;
+    let mut saw_xshell_flag = false;
+
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].trim();
+        let lower = arg.to_ascii_lowercase();
+
+        if let Some(value) = strip_cli_flag(arg, &["-url", "/url"]) {
+            saw_xshell_flag = true;
+            consumed.push(index);
+            url_value = Some(value.to_string());
+            index += 1;
+            continue;
+        }
+        if matches!(lower.as_str(), "-url" | "/url") {
+            if let Some(next) = args.get(index + 1) {
+                saw_xshell_flag = true;
+                consumed.push(index);
+                consumed.push(index + 1);
+                url_value = Some(next.trim().to_string());
+                index += 2;
+                continue;
+            }
+        }
+
+        if let Some(value) = strip_cli_flag(arg, &["-host", "/host"]) {
+            saw_xshell_flag = true;
+            consumed.push(index);
+            host = Some(value.to_string());
+            index += 1;
+            continue;
+        }
+        if matches!(lower.as_str(), "-host" | "/host") {
+            if let Some(next) = args.get(index + 1) {
+                saw_xshell_flag = true;
+                consumed.push(index);
+                consumed.push(index + 1);
+                host = Some(next.trim().to_string());
+                index += 2;
+                continue;
+            }
+        }
+
+        if let Some(value) = strip_cli_flag(arg, &["-user", "/user", "-l", "/l"]) {
+            saw_xshell_flag = true;
+            consumed.push(index);
+            user = Some(value.to_string());
+            index += 1;
+            continue;
+        }
+        if matches!(lower.as_str(), "-user" | "/user" | "-l" | "/l") {
+            if let Some(next) = args.get(index + 1) {
+                saw_xshell_flag = true;
+                consumed.push(index);
+                consumed.push(index + 1);
+                user = Some(next.trim().to_string());
+                index += 2;
+                continue;
+            }
+        }
+
+        if let Some(value) = strip_cli_flag(arg, &["-port", "/port", "-p", "/p"]) {
+            if let Ok(parsed) = value.parse::<u16>() {
+                if parsed > 0 {
+                    saw_xshell_flag = true;
+                    consumed.push(index);
+                    port = Some(parsed);
+                }
+            }
+            index += 1;
+            continue;
+        }
+        if matches!(lower.as_str(), "-port" | "/port" | "-p" | "/p") {
+            if let Some(next) = args.get(index + 1) {
+                if let Ok(parsed) = next.trim().parse::<u16>() {
+                    if parsed > 0 {
+                        saw_xshell_flag = true;
+                        consumed.push(index);
+                        consumed.push(index + 1);
+                        port = Some(parsed);
+                        index += 2;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        if let Some(value) = strip_cli_flag(arg, &["-pw", "/pw", "-password", "/password"]) {
+            saw_xshell_flag = true;
+            consumed.push(index);
+            password = Some(value.to_string());
+            index += 1;
+            continue;
+        }
+        if matches!(lower.as_str(), "-pw" | "/pw" | "-password" | "/password") {
+            if let Some(next) = args.get(index + 1) {
+                saw_xshell_flag = true;
+                consumed.push(index);
+                consumed.push(index + 1);
+                password = Some(next.to_string());
+                index += 2;
+                continue;
+            }
+        }
+
+        index += 1;
+    }
+
+    if !saw_xshell_flag {
+        return None;
+    }
+
+    if let Some(raw_url) = url_value {
+        let normalized = normalize_xshell_url_value(&raw_url)?;
+        return Some((normalized, consumed));
+    }
+
+    let host = host.filter(|value| !value.is_empty())?;
+    let username = user
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_SSH_USERNAME.to_string());
+    let port = port.unwrap_or(DEFAULT_SSH_PORT);
+    Some((
+        build_ssh_url(&username, password.as_deref(), &host, port),
+        consumed,
+    ))
+}
+
+fn try_normalize_securecrt_cli(args: &[String]) -> Option<(String, Vec<usize>)> {
+    let mut consumed = Vec::new();
+    let mut saw_ssh2 = false;
+    let mut user: Option<String> = None;
+    let mut password: Option<String> = None;
+    let mut port: Option<u16> = None;
+    let mut host: Option<String> = None;
+
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].trim();
+        let lower = arg.to_ascii_lowercase();
+
+        if matches!(lower.as_str(), "/ssh2" | "-ssh2") {
+            saw_ssh2 = true;
+            consumed.push(index);
+            index += 1;
+            continue;
+        }
+        // Optional tab flag — consume whenever present so a leading /T still works.
+        if lower == "/t" {
+            consumed.push(index);
+            index += 1;
+            continue;
+        }
+
+        if let Some(value) = strip_cli_flag(arg, &["/l", "-l"]) {
+            saw_ssh2 = true;
+            consumed.push(index);
+            user = Some(value.to_string());
+            index += 1;
+            continue;
+        }
+        if matches!(lower.as_str(), "/l" | "-l") {
+            if let Some(next) = args.get(index + 1) {
+                saw_ssh2 = true;
+                consumed.push(index);
+                consumed.push(index + 1);
+                user = Some(next.trim().to_string());
+                index += 2;
+                continue;
+            }
+        }
+
+        if let Some(value) = strip_cli_flag(arg, &["/password", "-password"]) {
+            saw_ssh2 = true;
+            consumed.push(index);
+            password = Some(value.to_string());
+            index += 1;
+            continue;
+        }
+        if matches!(lower.as_str(), "/password" | "-password") {
+            if let Some(next) = args.get(index + 1) {
+                saw_ssh2 = true;
+                consumed.push(index);
+                consumed.push(index + 1);
+                password = Some(next.to_string());
+                index += 2;
+                continue;
+            }
+        }
+
+        if let Some(value) = strip_cli_flag(arg, &["/p", "-p"]) {
+            if let Ok(parsed) = value.parse::<u16>() {
+                if parsed > 0 {
+                    saw_ssh2 = true;
+                    consumed.push(index);
+                    port = Some(parsed);
+                }
+            }
+            index += 1;
+            continue;
+        }
+        if matches!(lower.as_str(), "/p" | "-p") {
+            if let Some(next) = args.get(index + 1) {
+                if let Ok(parsed) = next.trim().parse::<u16>() {
+                    if parsed > 0 {
+                        saw_ssh2 = true;
+                        consumed.push(index);
+                        consumed.push(index + 1);
+                        port = Some(parsed);
+                        index += 2;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        // Positional host (or user@host), only once, after we know this is CRT-like.
+        if saw_ssh2
+            && host.is_none()
+            && !arg.starts_with('/')
+            && !arg.starts_with('-')
+            && !arg.is_empty()
+            && allowed_scheme(arg).is_none()
+        {
+            consumed.push(index);
+            host = Some(arg.to_string());
+        }
+
+        index += 1;
+    }
+
+    if !saw_ssh2 {
+        return None;
+    }
+
+    let host_spec = host.filter(|value| !value.is_empty())?;
+    let (parsed_user, host_name) = split_user_at_host(&host_spec);
+    if host_name.is_empty() {
+        return None;
+    }
+    let username = user
+        .or(parsed_user)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_SSH_USERNAME.to_string());
+    let port = port.unwrap_or(DEFAULT_SSH_PORT);
+    Some((
+        build_ssh_url(&username, password.as_deref(), &host_name, port),
+        consumed,
+    ))
+}
+
+fn strip_cli_flag<'a>(arg: &'a str, flags: &[&str]) -> Option<&'a str> {
+    for flag in flags {
+        let inline_eq = format!("{flag}=");
+        if arg.len() > inline_eq.len() && arg[..inline_eq.len()].eq_ignore_ascii_case(&inline_eq) {
+            let value = arg[inline_eq.len()..].trim();
+            return (!value.is_empty()).then_some(value);
+        }
+        // SecureCRT-style "/Luser" without separator is uncommon; support "-p22" style.
+        if flag.len() >= 2
+            && arg.len() > flag.len()
+            && arg[..flag.len()].eq_ignore_ascii_case(flag)
+            && !arg[flag.len()..].starts_with('=')
+            && flag.chars().last().is_some_and(|ch| ch.is_ascii_alphabetic())
+            && arg.as_bytes().get(flag.len()).is_some_and(|b| b.is_ascii_digit())
+        {
+            let value = arg[flag.len()..].trim();
+            return (!value.is_empty()).then_some(value);
+        }
+    }
+    None
+}
+
+fn normalize_xshell_url_value(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if allowed_scheme(trimmed).is_some() {
+        return Some(rewrite_scheme_aliases(trimmed));
+    }
+
+    // Bare connection string: user:pass@host:port or user@host:port or host:port
+    let (user, password, host, port) = parse_bare_ssh_target(trimmed)?;
+    Some(build_ssh_url(&user, password.as_deref(), &host, port))
+}
+
+fn parse_bare_ssh_target(value: &str) -> Option<(String, Option<String>, String, u16)> {
+    let mut username = DEFAULT_SSH_USERNAME.to_string();
+    let mut password = None;
+    let mut host_port = value;
+
+    if let Some(at) = value.rfind('@') {
+        let cred = &value[..at];
+        host_port = &value[at + 1..];
+        if let Some(colon) = cred.find(':') {
+            username = cred[..colon].to_string();
+            password = Some(cred[colon + 1..].to_string());
+        } else if !cred.is_empty() {
+            username = cred.to_string();
+        }
+    }
+
+    let (host, port) = split_host_port(host_port)?;
+    if host.is_empty() {
+        return None;
+    }
+    Some((username, password, host, port))
+}
+
+fn split_user_at_host(value: &str) -> (Option<String>, String) {
+    if let Some(at) = value.rfind('@') {
+        let user = value[..at].trim();
+        let host = value[at + 1..].trim();
+        if user.contains(':') {
+            // user:pass@host is not valid in CRT positional host; treat whole as host.
+            return (None, value.to_string());
+        }
+        return (
+            (!user.is_empty()).then(|| user.to_string()),
+            host.to_string(),
+        );
+    }
+    (None, value.to_string())
+}
+
+fn split_host_port(value: &str) -> Option<(String, u16)> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    if value.starts_with('[') {
+        let end = value.find(']')?;
+        let host = value[1..end].to_string();
+        let rest = &value[end + 1..];
+        if let Some(port_str) = rest.strip_prefix(':') {
+            let port = port_str.parse::<u16>().ok().filter(|p| *p > 0)?;
+            return Some((host, port));
+        }
+        return Some((host, DEFAULT_SSH_PORT));
+    }
+
+    // Prefer last colon for host:port, but avoid treating IPv6 as port.
+    if let Some(colon) = value.rfind(':') {
+        let host = &value[..colon];
+        let port_str = &value[colon + 1..];
+        if !host.is_empty() && port_str.chars().all(|ch| ch.is_ascii_digit()) {
+            if let Ok(port) = port_str.parse::<u16>() {
+                if port > 0 && !host.contains(':') {
+                    return Some((host.to_string(), port));
+                }
+            }
+        }
+    }
+
+    Some((value.to_string(), DEFAULT_SSH_PORT))
+}
+
+fn build_ssh_url(username: &str, password: Option<&str>, host: &str, port: u16) -> String {
+    let host_part = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    };
+    match password {
+        Some(password) if !password.is_empty() => format!(
+            "ssh://{}:{}@{}:{}",
+            urlencoding::encode(username),
+            urlencoding::encode(password),
+            host_part,
+            port
+        ),
+        _ => format!(
+            "ssh://{}@{}:{}",
+            urlencoding::encode(username),
+            host_part,
+            port
+        ),
+    }
+}
+
+fn rewrite_scheme_aliases(value: &str) -> String {
+    let trimmed = value.trim();
+    if let Some(rest) = strip_scheme_prefix(trimmed, "ssh2") {
+        return format!("ssh://{rest}");
+    }
+    trimmed.to_string()
+}
+
+fn strip_scheme_prefix<'a>(value: &'a str, scheme: &str) -> Option<&'a str> {
+    let prefix = format!("{scheme}://");
+    if value.len() >= prefix.len() && value[..prefix.len()].eq_ignore_ascii_case(&prefix) {
+        Some(&value[prefix.len()..])
+    } else {
+        None
+    }
 }
 
 fn build_local_external_open_url(cwd: Option<&str>) -> String {
@@ -344,9 +776,13 @@ fn sanitize_external_open_arg(arg: &str) -> Option<ExternalOpenCandidate> {
         return None;
     }
     if allowed_scheme(candidate).is_some() {
+        let value = rewrite_scheme_aliases(candidate);
+        if value.len() > MAX_URL_LENGTH {
+            return None;
+        }
         return Some(ExternalOpenCandidate {
             kind: ExternalOpenKind::Url,
-            value: candidate.to_string(),
+            value,
         });
     }
     if let Some(path) = markdown_path_from_arg(candidate) {
@@ -739,5 +1175,118 @@ mod tests {
     fn plain_second_instance_is_not_external_open() {
         let args = vec!["--new-window".to_string(), "notes.txt".to_string()];
         assert!(extract_external_open_urls(args).is_empty());
+    }
+
+    #[test]
+    fn rewrites_ssh2_scheme_to_ssh() {
+        let args = vec!["ssh2://root@example.com:22".to_string()];
+        assert_eq!(
+            extract_external_open_urls(args),
+            vec!["ssh://root@example.com:22".to_string()]
+        );
+    }
+
+    #[test]
+    fn normalizes_xshell_url_flag_with_ssh_scheme() {
+        let args = vec![
+            "-url".to_string(),
+            "ssh://admin:s3cret@10.0.0.5:2222".to_string(),
+        ];
+        assert_eq!(
+            extract_external_open_urls(args),
+            vec!["ssh://admin:s3cret@10.0.0.5:2222".to_string()]
+        );
+    }
+
+    #[test]
+    fn normalizes_xshell_url_flag_with_bare_target() {
+        let args = vec!["-url".to_string(), "admin:secret@10.0.0.5:2222".to_string()];
+        assert_eq!(
+            extract_external_open_urls(args),
+            vec!["ssh://admin:secret@10.0.0.5:2222".to_string()]
+        );
+    }
+
+    #[test]
+    fn normalizes_xshell_discrete_flags() {
+        let args = vec![
+            "-host".to_string(),
+            "10.0.0.8".to_string(),
+            "-user".to_string(),
+            "ops".to_string(),
+            "-port".to_string(),
+            "2200".to_string(),
+            "-pw".to_string(),
+            "one-time".to_string(),
+        ];
+        assert_eq!(
+            extract_external_open_urls(args),
+            vec!["ssh://ops:one-time@10.0.0.8:2200".to_string()]
+        );
+    }
+
+    #[test]
+    fn normalizes_securecrt_ssh2_cli() {
+        let args = vec![
+            "/SSH2".to_string(),
+            "/L".to_string(),
+            "deploy".to_string(),
+            "/PASSWORD".to_string(),
+            "temp-pass".to_string(),
+            "/P".to_string(),
+            "2222".to_string(),
+            "192.168.1.20".to_string(),
+        ];
+        assert_eq!(
+            extract_external_open_urls(args),
+            vec!["ssh://deploy:temp-pass@192.168.1.20:2222".to_string()]
+        );
+    }
+
+    #[test]
+    fn normalizes_securecrt_cli_with_tab_flag_and_user_at_host() {
+        let args = vec![
+            "/T".to_string(),
+            "/SSH2".to_string(),
+            "/PASSWORD".to_string(),
+            "p@ss:word".to_string(),
+            "root@bastion.example.com".to_string(),
+        ];
+        assert_eq!(
+            extract_external_open_urls(args),
+            vec!["ssh://root:p%40ss%3Aword@bastion.example.com:22".to_string()]
+        );
+    }
+
+    #[test]
+    fn xshell_url_does_not_double_count_ssh_arg() {
+        let args = vec![
+            "-url".to_string(),
+            "ssh://root@host:22".to_string(),
+            "--local".to_string(),
+        ];
+        assert_eq!(
+            extract_external_open_urls(args),
+            vec![
+                "ssh://root@host:22".to_string(),
+                "nyaterm://connect/local".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn encodes_special_characters_in_bastion_password() {
+        let args = vec![
+            "-host".to_string(),
+            "h".to_string(),
+            "-user".to_string(),
+            "u".to_string(),
+            "-pw".to_string(),
+            "a/b?c#d".to_string(),
+        ];
+        assert_eq!(
+            extract_external_open_urls(args),
+            vec!["ssh://u:a%2Fb%3Fc%23d@h:22".to_string()]
+        );
     }
 }

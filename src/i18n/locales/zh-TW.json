@@ -1033,7 +1033,7 @@
   },
   "externalOpen": {
     "continueConnection": "繼續連線",
-    "inlinePassword": "這種連結格式不能傳遞密碼。僅 ssh://user:password@host:port 支援一次性 SSH 密碼。",
+    "inlinePassword": "這種連結格式不能傳遞密碼。僅 ssh://user:password@host:port 或 ssh2:// 支援一次性 SSH 密碼。",
     "invalidMode": "外部 SSH 連結模式必須是 standard 或 terminal。",
     "invalidPort": "外部連結連接埠必須在 1 到 65535 之間。",
     "invalidUrl": "無效的外部連線連結。",
@@ -3088,7 +3088,7 @@
     "connect": "連線",
     "description": "選擇協定並直接開啟一個不儲存的臨時工作階段。",
     "empty": "請輸入連線目標。",
-    "inlinePassword": "只有 ssh:// URL 可以攜帶一次性密碼，不支援命令形式的內聯密碼。",
+    "inlinePassword": "只有 ssh:// 或 ssh2:// URL 可以攜帶一次性密碼，不支援命令形式的內聯密碼。",
     "invalidBaudRate": "請輸入有效的波特率。",
     "invalidInput": "請輸入有效的命令、URL 或主機。",
     "invalidMode": "SSH URL 模式必須是 standard 或 terminal。",

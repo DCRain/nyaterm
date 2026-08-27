@@ -41,4 +41,19 @@ describe("parseTemporarySshLink runtime mode", () => {
       expect(result.errorKey).toBe("temporarySsh.invalidMode");
     }
   });
+
+  it("treats ssh2:// as an ssh:// alias", () => {
+    const result = parseTemporarySshLink("ssh2://deploy:secret@example.com:2222");
+
+    expect(result.ok).toBe(true);
+    if (result.ok && result.config.protocol === "ssh") {
+      expect(result.config.host).toBe("example.com");
+      expect(result.config.port).toBe(2222);
+      expect(result.config.username).toBe("deploy");
+      expect(result.config.auth.type).toBe("password");
+      if (result.config.auth.type === "password") {
+        expect(result.config.auth.password).toBe("secret");
+      }
+    }
+  });
 });
