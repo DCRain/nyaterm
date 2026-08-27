@@ -5042,6 +5042,7 @@ dependencies = [
  "keyring",
  "lazy_static",
  "md-5 0.10.6",
+ "mime_guess",
  "notify",
  "nucleo-matcher",
  "nyaterm-otp",

@@ -181,6 +181,7 @@ opendal = { version = "0.58", default-features = false, features = [
     "layers-timeout",
     "layers-tracing",
 ] }
+mime_guess = "2"
 suppaftp = { version = "10", default-features = false, features = ["tokio", "tokio-rustls-ring"] }
 redb = "4.1.0"
 zmodem2 = { path = "vendor/zmodem2" }

@@ -411,7 +411,9 @@ const WORKSPACE_UI_KEYS = [
 ] as const;
 
 function isWorkspaceUiPatch(updates: Partial<UiConfig>) {
-  return WORKSPACE_UI_KEYS.some((key) => Object.hasOwn(updates, key));
+  return WORKSPACE_UI_KEYS.some((key) =>
+    Object.prototype.hasOwnProperty.call(updates, key),
+  );
 }
 
 function preserveWorkspaceUiOnReload(current: UiConfig, incoming: UiConfig): UiConfig {

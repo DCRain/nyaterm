@@ -234,6 +234,7 @@ mod tests {
             fail_on_missing_working_dir: true,
             name: "Local Terminal".to_string(),
             encoding: "UTF-8".to_string(),
+            elevated: false,
         };
 
         assert!(validate_working_dir_before_spawn(Some(&config)).is_err());
@@ -256,6 +257,7 @@ mod tests {
             fail_on_missing_working_dir: false,
             name: "Saved Local".to_string(),
             encoding: "UTF-8".to_string(),
+            elevated: false,
         };
 
         assert!(validate_working_dir_before_spawn(Some(&config)).is_ok());

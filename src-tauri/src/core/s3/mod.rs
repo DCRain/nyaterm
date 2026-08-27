@@ -190,7 +190,9 @@ impl S3Manager {
     pub async fn create_file(&self, connection_id: &str, path: &str) -> AppResult<()> {
         let op = self.operator_for(connection_id).await?;
         let key = normalize_s3_object_key(path);
-        op.write(&key, Vec::<u8>::new())
+        let content_type = guess_s3_content_type(path);
+        op.write_with(&key, Vec::<u8>::new())
+            .content_type(&content_type)
             .await
             .map_err(map_opendal_error)?;
         Ok(())
@@ -270,8 +272,16 @@ impl S3Manager {
             emitter.emit_status("started", 0, None);
         }
 
+        // Prefer the object key extension; fall back to the local file name so
+        // browsers/CDN get a real Content-Type instead of application/octet-stream.
+        let content_type = guess_s3_content_type_with_fallback(remote_path, local_path);
+
         let result: AppResult<u64> = async {
-            let mut writer = op.writer_with(&key).await.map_err(map_opendal_error)?;
+            let mut writer = op
+                .writer_with(&key)
+                .content_type(&content_type)
+                .await
+                .map_err(map_opendal_error)?;
             let mut buffer = vec![0u8; S3_CHUNK_SIZE];
             let mut transferred: u64 = 0;
             let mut last_progress = Instant::now();
@@ -1005,6 +1015,22 @@ fn normalize_s3_object_key(path: &str) -> String {
     }
 }
 
+/// Guess S3 object Content-Type from a path's extension.
+fn guess_s3_content_type(path: &str) -> String {
+    mime_guess::from_path(path)
+        .first_or_octet_stream()
+        .essence_str()
+        .to_string()
+}
+
+/// Prefer the remote object key; if that has no useful extension, use the local path.
+fn guess_s3_content_type_with_fallback(remote_path: &str, local_path: &str) -> String {
+    if let Some(mime) = mime_guess::from_path(remote_path).first() {
+        return mime.essence_str().to_string();
+    }
+    guess_s3_content_type(local_path)
+}
+
 fn storage_entry_name(path: &str) -> String {
     path.trim_end_matches('/')
         .rsplit('/')
@@ -1167,8 +1193,8 @@ pub type SharedS3Manager = Arc<S3Manager>;
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_s3_error, is_s3_list_self_entry, resolve_s3_location, s3_list_child,
-        summarize_s3_error_reason,
+        classify_s3_error, guess_s3_content_type, guess_s3_content_type_with_fallback,
+        is_s3_list_self_entry, resolve_s3_location, s3_list_child, summarize_s3_error_reason,
     };
     use opendal::ErrorKind;
 
@@ -1282,6 +1308,24 @@ mod tests {
         assert_eq!(
             summarize_s3_error_reason(raw),
             "AccessDenied: You have no right to access this object."
+        );
+    }
+
+    #[test]
+    fn s3_content_type_follows_file_extension() {
+        assert_eq!(guess_s3_content_type("/photos/a.jpg"), "image/jpeg");
+        assert_eq!(guess_s3_content_type("readme.md"), "text/markdown");
+        assert_eq!(guess_s3_content_type("app.js"), "text/javascript");
+        assert_eq!(guess_s3_content_type("style.css"), "text/css");
+        assert_eq!(guess_s3_content_type("index.html"), "text/html");
+        assert_eq!(guess_s3_content_type("data.json"), "application/json");
+        assert_eq!(
+            guess_s3_content_type("no-extension"),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            guess_s3_content_type_with_fallback("/uploads/blob", r"C:\tmp\photo.png"),
+            "image/png"
         );
     }
 }
