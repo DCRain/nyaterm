@@ -1,14 +1,11 @@
 import type { Terminal } from "@xterm/xterm";
 import type { TerminalAppSettings } from "@/context/AppContext";
-import { resolveShortcutKeys } from "@/hooks/useShortcutMap";
 import { writeClipboardText } from "@/lib/clipboard";
-import { matchesKeyEvent } from "@/lib/shortcutRegistry";
 import type { TerminalInputState } from "@/lib/terminalInputTracker";
 import {
   getInputIndexAtBufferPosition,
   getMouseBufferPosition,
   type InputSelectionRange,
-  isShiftInsertPasteEvent,
 } from "./terminalInputSelection";
 
 interface MutableRef<T> {
@@ -19,6 +16,7 @@ interface InstallXTerminalSelectionControllerParams {
   terminal: Terminal;
   containerEl: HTMLDivElement;
   isMacOS: boolean;
+  isWindows: boolean;
   activeRef: MutableRef<boolean>;
   visibleRef: MutableRef<boolean>;
   terminalAppSettingsRef: MutableRef<TerminalAppSettings>;
@@ -46,6 +44,7 @@ export function installXTerminalSelectionController({
   terminal,
   containerEl,
   isMacOS,
+  isWindows,
   activeRef,
   visibleRef,
   terminalAppSettingsRef,
@@ -66,6 +65,7 @@ export function installXTerminalSelectionController({
   pasteClipboard,
 }: InstallXTerminalSelectionControllerParams) {
   let primaryMouseDown: { x: number; y: number } | null = null;
+  let terminalHasFocus = document.activeElement === terminal.textarea;
 
   const resetTerminalPointerState = (
     options: { clearSelection?: boolean } = {},
@@ -230,6 +230,16 @@ export function installXTerminalSelectionController({
     resetTerminalPointerState();
   };
 
+  const handleTerminalFocus = () => {
+    terminalHasFocus = true;
+  };
+
+  const handleTerminalBlur = (e: FocusEvent) => {
+    if (e.relatedTarget !== null && document.hasFocus()) {
+      terminalHasFocus = false;
+    }
+  };
+
   const handleTerminalWindowBlur = () => {
     resetTerminalPointerState({ clearSelection: true });
   };
@@ -240,85 +250,27 @@ export function installXTerminalSelectionController({
     }
   };
 
-  const isInputOrEditableElement = (target: EventTarget | null): boolean => {
-    if (!target || !(target instanceof HTMLElement)) return false;
-    if (target === terminal.textarea) return false;
+  // Windows clipboard history injects Ctrl+V with an empty KeyboardEvent.code.
+  const handleSyntheticWinVPaste = (e: KeyboardEvent) => {
     if (
-      target instanceof HTMLInputElement ||
-      target instanceof HTMLTextAreaElement
-    ) {
-      return true;
-    }
-    if (
-      target.isContentEditable ||
-      Boolean(target.closest("[contenteditable='true']"))
-    ) {
-      return true;
-    }
-    return false;
-  };
-
-  // 在 window capture 阶段处理全局 paste 事件，确保即使终端 textarea
-  // 暂时失焦（如从其他应用切回）也能正确粘贴
-  const handleGlobalPaste = (e: ClipboardEvent) => {
-    if (!isTerminalAlive() || !activeRef.current || !visibleRef.current) return;
-    if (
-      isInputOrEditableElement(e.target) ||
-      isInputOrEditableElement(document.activeElement)
+      !isWindows ||
+      !terminalHasFocus ||
+      !isTerminalAlive() ||
+      !activeRef.current ||
+      !visibleRef.current ||
+      !e.ctrlKey ||
+      e.shiftKey ||
+      e.altKey ||
+      e.metaKey ||
+      e.code !== "" ||
+      (e.key !== "v" && e.key !== "V")
     ) {
       return;
     }
 
     e.preventDefault();
-    const text = e.clipboardData?.getData("text/plain");
-    if (text) {
-      pasteText(text);
-    } else {
-      pasteClipboard().catch(() => {});
-    }
-    terminal.focus();
-  };
-
-  const handleGlobalKeyDown = (e: KeyboardEvent) => {
-    if (!isTerminalAlive() || !activeRef.current || !visibleRef.current) return;
-    const kb = terminalAppSettingsRef.current.keybindings;
-    const isSyntheticWinVPaste =
-      !isMacOS &&
-      e.ctrlKey &&
-      !e.shiftKey &&
-      !e.altKey &&
-      !e.metaKey &&
-      e.code === "" &&
-      (e.key === "v" || e.key === "V");
-
-    if (
-      matchesKeyEvent(resolveShortcutKeys("terminal.paste", kb), e) ||
-      isShiftInsertPasteEvent(e) ||
-      isSyntheticWinVPaste
-    ) {
-      e.preventDefault();
-      e.stopPropagation();
-      pasteClipboard().catch(() => {});
-      terminal.focus();
-      return;
-    }
-
-    if (
-      isInputOrEditableElement(e.target) ||
-      isInputOrEditableElement(document.activeElement)
-    ) {
-      return;
-    }
-    if (document.activeElement === terminal.textarea) {
-      return;
-    }
-  };
-
-  // 窗口重新获得焦点时（如从 Win+V 剪贴板面板切回），将焦点恢复到终端
-  const handleWindowFocus = () => {
-    if (!isTerminalAlive() || !activeRef.current || !visibleRef.current) return;
-    if (isInputOrEditableElement(document.activeElement)) return;
-    terminal.focus();
+    e.stopPropagation();
+    pasteClipboard().catch(() => {});
   };
 
   containerEl.addEventListener("mousedown", handleTerminalMouseDown);
@@ -329,9 +281,11 @@ export function installXTerminalSelectionController({
   if (isMacOS) {
     document.addEventListener("mousemove", handleMacReleasedMouseMove, true);
   }
-  window.addEventListener("paste", handleGlobalPaste, true);
-  window.addEventListener("keydown", handleGlobalKeyDown, true);
-  window.addEventListener("focus", handleWindowFocus);
+  if (isWindows) {
+    terminal.textarea?.addEventListener("focus", handleTerminalFocus);
+    terminal.textarea?.addEventListener("blur", handleTerminalBlur);
+    window.addEventListener("keydown", handleSyntheticWinVPaste, true);
+  }
   window.addEventListener("blur", handleTerminalWindowBlur);
   document.addEventListener("visibilitychange", handleTerminalVisibilityChange);
 
@@ -352,9 +306,11 @@ export function installXTerminalSelectionController({
           true,
         );
       }
-      window.removeEventListener("paste", handleGlobalPaste, true);
-      window.removeEventListener("keydown", handleGlobalKeyDown, true);
-      window.removeEventListener("focus", handleWindowFocus);
+      if (isWindows) {
+        terminal.textarea?.removeEventListener("focus", handleTerminalFocus);
+        terminal.textarea?.removeEventListener("blur", handleTerminalBlur);
+        window.removeEventListener("keydown", handleSyntheticWinVPaste, true);
+      }
       window.removeEventListener("blur", handleTerminalWindowBlur);
       document.removeEventListener(
         "visibilitychange",

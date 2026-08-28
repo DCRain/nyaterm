@@ -43,7 +43,7 @@ import { detectCredentialPromptKind } from "@/lib/credentialAutofill";
 import { invoke } from "@/lib/invoke";
 import { hexLuminance } from "@/lib/keywordHighlightPresets";
 import { logger } from "@/lib/logger";
-import { isMacOS } from "@/lib/platform";
+import { isMacOS, isWindows } from "@/lib/platform";
 import { openSendCommandPanel } from "@/lib/sendCommandPanelEvents";
 import {
   buildTerminalCommandInput,
@@ -2110,6 +2110,7 @@ export default function XTerminal({
       terminal,
       containerEl,
       isMacOS,
+      isWindows,
       activeRef,
       visibleRef,
       terminalAppSettingsRef,
