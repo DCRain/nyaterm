@@ -1,5 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import i18n from "@/i18n";
 import { useAppLockState } from "@/hooks/useAppLockState";
 import { EncryptedNotesSessionProvider } from "@/hooks/useEncryptedNotesSession";
 import { DEFAULT_AI_SETTINGS } from "@/lib/aiSettings";
@@ -19,6 +20,7 @@ import {
   normalizeQuickCommandAppSettings,
   normalizeQuickCommandUiConfig,
 } from "@/lib/quickCommandSettings";
+import { detectSystemLanguage } from "@/lib/systemLanguage";
 import {
   collectSessionPanes,
   createFileDocumentPane,
@@ -237,7 +239,6 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     serial_send_height: 180,
     serial_send_clear_after_send: false,
     zoom_level: 1.0,
-    language: "en",
     header_status_mode: "session",
     header_status_visible: true,
     show_notes_panel: true,
@@ -428,7 +429,6 @@ const WORKSPACE_UI_KEYS = [
   "open_tabs",
   "zoom_level",
   "show_notes_panel",
-  "language",
   "show_remote_stats",
   "remote_stats_interval",
   "show_gpu_monitor",
@@ -454,6 +454,13 @@ function isWorkspaceUiPatch(updates: Partial<UiConfig>) {
   return WORKSPACE_UI_KEYS.some((key) =>
     Object.prototype.hasOwnProperty.call(updates, key),
   );
+}
+
+function syncAppLanguage(language: string | undefined) {
+  const nextLanguage = language?.trim() || detectSystemLanguage();
+  if (nextLanguage !== i18n.language) {
+    void i18n.changeLanguage(nextLanguage);
+  }
 }
 
 function preserveWorkspaceUiOnReload(current: UiConfig, incoming: UiConfig): UiConfig {
@@ -494,7 +501,6 @@ function preserveWorkspaceUiOnReload(current: UiConfig, incoming: UiConfig): UiC
     open_tabs: current.open_tabs,
     zoom_level: current.zoom_level,
     show_notes_panel: current.show_notes_panel,
-    language: current.language,
     show_remote_stats: current.show_remote_stats,
     remote_stats_interval: current.remote_stats_interval,
     show_gpu_monitor: current.show_gpu_monitor,
@@ -592,6 +598,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         appSettingsRef.current = normalized;
         setAppSettings(normalized);
         setLoggerLevel(normalized.diagnostics.level);
+        syncAppLanguage(normalized.ui.language);
         appSettingsLoaded.current = true;
         setSettingsLoaded(true);
         if (isPrimaryMainWindow() && normalized.security?.enable_screen_lock) {
@@ -667,6 +674,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       );
       appSettingsRef.current = normalized;
       setLoggerLevel(normalized.diagnostics.level);
+      syncAppLanguage(normalized.ui.language);
       return normalized;
     });
   }, []);

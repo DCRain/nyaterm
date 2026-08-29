@@ -4,6 +4,7 @@
 //! Credentials are AES-256-GCM encrypted in-place.
 
 mod cloud_sync;
+mod locale;
 mod connection;
 mod credential;
 mod key;
@@ -25,6 +26,7 @@ pub use cloud_sync::{
     merge_masked_cloud_sync_settings, save_cloud_sync_state,
 };
 #[allow(unused_imports)]
+pub use locale::{detect_system_language, map_locale_to_app_language, resolve_ui_language};
 pub use connection::{
     AiExecutionProfile, AppConfig, AssetAccelerator, AssetAcceleratorType, AssetDeviceType,
     AssetDisk, AssetDiskKind, AssetDiskPurpose, AssetMetadata, ConnectionAuth,

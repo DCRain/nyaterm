@@ -6,6 +6,7 @@ import { useConfigTransfer } from "@/hooks/useConfigTransfer";
 import { AVAILABLE_LANGUAGES } from "@/i18n";
 import { HEADER_STATUS_MODES, normalizeHeaderStatusMode } from "@/lib/headerStatus";
 import { invoke } from "@/lib/invoke";
+import { detectSystemLanguage } from "@/lib/systemLanguage";
 import {
   SettingFieldGrid,
   SettingRow,
@@ -31,7 +32,7 @@ export function GeneralTab() {
         <SettingSelect
           label={t("settings.language")}
           desc={t("settings.languageDesc")}
-          value={appSettings.ui.language || "en"}
+          value={appSettings.ui.language || detectSystemLanguage()}
           onValueChange={(lng) => {
             i18n.changeLanguage(lng);
             updateUi({ language: lng });

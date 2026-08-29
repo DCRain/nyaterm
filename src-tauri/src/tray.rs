@@ -88,8 +88,8 @@ enum TrayLanguage {
 
 impl TrayLanguage {
     fn from_settings(settings: &AppSettings) -> Self {
-        let language = settings.ui.language.as_deref().unwrap_or("en");
-        tray_language_from_code(language)
+        let language = config::resolve_ui_language(settings.ui.language.as_deref());
+        tray_language_from_code(&language)
     }
 }
 

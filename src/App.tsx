@@ -129,6 +129,7 @@ import { invoke } from "./lib/invoke";
 import { logger } from "./lib/logger";
 import { NOTE_OPEN_EVENT, type NoteOpenDetail } from "./lib/noteEditorEvents";
 import { subscribeOpenSshTerminalAtPath } from "./lib/openSshTerminalAtPath";
+import { detectSystemLanguage } from "./lib/systemLanguage";
 import {
   launchSavedRemoteDesktop,
   type RemoteDesktopClientInstallRecommendation,
@@ -327,8 +328,9 @@ function App() {
   }, [settingsLoaded]);
 
   useEffect(() => {
-    if (appSettings.ui.language && appSettings.ui.language !== i18n.language) {
-      i18n.changeLanguage(appSettings.ui.language);
+    const nextLanguage = appSettings.ui.language?.trim() || detectSystemLanguage();
+    if (nextLanguage !== i18n.language) {
+      void i18n.changeLanguage(nextLanguage);
     }
   }, [appSettings.ui.language, i18n]);
 

@@ -480,7 +480,7 @@ fn default_sort_mode() -> String {
 }
 
 fn default_language() -> Option<String> {
-    Some("en".to_string())
+    None
 }
 
 fn default_header_status_mode() -> String {

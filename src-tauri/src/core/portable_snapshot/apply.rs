@@ -32,10 +32,13 @@ pub async fn apply_portable_snapshot(
         config::load_app_settings(app).unwrap_or_default(),
         &snapshot.snapshot_kind,
     );
+    let mut merged = merged;
+    merged.appearance.normalize_window_transparency();
     let mut persisted = merged.clone();
     persisted.cloud_sync = config::encrypt_cloud_sync_settings(merged.cloud_sync.clone())?;
     persisted.ai = config::encrypt_ai_settings(merged.ai.clone())?;
     config::save_app_settings(app, &persisted)?;
+    crate::app::apply_window_transparency_to_all(app);
 
     if !snapshot.known_hosts.is_empty() {
         crate::storage::replace_known_hosts_export(&snapshot.known_hosts)?;

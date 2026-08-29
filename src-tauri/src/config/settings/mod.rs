@@ -433,6 +433,14 @@ pub fn load_app_settings(app: &AppHandle) -> AppResult<AppSettings> {
         migrated = true;
     }
 
+    {
+        let resolved = super::locale::resolve_ui_language(settings.ui.language.as_deref());
+        if settings.ui.language.as_deref() != Some(resolved.as_str()) {
+            settings.ui.language = Some(resolved);
+            migrated = true;
+        }
+    }
+
     if migrated && secrets_ready_for_persist {
         persist_migrated_app_settings(app, &settings);
     }

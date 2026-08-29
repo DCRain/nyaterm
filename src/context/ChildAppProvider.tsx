@@ -26,6 +26,7 @@ import {
   DEFAULT_TAB_RIGHT_CLICK_ACTION,
 } from "@/lib/interactionSettings";
 import { normalizeQuickCommandAppSettings } from "@/lib/quickCommandSettings";
+import { detectSystemLanguage } from "@/lib/systemLanguage";
 import type {
   AppRuntimeInfo,
   AppSettings,
@@ -40,6 +41,13 @@ import { DEFAULT_TERMINAL_FONT_SIZE } from "../lib/terminalFontSize";
 import { resolveTheme } from "../lib/themes";
 import { useWindowTransparencyDom } from "../lib/windowTransparencyDom";
 import { AppContext } from "./AppContext";
+
+function syncChildAppLanguage(language: string | undefined) {
+  const nextLanguage = language?.trim() || detectSystemLanguage();
+  if (nextLanguage !== i18n.language) {
+    void i18n.changeLanguage(nextLanguage);
+  }
+}
 
 const DEFAULT_APP_SETTINGS: AppSettings = {
   general: {
@@ -198,7 +206,6 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     serial_send_height: 180,
     serial_send_clear_after_send: false,
     zoom_level: 1.0,
-    language: "en",
     header_status_mode: "session",
     header_status_visible: true,
     show_notes_panel: true,
@@ -270,12 +277,7 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
         setLoggerLevel(normalized.diagnostics.level);
         loaded.current = true;
         setSettingsLoaded(true);
-        if (
-          normalized.ui?.language &&
-          normalized.ui.language !== i18n.language
-        ) {
-          i18n.changeLanguage(normalized.ui.language);
-        }
+        syncChildAppLanguage(normalized.ui.language);
       })
       .catch(() => {
         loaded.current = true;
@@ -325,9 +327,7 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
   }, [appSettings.appearance.ui_font_family]);
 
   useEffect(() => {
-    if (appSettings.ui?.language && appSettings.ui.language !== i18n.language) {
-      i18n.changeLanguage(appSettings.ui.language);
-    }
+    syncChildAppLanguage(appSettings.ui?.language);
   }, [appSettings.ui?.language]);
 
   useIdleLock(
@@ -390,6 +390,7 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
     const normalized = normalizeQuickCommandAppSettings(next);
     appSettingsRef.current = normalized;
     setLoggerLevel(normalized.diagnostics.level);
+    syncChildAppLanguage(normalized.ui.language);
     setAppSettings(normalized);
   }, []);
 
