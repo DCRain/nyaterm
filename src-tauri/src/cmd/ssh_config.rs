@@ -5,7 +5,7 @@ use crate::error::AppResult;
 #[tauri::command]
 pub fn list_ssh_config_hosts() -> AppResult<Vec<SshConfigEntry>> {
     let config = SshConfig::load_default()?;
-    Ok(config.to_entries())
+    config.to_entries()
 }
 
 /// Returns the raw parsed `Host` blocks from `~/.ssh/config`.

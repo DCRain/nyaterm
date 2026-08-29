@@ -68,7 +68,9 @@ impl SshConfig {
     pub fn load_from(path: &Path) -> AppResult<Self> {
         let mut visited = HashSet::new();
         let mut hosts = Vec::new();
-        parse_file(path, &mut visited, &mut hosts)?;
+        let mut state = ParseState::default();
+        parse_file(path, true, &mut visited, &mut hosts, &mut state)?;
+        finish_parse(&mut hosts, &mut state);
         Ok(SshConfig { hosts })
     }
 
@@ -79,7 +81,12 @@ impl SshConfig {
         let port = resolved.port.unwrap_or(22);
         let user = resolved.user.unwrap_or_else(whoami::username);
         let identity_file = resolved.identity_file;
-        let proxy_jump = resolved.proxy_jump.clone();
+        // `ProxyJump none` explicitly disables a value that may have matched
+        // earlier (for example from `Host *`). It is not a host named `none`.
+        let proxy_jump = resolved
+            .proxy_jump
+            .clone()
+            .filter(|value| !value.eq_ignore_ascii_case("none"));
 
         let mut hops = Vec::new();
         if let Some(ref pj) = proxy_jump {
@@ -89,12 +96,12 @@ impl SshConfig {
                     continue;
                 }
                 // Parse user@host:port syntax from ProxyJump directives.
-                let (jump_user_spec, jump_host_spec, jump_port_spec) =
-                    parse_jump_spec(jump_spec);
+                let (jump_user_spec, jump_host_spec, jump_port_spec) = parse_jump_spec(jump_spec)?;
                 let jump_alias = &jump_host_spec;
                 let jump_resolved = self.resolve_options(jump_alias);
-                let jump_host =
-                    jump_resolved.host_name.unwrap_or_else(|| jump_alias.to_string());
+                let jump_host = jump_resolved
+                    .host_name
+                    .unwrap_or_else(|| jump_alias.to_string());
                 let jump_port = jump_port_spec.or(jump_resolved.port).unwrap_or(22);
                 let jump_user = jump_user_spec
                     .or(jump_resolved.user)
@@ -133,7 +140,7 @@ impl SshConfig {
             .iter()
             .flat_map(|h| &h.patterns)
             .filter(|p| !p.contains('*') && !p.contains('?') && !p.starts_with('!'))
-            .filter(|p| seen.insert(p.clone()))
+            .filter(|p| seen.insert((*p).clone()))
             .map(|p| p.to_string())
             .collect()
     }
@@ -167,18 +174,10 @@ impl SshConfig {
     }
 
     /// Converts all concrete host aliases into entries.
-    pub fn to_entries(&self) -> Vec<SshConfigEntry> {
+    pub fn to_entries(&self) -> AppResult<Vec<SshConfigEntry>> {
         self.list_hosts()
             .iter()
-            .filter_map(|alias| self.resolve(alias).ok())
-            .collect()
-    }
-
-    /// Converts entries into SavedConnection objects for import.
-    pub fn to_saved_connections(&self) -> Vec<SavedConnection> {
-        self.to_entries()
-            .iter()
-            .map(|e| entry_to_saved_connection(e, None))
+            .map(|alias| self.resolve(alias))
             .collect()
     }
 }
@@ -244,13 +243,28 @@ fn glob_match_inner(p: &[char], t: &[char]) -> bool {
     }
 }
 
+#[derive(Default)]
+struct ParseState {
+    current: Option<SshConfigHost>,
+    global: SshConfigHost,
+    global_emitted: bool,
+}
+
 fn parse_file(
     path: &Path,
+    required: bool,
     visited: &mut HashSet<PathBuf>,
     hosts: &mut Vec<SshConfigHost>,
+    state: &mut ParseState,
 ) -> AppResult<()> {
     let canonical = match fs::canonicalize(path) {
         Ok(c) => c,
+        Err(error) if required => {
+            return Err(AppError::Config(format!(
+                "SSH config file not found or cannot be accessed at {}: {error}",
+                path.display()
+            )));
+        }
         Err(_) => return Ok(()),
     };
     if !visited.insert(canonical.clone()) {
@@ -260,24 +274,32 @@ fn parse_file(
     let contents = fs::read_to_string(&canonical)
         .map_err(|e| AppError::Config(format!("cannot read {}: {e}", canonical.display())))?;
 
-    parse_string(&contents, &canonical, visited, hosts)
+    parse_string_into(&contents, &canonical, visited, hosts, state)
 }
 
+#[cfg(test)]
 fn parse_string(
     contents: &str,
     config_path: &Path,
     visited: &mut HashSet<PathBuf>,
     hosts: &mut Vec<SshConfigHost>,
 ) -> AppResult<()> {
-    // Relative Include paths resolve from the directory containing the config
-       // file, not from the config file path itself (matching OpenSSH behavior).
-    let base_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
-    let mut current: Option<SshConfigHost> = None;
-    // Global/default options declared before the first Host block. OpenSSH
-    // applies these to all hosts, so we store them and merge into each new
-    // block as it starts.
-    let mut global_options: Option<SshConfigHost> = None;
+    let mut state = ParseState::default();
+    parse_string_into(contents, config_path, visited, hosts, &mut state)?;
+    finish_parse(hosts, &mut state);
+    Ok(())
+}
 
+fn parse_string_into(
+    contents: &str,
+    config_path: &Path,
+    visited: &mut HashSet<PathBuf>,
+    hosts: &mut Vec<SshConfigHost>,
+    state: &mut ParseState,
+) -> AppResult<()> {
+    // Relative Include paths resolve from the directory containing the config
+    // file, not from the config file path itself (matching OpenSSH behavior).
+    let base_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
     for raw_line in contents.lines() {
         let line = raw_line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -293,71 +315,73 @@ fn parse_string(
 
         match kw_lower.as_str() {
             "host" => {
-                if let Some(mut block) = current.take() {
+                if let Some(mut block) = state.current.take() {
                     block.name = derive_display_name(&block.patterns);
                     hosts.push(block);
                 }
-                let patterns: Vec<String> = value
-                    .split_whitespace()
-                    .map(|s| s.to_string())
-                    .collect();
-                // Start a new block, pre-populated with global defaults.
-                let mut block = SshConfigHost {
+                let patterns: Vec<String> =
+                    value.split_whitespace().map(|s| s.to_string()).collect();
+                // Global directives are an implicit leading `Host *` block.
+                // Keeping it in lexical order is what gives OpenSSH its
+                // first-value-wins behaviour when resolving later blocks.
+                if !state.global_emitted && has_options(&state.global) {
+                    let mut global = state.global.clone();
+                    global.patterns = vec!["*".to_string()];
+                    global.name = "*".to_string();
+                    hosts.push(global);
+                    state.global_emitted = true;
+                }
+                state.current = Some(SshConfigHost {
                     patterns,
                     ..Default::default()
-                };
-                if let Some(ref global) = global_options {
-                    block.host_name = global.host_name.clone();
-                    block.port = global.port;
-                    block.user = global.user.clone();
-                    block.identity_file = global.identity_file.clone();
-                    block.proxy_jump = global.proxy_jump.clone();
-                    block.host_key_alias = global.host_key_alias.clone();
-                }
-                current = Some(block);
+                });
             }
             "hostname" => {
-                if let Some(ref mut block) = current {
-                    block.host_name = Some(value.to_string());
+                if let Some(ref mut block) = state.current {
+                    set_if_missing(&mut block.host_name, value.to_string());
                 } else {
-                    global_options.get_or_insert_default().host_name = Some(value.to_string());
+                    set_if_missing(&mut state.global.host_name, value.to_string());
                 }
             }
             "port" => {
-                if let Ok(port) = value.parse::<u16>() {
-                    if let Some(ref mut block) = current {
-                        block.port = Some(port);
-                    } else {
-                        global_options.get_or_insert_default().port = Some(port);
-                    }
+                let port = value.parse::<u16>().map_err(|_| {
+                    AppError::Config(format!(
+                        "Invalid Port '{value}' in {}",
+                        config_path.display()
+                    ))
+                })?;
+                if let Some(ref mut block) = state.current {
+                    set_if_missing(&mut block.port, port);
+                } else {
+                    set_if_missing(&mut state.global.port, port);
                 }
             }
             "user" => {
-                if let Some(ref mut block) = current {
-                    block.user = Some(value.to_string());
+                if let Some(ref mut block) = state.current {
+                    set_if_missing(&mut block.user, value.to_string());
                 } else {
-                    global_options.get_or_insert_default().user = Some(value.to_string());
+                    set_if_missing(&mut state.global.user, value.to_string());
                 }
             }
             "identityfile" => {
-                if let Some(ref mut block) = current {
-                    block.identity_file = Some(expand_tilde(value));
+                if let Some(ref mut block) = state.current {
+                    set_if_missing(&mut block.identity_file, expand_tilde(value));
                 } else {
-                    global_options.get_or_insert_default().identity_file = Some(expand_tilde(value));
+                    set_if_missing(&mut state.global.identity_file, expand_tilde(value));
                 }
             }
             "proxyjump" => {
-                if let Some(ref mut block) = current {
-                    block.proxy_jump = Some(value.to_string());
+                if let Some(ref mut block) = state.current {
+                    set_if_missing(&mut block.proxy_jump, value.to_string());
                 } else {
-                    global_options.get_or_insert_default().proxy_jump = Some(value.to_string());
+                    set_if_missing(&mut state.global.proxy_jump, value.to_string());
                 }
             }
             "hostkeyalias" => {
-                if let Some(ref mut block) = current {
-                    block.host_key_alias = Some(value.to_string());
+                if let Some(ref mut block) = state.current {
+                    set_if_missing(&mut block.host_key_alias, value.to_string());
                 } else {
-                    global_options.get_or_insert_default().host_key_alias = Some(value.to_string());
+                    set_if_missing(&mut state.global.host_key_alias, value.to_string());
                 }
             }
             "include" => {
@@ -369,7 +393,7 @@ fn parse_string(
                         base_dir.join(&expanded)
                     };
                     for matched in glob_paths(&include_path) {
-                        parse_file(&matched, visited, hosts)?;
+                        parse_file(&matched, false, visited, hosts, state)?;
                     }
                 }
             }
@@ -377,12 +401,36 @@ fn parse_string(
         }
     }
 
-    if let Some(mut block) = current {
+    Ok(())
+}
+
+fn set_if_missing<T>(slot: &mut Option<T>, value: T) {
+    if slot.is_none() {
+        *slot = Some(value);
+    }
+}
+
+fn has_options(block: &SshConfigHost) -> bool {
+    block.host_name.is_some()
+        || block.port.is_some()
+        || block.user.is_some()
+        || block.identity_file.is_some()
+        || block.proxy_jump.is_some()
+        || block.host_key_alias.is_some()
+}
+
+fn finish_parse(hosts: &mut Vec<SshConfigHost>, state: &mut ParseState) {
+    if !state.global_emitted && has_options(&state.global) {
+        let mut global = state.global.clone();
+        global.patterns = vec!["*".to_string()];
+        global.name = "*".to_string();
+        hosts.push(global);
+        state.global_emitted = true;
+    }
+    if let Some(mut block) = state.current.take() {
         block.name = derive_display_name(&block.patterns);
         hosts.push(block);
     }
-
-    Ok(())
 }
 
 fn split_kv(line: &str) -> Option<(&str, &str)> {
@@ -397,13 +445,22 @@ fn split_kv(line: &str) -> Option<(&str, &str)> {
 
 /// Parses a ProxyJump specification into (user, host, port) components.
 /// Supports: `bastion`, `user@bastion`, `bastion:2222`, `user@bastion:2222`.
-fn parse_jump_spec(spec: &str) -> (Option<String>, String, Option<u16>) {
+fn parse_jump_spec(spec: &str) -> AppResult<(Option<String>, String, Option<u16>)> {
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return Err(AppError::Config(
+            "ProxyJump contains an empty hop".to_string(),
+        ));
+    }
     let mut remaining = spec;
     let mut user = None;
     let mut port = None;
 
     // Extract user if present: user@host[:port]
     if let Some(at_pos) = remaining.find('@') {
+        if at_pos == 0 || remaining[at_pos + 1..].contains('@') {
+            return Err(AppError::Config(format!("Invalid ProxyJump hop '{spec}'")));
+        }
         user = Some(remaining[..at_pos].to_string());
         remaining = &remaining[at_pos + 1..];
     }
@@ -411,13 +468,19 @@ fn parse_jump_spec(spec: &str) -> (Option<String>, String, Option<u16>) {
     // Extract port if present: host:port
     if let Some(colon_pos) = remaining.rfind(':') {
         let port_part = &remaining[colon_pos + 1..];
-        if let Ok(p) = port_part.parse::<u16>() {
-            port = Some(p);
-            remaining = &remaining[..colon_pos];
-        }
+        port = Some(
+            port_part
+                .parse::<u16>()
+                .map_err(|_| AppError::Config(format!("Invalid ProxyJump port in '{spec}'")))?,
+        );
+        remaining = &remaining[..colon_pos];
     }
 
-    (user, remaining.to_string(), port)
+    if remaining.is_empty() {
+        return Err(AppError::Config(format!("Invalid ProxyJump hop '{spec}'")));
+    }
+
+    Ok((user, remaining.to_string(), port))
 }
 
 fn derive_display_name(patterns: &[String]) -> String {
@@ -489,21 +552,28 @@ fn default_config_path() -> PathBuf {
 /// Uses `agent` auth by default. When an identity file is present, we still
 /// use `agent` because the key file would need to be registered in nyaterm's
 /// key store (which requires reading the file content). The identity file path
-/// is noted in the description for manual setup later.
-fn entry_to_saved_connection(entry: &SshConfigEntry, proxy_jump_id: Option<String>) -> SavedConnection {
+/// is noted as a manual setup requirement rather than claiming the key was
+/// imported.
+fn entry_to_saved_connection(
+    entry: &SshConfigEntry,
+    proxy_jump_id: Option<String>,
+) -> SavedConnection {
     let description = if entry.proxy_jump.is_some() {
         format!(
             "Imported from ~/.ssh/config (ProxyJump: {}{})",
             entry.proxy_jump.as_ref().unwrap(),
             if entry.identity_file.is_some() {
-                format!(", IdentityFile: {}", entry.identity_file.as_ref().unwrap())
+                format!(
+                    ", IdentityFile recognized (configure manually): {}",
+                    entry.identity_file.as_ref().unwrap()
+                )
             } else {
                 String::new()
             }
         )
     } else if entry.identity_file.is_some() {
         format!(
-            "Imported from ~/.ssh/config (IdentityFile: {})",
+            "Imported from ~/.ssh/config (IdentityFile recognized; configure manually: {})",
             entry.identity_file.as_ref().unwrap()
         )
     } else {
@@ -555,89 +625,16 @@ fn entry_to_saved_connection(entry: &SshConfigEntry, proxy_jump_id: Option<Strin
     }
 }
 
-/// Imports SSH config hosts as saved connections, skipping duplicates by name.
-/// Jump hosts referenced by ProxyJump are imported first, and their connection
-/// IDs are wired into the target's `ConnectionNetwork.proxy_jump_id` so the
-/// runtime can follow the chain.
-/// Returns the number of connections imported.
+/// Imports SSH config hosts as saved connections, skipping existing names.
+/// Each ProxyJump list is materialized in reverse linkage order because the
+/// runtime recursively follows `proxy_jump_id` from a target to the previous
+/// hop: `jump1,jump2,target` becomes `target -> jump2 -> jump1`.
 pub fn import_ssh_config_connections(app: &tauri::AppHandle) -> AppResult<usize> {
     let config = SshConfig::load_default()?;
-    let entries = config.to_entries();
-
-    if entries.is_empty() {
-        return Ok(0);
-    }
-
     let mut cfg = crate::config::load_config(app)?;
-    let existing_names: HashSet<String> =
-        cfg.connections.iter().map(|c| c.name.clone()).collect();
-
-    // Map alias -> connection ID for jump host linking.
-    let mut alias_to_id: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-
-    // Collect all jump aliases referenced by any entry, parsing user@host:port
-    // specs to extract the bare host alias for matching against config entries.
-    let jump_aliases: HashSet<String> = entries
-        .iter()
-        .filter_map(|e| e.proxy_jump.as_ref())
-        .flat_map(|pj| {
-            pj.split(',').map(|s| {
-                let (_, host, _) = parse_jump_spec(s.trim());
-                host
-            })
-        })
-        .collect();
-
-    let mut count = 0;
-
-    // First pass: import jump hosts so their IDs exist before wiring targets.
-    for entry in &entries {
-        if !jump_aliases.contains(&entry.alias) {
-            continue;
-        }
-        if existing_names.contains(&entry.alias) {
-            if let Some(existing) = cfg.connections.iter().find(|c| c.name == entry.alias) {
-                alias_to_id.insert(entry.alias.clone(), existing.id.clone());
-            }
-            continue;
-        }
-        let conn = entry_to_saved_connection(entry, None);
-        alias_to_id.insert(entry.alias.clone(), conn.id.clone());
-        cfg.connections.push(conn);
-        count += 1;
-    }
-
-    // Second pass: import remaining hosts, wiring the full jump chain.
-    // For multi-hop ProxyJump (jump1,jump2,...,target), we chain each
-    // connection's proxy_jump_id to the previous hop's connection ID.
-    // The runtime follows proxy_jump_id recursively to build the full route.
-    for entry in &entries {
-        if jump_aliases.contains(&entry.alias) {
-            continue; // already imported above
-        }
-        if existing_names.contains(&entry.alias) {
-            continue;
-        }
-
-        // Wire the first jump in the chain. The runtime follows
-        // proxy_jump_id recursively, so we only need to link to the
-        // first hop. Each jump host was imported with its own
-        // proxy_jump_id (if it had one) in the first pass.
-        let proxy_jump_id = entry.proxy_jump.as_ref().and_then(|pj| {
-            pj.split(',')
-                .next()
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .and_then(|spec| {
-                    let (_, host, _) = parse_jump_spec(spec);
-                    alias_to_id.get(&host).cloned()
-                })
-        });
-
-        let conn = entry_to_saved_connection(entry, proxy_jump_id);
-        cfg.connections.push(conn);
-        count += 1;
-    }
+    let connections = build_imported_connections(&config, &cfg.connections)?;
+    let count = connections.len();
+    cfg.connections.extend(connections);
 
     if count > 0 {
         crate::config::save_config(app, &cfg)?;
@@ -683,7 +680,13 @@ mod tests {
 
         let mut hosts = Vec::new();
         let mut visited = HashSet::new();
-        parse_string(config, Path::new("/tmp/test/config"), &mut visited, &mut hosts).unwrap();
+        parse_string(
+            config,
+            Path::new("/tmp/test/config"),
+            &mut visited,
+            &mut hosts,
+        )
+        .unwrap();
 
         assert_eq!(hosts.len(), 2);
         assert_eq!(hosts[0].name, "prod");
@@ -712,7 +715,13 @@ mod tests {
 
         let mut hosts = Vec::new();
         let mut visited = HashSet::new();
-        parse_string(config, Path::new("/tmp/chain/config"), &mut visited, &mut hosts).unwrap();
+        parse_string(
+            config,
+            Path::new("/tmp/chain/config"),
+            &mut visited,
+            &mut hosts,
+        )
+        .unwrap();
 
         let ssh_config = SshConfig { hosts };
         let resolved = ssh_config.resolve("target").unwrap();
@@ -749,7 +758,13 @@ mod tests {
 
         let mut hosts = Vec::new();
         let mut visited = HashSet::new();
-        parse_string(config, Path::new("/tmp/resolve/config"), &mut visited, &mut hosts).unwrap();
+        parse_string(
+            config,
+            Path::new("/tmp/resolve/config"),
+            &mut visited,
+            &mut hosts,
+        )
+        .unwrap();
 
         let ssh_config = SshConfig { hosts };
         let resolved = ssh_config.resolve("prod").unwrap();
@@ -776,7 +791,13 @@ mod tests {
 
         let mut hosts = Vec::new();
         let mut visited = HashSet::new();
-        parse_string(config, Path::new("/tmp/list/config"), &mut visited, &mut hosts).unwrap();
+        parse_string(
+            config,
+            Path::new("/tmp/list/config"),
+            &mut visited,
+            &mut hosts,
+        )
+        .unwrap();
 
         let ssh_config = SshConfig { hosts };
         let host_list = ssh_config.list_hosts();
@@ -789,7 +810,6 @@ mod tests {
     fn relative_include_resolves_from_ssh_dir() {
         // Simulate a config at ~/.ssh/config with Include conf.d/*.conf
         // The base_dir should be ~/.ssh/ (parent of config), not ~/.ssh/config/
-        let config = "Include conf.d/*.conf\n";
         let config_path = Path::new("/tmp/ssh_test/config");
         // We can't test actual file resolution without creating files,
         // but we can verify that the base_dir is derived correctly.
@@ -802,25 +822,25 @@ mod tests {
     #[test]
     fn parse_jump_spec_extracts_components() {
         // Bare alias
-        let (user, host, port) = parse_jump_spec("bastion");
+        let (user, host, port) = parse_jump_spec("bastion").unwrap();
         assert_eq!(user, None);
         assert_eq!(host, "bastion");
         assert_eq!(port, None);
 
         // user@host
-        let (user, host, port) = parse_jump_spec("alice@bastion");
+        let (user, host, port) = parse_jump_spec("alice@bastion").unwrap();
         assert_eq!(user.as_deref(), Some("alice"));
         assert_eq!(host, "bastion");
         assert_eq!(port, None);
 
         // host:port
-        let (user, host, port) = parse_jump_spec("bastion:2222");
+        let (user, host, port) = parse_jump_spec("bastion:2222").unwrap();
         assert_eq!(user, None);
         assert_eq!(host, "bastion");
         assert_eq!(port, Some(2222));
 
         // user@host:port
-        let (user, host, port) = parse_jump_spec("alice@bastion:2222");
+        let (user, host, port) = parse_jump_spec("alice@bastion:2222").unwrap();
         assert_eq!(user.as_deref(), Some("alice"));
         assert_eq!(host, "bastion");
         assert_eq!(port, Some(2222));
@@ -841,12 +861,18 @@ mod tests {
 
         let mut hosts = Vec::new();
         let mut visited = HashSet::new();
-        parse_string(config, Path::new("/tmp/dedup/config"), &mut visited, &mut hosts).unwrap();
+        parse_string(
+            config,
+            Path::new("/tmp/dedup/config"),
+            &mut visited,
+            &mut hosts,
+        )
+        .unwrap();
 
         let ssh_config = SshConfig { hosts };
         let host_list = ssh_config.list_hosts();
         // "prod" appears in two blocks but should be listed once.
-        assert_eq!(host_list.iter().filter(|h| h == "prod").count(), 1);
+        assert_eq!(host_list.iter().filter(|h| *h == "prod").count(), 1);
         assert_eq!(host_list.len(), 2);
     }
 
@@ -862,7 +888,13 @@ mod tests {
 
         let mut hosts = Vec::new();
         let mut visited = HashSet::new();
-        parse_string(config, Path::new("/tmp/global/config"), &mut visited, &mut hosts).unwrap();
+        parse_string(
+            config,
+            Path::new("/tmp/global/config"),
+            &mut visited,
+            &mut hosts,
+        )
+        .unwrap();
 
         let ssh_config = SshConfig { hosts };
         let resolved = ssh_config.resolve("prod").unwrap();
@@ -885,7 +917,13 @@ mod tests {
 
         let mut hosts = Vec::new();
         let mut visited = HashSet::new();
-        parse_string(config, Path::new("/tmp/jumpuser/config"), &mut visited, &mut hosts).unwrap();
+        parse_string(
+            config,
+            Path::new("/tmp/jumpuser/config"),
+            &mut visited,
+            &mut hosts,
+        )
+        .unwrap();
 
         let ssh_config = SshConfig { hosts };
         let resolved = ssh_config.resolve("target").unwrap();
@@ -895,5 +933,378 @@ mod tests {
         assert_eq!(resolved.hops[0].user, "alice");
         assert_eq!(resolved.hops[0].port, 2222);
         assert!(!resolved.hops[0].is_target);
+    }
+
+    #[test]
+    fn first_value_wins_when_wildcard_precedes_specific_host() {
+        let config = r#"
+            Host *
+                User default
+
+            Host prod
+                User admin
+        "#;
+        let ssh_config = parse_test_config(config);
+
+        assert_eq!(ssh_config.resolve("prod").unwrap().user, "default");
+    }
+
+    #[test]
+    fn global_option_precedes_and_wins_over_host_option() {
+        // This matches `ssh -G prod -F config`: global directives occur
+        // before Host blocks and are therefore the first value obtained.
+        let config = r#"
+            User global
+
+            Host prod
+                User specific
+        "#;
+        let ssh_config = parse_test_config(config);
+
+        assert_eq!(ssh_config.resolve("prod").unwrap().user, "global");
+    }
+
+    #[test]
+    fn identity_file_is_manual_agent_setup_not_key_import() {
+        let ssh_config = parse_test_config("Host prod\n    IdentityFile ~/.ssh/id_ed25519\n");
+        let entry = ssh_config.resolve("prod").unwrap();
+        let connection = entry_to_saved_connection(&entry, None);
+
+        assert_eq!(connection.auth.as_ref().unwrap().mode, "agent");
+        assert!(connection.auth.as_ref().unwrap().key_id.is_none());
+        assert!(
+            connection
+                .description
+                .as_deref()
+                .unwrap()
+                .contains("configure manually")
+        );
+    }
+
+    #[test]
+    fn imported_connections_materialize_two_hop_proxy_jump_in_runtime_order() {
+        let ssh_config = parse_test_config(
+            r#"
+                Host jump1
+                    HostName jump1.example.com
+
+                Host jump2
+                    HostName jump2.internal
+
+                Host target
+                    HostName target.internal
+                    ProxyJump jump1,jump2
+            "#,
+        );
+        let connections = build_imported_connections(&ssh_config, &[]).unwrap();
+        let by_name = connections
+            .iter()
+            .map(|connection| (connection.name.as_str(), connection))
+            .collect::<std::collections::HashMap<_, _>>();
+        let jump1 = by_name["jump1"];
+        let jump2 = by_name["jump2"];
+        let target = by_name["target"];
+
+        assert!(jump1.network.is_none());
+        assert_eq!(
+            jump2
+                .network
+                .as_ref()
+                .and_then(|network| network.proxy_jump_id.as_deref()),
+            Some(jump1.id.as_str())
+        );
+        assert_eq!(
+            target
+                .network
+                .as_ref()
+                .and_then(|network| network.proxy_jump_id.as_deref()),
+            Some(jump2.id.as_str())
+        );
+    }
+
+    #[test]
+    fn imported_connections_deduplicate_repeated_host_aliases() {
+        let ssh_config = parse_test_config(
+            r#"
+                Host foo
+                    User admin
+                Host foo
+                    Port 2222
+            "#,
+        );
+        let connections = build_imported_connections(&ssh_config, &[]).unwrap();
+
+        assert_eq!(
+            connections
+                .iter()
+                .filter(|connection| connection.name == "foo")
+                .count(),
+            1
+        );
+        let ConnectionType::Ssh { port, .. } = &connections[0].config else {
+            panic!("SSH connection expected");
+        };
+        assert_eq!(*port, 2222);
+    }
+
+    #[test]
+    fn imported_connections_materialize_three_hop_proxy_jump_in_runtime_order() {
+        let ssh_config = parse_test_config(
+            r#"
+                Host jump1
+                Host jump2
+                Host jump3
+                Host target
+                    ProxyJump jump1,jump2,jump3
+            "#,
+        );
+        let connections = build_imported_connections(&ssh_config, &[]).unwrap();
+        let by_name = connections
+            .iter()
+            .map(|connection| (connection.name.as_str(), connection))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        for (node, expected_previous) in
+            [("jump2", "jump1"), ("jump3", "jump2"), ("target", "jump3")]
+        {
+            assert_eq!(
+                by_name[node]
+                    .network
+                    .as_ref()
+                    .and_then(|network| network.proxy_jump_id.as_deref()),
+                Some(by_name[expected_previous].id.as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn imported_proxy_jump_override_preserves_user_and_port_in_distinct_connection() {
+        let ssh_config = parse_test_config(
+            r#"
+                Host bastion
+                    HostName bastion.example.com
+                    User defaultuser
+                    Port 22
+
+                Host target
+                    ProxyJump alice@bastion:2222
+            "#,
+        );
+        let connections = build_imported_connections(&ssh_config, &[]).unwrap();
+        let jump = connections
+            .iter()
+            .find(|connection| connection.name == "bastion (ProxyJump: alice@bastion:2222)")
+            .expect("override jump connection");
+        let target = connections
+            .iter()
+            .find(|connection| connection.name == "target")
+            .expect("target connection");
+        let ConnectionType::Ssh {
+            host,
+            port,
+            username,
+            ..
+        } = &jump.config
+        else {
+            panic!("SSH connection expected");
+        };
+
+        assert_eq!(host, "bastion.example.com");
+        assert_eq!(*port, 2222);
+        assert_eq!(username, "alice");
+        assert_eq!(
+            target
+                .network
+                .as_ref()
+                .and_then(|network| network.proxy_jump_id.as_deref()),
+            Some(jump.id.as_str())
+        );
+    }
+
+    #[test]
+    fn load_from_follows_relative_recursive_includes_and_ignores_cycles() {
+        let root = test_temp_dir("includes");
+        let config = root.join("config");
+        let include_dir = root.join("conf.d");
+        fs::create_dir_all(&include_dir).unwrap();
+        fs::write(&config, "Include conf.d/*.conf\n").unwrap();
+        fs::write(
+            include_dir.join("work.conf"),
+            "Include nested.conf\nHost work\n    User dev\n",
+        )
+        .unwrap();
+        fs::write(
+            include_dir.join("nested.conf"),
+            "Include ../config\nHost nested\n    Port 2200\n",
+        )
+        .unwrap();
+
+        let parsed = SshConfig::load_from(&config).unwrap();
+        assert_eq!(parsed.resolve("work").unwrap().user, "dev");
+        assert_eq!(parsed.resolve("nested").unwrap().port, 2200);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn missing_root_config_returns_an_actionable_error() {
+        let missing = test_temp_dir("missing").join("config");
+        let error = SshConfig::load_from(&missing).unwrap_err();
+        assert!(error.to_string().contains("SSH config file not found"));
+    }
+
+    fn parse_test_config(contents: &str) -> SshConfig {
+        let mut hosts = Vec::new();
+        let mut visited = HashSet::new();
+        parse_string(
+            contents,
+            Path::new("/tmp/ssh_config_test/config"),
+            &mut visited,
+            &mut hosts,
+        )
+        .unwrap();
+        SshConfig { hosts }
+    }
+
+    fn test_temp_dir(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "nyaterm_ssh_config_{name}_{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ImportNode {
+    key: String,
+    name: String,
+    entry: SshConfigEntry,
+}
+
+/// Builds the connection graph before it is persisted. Kept separate from the
+/// Tauri/storage boundary so the exact runtime graph can be tested.
+fn build_imported_connections(
+    config: &SshConfig,
+    existing: &[SavedConnection],
+) -> AppResult<Vec<SavedConnection>> {
+    use std::collections::HashMap;
+
+    let entries = config.to_entries()?;
+    let mut nodes: HashMap<String, ImportNode> = HashMap::new();
+    let mut links: HashMap<String, String> = HashMap::new();
+
+    for entry in &entries {
+        let target = regular_import_node(entry.clone());
+        nodes.entry(target.key.clone()).or_insert(target.clone());
+
+        let Some(proxy_jump) = entry.proxy_jump.as_deref() else {
+            continue;
+        };
+
+        let mut previous: Option<ImportNode> = None;
+        for raw_spec in proxy_jump.split(',') {
+            let jump = jump_import_node(config, raw_spec)?;
+            nodes.entry(jump.key.clone()).or_insert(jump.clone());
+            if let Some(previous) = previous {
+                set_import_link(&mut links, &jump.key, &previous.key)?;
+            }
+            previous = Some(jump);
+        }
+        if let Some(last_jump) = previous {
+            set_import_link(&mut links, &target.key, &last_jump.key)?;
+        }
+    }
+
+    let existing_by_name: HashMap<&str, &SavedConnection> = existing
+        .iter()
+        .map(|connection| (connection.name.as_str(), connection))
+        .collect();
+    let mut ids = HashMap::new();
+    let mut ordered_nodes: Vec<_> = nodes.into_values().collect();
+    ordered_nodes.sort_by(|a, b| a.name.cmp(&b.name));
+
+    for node in &ordered_nodes {
+        if let Some(existing) = existing_by_name.get(node.name.as_str()) {
+            ids.insert(node.key.clone(), existing.id.clone());
+        } else {
+            ids.insert(node.key.clone(), uuid::Uuid::new_v4().to_string());
+        }
+    }
+
+    let mut imported = Vec::new();
+    for node in ordered_nodes {
+        let expected_jump_id = links.get(&node.key).map(|key| {
+            ids.get(key)
+                .expect("all ProxyJump links have a materialized connection")
+                .clone()
+        });
+
+        if let Some(existing) = existing_by_name.get(node.name.as_str()) {
+            let existing_jump_id = existing
+                .network
+                .as_ref()
+                .and_then(|network| network.proxy_jump_id.as_ref());
+            if expected_jump_id.as_deref() != existing_jump_id.map(String::as_str) {
+                return Err(AppError::Config(format!(
+                    "Cannot safely import ProxyJump route: existing connection '{}' has a different jump host",
+                    node.name
+                )));
+            }
+            continue;
+        }
+
+        let mut connection = entry_to_saved_connection(&node.entry, expected_jump_id);
+        connection.id = ids.get(&node.key).expect("generated ID exists").clone();
+        connection.name = node.name;
+        imported.push(connection);
+    }
+
+    Ok(imported)
+}
+
+fn set_import_link(
+    links: &mut std::collections::HashMap<String, String>,
+    node: &str,
+    previous_hop: &str,
+) -> AppResult<()> {
+    if let Some(existing) = links.insert(node.to_string(), previous_hop.to_string()) {
+        if existing != previous_hop {
+            return Err(AppError::Config(format!(
+                "ProxyJump host '{node}' is used with conflicting preceding hops ('{existing}' and '{previous_hop}')"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn regular_import_node(entry: SshConfigEntry) -> ImportNode {
+    ImportNode {
+        key: format!("alias:{}", entry.alias),
+        name: entry.alias.clone(),
+        entry,
+    }
+}
+
+fn jump_import_node(config: &SshConfig, raw_spec: &str) -> AppResult<ImportNode> {
+    let (user_override, host_alias, port_override) = parse_jump_spec(raw_spec)?;
+    let mut entry = config.resolve(&host_alias)?;
+    let has_override = user_override.is_some() || port_override.is_some();
+    if let Some(user) = user_override {
+        entry.user = user;
+    }
+    if let Some(port) = port_override {
+        entry.port = port;
+    }
+
+    if has_override {
+        let raw_spec = raw_spec.trim();
+        Ok(ImportNode {
+            key: format!("jump:{raw_spec}"),
+            name: format!("{} (ProxyJump: {raw_spec})", host_alias),
+            entry,
+        })
+    } else {
+        Ok(regular_import_node(entry))
     }
 }
