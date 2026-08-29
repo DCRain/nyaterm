@@ -2319,6 +2319,31 @@ pub async fn create_remote_symlink(
     Ok(())
 }
 
+pub async fn update_remote_symlink_target(
+    manager: Arc<SessionManager>,
+    session_id: &str,
+    path: &str,
+    raw_path_token: Option<&str>,
+    target_path: &str,
+) -> AppResult<()> {
+    let auto_fs = get_or_create_auto_fs(&manager, session_id).await?;
+    let guard = auto_fs.backend().await?;
+    let fs = guard.as_ref().unwrap();
+    let path_ref = RemotePathRef::new(path, raw_path_token)?;
+    fs.update_symlink_target_ref(&path_ref, target_path).await?;
+
+    tracing::debug!(
+        target: "user_action",
+        action = "update",
+        entity = "remote_symlink",
+        session_id = %session_id,
+        remote_path = path,
+        "User changed remote symbolic link target"
+    );
+
+    Ok(())
+}
+
 pub async fn chmod_remote_file(
     manager: Arc<SessionManager>,
     session_id: &str,

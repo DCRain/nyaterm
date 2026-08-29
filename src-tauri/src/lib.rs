@@ -278,6 +278,7 @@ pub fn run() {
             cmd::sftp::create_remote_file,
             cmd::sftp::create_remote_dir,
             cmd::sftp::create_remote_symlink,
+            cmd::sftp::update_remote_symlink_target,
             cmd::sftp::chmod_remote_file,
             cmd::sftp::update_remote_file_attributes,
             cmd::sftp::download_remote_directory,

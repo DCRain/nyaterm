@@ -1747,6 +1747,7 @@ export interface FileProperties {
   name: string;
   is_dir: boolean;
   is_symlink: boolean;
+  symlink_target?: string | null;
   size: number;
   permissions: string;
   owner: string;
