@@ -353,9 +353,13 @@ export default function AppLayout({
   const leftActivityBarVisible = Boolean(leftActivityBar.visible);
   const rightActivityBarVisible = Boolean(rightActivityBar.visible);
   const leftPanelOpen =
-    hasLeftActivityItems && (leftPanelIds.length > 0 || Boolean(leftOverlayPanelId));
+    hasLeftActivityItems &&
+    leftActivityBarVisible &&
+    (leftPanelIds.length > 0 || Boolean(leftOverlayPanelId));
   const rightPanelOpen =
-    hasRightActivityItems && (rightPanelIds.length > 0 || Boolean(rightOverlayPanelId));
+    hasRightActivityItems &&
+    rightActivityBarVisible &&
+    (rightPanelIds.length > 0 || Boolean(rightOverlayPanelId));
   const serialSendVisible = bottomPanel.activePanel === "serialSend";
   const serialSendMounted = serialSendVisible || serialSendRunning;
   // When side chrome is gone, round the terminal so it doesn't cover window corners.

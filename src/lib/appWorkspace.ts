@@ -34,8 +34,8 @@ export const DEFAULT_ACTIVITY_BAR_LAYOUT: ActivityBarLayout = {
   show_labels: false,
   show_labels_left: false,
   show_labels_right: false,
-  show_left: false,
-  show_right: false,
+  show_left: true,
+  show_right: true,
   hidden_items: [],
 };
 

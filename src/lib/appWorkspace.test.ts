@@ -206,6 +206,8 @@ describe("activity bar visibility state", () => {
 
     expect(layout.hidden_items).toEqual([]);
     expect(layout.show_labels).toBe(false);
+    expect(layout.show_left).toBe(true);
+    expect(layout.show_right).toBe(true);
     expect(layout.left_top).toEqual(["fileExplorer", "notes", "network", "securityAuth"]);
   });
 });

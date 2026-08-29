@@ -2538,6 +2538,38 @@ function App() {
       return;
     }
     updateUi((prev) => {
+      const activityBarHidden = !prev.activity_bar_layout.show_left;
+      if (activityBarHidden) {
+        const first = getVisibleActivityIds(
+          [...prev.activity_bar_layout.left_top, ...prev.activity_bar_layout.left_bottom],
+          prev,
+        ).find((id) => !NON_PANEL_IDS.has(id));
+        if (prev.active_left_panel || (prev.left_open_panels?.length ?? 0) > 0) {
+          return {
+            activity_bar_layout: {
+              ...prev.activity_bar_layout,
+              show_left: true,
+            },
+          };
+        }
+        if (!first) {
+          return {
+            activity_bar_layout: {
+              ...prev.activity_bar_layout,
+              show_left: true,
+            },
+          };
+        }
+        return {
+          activity_bar_layout: {
+            ...prev.activity_bar_layout,
+            show_left: true,
+          },
+          ...(EXCLUSIVE_PANEL_IDS.has(first)
+            ? { active_left_panel: first }
+            : { left_open_panels: [first], active_left_panel: first }),
+        };
+      }
       if (multiPanelOpen) {
         if ((prev.left_open_panels?.length ?? 0) > 0 || prev.active_left_panel) {
           return { left_open_panels: [], active_left_panel: null };
@@ -2582,6 +2614,38 @@ function App() {
       return;
     }
     updateUi((prev) => {
+      const activityBarHidden = !prev.activity_bar_layout.show_right;
+      if (activityBarHidden) {
+        const first = getVisibleActivityIds(
+          [...prev.activity_bar_layout.right_top, ...prev.activity_bar_layout.right_bottom],
+          prev,
+        ).find((id) => !NON_PANEL_IDS.has(id));
+        if (prev.active_right_panel || (prev.right_open_panels?.length ?? 0) > 0) {
+          return {
+            activity_bar_layout: {
+              ...prev.activity_bar_layout,
+              show_right: true,
+            },
+          };
+        }
+        if (!first) {
+          return {
+            activity_bar_layout: {
+              ...prev.activity_bar_layout,
+              show_right: true,
+            },
+          };
+        }
+        return {
+          activity_bar_layout: {
+            ...prev.activity_bar_layout,
+            show_right: true,
+          },
+          ...(EXCLUSIVE_PANEL_IDS.has(first)
+            ? { active_right_panel: first }
+            : { right_open_panels: [first], active_right_panel: first }),
+        };
+      }
       if (multiPanelOpen) {
         if ((prev.right_open_panels?.length ?? 0) > 0 || prev.active_right_panel) {
           return { right_open_panels: [], active_right_panel: null };
