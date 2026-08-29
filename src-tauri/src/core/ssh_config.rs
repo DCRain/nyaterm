@@ -628,7 +628,8 @@ fn entry_to_saved_connection(
 /// Imports SSH config hosts as saved connections, skipping existing names.
 /// Each ProxyJump list is materialized in reverse linkage order because the
 /// runtime recursively follows `proxy_jump_id` from a target to the previous
-/// hop: `jump1,jump2,target` becomes `target -> jump2 -> jump1`.
+/// hop. Later hops are synthetic connections so a plain `Host jump2` remains
+/// a direct connection even when a target reaches it via `jump1`.
 pub fn import_ssh_config_connections(app: &tauri::AppHandle) -> AppResult<usize> {
     let config = SshConfig::load_default()?;
     let mut cfg = crate::config::load_config(app)?;
@@ -1003,11 +1004,13 @@ mod tests {
             .collect::<std::collections::HashMap<_, _>>();
         let jump1 = by_name["jump1"];
         let jump2 = by_name["jump2"];
+        let jump2_via_jump1 = by_name["jump2 (ProxyJump via: jump1)"];
         let target = by_name["target"];
 
         assert!(jump1.network.is_none());
+        assert!(jump2.network.is_none());
         assert_eq!(
-            jump2
+            jump2_via_jump1
                 .network
                 .as_ref()
                 .and_then(|network| network.proxy_jump_id.as_deref()),
@@ -1018,7 +1021,7 @@ mod tests {
                 .network
                 .as_ref()
                 .and_then(|network| network.proxy_jump_id.as_deref()),
-            Some(jump2.id.as_str())
+            Some(jump2_via_jump1.id.as_str())
         );
     }
 
@@ -1064,17 +1067,68 @@ mod tests {
             .map(|connection| (connection.name.as_str(), connection))
             .collect::<std::collections::HashMap<_, _>>();
 
-        for (node, expected_previous) in
-            [("jump2", "jump1"), ("jump3", "jump2"), ("target", "jump3")]
-        {
-            assert_eq!(
-                by_name[node]
-                    .network
-                    .as_ref()
-                    .and_then(|network| network.proxy_jump_id.as_deref()),
-                Some(by_name[expected_previous].id.as_str())
-            );
-        }
+        assert!(by_name["jump1"].network.is_none());
+        assert!(by_name["jump2"].network.is_none());
+        assert!(by_name["jump3"].network.is_none());
+
+        let jump2 = by_name["jump2 (ProxyJump via: jump1)"];
+        let jump3 = by_name["jump3 (ProxyJump via: jump1,jump2)"];
+        assert_eq!(
+            jump2
+                .network
+                .as_ref()
+                .and_then(|network| network.proxy_jump_id.as_deref()),
+            Some(by_name["jump1"].id.as_str())
+        );
+        assert_eq!(
+            jump3
+                .network
+                .as_ref()
+                .and_then(|network| network.proxy_jump_id.as_deref()),
+            Some(jump2.id.as_str())
+        );
+        assert_eq!(
+            by_name["target"]
+                .network
+                .as_ref()
+                .and_then(|network| network.proxy_jump_id.as_deref()),
+            Some(jump3.id.as_str())
+        );
+    }
+
+    #[test]
+    fn existing_direct_jump_alias_does_not_block_multi_hop_import() {
+        let direct_config = parse_test_config("Host jump2\n    HostName jump2.example.com\n");
+        let existing = build_imported_connections(&direct_config, &[])
+            .unwrap()
+            .pop()
+            .expect("direct jump2 connection");
+        assert!(existing.network.is_none());
+
+        let ssh_config = parse_test_config(
+            r#"
+                Host jump1
+                Host jump2
+                Host target
+                    ProxyJump jump1,jump2
+            "#,
+        );
+        let connections = build_imported_connections(&ssh_config, &[existing]).unwrap();
+        let by_name = connections
+            .iter()
+            .map(|connection| (connection.name.as_str(), connection))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        assert!(!by_name.contains_key("jump2"));
+        let jump1 = by_name["jump1"];
+        let routed_jump2 = by_name["jump2 (ProxyJump via: jump1)"];
+        assert_eq!(
+            routed_jump2
+                .network
+                .as_ref()
+                .and_then(|network| network.proxy_jump_id.as_deref()),
+            Some(jump1.id.as_str())
+        );
     }
 
     #[test]
@@ -1203,12 +1257,14 @@ fn build_imported_connections(
         };
 
         let mut previous: Option<ImportNode> = None;
+        let mut prior_specs = Vec::new();
         for raw_spec in proxy_jump.split(',') {
-            let jump = jump_import_node(config, raw_spec)?;
+            let jump = jump_import_node(config, raw_spec, &prior_specs)?;
             nodes.entry(jump.key.clone()).or_insert(jump.clone());
             if let Some(previous) = previous {
                 set_import_link(&mut links, &jump.key, &previous.key)?;
             }
+            prior_specs.push(raw_spec.trim().to_string());
             previous = Some(jump);
         }
         if let Some(last_jump) = previous {
@@ -1286,7 +1342,11 @@ fn regular_import_node(entry: SshConfigEntry) -> ImportNode {
     }
 }
 
-fn jump_import_node(config: &SshConfig, raw_spec: &str) -> AppResult<ImportNode> {
+fn jump_import_node(
+    config: &SshConfig,
+    raw_spec: &str,
+    prior_specs: &[String],
+) -> AppResult<ImportNode> {
     let (user_override, host_alias, port_override) = parse_jump_spec(raw_spec)?;
     let mut entry = config.resolve(&host_alias)?;
     let has_override = user_override.is_some() || port_override.is_some();
@@ -1297,11 +1357,25 @@ fn jump_import_node(config: &SshConfig, raw_spec: &str) -> AppResult<ImportNode>
         entry.port = port;
     }
 
-    if has_override {
+    // A second-or-later hop has route-specific semantics: it must reach the
+    // previous hop first. Never attach that context to the regular alias,
+    // otherwise opening `jump2` directly would incorrectly transit `jump1`.
+    if has_override || !prior_specs.is_empty() {
         let raw_spec = raw_spec.trim();
+        let route_prefix = prior_specs.join(",");
+        let name = if route_prefix.is_empty() {
+            format!("{} (ProxyJump: {raw_spec})", host_alias)
+        } else if raw_spec == host_alias {
+            format!("{} (ProxyJump via: {route_prefix})", host_alias)
+        } else {
+            format!(
+                "{} (ProxyJump via: {route_prefix}; spec: {raw_spec})",
+                host_alias
+            )
+        };
         Ok(ImportNode {
-            key: format!("jump:{raw_spec}"),
-            name: format!("{} (ProxyJump: {raw_spec})", host_alias),
+            key: format!("jump:{raw_spec}:via:{route_prefix}"),
+            name,
             entry,
         })
     } else {
