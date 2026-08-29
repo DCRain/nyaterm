@@ -22,6 +22,7 @@ pub mod rdp;
 pub mod session;
 pub mod settings;
 pub mod sftp;
+pub mod ssh_config;
 pub mod stats;
 pub mod translate;
 pub mod tunnel;

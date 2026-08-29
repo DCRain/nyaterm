@@ -1884,3 +1884,23 @@ export interface CloudSyncHistoryEntry {
   duration_ms?: number | null;
   message: string;
 }
+
+// ── SSH Config Import ─────────────────────────────────────────────────────────
+
+export interface SshConfigHop {
+  host: string;
+  port: number;
+  user: string;
+  isTarget: boolean;
+}
+
+export interface SshConfigEntry {
+  alias: string;
+  host: string;
+  port: number;
+  user: string;
+  identityFile?: string | null;
+  proxyJump?: string | null;
+  hops: SshConfigHop[];
+  hostKeyAlias?: string | null;
+}
