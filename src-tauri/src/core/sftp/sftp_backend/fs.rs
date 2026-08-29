@@ -827,7 +827,7 @@ impl RemoteFs for SftpBackend {
             .map(|s| s.transfer)
             .unwrap_or_default();
         let (request_kib, pipeline_depth, max_concurrent_writes) =
-            sftp_pipeline_config(&transfer_settings);
+            sftp_pipeline_config(&transfer_settings, self.pipeline_depth_override);
         let transfer_started = Instant::now();
         let directory_controller = create_directory_transfer_controller(
             transfer_id,
@@ -926,7 +926,7 @@ impl RemoteFs for SftpBackend {
         let _ = sftp_for_check.close().await;
 
         let (request_kib, pipeline_depth, max_concurrent_writes) =
-            sftp_pipeline_config(transfer_settings);
+            sftp_pipeline_config(transfer_settings, self.pipeline_depth_override);
         let transfer_started = Instant::now();
         let directory_controller = create_directory_transfer_controller(
             transfer_id,

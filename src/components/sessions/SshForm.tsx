@@ -1891,6 +1891,36 @@ export function SshForm({
                     {t("dialog.sftpFilenameEncodingDesc")}
                   </p>
                 </div>
+                <div className="mt-3 max-w-md">
+                  <Label className="text-xs font-medium text-foreground/80">
+                    {t("dialog.sftpPipelineDepth")}
+                  </Label>
+                  <Select
+                    disabled={sftpDisabled}
+                    value={sftpSettings.pipeline_depth?.toString() ?? "auto"}
+                    onValueChange={(value) =>
+                      setSftpSettings({
+                        ...sftpSettings,
+                        pipeline_depth: value === "auto" ? undefined : Number(value),
+                      })
+                    }
+                  >
+                    <SelectTrigger className="mt-1 h-8 text-xs font-normal">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="auto">{t("dialog.sftpPipelineDepthAuto")}</SelectItem>
+                      {[4, 8, 16, 32, 64].map((depth) => (
+                        <SelectItem key={depth} value={depth.toString()}>
+                          {depth}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="mt-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
+                    {t("dialog.sftpPipelineDepthDesc")}
+                  </p>
+                </div>
               </div>
             </TabsContent>
 

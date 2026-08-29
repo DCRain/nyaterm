@@ -92,6 +92,7 @@ pub(crate) struct AutoRemoteFs {
     ssh_handle: Arc<SshConnectionHandles>,
     cache_key: String,
     sftp_encoding: String,
+    sftp_pipeline_depth_override: Option<u32>,
 }
 
 impl AutoRemoteFs {
@@ -101,12 +102,14 @@ impl AutoRemoteFs {
         port: u16,
         username: &str,
         sftp_encoding: &str,
+        sftp_pipeline_depth_override: Option<u32>,
     ) -> Self {
         Self {
             inner: RwLock::new(None),
             ssh_handle,
             cache_key: cache_key(host, port, username),
             sftp_encoding: sftp_encoding.to_string(),
+            sftp_pipeline_depth_override,
         }
     }
 
@@ -151,6 +154,7 @@ impl AutoRemoteFs {
                 return Ok(Box::new(SftpBackend::new(
                     self.ssh_handle.clone(),
                     &self.sftp_encoding,
+                    self.sftp_pipeline_depth_override,
                 )));
             }
             Err(e) => {
@@ -198,6 +202,7 @@ impl AutoRemoteFs {
                         Box::new(SftpBackend::new(
                             self.ssh_handle.clone(),
                             &self.sftp_encoding,
+                            self.sftp_pipeline_depth_override,
                         ))
                     })
             }
@@ -237,6 +242,7 @@ async fn get_ssh_info(
     String,
     String,
     String,
+    Option<u32>,
 )> {
     let sessions = manager.sessions.lock().await;
     let session = sessions
@@ -251,7 +257,7 @@ async fn get_ssh_info(
         .downcast::<SshConnectionHandles>()
         .map_err(|_| AppError::Config("Failed to get SSH handle".to_string()))?;
 
-    let (host, port, username, encoding, sftp_encoding) =
+    let (host, port, username, encoding, sftp_encoding, sftp_pipeline_depth_override) =
         if let Some(ref cfg_any) = session.ssh_config {
             if let Some(cfg) = cfg_any.downcast_ref::<crate::core::ssh::SshConfig>() {
                 let sftp_encoding = if cfg.sftp.filename_encoding.trim().is_empty() {
@@ -265,6 +271,7 @@ async fn get_ssh_info(
                     cfg.username.clone(),
                     cfg.encoding.clone(),
                     sftp_encoding,
+                    cfg.sftp.pipeline_depth,
                 )
             } else {
                 (
@@ -273,6 +280,7 @@ async fn get_ssh_info(
                     "unknown".to_string(),
                     "UTF-8".to_string(),
                     "UTF-8".to_string(),
+                    None,
                 )
             }
         } else {
@@ -282,10 +290,19 @@ async fn get_ssh_info(
                 "unknown".to_string(),
                 "UTF-8".to_string(),
                 "UTF-8".to_string(),
+                None,
             )
         };
 
-    Ok((ssh_handle, host, port, username, encoding, sftp_encoding))
+    Ok((
+        ssh_handle,
+        host,
+        port,
+        username,
+        encoding,
+        sftp_encoding,
+        sftp_pipeline_depth_override,
+    ))
 }
 
 async fn get_or_create_auto_fs(
@@ -307,7 +324,7 @@ async fn get_or_create_auto_fs(
         }
     }
 
-    let (ssh_handle, host, port, username, _encoding, sftp_encoding) =
+    let (ssh_handle, host, port, username, _encoding, sftp_encoding, sftp_pipeline_depth_override) =
         get_ssh_info(manager, session_id).await?;
     let auto_fs = Arc::new(AutoRemoteFs::new(
         ssh_handle,
@@ -315,6 +332,7 @@ async fn get_or_create_auto_fs(
         port,
         &username,
         &sftp_encoding,
+        sftp_pipeline_depth_override,
     ));
 
     {

@@ -435,6 +435,12 @@ pub struct SftpSettings {
     pub shell_detection_timeout_ms: u64,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub filename_encoding: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_sftp_pipeline_depth",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pipeline_depth: Option<u32>,
 }
 
 impl Default for SftpSettings {
@@ -444,6 +450,7 @@ impl Default for SftpSettings {
             cwd_follow_mode: SftpCwdFollowMode::ShellIntegration,
             shell_detection_timeout_ms: default_sftp_shell_detection_timeout_ms(),
             filename_encoding: String::new(),
+            pipeline_depth: None,
         }
     }
 }
@@ -497,6 +504,34 @@ pub fn resolve_ssh_terminal_type(
 
 pub const MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS: u64 = 100;
 pub const MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS: u64 = 60_000;
+pub const MIN_SFTP_PIPELINE_DEPTH: u32 = 4;
+pub const MAX_SFTP_PIPELINE_DEPTH: u32 = 64;
+
+fn deserialize_sftp_pipeline_depth<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum PipelineDepthValue {
+        Signed(i64),
+        Unsigned(u64),
+        Invalid(serde::de::IgnoredAny),
+    }
+
+    let value = Option::<PipelineDepthValue>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(PipelineDepthValue::Signed(value)) => Some(value.clamp(
+            i64::from(MIN_SFTP_PIPELINE_DEPTH),
+            i64::from(MAX_SFTP_PIPELINE_DEPTH),
+        ) as u32),
+        Some(PipelineDepthValue::Unsigned(value)) => Some(value.clamp(
+            u64::from(MIN_SFTP_PIPELINE_DEPTH),
+            u64::from(MAX_SFTP_PIPELINE_DEPTH),
+        ) as u32),
+        Some(PipelineDepthValue::Invalid(_)) | None => None,
+    })
+}
 
 pub fn default_sftp_shell_detection_timeout_ms() -> u64 {
     3000
@@ -1370,8 +1405,9 @@ pub fn save_config(app: &AppHandle, config: &AppConfig) -> AppResult<()> {
 mod tests {
     use super::{
         AssetAcceleratorType, AssetDeviceType, AssetDiskKind, AssetDiskPurpose, ConnectionType,
-        MAX_SSH_AGENT_ENVIRONMENT_VARIABLE_LEN, MAX_SSH_AGENT_FORWARDING_ENDPOINTS,
-        MAX_SSH_AGENT_FORWARDING_IDENTITIES, MAX_SSH_AGENT_UNIX_SOCKET_PATH_LEN, SavedConnection,
+        MAX_SFTP_PIPELINE_DEPTH, MAX_SSH_AGENT_ENVIRONMENT_VARIABLE_LEN,
+        MAX_SSH_AGENT_FORWARDING_ENDPOINTS, MAX_SSH_AGENT_FORWARDING_IDENTITIES,
+        MAX_SSH_AGENT_UNIX_SOCKET_PATH_LEN, MIN_SFTP_PIPELINE_DEPTH, SavedConnection,
         SftpCwdFollowMode, SftpSettings, SshAgentEndpoint, SshAgentForwardingConfig,
         SshAgentForwardingPolicy, SshAgentForwardingSources, SshAlgorithmMode, SshProfile,
         SshTerminalType, effective_cwd_follow_mode, effective_cwd_follow_mode_for_profile,
@@ -1922,6 +1958,7 @@ mod tests {
             SftpCwdFollowMode::ShellIntegration
         );
         assert_eq!(connection.sftp.shell_detection_timeout_ms, 3000);
+        assert_eq!(connection.sftp.pipeline_depth, None);
     }
 
     #[test]
@@ -1942,6 +1979,42 @@ mod tests {
         .expect("connection");
 
         assert_eq!(connection.sftp.shell_detection_timeout_ms, 5000);
+    }
+
+    #[test]
+    fn sftp_pipeline_depth_roundtrips_and_automatic_is_omitted() {
+        let automatic = serde_json::to_value(SftpSettings::default()).expect("automatic settings");
+        assert!(automatic.get("pipeline_depth").is_none());
+
+        let settings = SftpSettings {
+            pipeline_depth: Some(32),
+            ..SftpSettings::default()
+        };
+        let encoded = serde_json::to_value(&settings).expect("manual settings");
+        assert_eq!(encoded["pipeline_depth"], 32);
+        let decoded: SftpSettings = serde_json::from_value(encoded).expect("roundtrip settings");
+        assert_eq!(decoded.pipeline_depth, Some(32));
+    }
+
+    #[test]
+    fn sftp_pipeline_depth_normalizes_invalid_imported_values() {
+        let below_minimum: SftpSettings =
+            serde_json::from_value(serde_json::json!({ "pipeline_depth": 0 }))
+                .expect("below-minimum settings");
+        let above_maximum: SftpSettings =
+            serde_json::from_value(serde_json::json!({ "pipeline_depth": 999 }))
+                .expect("above-maximum settings");
+        let negative: SftpSettings =
+            serde_json::from_value(serde_json::json!({ "pipeline_depth": -10 }))
+                .expect("negative settings");
+        let invalid_type: SftpSettings =
+            serde_json::from_value(serde_json::json!({ "pipeline_depth": "fast" }))
+                .expect("invalid-type settings");
+
+        assert_eq!(below_minimum.pipeline_depth, Some(MIN_SFTP_PIPELINE_DEPTH));
+        assert_eq!(above_maximum.pipeline_depth, Some(MAX_SFTP_PIPELINE_DEPTH));
+        assert_eq!(negative.pipeline_depth, Some(MIN_SFTP_PIPELINE_DEPTH));
+        assert_eq!(invalid_type.pipeline_depth, None);
     }
 
     #[test]

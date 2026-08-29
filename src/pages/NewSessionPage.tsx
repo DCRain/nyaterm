@@ -104,6 +104,7 @@ function normalizeSftpSettings(value: SavedConnection["sftp"] | undefined): Sftp
     shell_detection_timeout_ms:
       value?.shell_detection_timeout_ms ?? DEFAULT_SFTP_SHELL_DETECTION_TIMEOUT_MS,
     filename_encoding: value?.filename_encoding || "",
+    pipeline_depth: value?.pipeline_depth,
   };
 }
 

@@ -430,6 +430,8 @@ export interface SftpSettings {
   cwd_follow_mode: SftpCwdFollowMode;
   shell_detection_timeout_ms: number;
   filename_encoding?: string;
+  /** Override SFTP single-file pipeline depth. Undefined means automatic. */
+  pipeline_depth?: number;
 }
 
 export type AlgorithmRisk = "modern" | "legacy" | "insecure";
