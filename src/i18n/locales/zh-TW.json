@@ -160,7 +160,7 @@
     "externalMcp": "外部 MCP",
     "externalMcpAllSessions": "所有工作階段",
     "externalMcpAllowOnce": "允許一次",
-    "externalMcpAllowSession": "此 MCP 工作階段內允許",
+    "externalMcpAllowSession": "此連線期間允許",
     "externalMcpApprovalDesc": "MCP 用戶端正在要求存取 NyaTerm 工作階段。",
     "externalMcpApprovalTitle": "外部 MCP 核准",
     "externalMcpCapability": "功能",

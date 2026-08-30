@@ -160,7 +160,7 @@
     "externalMcp": "외부 MCP",
     "externalMcpAllSessions": "모든 세션",
     "externalMcpAllowOnce": "한 번 허용",
-    "externalMcpAllowSession": "이 MCP 세션에서 허용",
+    "externalMcpAllowSession": "이 연결에서 허용",
     "externalMcpApprovalDesc": "MCP 클라이언트가 NyaTerm 세션 접근을 요청합니다.",
     "externalMcpApprovalTitle": "외부 MCP 승인",
     "externalMcpCapability": "기능",

@@ -160,7 +160,7 @@
     "externalMcp": "外部 MCP",
     "externalMcpAllSessions": "所有会话",
     "externalMcpAllowOnce": "允许一次",
-    "externalMcpAllowSession": "本次 MCP 会话内允许",
+    "externalMcpAllowSession": "本次连接中允许",
     "externalMcpApprovalDesc": "一个 MCP 客户端正在请求访问 NyaTerm 会话。",
     "externalMcpApprovalTitle": "外部 MCP 审批",
     "externalMcpCapability": "能力",

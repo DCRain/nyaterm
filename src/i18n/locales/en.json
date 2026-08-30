@@ -160,7 +160,7 @@
     "externalMcp": "External MCP",
     "externalMcpAllSessions": "All sessions",
     "externalMcpAllowOnce": "Allow once",
-    "externalMcpAllowSession": "Allow for this MCP session",
+    "externalMcpAllowSession": "Allow for this connection",
     "externalMcpApprovalDesc": "An MCP client is requesting access to a NyaTerm session.",
     "externalMcpApprovalTitle": "External MCP approval",
     "externalMcpCapability": "Capability",
