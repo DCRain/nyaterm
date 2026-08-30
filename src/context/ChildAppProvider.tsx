@@ -181,6 +181,9 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     ...DEFAULT_AI_SETTINGS,
   },
   cloud_sync: DEFAULT_CLOUD_SYNC_SETTINGS,
+  rdp: {
+    special_shortcuts: [],
+  },
   ui: {
     open_tabs: [],
     terminal_window_layout: null,

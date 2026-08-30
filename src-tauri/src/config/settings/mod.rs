@@ -4,6 +4,7 @@ mod diagnostics;
 mod general;
 mod interaction;
 mod proxy;
+mod rdp;
 mod recording;
 mod search;
 mod security;
@@ -27,6 +28,7 @@ pub use diagnostics::{DiagnosticsLogLevel, DiagnosticsSettings};
 pub use general::GeneralSettings;
 pub use interaction::InteractionSettings;
 pub use proxy::ProxySettings;
+pub use rdp::RdpSettings;
 pub use recording::RecordingSettings;
 pub use search::{SearchEngine, SearchSettings};
 pub use security::SecuritySettings;
@@ -73,6 +75,8 @@ pub struct AppSettings {
     pub ai: AiSettings,
     #[serde(default)]
     pub cloud_sync: CloudSyncSettings,
+    #[serde(default)]
+    pub rdp: RdpSettings,
     #[serde(default)]
     pub ui: UiConfig,
     /// User-customized keyboard shortcut overrides. Keys are shortcut IDs, values are hotkey strings.

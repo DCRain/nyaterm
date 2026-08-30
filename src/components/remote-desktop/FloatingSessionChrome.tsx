@@ -1,4 +1,4 @@
-import { Maximize2, Minimize2, Monitor, Power, RotateCcw, Send } from "lucide-react";
+import { Maximize2, Minimize2, Monitor, Power, RotateCcw } from "lucide-react";
 import {
   type CSSProperties,
   type ReactNode,
@@ -50,7 +50,7 @@ export interface FloatingSessionChromeProps {
   isFullscreen?: boolean;
   onReconnect: () => void;
   onClose: () => void;
-  onSendCtrlAltDel?: () => void;
+  shortcutPopover?: ReactNode;
   extraCollapsedIcon?: ReactNode;
   className?: string;
 }
@@ -169,7 +169,7 @@ export function FloatingSessionChrome({
   isFullscreen = false,
   onReconnect,
   onClose,
-  onSendCtrlAltDel,
+  shortcutPopover,
   extraCollapsedIcon,
   className,
 }: FloatingSessionChromeProps) {
@@ -583,18 +583,7 @@ export function FloatingSessionChrome({
               <span className="font-mono tabular-nums text-white/70">{networkText}</span>
             </span>
           ) : null}
-          {onSendCtrlAltDel ? (
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              className="h-6 w-6 shrink-0 text-white"
-              title={t("dialog.rdpCtrlAltDel")}
-              aria-label={t("dialog.rdpCtrlAltDel")}
-              onClick={onSendCtrlAltDel}
-            >
-              <Send className="h-3.5 w-3.5" />
-            </Button>
-          ) : null}
+          {shortcutPopover}
           <Button
             variant="ghost"
             size="icon-xs"

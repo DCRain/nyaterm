@@ -1932,7 +1932,26 @@
     "clientMissingTitle": "找不到 {{protocol}} 用戶端",
     "launched": "已用 {{client}} 開啟 {{name}}",
     "noRecommendations": "目前平台暫無安裝建議。",
-    "openDownloadPage": "開啟下載頁"
+    "openDownloadPage": "開啟下載頁",
+    "shortcutListTitle": "特殊快捷鍵",
+    "addShortcut": "新增快捷鍵",
+    "deleteShortcut": "刪除快捷鍵",
+    "restoreShortcuts": "恢復自訂快捷鍵",
+    "shortcutNamePlaceholder": "快捷鍵名稱",
+    "shortcutComboHint": "按下要傳送到遠端的組合鍵",
+    "shortcutRecording": "請按鍵錄製…",
+    "shortcuts": {
+      "ctrlAltDel": "Ctrl+Alt+Del",
+      "winR": "執行 (Win+R)",
+      "winD": "顯示桌面 (Win+D)",
+      "winL": "鎖定 (Win+L)",
+      "winE": "檔案總管 (Win+E)",
+      "ctrlShiftEsc": "工作管理員",
+      "ctrlWinLeft": "虛擬桌面左切",
+      "ctrlWinRight": "虛擬桌面右切",
+      "altF4": "關閉視窗 (Alt+F4)",
+      "winTab": "工作檢視 (Win+Tab)"
+    }
   },
   "resourceMonitor": {
     "Load1": "1分鐘",

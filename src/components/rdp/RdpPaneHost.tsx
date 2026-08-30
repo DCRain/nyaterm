@@ -16,6 +16,7 @@ import { useTranslation } from "react-i18next";
 import ExternalFileDropOverlay from "@/components/ExternalFileDropOverlay";
 import { FloatingSessionChrome } from "@/components/remote-desktop/FloatingSessionChrome";
 import type { RemoteDesktopNetworkStatus } from "@/components/remote-desktop/FloatingSessionChrome";
+import { RdpShortcutPopover } from "@/components/remote-desktop/RdpShortcutPopover";
 import {
   createRemoteDesktopRenderer,
   type RemoteDesktopRenderer,
@@ -495,31 +496,9 @@ function RdpPaneHost({
     };
   }, [cancelPrintableKeyFallbacks, releaseAllKeys]);
 
-  useEffect(() => {
-    if (!active || !visible || pane.connecting || pane.connectError || state !== "active") {
-      void invoke("rdp_set_keyboard_capture", { sessionId: null }).catch(() => {});
-      return;
-    }
-
-    const container = containerRef.current;
-    if (container?.contains(document.activeElement)) {
-      void invoke("rdp_set_keyboard_capture", { sessionId: pane.sessionId }).catch(() => {});
-    }
-
-    return () => {
-      void invoke("rdp_set_keyboard_capture", { sessionId: null }).catch(() => {});
-    };
-  }, [active, pane.connectError, pane.connecting, pane.sessionId, state, visible]);
-
-  const handleFocus = useCallback(() => {
-    if (!active || !visible || pane.connecting || pane.connectError || state !== "active") return;
-    void invoke("rdp_set_keyboard_capture", { sessionId: pane.sessionId }).catch(() => {});
-  }, [active, pane.connectError, pane.connecting, pane.sessionId, state, visible]);
-
   const handleBlur = useCallback(
     (event: ReactFocusEvent<HTMLElement>) => {
       if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
-      void invoke("rdp_set_keyboard_capture", { sessionId: null }).catch(() => {});
       releaseAllKeys();
     },
     [releaseAllKeys],
@@ -644,7 +623,6 @@ function RdpPaneHost({
       data-rdp-input-root="true"
       data-remote-desktop-input-root="true"
       tabIndex={active ? 0 : -1}
-      onFocus={handleFocus}
       onKeyDownCapture={handlePhysicalKeyDownCapture}
       onKeyUpCapture={handlePhysicalKeyUpCapture}
       onKeyDown={handleRdpKeyDown}
@@ -745,18 +723,9 @@ function RdpPaneHost({
         active={active}
         onReconnect={() => void invoke("rdp_reconnect", { sessionId: pane.sessionId })}
         onClose={() => onDisconnectedCloseRequested?.()}
-        onSendCtrlAltDel={() =>
-          sendShortcut([
-            { type: "key-down", scanCode: 0x1d, extended: false, repeat: false },
-            { type: "key-down", scanCode: 0x38, extended: false, repeat: false },
-            { type: "key-down", scanCode: 0x53, extended: true, repeat: false },
-            { type: "key-up", scanCode: 0x53, extended: true, repeat: false },
-            { type: "key-up", scanCode: 0x38, extended: false, repeat: false },
-            { type: "key-up", scanCode: 0x1d, extended: false, repeat: false },
-          ])
-        }
         onToggleFullscreen={() => void toggleFullscreen()}
         isFullscreen={isFullscreen}
+        shortcutPopover={<RdpShortcutPopover onSendShortcut={sendShortcut} />}
       />
 
       {isExternalDropActive && (

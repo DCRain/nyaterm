@@ -1808,6 +1808,16 @@ export interface InteractionSettings {
   tab_right_click_action: import("@/lib/interactionSettings").TabMouseAction;
 }
 
+export interface RdpSpecialShortcutConfig {
+  id: string;
+  label: string;
+  combo: string;
+}
+
+export interface RdpSettings {
+  special_shortcuts: RdpSpecialShortcutConfig[];
+}
+
 export interface AppSettings {
   general: GeneralSettings;
   appearance: AppearanceSettings;
@@ -1822,6 +1832,7 @@ export interface AppSettings {
   diagnostics: DiagnosticsSettings;
   ai: AISettings;
   cloud_sync: CloudSyncSettings;
+  rdp: RdpSettings;
   ui: UiConfig;
   keybindings: Record<string, string>;
 }

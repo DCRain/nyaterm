@@ -1933,7 +1933,26 @@
     "clientMissingTitle": "{{protocol}} client not found",
     "launched": "Opened {{name}} with {{client}}",
     "noRecommendations": "No install recommendations are available for this platform.",
-    "openDownloadPage": "Open download page"
+    "openDownloadPage": "Open download page",
+    "shortcutListTitle": "Special shortcuts",
+    "addShortcut": "Add shortcut",
+    "deleteShortcut": "Delete shortcut",
+    "restoreShortcuts": "Restore custom shortcuts",
+    "shortcutNamePlaceholder": "Shortcut name",
+    "shortcutComboHint": "Press the key combination to send to the remote desktop",
+    "shortcutRecording": "Press keys to record…",
+    "shortcuts": {
+      "ctrlAltDel": "Ctrl+Alt+Del",
+      "winR": "Run (Win+R)",
+      "winD": "Show desktop (Win+D)",
+      "winL": "Lock (Win+L)",
+      "winE": "File Explorer (Win+E)",
+      "ctrlShiftEsc": "Task Manager",
+      "ctrlWinLeft": "Virtual desktop left",
+      "ctrlWinRight": "Virtual desktop right",
+      "altF4": "Close window (Alt+F4)",
+      "winTab": "Task view (Win+Tab)"
+    }
   },
   "resourceMonitor": {
     "Load1": "1 min",

@@ -1932,7 +1932,26 @@
     "clientMissingTitle": "未找到 {{protocol}} 客户端",
     "launched": "已用 {{client}} 打开 {{name}}",
     "noRecommendations": "当前平台暂无安装建议。",
-    "openDownloadPage": "打开下载页"
+    "openDownloadPage": "打开下载页",
+    "shortcutListTitle": "特殊快捷键",
+    "addShortcut": "添加快捷键",
+    "deleteShortcut": "删除快捷键",
+    "restoreShortcuts": "恢复自定义快捷键",
+    "shortcutNamePlaceholder": "快捷键名称",
+    "shortcutComboHint": "按下要发送到远端的组合键",
+    "shortcutRecording": "请按键录制…",
+    "shortcuts": {
+      "ctrlAltDel": "Ctrl+Alt+Del",
+      "winR": "运行 (Win+R)",
+      "winD": "显示桌面 (Win+D)",
+      "winL": "锁定 (Win+L)",
+      "winE": "资源管理器 (Win+E)",
+      "ctrlShiftEsc": "任务管理器",
+      "ctrlWinLeft": "虚拟桌面左切",
+      "ctrlWinRight": "虚拟桌面右切",
+      "altF4": "关闭窗口 (Alt+F4)",
+      "winTab": "任务视图 (Win+Tab)"
+    }
   },
   "resourceMonitor": {
     "Load1": "1分钟",

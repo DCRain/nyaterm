@@ -27,11 +27,28 @@ vi.mock("@tauri-apps/api/core", () => ({
   },
 }));
 
+vi.mock("@tauri-apps/api/webview", () => ({
+  getCurrentWebview: () => ({
+    onDragDropEvent: () => Promise.resolve(() => {}),
+  }),
+}));
+
 vi.mock("@/context/TransferContext", () => ({
   useTransfer: () => ({
     upsertExternalTransferProgress: vi.fn(),
     completeExternalTransfer: vi.fn(),
     failExternalTransfer: vi.fn(),
+  }),
+}));
+
+vi.mock("@/context/AppContext", () => ({
+  useApp: () => ({
+    appSettings: {
+      rdp: {
+        special_shortcuts: [],
+      },
+    },
+    updateAppSettings: vi.fn(),
   }),
 }));
 
@@ -162,10 +179,17 @@ describe("RdpPaneHost", () => {
       />,
     );
 
-    const controls = screen.getAllByRole("button");
-    expect(controls).toHaveLength(3);
-    fireEvent.click(controls[1]);
-    fireEvent.click(controls[2]);
+    await waitFor(() => expect(listeners.has("rdp-state-rdp-session")).toBe(true));
+    act(() => {
+      listeners.get("rdp-state-rdp-session")?.({
+        payload: { sessionId: "rdp-session", state: "active" },
+      });
+    });
+
+    const reconnectButton = screen.getByRole("button", { name: "dialog.rdpReconnect" });
+    const closeButton = screen.getByRole("button", { name: "dialog.remoteDesktopChromeClose" });
+    fireEvent.click(reconnectButton);
+    fireEvent.click(closeButton);
 
     expect(invokeMock).toHaveBeenCalledWith("rdp_reconnect", { sessionId: "rdp-session" });
     expect(onDisconnectedCloseRequested).toHaveBeenCalledOnce();

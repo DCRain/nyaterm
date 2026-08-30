@@ -1932,7 +1932,26 @@
     "clientMissingTitle": "{{protocol}} 클라이언트를 찾을 수 없음",
     "launched": "{{client}}(으)로 {{name}}을(를) 열었습니다",
     "noRecommendations": "이 플랫폼에 대한 설치 안내가 없습니다.",
-    "openDownloadPage": "다운로드 페이지 열기"
+    "openDownloadPage": "다운로드 페이지 열기",
+    "shortcutListTitle": "특수 단축키",
+    "addShortcut": "단축키 추가",
+    "deleteShortcut": "단축키 삭제",
+    "restoreShortcuts": "사용자 단축키 복원",
+    "shortcutNamePlaceholder": "단축키 이름",
+    "shortcutComboHint": "원격 데스크톱으로 보낼 키 조합을 누르세요",
+    "shortcutRecording": "키를 눌러 녹화…",
+    "shortcuts": {
+      "ctrlAltDel": "Ctrl+Alt+Del",
+      "winR": "실행 (Win+R)",
+      "winD": "바탕 화면 표시 (Win+D)",
+      "winL": "잠금 (Win+L)",
+      "winE": "파일 탐색기 (Win+E)",
+      "ctrlShiftEsc": "작업 관리자",
+      "ctrlWinLeft": "가상 데스크톱 왼쪽",
+      "ctrlWinRight": "가상 데스크톱 오른쪽",
+      "altF4": "창 닫기 (Alt+F4)",
+      "winTab": "작업 보기 (Win+Tab)"
+    }
   },
   "resourceMonitor": {
     "Load1": "1분",
