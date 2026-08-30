@@ -115,7 +115,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   interaction: {
     copy_on_select: false,
     allow_osc52_clipboard_write: false,
-    right_click_paste: false,
+    terminal_right_click_action: "menu",
     terminal_zoom_enabled: true,
     command_suggestions_enabled: true,
     command_suggestion_min_chars: DEFAULT_COMMAND_SUGGESTION_MIN_CHARS,

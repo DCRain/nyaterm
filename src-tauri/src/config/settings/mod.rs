@@ -95,6 +95,10 @@ pub fn load_app_settings(app: &AppHandle) -> AppResult<AppSettings> {
             interaction.contains_key("mac_ime_compatibility")
                 && !interaction.contains_key("ime_compatibility")
         });
+    let has_legacy_terminal_right_click_action = raw_settings
+        .get("interaction")
+        .and_then(|interaction| interaction.as_object())
+        .is_some_and(|interaction| !interaction.contains_key("terminal_right_click_action"));
 
     let mut migrated = false;
     let mut secrets_ready_for_persist = true;
@@ -149,6 +153,9 @@ pub fn load_app_settings(app: &AppHandle) -> AppResult<AppSettings> {
         migrated = true;
     }
     if has_legacy_mac_ime_compatibility {
+        migrated = true;
+    }
+    if has_legacy_terminal_right_click_action {
         migrated = true;
     }
 

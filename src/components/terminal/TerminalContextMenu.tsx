@@ -23,6 +23,7 @@ import { useTerminalAppSettings } from "@/context/AppContext";
 import { resolveDisplayKeys } from "@/hooks/useShortcutMap";
 import { openAIAssistant } from "@/lib/aiEvents";
 import { writeClipboardText } from "@/lib/clipboard";
+import { normalizeTerminalRightClickAction } from "@/lib/interactionSettings";
 import { invoke } from "@/lib/invoke";
 import { sendTerminalClearInput } from "@/lib/terminalControlInput";
 import { openSettings } from "@/lib/windowManager";
@@ -71,6 +72,9 @@ export default function TerminalContextMenu({
   const { t } = useTranslation();
   const termSettings = useTerminalAppSettings();
   const { interaction, translation, search, ai, keybindings } = termSettings;
+  const rightClickAction = normalizeTerminalRightClickAction(
+    interaction.terminal_right_click_action,
+  );
   const dk = (id: string) => resolveDisplayKeys(id, keybindings);
 
   const [ctxSelection, setCtxSelection] = useState({
@@ -116,29 +120,32 @@ export default function TerminalContextMenu({
       )
     : [];
 
-  // Right-click context menu: capture selection state
-  const handleContextMenu = (e: React.MouseEvent) => {
+  // Right-click context menu: capture selection state.
+  const handleContextMenu = () => {
     const terminal = terminalRef.current;
     if (!terminal) return;
-
-    if (interaction.right_click_paste) {
-      e.preventDefault();
-      e.stopPropagation();
-      (async () => {
-        try {
-          await onPasteClipboard();
-        } catch {
-          /* clipboard access denied */
-        }
-        terminal.clearSelection();
-        terminal.focus();
-      })();
-      return;
-    }
 
     const selection = terminal.getSelection();
     const hasSelection = selection.length > 0;
     setCtxSelection({ text: selection, hasSelection });
+  };
+
+  const handleDirectPasteContextMenu = (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+
+    void (async () => {
+      try {
+        await onPasteClipboard();
+      } catch {
+        /* clipboard access denied */
+      }
+      terminal.clearSelection();
+      terminal.focus();
+    })();
   };
 
   const doPaste = useCallback(async () => {
@@ -226,8 +233,17 @@ export default function TerminalContextMenu({
   return (
     <>
       <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <div className="h-full w-full" onContextMenu={handleContextMenu}>
+        <ContextMenuTrigger asChild disabled={rightClickAction !== "menu"}>
+          <div
+            className="h-full w-full"
+            onContextMenu={
+              rightClickAction === "menu"
+                ? handleContextMenu
+                : rightClickAction === "paste"
+                  ? handleDirectPasteContextMenu
+                  : undefined
+            }
+          >
             {children}
           </div>
         </ContextMenuTrigger>
