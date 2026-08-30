@@ -23,6 +23,7 @@ import { useFileDocumentCloseGuard } from "./hooks/useFileDocumentCloseGuard";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts";
 import { useIdleLock } from "./hooks/useIdleLock";
 import { useMacSelectionGuard } from "./hooks/useMacSelectionGuard";
+import { useMcpActiveSession } from "./hooks/useMcpActiveSession";
 import { useModalChildWindows } from "./hooks/useModalChildWindows";
 import { useRemoteGpuOverview } from "./hooks/useRemoteGpuOverview";
 import { useRemoteNpuOverview } from "./hooks/useRemoteNpuOverview";
@@ -3070,6 +3071,7 @@ function App() {
     !activePane.connectError
       ? activePane.sessionId
       : null;
+  useMcpActiveSession(activeSessionId);
   const activeSshSessionId =
     activePane &&
     activePane.paneKind === "terminal" &&

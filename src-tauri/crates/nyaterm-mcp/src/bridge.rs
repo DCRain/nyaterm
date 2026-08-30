@@ -41,6 +41,7 @@ struct Connection {
 pub struct BridgeClient {
     endpoint: BridgeEndpoint,
     connection: Arc<Mutex<Option<Connection>>>,
+    identity: Arc<Mutex<Option<ClientIdentifyParams>>>,
 }
 
 impl BridgeClient {
@@ -48,12 +49,14 @@ impl BridgeClient {
         Self {
             endpoint,
             connection: Arc::new(Mutex::new(None)),
+            identity: Arc::new(Mutex::new(None)),
         }
     }
 
     pub async fn identify(&self, name: String, version: Option<String>) {
-        let params =
-            serde_json::to_value(ClientIdentifyParams { name, version }).unwrap_or_default();
+        let identity = ClientIdentifyParams { name, version };
+        *self.identity.lock().await = Some(identity.clone());
+        let params = serde_json::to_value(identity).unwrap_or_default();
         let _ = self.rpc("client.identify", params).await;
     }
 
@@ -71,70 +74,104 @@ impl BridgeClient {
         })
         .map_err(|error| bridge_error("invalid_argument", &error.to_string()))?;
         let mut guard = self.connection.lock().await;
-        if guard.is_none() {
-            *guard = Some(connect(&self.endpoint).await.map_err(io_error)?);
-        }
+        self.ensure_connection(&mut guard, true).await?;
         let connection = guard.as_mut().unwrap();
-        let id = connection.next_id;
-        connection.next_id += 1;
-        write_request(
-            connection,
-            RpcRequest {
-                id,
-                method: "capability.execute".into(),
-                params,
-            },
-        )
-        .await
-        .map_err(io_error)?;
-        let response = tokio::select! {
+        let result = tokio::select! {
             _ = cancellation.cancelled() => {
                 let endpoint = self.endpoint.clone();
                 tokio::spawn(async move { let _ = cancel_request(&endpoint, &request_id).await; });
                 *guard = None;
                 return Err(bridge_error("cancelled", "The MCP tool call was cancelled."));
             }
-            response = read_response(connection) => response.map_err(io_error)?,
+            result = connection_rpc(connection, "capability.execute", params) => result,
         };
-        if response.id != id {
-            *guard = None;
-            return Err(bridge_error(
-                "bridge_disconnected",
-                "MCP bridge response ID mismatch.",
-            ));
-        }
-        match (response.result, response.error) {
-            (Some(value), None) => Ok(value),
-            (_, Some(error)) => Err(error),
-            _ => Err(bridge_error(
-                "bridge_disconnected",
-                "MCP bridge returned an empty response.",
-            )),
-        }
+        finish_rpc(&mut guard, result)
     }
 
     async fn rpc(&self, method: &str, params: Value) -> Result<Value, RpcError> {
         let mut guard = self.connection.lock().await;
-        if guard.is_none() {
-            *guard = Some(connect(&self.endpoint).await.map_err(io_error)?);
-        }
+        self.ensure_connection(&mut guard, method != "client.identify")
+            .await?;
         let connection = guard.as_mut().unwrap();
-        let id = connection.next_id;
-        connection.next_id += 1;
-        write_request(
-            connection,
-            RpcRequest {
-                id,
-                method: method.into(),
-                params,
-            },
-        )
+        let result = connection_rpc(connection, method, params).await;
+        finish_rpc(&mut guard, result)
+    }
+
+    async fn ensure_connection(
+        &self,
+        guard: &mut Option<Connection>,
+        replay_identity: bool,
+    ) -> Result<(), RpcError> {
+        if guard.is_some() {
+            return Ok(());
+        }
+        let mut connection = connect(&self.endpoint).await.map_err(io_error)?;
+        if replay_identity && let Some(identity) = self.identity.lock().await.clone() {
+            let params = serde_json::to_value(identity)
+                .map_err(|error| bridge_error("invalid_argument", &error.to_string()))?;
+            match connection_rpc(&mut connection, "client.identify", params).await {
+                Ok(_) => {}
+                Err(ConnectionRpcError::Remote(error)) => return Err(error),
+                Err(ConnectionRpcError::Disconnected(error)) => return Err(error),
+            }
+        }
+        *guard = Some(connection);
+        Ok(())
+    }
+}
+
+enum ConnectionRpcError {
+    Remote(RpcError),
+    Disconnected(RpcError),
+}
+
+fn finish_rpc(
+    guard: &mut Option<Connection>,
+    result: Result<Value, ConnectionRpcError>,
+) -> Result<Value, RpcError> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(ConnectionRpcError::Remote(error)) => Err(error),
+        Err(ConnectionRpcError::Disconnected(error)) => {
+            *guard = None;
+            Err(error)
+        }
+    }
+}
+
+async fn connection_rpc(
+    connection: &mut Connection,
+    method: &str,
+    params: Value,
+) -> Result<Value, ConnectionRpcError> {
+    let id = connection.next_id;
+    connection.next_id += 1;
+    write_request(
+        connection,
+        RpcRequest {
+            id,
+            method: method.into(),
+            params,
+        },
+    )
+    .await
+    .map_err(|error| ConnectionRpcError::Disconnected(io_error(error)))?;
+    let response = read_response(connection)
         .await
-        .map_err(io_error)?;
-        let response = read_response(connection).await.map_err(io_error)?;
-        response
-            .error
-            .map_or_else(|| Ok(response.result.unwrap_or(Value::Null)), Err)
+        .map_err(|error| ConnectionRpcError::Disconnected(io_error(error)))?;
+    if response.id != id {
+        return Err(ConnectionRpcError::Disconnected(bridge_error(
+            "bridge_disconnected",
+            "MCP bridge response ID mismatch.",
+        )));
+    }
+    match (response.result, response.error) {
+        (Some(value), None) => Ok(value),
+        (_, Some(error)) => Err(ConnectionRpcError::Remote(error)),
+        _ => Err(ConnectionRpcError::Disconnected(bridge_error(
+            "bridge_disconnected",
+            "MCP bridge returned an empty response.",
+        ))),
     }
 }
 
@@ -144,43 +181,36 @@ async fn connect(endpoint: &BridgeEndpoint) -> std::io::Result<Connection> {
     let mut connection = Connection {
         reader: BufReader::new(read),
         writer: write,
-        next_id: 2,
+        next_id: 1,
     };
     let params = serde_json::to_value(AuthParams {
         token: endpoint.token.clone(),
         generation: endpoint.generation.clone(),
     })
     .map_err(std::io::Error::other)?;
-    write_request(
-        &mut connection,
-        RpcRequest {
-            id: 1,
-            method: "auth".into(),
-            params,
-        },
-    )
-    .await?;
-    if read_response(&mut connection).await?.error.is_some() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "NyaTerm MCP authentication failed",
-        ));
-    }
+    connection_rpc(&mut connection, "auth", params)
+        .await
+        .map_err(|error| match error {
+            ConnectionRpcError::Remote(error) | ConnectionRpcError::Disconnected(error) => {
+                std::io::Error::new(std::io::ErrorKind::PermissionDenied, error.message)
+            }
+        })?;
     Ok(connection)
 }
 
 async fn cancel_request(endpoint: &BridgeEndpoint, request_id: &str) -> std::io::Result<()> {
     let mut connection = connect(endpoint).await?;
-    write_request(
+    connection_rpc(
         &mut connection,
-        RpcRequest {
-            id: 2,
-            method: "request.cancel".into(),
-            params: json!({ "requestId": request_id }),
-        },
+        "request.cancel",
+        json!({ "requestId": request_id }),
     )
-    .await?;
-    let _ = read_response(&mut connection).await?;
+    .await
+    .map_err(|error| match error {
+        ConnectionRpcError::Remote(error) | ConnectionRpcError::Disconnected(error) => {
+            std::io::Error::other(error.message)
+        }
+    })?;
     Ok(())
 }
 
@@ -266,5 +296,213 @@ fn bridge_error(code: &str, message: &str) -> RpcError {
     RpcError {
         code: code.into(),
         message: message.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use tokio::net::TcpListener;
+
+    use super::*;
+
+    async fn request(
+        lines: &mut tokio::io::Lines<BufReader<tokio::net::tcp::OwnedReadHalf>>,
+    ) -> RpcRequest {
+        serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap()
+    }
+
+    async fn respond(writer: &mut tokio::net::tcp::OwnedWriteHalf, id: u64, result: Value) {
+        let mut bytes = serde_json::to_vec(&RpcResponse {
+            id,
+            result: Some(result),
+            error: None,
+        })
+        .unwrap();
+        bytes.push(b'\n');
+        writer.write_all(&bytes).await.unwrap();
+    }
+
+    async fn authenticate(
+        stream: TcpStream,
+        auth_count: &AtomicUsize,
+    ) -> (
+        tokio::io::Lines<BufReader<tokio::net::tcp::OwnedReadHalf>>,
+        tokio::net::tcp::OwnedWriteHalf,
+    ) {
+        let (reader, mut writer) = stream.into_split();
+        let mut lines = BufReader::new(reader).lines();
+        let auth = request(&mut lines).await;
+        assert_eq!(auth.method, "auth");
+        assert_eq!(auth.params["token"], "test-token");
+        auth_count.fetch_add(1, Ordering::SeqCst);
+        respond(&mut writer, auth.id, json!({ "authenticated": true })).await;
+        (lines, writer)
+    }
+
+    #[tokio::test]
+    async fn disconnect_invalidates_and_next_call_reauthenticates_and_identifies() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let auth_count = Arc::new(AtomicUsize::new(0));
+        let server_count = auth_count.clone();
+        let server = tokio::spawn(async move {
+            let (first, _) = listener.accept().await.unwrap();
+            let (mut lines, mut writer) = authenticate(first, &server_count).await;
+            let identify = request(&mut lines).await;
+            assert_eq!(identify.method, "client.identify");
+            respond(&mut writer, identify.id, json!({ "identified": true })).await;
+            let call = request(&mut lines).await;
+            assert_eq!(call.method, "capability.execute");
+            respond(&mut writer, call.id, json!({ "value": "first" })).await;
+            drop(writer);
+
+            let (second, _) = listener.accept().await.unwrap();
+            let (mut lines, mut writer) = authenticate(second, &server_count).await;
+            let identify = request(&mut lines).await;
+            assert_eq!(identify.method, "client.identify");
+            respond(&mut writer, identify.id, json!({ "identified": true })).await;
+            let call = request(&mut lines).await;
+            respond(&mut writer, call.id, json!({ "value": "recovered" })).await;
+        });
+
+        let client = BridgeClient::new(BridgeEndpoint::for_test(port));
+        client
+            .identify("bridge-test".into(), Some("1.0".into()))
+            .await;
+        let first = client
+            .call("get_environment", json!({}), CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(first["value"], "first");
+
+        let disconnected = client
+            .call("get_environment", json!({}), CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert_eq!(disconnected.code, "bridge_disconnected");
+
+        let recovered = client
+            .call("get_environment", json!({}), CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(recovered["value"], "recovered");
+        server.await.unwrap();
+        assert_eq!(auth_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn response_id_mismatch_invalidates_the_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let auth_count = Arc::new(AtomicUsize::new(0));
+        let server_count = auth_count.clone();
+        let server = tokio::spawn(async move {
+            let (first, _) = listener.accept().await.unwrap();
+            let (mut lines, mut writer) = authenticate(first, &server_count).await;
+            let call = request(&mut lines).await;
+            respond(&mut writer, call.id + 1, json!({ "wrong": true })).await;
+            drop(writer);
+
+            let (second, _) = listener.accept().await.unwrap();
+            let (mut lines, mut writer) = authenticate(second, &server_count).await;
+            let call = request(&mut lines).await;
+            respond(&mut writer, call.id, json!({ "recovered": true })).await;
+        });
+
+        let client = BridgeClient::new(BridgeEndpoint::for_test(port));
+        let mismatch = client
+            .call("get_environment", json!({}), CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert_eq!(mismatch.code, "bridge_disconnected");
+        let recovered = client
+            .call("get_environment", json!({}), CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(recovered["recovered"], true);
+        server.await.unwrap();
+        assert_eq!(auth_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn invalid_response_invalidates_the_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let auth_count = Arc::new(AtomicUsize::new(0));
+        let server_count = auth_count.clone();
+        let server = tokio::spawn(async move {
+            let (first, _) = listener.accept().await.unwrap();
+            let (mut lines, mut writer) = authenticate(first, &server_count).await;
+            let _ = request(&mut lines).await;
+            writer.write_all(b"not-json\n").await.unwrap();
+            drop(writer);
+
+            let (second, _) = listener.accept().await.unwrap();
+            let (mut lines, mut writer) = authenticate(second, &server_count).await;
+            let call = request(&mut lines).await;
+            respond(&mut writer, call.id, json!({ "recovered": true })).await;
+        });
+
+        let client = BridgeClient::new(BridgeEndpoint::for_test(port));
+        let invalid = client
+            .call("get_environment", json!({}), CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert_eq!(invalid.code, "bridge_disconnected");
+        assert!(
+            client
+                .call("get_environment", json!({}), CancellationToken::new())
+                .await
+                .unwrap()["recovered"]
+                .as_bool()
+                .unwrap()
+        );
+        server.await.unwrap();
+        assert_eq!(auth_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn empty_response_invalidates_the_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let auth_count = Arc::new(AtomicUsize::new(0));
+        let server_count = auth_count.clone();
+        let server = tokio::spawn(async move {
+            let (first, _) = listener.accept().await.unwrap();
+            let (mut lines, mut writer) = authenticate(first, &server_count).await;
+            let call = request(&mut lines).await;
+            let mut bytes = serde_json::to_vec(&RpcResponse {
+                id: call.id,
+                result: None,
+                error: None,
+            })
+            .unwrap();
+            bytes.push(b'\n');
+            writer.write_all(&bytes).await.unwrap();
+            drop(writer);
+
+            let (second, _) = listener.accept().await.unwrap();
+            let (mut lines, mut writer) = authenticate(second, &server_count).await;
+            let call = request(&mut lines).await;
+            respond(&mut writer, call.id, json!({ "recovered": true })).await;
+        });
+
+        let client = BridgeClient::new(BridgeEndpoint::for_test(port));
+        let empty = client
+            .call("get_environment", json!({}), CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert_eq!(empty.code, "bridge_disconnected");
+        assert_eq!(
+            client
+                .call("get_environment", json!({}), CancellationToken::new())
+                .await
+                .unwrap()["recovered"],
+            true
+        );
+        server.await.unwrap();
+        assert_eq!(auth_count.load(Ordering::SeqCst), 2);
     }
 }

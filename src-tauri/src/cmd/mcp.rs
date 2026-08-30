@@ -70,6 +70,20 @@ pub async fn respond_external_mcp_approval(
 }
 
 #[tauri::command]
+pub async fn report_mcp_active_session(
+    window: tauri::WebviewWindow,
+    manager: tauri::State<'_, Arc<McpManager>>,
+    session_id: Option<String>,
+) -> AppResult<()> {
+    if !crate::window_state::is_main_window_label(window.label()) {
+        return Err(AppError::Config(
+            "Only a NyaTerm main window can report its active MCP session.".into(),
+        ));
+    }
+    manager.set_active_session(window.label(), session_id).await
+}
+
+#[tauri::command]
 pub fn get_external_mcp_client_configs(
     manager: tauri::State<'_, Arc<McpManager>>,
 ) -> AppResult<McpClientConfigs> {

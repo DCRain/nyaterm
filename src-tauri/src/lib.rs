@@ -167,6 +167,7 @@ pub fn run() {
             cmd::mcp::notify_mcp_session_restore_complete,
             cmd::mcp::set_external_mcp_enabled,
             cmd::mcp::respond_external_mcp_approval,
+            cmd::mcp::report_mcp_active_session,
             cmd::mcp::get_external_mcp_client_configs,
             cmd::ai::detect_claude_code_cli,
             cmd::ai::get_claude_code_account_status,

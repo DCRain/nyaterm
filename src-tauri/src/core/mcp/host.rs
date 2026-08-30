@@ -32,8 +32,9 @@ use crate::core::SessionManager;
 use crate::core::ai::{AppendAiAuditRequest, append_ai_audit, redact_sensitive_text};
 use crate::core::capabilities::sftp as sftp_capability;
 use crate::core::capabilities::{
-    CapabilityAccess, McpScope, OutputStore, PolicyDecision, TerminalExecuteRequest,
-    assess_command_risk, capability_for_tool, decide_policy, execute_terminal_command,
+    CapabilityAccess, McpScope, McpScopeSnapshot, OutputStore, PolicyDecision, RiskAssessment,
+    TerminalExecuteRequest, assess_command_risk, capability_for_tool, decide_policy,
+    execute_terminal_command,
 };
 use crate::core::session::{SessionInfo, SessionType};
 use crate::error::{AppError, AppResult};
@@ -116,7 +117,7 @@ struct ExternalRuntime {
     settings: ExternalMcpSettings,
     owner_window_label: String,
     generation: String,
-    scoped_session_count: usize,
+    scope: Arc<McpScope>,
     cancellation: CancellationToken,
     last_activity: Arc<StdMutex<Instant>>,
     approval_waiters: Arc<AtomicUsize>,
@@ -145,6 +146,7 @@ pub struct McpManager {
     persistent_startup: Mutex<Option<ExternalMcpSettings>>,
     approvals: Arc<McpApprovalManager>,
     request_cancellations: Mutex<HashMap<String, (String, CancellationToken)>>,
+    active_sessions: RwLock<HashMap<String, String>>,
     external_connections: AtomicUsize,
     last_error: StdMutex<Option<String>>,
 }
@@ -168,6 +170,7 @@ impl McpManager {
             persistent_startup: Mutex::new(None),
             approvals: Arc::new(McpApprovalManager::default()),
             request_cancellations: Mutex::new(HashMap::new()),
+            active_sessions: RwLock::new(HashMap::new()),
             external_connections: AtomicUsize::new(0),
             last_error: StdMutex::new(None),
         })
@@ -236,37 +239,31 @@ impl McpManager {
                 "The MCP bridge is not initialized.".into(),
             ));
         }
-        {
+        let unchanged = {
             let current = self.external.lock().await;
             if let Some(current) = current.as_ref() {
                 if current.owner_window_label != owner_window_label {
                     return Err(AppError::Config("External MCP is already bound to another NyaTerm window. Disable it before enabling it from this window.".into()));
                 }
-                if current.settings == settings {
-                    return Ok(self.status_from(Some(current)));
-                }
+                current.settings == settings
+            } else {
+                false
             }
+        };
+        if unchanged {
+            return Ok(self.status().await);
         }
         self.disable_external(false).await?;
-        let mut session_ids = self
-            .sessions
-            .list_sessions()
-            .await
-            .into_iter()
-            .filter(|session| {
-                settings.session_scope == ExternalMcpSessionScope::AllSessions
-                    || session.owner_window_label.as_deref() == Some(owner_window_label)
-            })
-            .map(|session| session.id)
-            .collect::<Vec<_>>();
-        session_ids.sort();
-        let default_session_id = (session_ids.len() == 1).then(|| session_ids[0].clone());
+        let scope = Arc::new(match settings.session_scope {
+            ExternalMcpSessionScope::CurrentWindow => McpScope::current_window(owner_window_label),
+            ExternalMcpSessionScope::AllSessions => McpScope::AllSessions,
+        });
         let generation = uuid::Uuid::new_v4().to_string();
         let token = random_token();
         let cancellation = CancellationToken::new();
         let credential = Arc::new(Credential {
             token: token.clone(),
-            scope: Arc::new(McpScope::new(session_ids.clone(), default_session_id)),
+            scope: scope.clone(),
             permission_mode: settings.permission_mode.clone(),
             source: EXTERNAL_SOURCE.into(),
             owner_window_label: Some(owner_window_label.to_string()),
@@ -282,7 +279,7 @@ impl McpManager {
             settings: settings.clone(),
             owner_window_label: owner_window_label.to_string(),
             generation: generation.clone(),
-            scoped_session_count: session_ids.len(),
+            scope,
             cancellation: cancellation.clone(),
             last_activity: last_activity.clone(),
             approval_waiters: approval_waiters.clone(),
@@ -343,6 +340,7 @@ impl McpManager {
     }
 
     pub async fn owner_window_closed(&self, label: &str) {
+        self.active_sessions.write().await.remove(label);
         let matches = self
             .external
             .lock()
@@ -366,20 +364,32 @@ impl McpManager {
 
     pub async fn status(&self) -> McpRuntimeStatus {
         let external = self.external.lock().await;
-        self.status_from(external.as_ref())
-    }
-
-    fn status_from(&self, external: Option<&ExternalRuntime>) -> McpRuntimeStatus {
+        let metadata = external.as_ref().map(|state| {
+            (
+                state.owner_window_label.clone(),
+                state.generation.clone(),
+                state.scope.clone(),
+            )
+        });
+        drop(external);
+        let scoped_session_count = if let Some((_, _, scope)) = metadata.as_ref() {
+            scope
+                .resolve(&self.sessions.list_sessions().await)
+                .session_ids
+                .len()
+        } else {
+            0
+        };
         let port = self.port.load(Ordering::SeqCst);
         McpRuntimeStatus {
-            enabled: external.is_some(),
-            running: external.is_some() && port != 0,
+            enabled: metadata.is_some(),
+            running: metadata.is_some() && port != 0,
             error: self.last_error.lock().unwrap().clone(),
-            owner_window_label: external.map(|state| state.owner_window_label.clone()),
-            scoped_session_count: external.map_or(0, |state| state.scoped_session_count),
+            owner_window_label: metadata.as_ref().map(|state| state.0.clone()),
+            scoped_session_count,
             connection_count: self.external_connections.load(Ordering::SeqCst),
             port: (port != 0).then_some(port),
-            generation: external.map(|state| state.generation.clone()),
+            generation: metadata.map(|state| state.1),
         }
     }
 
@@ -417,7 +427,7 @@ impl McpManager {
             generation.clone(),
             Arc::new(Credential {
                 token: token.clone(),
-                scope: Arc::new(McpScope::new(session_ids, default_session_id)),
+                scope: Arc::new(McpScope::explicit(session_ids, default_session_id)),
                 permission_mode,
                 source: source.to_string(),
                 owner_window_label,
@@ -441,6 +451,31 @@ impl McpManager {
         decision: ApprovalDecision,
     ) -> AppResult<()> {
         self.approvals.respond(request_id, decision).await
+    }
+
+    pub async fn set_active_session(
+        &self,
+        owner_window_label: &str,
+        session_id: Option<String>,
+    ) -> AppResult<()> {
+        if let Some(session_id) = session_id {
+            let info = self.sessions.session_info(&session_id).await?;
+            if info.owner_window_label.as_deref() != Some(owner_window_label) {
+                return Err(AppError::Config(
+                    "The active session does not belong to the reporting window.".into(),
+                ));
+            }
+            self.active_sessions
+                .write()
+                .await
+                .insert(owner_window_label.to_string(), session_id);
+        } else {
+            self.active_sessions
+                .write()
+                .await
+                .remove(owner_window_label);
+        }
+        Ok(())
     }
 
     pub async fn cancel_pending_approvals(&self) {
@@ -678,7 +713,7 @@ impl McpManager {
                 Ok(value) => {
                     self.audit(
                         context,
-                        definition.id,
+                        definition.capability,
                         None,
                         None,
                         Some("inherited"),
@@ -693,7 +728,7 @@ impl McpManager {
                 Err(error) => {
                     self.audit(
                         context,
-                        definition.id,
+                        definition.capability,
                         None,
                         None,
                         Some("inherited"),
@@ -707,13 +742,17 @@ impl McpManager {
                 }
             }
         }
-        let session_id = match self.resolve_session(context, tool_name, &arguments) {
+        let scope = context
+            .credential
+            .scope
+            .resolve(&self.sessions.list_sessions().await);
+        let session_id = match Self::resolve_session(&scope, tool_name, &arguments) {
             Ok(session_id) => session_id,
             Err(error) => {
                 let mapped = map_error(error);
                 self.audit(
                     context,
-                    definition.id,
+                    definition.capability,
                     arguments.get("sessionId").and_then(Value::as_str),
                     None,
                     Some("validation_denied"),
@@ -732,22 +771,75 @@ impl McpManager {
                 "A target session is required for this capability.",
             ));
         }
-        let risk = if tool_name == tool::TERMINAL_EXECUTE {
-            Some(
-                assess_command_risk(&parse::<TerminalExecuteArgs>(arguments.clone())?.command)
-                    .level,
-            )
-        } else {
-            None
+        let assessment: Option<RiskAssessment> = match tool_name {
+            tool::TERMINAL_EXECUTE => Some(assess_command_risk(
+                &parse::<TerminalExecuteArgs>(arguments.clone())?.command,
+            )),
+            tool::SFTP_WRITE_TEXT => {
+                let args = parse::<SftpWriteTextArgs>(arguments.clone())?;
+                Some(sftp_capability::assess_sftp_risk(
+                    sftp_capability::SftpRiskOperation::Write,
+                    &args.path,
+                    None,
+                    args.force.unwrap_or(false),
+                    None,
+                ))
+            }
+            tool::SFTP_MKDIR => {
+                let args = parse::<SftpMkdirArgs>(arguments.clone())?;
+                Some(sftp_capability::assess_sftp_risk(
+                    sftp_capability::SftpRiskOperation::Mkdir,
+                    &args.path,
+                    None,
+                    false,
+                    args.mode.as_deref(),
+                ))
+            }
+            tool::SFTP_RENAME => {
+                let args = parse::<SftpRenameArgs>(arguments.clone())?;
+                Some(sftp_capability::assess_sftp_risk(
+                    sftp_capability::SftpRiskOperation::Rename,
+                    &args.old_path,
+                    Some(&args.new_path),
+                    false,
+                    None,
+                ))
+            }
+            tool::SFTP_DELETE => {
+                let args = parse::<PathArgs>(arguments.clone())?;
+                Some(sftp_capability::assess_sftp_risk(
+                    sftp_capability::SftpRiskOperation::Delete,
+                    &args.path,
+                    None,
+                    false,
+                    None,
+                ))
+            }
+            tool::SFTP_CHMOD => {
+                let args = parse::<SftpChmodArgs>(arguments.clone())?;
+                Some(sftp_capability::assess_sftp_risk(
+                    sftp_capability::SftpRiskOperation::Chmod,
+                    &args.path,
+                    None,
+                    false,
+                    Some(&args.mode),
+                ))
+            }
+            _ => None,
         };
         let policy = decide_policy(
             &context.credential.permission_mode,
             definition.access,
-            risk.as_ref(),
+            assessment.as_ref(),
         );
-        let grant_key = session_id.clone().map(|id| (id, definition.id.to_string()));
+        let risk = assessment.as_ref().map(|value| value.level.clone());
+        let grant_key = session_id
+            .clone()
+            .map(|id| (id, definition.capability.to_string()));
         let grantable = definition.access != CapabilityAccess::DestructiveWrite
-            && risk.as_ref().is_none_or(|value| *value < RiskLevel::High);
+            && assessment
+                .as_ref()
+                .is_none_or(|value| value.auto_executable && value.level < RiskLevel::High);
         let granted = grantable
             && match grant_key.as_ref() {
                 Some(key) => context.grants.lock().await.contains(key),
@@ -757,7 +849,7 @@ impl McpManager {
         if policy == PolicyDecision::Deny {
             self.audit(
                 context,
-                definition.id,
+                definition.capability,
                 session_id.as_deref(),
                 risk,
                 Some("policy_denied"),
@@ -801,7 +893,7 @@ impl McpManager {
             let event = ApprovalRequestEvent {
                 request_id: uuid::Uuid::new_v4().to_string(),
                 client: context.client.lock().unwrap().clone(),
-                capability: definition.id.to_string(),
+                capability: definition.capability.to_string(),
                 session_id: Some(target.to_string()),
                 session_name: Some(info.name),
                 parameter_summary: summarize(tool_name, &arguments),
@@ -829,7 +921,7 @@ impl McpManager {
                 Err(error) => {
                     self.audit(
                         context,
-                        definition.id,
+                        definition.capability,
                         Some(target),
                         risk.clone(),
                         Some("approval_unavailable"),
@@ -846,7 +938,7 @@ impl McpManager {
             if decision == ApprovalDecision::Deny {
                 self.audit(
                     context,
-                    definition.id,
+                    definition.capability,
                     Some(target),
                     risk,
                     approval,
@@ -861,16 +953,18 @@ impl McpManager {
                     "The operation was denied by the user.",
                 ));
             }
-            if decision == ApprovalDecision::AllowSession && grantable {
-                if let Some(key) = grant_key {
-                    context.grants.lock().await.insert(key);
-                }
+            if decision == ApprovalDecision::AllowSession
+                && grantable
+                && let Some(key) = grant_key
+            {
+                context.grants.lock().await.insert(key);
             }
         }
         let result = tokio::select! {
             _ = cancellation.cancelled() => Err(failure("cancelled", "The MCP request was cancelled.")),
             value = self.dispatch(
                 context,
+                &scope,
                 tool_name,
                 arguments.clone(),
                 session_id.as_deref(),
@@ -882,7 +976,7 @@ impl McpManager {
             Ok(value) => {
                 self.audit(
                     context,
-                    definition.id,
+                    definition.capability,
                     session_id.as_deref(),
                     risk,
                     approval,
@@ -897,7 +991,7 @@ impl McpManager {
             Err(error) => {
                 self.audit(
                     context,
-                    definition.id,
+                    definition.capability,
                     session_id.as_deref(),
                     risk,
                     approval,
@@ -913,8 +1007,7 @@ impl McpManager {
     }
 
     fn resolve_session(
-        &self,
-        context: &ConnectionContext,
+        scope: &McpScopeSnapshot,
         tool_name: &str,
         arguments: &Value,
     ) -> AppResult<Option<String>> {
@@ -923,9 +1016,7 @@ impl McpManager {
         }
         if tool_name == tool::TERMINAL_EXECUTE {
             let args: TerminalExecuteArgs = serde_json::from_value(arguments.clone())?;
-            return context
-                .credential
-                .scope
+            return scope
                 .resolve_terminal_session(args.session_id.as_deref())
                 .map(Some);
         }
@@ -933,13 +1024,14 @@ impl McpManager {
             .get("sessionId")
             .and_then(Value::as_str)
             .ok_or_else(|| AppError::Config("sessionId is required.".into()))?;
-        context.credential.scope.require(id)?;
+        scope.require(id)?;
         Ok(Some(id.to_string()))
     }
 
     async fn dispatch(
         &self,
         context: &ConnectionContext,
+        scope: &McpScopeSnapshot,
         name: &str,
         arguments: Value,
         session_id: Option<&str>,
@@ -948,15 +1040,24 @@ impl McpManager {
         match name {
             tool::GET_ENVIRONMENT => {
                 let mut sessions = Vec::new();
-                for id in &context.credential.scope.session_ids {
+                for id in &scope.session_ids {
                     if let Ok(info) = self.sessions.session_info(id).await {
                         sessions.push(safe_metadata(&info));
                     }
                 }
                 sessions.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
-                Ok(
-                    json!({ "defaultSessionId": context.credential.scope.default_session_id, "sessions": sessions }),
-                )
+                let active_session_id =
+                    if let Some(owner) = context.credential.owner_window_label.as_deref() {
+                        let active_sessions = self.active_sessions.read().await;
+                        scoped_active_session_id(active_sessions.get(owner), scope)
+                    } else {
+                        None
+                    };
+                Ok(json!({
+                    "activeSessionId": active_session_id,
+                    "defaultSessionId": scope.default_session_id,
+                    "sessions": sessions,
+                }))
             }
             tool::SESSION_GET => {
                 let args: SessionArgs = parse(arguments)?;
@@ -1300,6 +1401,14 @@ fn sftp_available(info: &SessionInfo) -> bool {
 fn safe_metadata(info: &SessionInfo) -> Value {
     json!({ "id": info.id, "name": info.name, "type": session_type_name(&info.session_type), "connected": info.connected })
 }
+fn scoped_active_session_id(
+    active_session_id: Option<&String>,
+    scope: &McpScopeSnapshot,
+) -> Option<String> {
+    active_session_id
+        .filter(|id| scope.session_ids.contains(*id))
+        .cloned()
+}
 fn access_risk(value: CapabilityAccess) -> RiskLevel {
     match value {
         CapabilityAccess::Read => RiskLevel::Low,
@@ -1430,6 +1539,25 @@ mod tests {
     #[test]
     fn token_is_32_bytes() {
         assert_eq!(URL_SAFE_NO_PAD.decode(random_token()).unwrap().len(), 32);
+    }
+
+    #[test]
+    fn active_session_must_be_live_and_scoped() {
+        let scope = McpScopeSnapshot {
+            session_ids: HashSet::from(["session-a".into()]),
+            default_session_id: None,
+        };
+        assert_eq!(
+            scoped_active_session_id(Some(&"session-a".into()), &scope).as_deref(),
+            Some("session-a")
+        );
+        assert!(scoped_active_session_id(Some(&"session-b".into()), &scope).is_none());
+
+        let closed_scope = McpScopeSnapshot {
+            session_ids: HashSet::new(),
+            default_session_id: None,
+        };
+        assert!(scoped_active_session_id(Some(&"session-a".into()), &closed_scope).is_none());
     }
 
     #[tokio::test]

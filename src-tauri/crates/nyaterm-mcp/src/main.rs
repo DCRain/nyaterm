@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use bridge::{BridgeClient, BridgeEndpoint, endpoint_from_environment_or_discovery};
 use nyaterm_mcp_protocol::{
-    EmptyArgs, OutputReadArgs, PathArgs, SessionArgs, SftpChmodArgs, SftpMkdirArgs,
-    SftpReadTextArgs, SftpRenameArgs, SftpWriteTextArgs, TerminalExecuteArgs,
-    TerminalRecentOutputArgs, tool,
+    EmptyArgs, MCP_TOOL_REGISTRY, McpToolDefinition, OutputReadArgs, PathArgs, SessionArgs,
+    SftpChmodArgs, SftpMkdirArgs, SftpReadTextArgs, SftpRenameArgs, SftpWriteTextArgs,
+    TerminalExecuteArgs, TerminalRecentOutputArgs, tool,
 };
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, Implementation, ListToolsResult,
@@ -89,94 +89,37 @@ impl ServerHandler for NyaTermMcp {
 }
 
 fn build_tools() -> Vec<Tool> {
-    vec![
-        tool_def::<EmptyArgs>(
-            tool::GET_ENVIRONMENT,
-            "Return scoped NyaTerm sessions and the optional default session.",
-            true,
-            false,
-        ),
-        tool_def::<SessionArgs>(
-            tool::SESSION_GET,
-            "Return safe metadata and capability availability for a scoped session.",
-            true,
-            false,
-        ),
-        tool_def::<TerminalExecuteArgs>(
-            tool::TERMINAL_EXECUTE,
-            "Execute a command in an existing scoped NyaTerm terminal session.",
-            false,
-            false,
-        ),
-        tool_def::<TerminalRecentOutputArgs>(
-            tool::TERMINAL_RECENT_OUTPUT,
-            "Read recent ANSI-free terminal output for a scoped session.",
-            true,
-            false,
-        ),
-        tool_def::<SessionArgs>(
-            tool::SFTP_HOME,
-            "Return the remote home directory.",
-            true,
-            false,
-        ),
-        tool_def::<PathArgs>(tool::SFTP_LIST, "List a remote directory.", true, false),
-        tool_def::<PathArgs>(tool::SFTP_STAT, "Read remote path metadata.", true, false),
-        tool_def::<SftpReadTextArgs>(
-            tool::SFTP_READ_TEXT,
-            "Read up to 64 KiB of a remote UTF-8 text file.",
-            true,
-            false,
-        ),
-        tool_def::<SftpWriteTextArgs>(
-            tool::SFTP_WRITE_TEXT,
-            "Write a remote UTF-8 text file with optional conflict protection.",
-            false,
-            false,
-        ),
-        tool_def::<SftpMkdirArgs>(tool::SFTP_MKDIR, "Create a remote directory.", false, false),
-        tool_def::<SftpRenameArgs>(
-            tool::SFTP_RENAME,
-            "Rename or move a remote path.",
-            false,
-            false,
-        ),
-        tool_def::<PathArgs>(
-            tool::SFTP_DELETE,
-            "Delete a remote path using NyaTerm's existing delete semantics.",
-            false,
-            true,
-        ),
-        tool_def::<SftpChmodArgs>(
-            tool::SFTP_CHMOD,
-            "Change remote path permissions.",
-            false,
-            false,
-        ),
-        tool_def::<OutputReadArgs>(
-            tool::OUTPUT_READ,
-            "Read another chunk of a large result produced on this MCP connection.",
-            true,
-            false,
-        ),
-    ]
+    MCP_TOOL_REGISTRY
+        .iter()
+        .map(|definition| match definition.tool {
+            tool::GET_ENVIRONMENT => tool_def::<EmptyArgs>(definition),
+            tool::SESSION_GET | tool::SFTP_HOME => tool_def::<SessionArgs>(definition),
+            tool::TERMINAL_EXECUTE => tool_def::<TerminalExecuteArgs>(definition),
+            tool::TERMINAL_RECENT_OUTPUT => tool_def::<TerminalRecentOutputArgs>(definition),
+            tool::SFTP_LIST | tool::SFTP_STAT | tool::SFTP_DELETE => {
+                tool_def::<PathArgs>(definition)
+            }
+            tool::SFTP_READ_TEXT => tool_def::<SftpReadTextArgs>(definition),
+            tool::SFTP_WRITE_TEXT => tool_def::<SftpWriteTextArgs>(definition),
+            tool::SFTP_MKDIR => tool_def::<SftpMkdirArgs>(definition),
+            tool::SFTP_RENAME => tool_def::<SftpRenameArgs>(definition),
+            tool::SFTP_CHMOD => tool_def::<SftpChmodArgs>(definition),
+            tool::OUTPUT_READ => tool_def::<OutputReadArgs>(definition),
+            _ => unreachable!("registry contains an unknown MCP tool"),
+        })
+        .collect()
 }
 
-fn tool_def<T: JsonSchema>(
-    name: &'static str,
-    description: &'static str,
-    read_only: bool,
-    destructive: bool,
-) -> Tool {
+fn tool_def<T: JsonSchema>(definition: &McpToolDefinition) -> Tool {
     let schema = serde_json::to_value(schemars::schema_for!(T))
         .unwrap_or_else(|_| json!({ "type": "object" }));
     let object = schema.as_object().cloned().unwrap_or_else(Map::new);
-    let mut item = Tool::new(name, description, object);
+    let mut item = Tool::new(definition.tool, definition.description, object);
     item.annotations = Some(
         ToolAnnotations::new()
-            .read_only(read_only)
-            .destructive(destructive)
-            .open_world(false),
+            .read_only(definition.read_only_hint)
+            .destructive(definition.destructive_hint)
+            .open_world(definition.open_world_hint),
     );
     item
 }
@@ -193,13 +136,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use nyaterm_mcp_protocol::{RpcRequest, RpcResponse};
+    use nyaterm_mcp_protocol::{MCP_TOOL_REGISTRY, RpcRequest, RpcResponse};
     use tokio::{
         io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines, ReadHalf, WriteHalf},
         net::TcpListener,
     };
 
     use super::*;
+
+    #[test]
+    fn listed_tool_annotations_come_from_the_shared_registry() {
+        let tools = build_tools();
+        assert_eq!(tools.len(), MCP_TOOL_REGISTRY.len());
+        for definition in MCP_TOOL_REGISTRY {
+            let tool = tools
+                .iter()
+                .find(|tool| tool.name == definition.tool)
+                .unwrap();
+            let value = serde_json::to_value(tool).unwrap();
+            assert_eq!(
+                value["annotations"]["readOnlyHint"],
+                definition.read_only_hint
+            );
+            assert_eq!(
+                value["annotations"]["destructiveHint"],
+                definition.destructive_hint
+            );
+            assert_eq!(
+                value["annotations"]["openWorldHint"],
+                definition.open_world_hint
+            );
+        }
+    }
 
     async fn send_client_message(writer: &mut WriteHalf<tokio::io::DuplexStream>, raw: &str) {
         let value = serde_json::from_str::<Value>(raw).expect("valid MCP client message");
