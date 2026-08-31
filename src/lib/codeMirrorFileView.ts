@@ -294,7 +294,7 @@ export function codeMirrorFileViewExtensions(
         borderLeftColor: "var(--foreground)",
       },
       ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
-        backgroundColor: "color-mix(in srgb, var(--primary) 28%, transparent)",
+        backgroundColor: "var(--df-terminal-selection, var(--df-primary)) !important",
       },
       ".cm-scroller": {
         fontFamily: "var(--font-mono), 'JetBrains Mono', monospace",
@@ -318,7 +318,15 @@ export function codeMirrorFileViewExtensions(
         opacity: "0.8",
       },
       ".cm-activeLine": {
-        backgroundColor: "color-mix(in srgb, var(--muted) 22%, transparent)",
+        "&::before": {
+          content: '""',
+          position: "absolute",
+          inset: "0",
+          zIndex: "-3",
+          backgroundColor: "color-mix(in srgb, var(--muted) 22%, transparent)",
+        },
+        position: "relative",
+        backgroundColor: "transparent",
       },
       ".cm-activeLineGutter": {
         backgroundColor: "color-mix(in srgb, var(--muted) 32%, transparent)",
