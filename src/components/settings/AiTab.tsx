@@ -1,5 +1,5 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { listen } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -32,14 +32,14 @@ import {
   supportsApiFormatSelection,
   supportsCustomModelDiscovery,
 } from "@/lib/aiSettings";
+import { writeClipboardText } from "@/lib/clipboard";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
-import { writeClipboardText } from "@/lib/clipboard";
+import { getOwnerMainWindowLabel } from "@/lib/windowManager";
 import type {
-  AICustomActionConfig,
   AIApiFormat,
+  AICustomActionConfig,
   AIModelConfigItem,
-  AIPermissionMode,
   AIProviderCredential,
   AIProviderKind,
   AISettings,
@@ -48,6 +48,7 @@ import type {
   ExternalMcpSettings,
   McpRuntimeStatus,
 } from "@/types/global";
+import { AiPermissionSelect } from "./AiPermissionSelect";
 import {
   SettingFieldGrid,
   SettingInput,
@@ -307,8 +308,6 @@ export function AiAgentsTab() {
     enabled: false,
     permission_mode: "confirm",
     session_scope: "current_window",
-    server_mode: "temporary",
-    idle_timeout_minutes: 10,
   };
   const [mcpStatus, setMcpStatus] = useState<McpRuntimeStatus | null>(null);
   const [cliStatus, setCliStatus] = useState<CodexCliStatus | null>(null);
@@ -341,12 +340,32 @@ export function AiAgentsTab() {
 
   const updateExternalMcp = useCallback(
     (patch: Partial<ExternalMcpSettings>) =>
-      updateAppSettings({ ai: { ...ai, external_mcp: { ...externalMcp, ...patch } } }),
+      updateAppSettings({
+        ai: { ...ai, external_mcp: { ...externalMcp, ...patch } },
+      }),
     [ai, externalMcp, updateAppSettings],
   );
 
+  const setExternalMcpEnabled = useCallback(
+    async (enabled: boolean) => {
+      try {
+        const status = await invoke<McpRuntimeStatus>("set_external_mcp_enabled", {
+          enabled,
+          ownerWindowLabel: getOwnerMainWindowLabel(),
+        });
+        setMcpStatus(status);
+        updateExternalMcp({ enabled });
+      } catch (error) {
+        toast.error(getErrorMessage(error));
+      }
+    },
+    [updateExternalMcp],
+  );
+
   useEffect(() => {
-    void invoke<McpRuntimeStatus>("get_external_mcp_status").then(setMcpStatus).catch(() => {});
+    void invoke<McpRuntimeStatus>("get_external_mcp_status")
+      .then(setMcpStatus)
+      .catch(() => {});
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void listen<McpRuntimeStatus>("mcp-status-changed", (event) => {
@@ -597,19 +616,15 @@ export function AiAgentsTab() {
                   </SelectItem>
                 ))}
               </SettingSelect>
-              <SettingSelect
-                label={t("ai.permissionMode")}
+              <AiPermissionSelect
                 value={codex.permission_mode ?? "confirm"}
+                targetLabel="Codex"
                 onValueChange={(permission_mode) =>
                   updateCodex({
-                    permission_mode: permission_mode as AIPermissionMode,
+                    permission_mode,
                   })
                 }
-              >
-                <SelectItem value="observer">{t("ai.permissionObserver")}</SelectItem>
-                <SelectItem value="confirm">{t("ai.permissionConfirm")}</SelectItem>
-                <SelectItem value="auto">{t("ai.permissionAuto")}</SelectItem>
-              </SettingSelect>
+              />
             </SettingFieldGrid>
 
             <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
@@ -722,19 +737,15 @@ export function AiAgentsTab() {
                   })
                 }
               />
-              <SettingSelect
-                label={t("ai.permissionMode")}
+              <AiPermissionSelect
                 value={claudeCode.permission_mode ?? "confirm"}
+                targetLabel="Claude Code"
                 onValueChange={(permission_mode) =>
                   updateClaudeCode({
-                    permission_mode: permission_mode as AIPermissionMode,
+                    permission_mode,
                   })
                 }
-              >
-                <SelectItem value="observer">{t("ai.permissionObserver")}</SelectItem>
-                <SelectItem value="confirm">{t("ai.permissionConfirm")}</SelectItem>
-                <SelectItem value="auto">{t("ai.permissionAuto")}</SelectItem>
-              </SettingSelect>
+              />
             </SettingFieldGrid>
 
             <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
@@ -782,7 +793,7 @@ export function AiAgentsTab() {
             </Badge>
             <SettingSwitch
               checked={externalMcp.enabled}
-              onChange={(enabled) => updateExternalMcp({ enabled })}
+              onChange={(enabled) => void setExternalMcpEnabled(enabled)}
             />
           </div>
         </SettingRow>
@@ -790,17 +801,15 @@ export function AiAgentsTab() {
           <div className="text-xs text-destructive">{mcpStatus.error}</div>
         ) : null}
         <SettingFieldGrid>
-          <SettingSelect
-            label={t("ai.permissionMode")}
+          <AiPermissionSelect
             value={externalMcp.permission_mode}
+            targetLabel={t("ai.externalMcp")}
             onValueChange={(permission_mode) =>
-              updateExternalMcp({ permission_mode: permission_mode as AIPermissionMode })
+              updateExternalMcp({
+                permission_mode,
+              })
             }
-          >
-            <SelectItem value="observer">{t("ai.permissionObserver")}</SelectItem>
-            <SelectItem value="confirm">{t("ai.permissionConfirm")}</SelectItem>
-            <SelectItem value="auto">{t("ai.permissionAuto")}</SelectItem>
-          </SettingSelect>
+          />
           <SettingSelect
             label={t("ai.externalMcpScope")}
             value={externalMcp.session_scope}
@@ -813,27 +822,6 @@ export function AiAgentsTab() {
             <SelectItem value="current_window">{t("ai.externalMcpCurrentWindow")}</SelectItem>
             <SelectItem value="all_sessions">{t("ai.externalMcpAllSessions")}</SelectItem>
           </SettingSelect>
-          <SettingSelect
-            label={t("ai.externalMcpServerMode")}
-            value={externalMcp.server_mode}
-            onValueChange={(server_mode) =>
-              updateExternalMcp({
-                server_mode: server_mode as ExternalMcpSettings["server_mode"],
-              })
-            }
-          >
-            <SelectItem value="temporary">{t("ai.externalMcpTemporary")}</SelectItem>
-            <SelectItem value="persistent">{t("ai.externalMcpPersistent")}</SelectItem>
-          </SettingSelect>
-          <SettingNumberInput
-            label={t("ai.externalMcpIdleTimeout")}
-            min={1}
-            max={120}
-            step={1}
-            disabled={externalMcp.server_mode === "persistent"}
-            value={externalMcp.idle_timeout_minutes}
-            onChange={(idle_timeout_minutes) => updateExternalMcp({ idle_timeout_minutes })}
-          />
         </SettingFieldGrid>
         <div className="text-xs text-muted-foreground">
           {t("ai.externalMcpRuntimeSummary", {

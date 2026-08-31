@@ -72,6 +72,7 @@ pub enum AiPermissionMode {
     Observer,
     Confirm,
     Auto,
+    FullAccess,
 }
 
 impl Default for AiPermissionMode {
@@ -94,19 +95,6 @@ impl Default for ExternalMcpSessionScope {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ExternalMcpServerMode {
-    Temporary,
-    Persistent,
-}
-
-impl Default for ExternalMcpServerMode {
-    fn default() -> Self {
-        Self::Temporary
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExternalMcpSettings {
     #[serde(default)]
     pub enabled: bool,
@@ -114,10 +102,6 @@ pub struct ExternalMcpSettings {
     pub permission_mode: AiPermissionMode,
     #[serde(default)]
     pub session_scope: ExternalMcpSessionScope,
-    #[serde(default)]
-    pub server_mode: ExternalMcpServerMode,
-    #[serde(default = "default_external_mcp_idle_timeout_minutes")]
-    pub idle_timeout_minutes: u16,
 }
 
 impl Default for ExternalMcpSettings {
@@ -126,14 +110,8 @@ impl Default for ExternalMcpSettings {
             enabled: false,
             permission_mode: AiPermissionMode::Confirm,
             session_scope: ExternalMcpSessionScope::CurrentWindow,
-            server_mode: ExternalMcpServerMode::Temporary,
-            idle_timeout_minutes: default_external_mcp_idle_timeout_minutes(),
         }
     }
-}
-
-fn default_external_mcp_idle_timeout_minutes() -> u16 {
-    10
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -738,8 +716,6 @@ pub fn normalize_ai_settings(settings: &mut AiSettings) -> bool {
     let original = serde_json::to_string(settings).unwrap_or_default();
 
     settings.schema_version = 6;
-    settings.external_mcp.idle_timeout_minutes =
-        settings.external_mcp.idle_timeout_minutes.clamp(1, 120);
     if settings.request_user_agent.trim().is_empty() {
         settings.request_user_agent = default_request_user_agent();
     }
@@ -878,6 +854,38 @@ fn migrate_legacy_ollama_base_url(base_url: &mut Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_external_mcp_mode_fields_are_read_but_not_written() {
+        let settings: ExternalMcpSettings = serde_json::from_value(serde_json::json!({
+            "enabled": true,
+            "permission_mode": "confirm",
+            "session_scope": "current_window",
+            "server_mode": "temporary",
+            "idle_timeout_minutes": 10
+        }))
+        .expect("legacy External MCP settings");
+
+        assert!(settings.enabled);
+        assert_eq!(settings.permission_mode, AiPermissionMode::Confirm);
+        assert_eq!(
+            settings.session_scope,
+            ExternalMcpSessionScope::CurrentWindow
+        );
+        let serialized = serde_json::to_value(settings).expect("serialized External MCP settings");
+        assert!(serialized.get("server_mode").is_none());
+        assert!(serialized.get("idle_timeout_minutes").is_none());
+    }
+
+    #[test]
+    fn full_access_permission_mode_roundtrips_as_snake_case() {
+        let serialized = serde_json::to_string(&AiPermissionMode::FullAccess)
+            .expect("serialized permission mode");
+        assert_eq!(serialized, "\"full_access\"");
+        let parsed: AiPermissionMode =
+            serde_json::from_str(&serialized).expect("parsed permission mode");
+        assert_eq!(parsed, AiPermissionMode::FullAccess);
+    }
 
     fn ollama_profile(settings: &AiSettings) -> &AiProviderProfile {
         settings

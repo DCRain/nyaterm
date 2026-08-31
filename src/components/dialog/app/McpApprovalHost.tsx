@@ -92,9 +92,13 @@ export function McpApprovalHost() {
             </div>
             <div>
               <span className="text-muted-foreground">
-                {t("ai.externalMcpSession")}:
+                {t("ai.externalMcpTarget")}:
               </span>{" "}
-              {current.sessionName ?? current.sessionId ?? "-"}
+              {current.connectionName ??
+                current.connectionId ??
+                current.sessionName ??
+                current.sessionId ??
+                "-"}
             </div>
             <div>
               <span className="text-muted-foreground">

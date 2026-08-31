@@ -8,9 +8,9 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use nyaterm_mcp_protocol::{
     AuthParams, CapabilityExecuteParams, ClientIdentifyParams, DiscoveryDocument,
     MAX_INLINE_OUTPUT_BYTES, MAX_RPC_LINE_BYTES, MAX_TEXT_READ_BYTES, MAX_TEXT_WRITE_BYTES,
-    PROTOCOL_VERSION, PathArgs, RpcError, RpcRequest, RpcResponse, SessionArgs, SftpChmodArgs,
-    SftpMkdirArgs, SftpReadTextArgs, SftpRenameArgs, SftpWriteTextArgs, TerminalExecuteArgs,
-    TerminalRecentOutputArgs, tool,
+    PROTOCOL_VERSION, PathArgs, RpcError, RpcRequest, RpcResponse, SessionArgs, SessionOpenArgs,
+    SftpChmodArgs, SftpMkdirArgs, SftpReadTextArgs, SftpRenameArgs, SftpWriteTextArgs,
+    TerminalExecuteArgs, TerminalRecentOutputArgs, tool,
 };
 use rand::RngCore;
 use serde::Serialize;
@@ -19,13 +19,13 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use super::approval::{ApprovalDecision, ApprovalRequestEvent, McpApprovalManager};
 use super::discovery::DiscoveryStore;
 use crate::config::{
-    AiExecutionProfile, AiPermissionMode, ExternalMcpServerMode, ExternalMcpSessionScope,
+    AiExecutionProfile, AiPermissionMode, ConnectionType, ExternalMcpSessionScope,
     ExternalMcpSettings, RiskLevel,
 };
 use crate::core::SessionManager;
@@ -62,6 +62,30 @@ pub struct McpClientConfigs {
     pub codex: Value,
     pub claude_code: Value,
     pub cursor: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct McpConnectionSummary {
+    id: String,
+    name: String,
+    r#type: String,
+    group_path: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct McpSessionOpenRequestEvent {
+    request_id: String,
+    connection_id: String,
+    target_window_label: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct McpSessionOpenCancelEvent {
+    request_id: String,
+    target_window_label: String,
 }
 
 #[derive(Clone)]
@@ -111,6 +135,7 @@ struct Credential {
     source: String,
     owner_window_label: Option<String>,
     cancellation: CancellationToken,
+    opened_session_ids: RwLock<HashSet<String>>,
 }
 
 struct ExternalRuntime {
@@ -119,8 +144,11 @@ struct ExternalRuntime {
     generation: String,
     scope: Arc<McpScope>,
     cancellation: CancellationToken,
-    last_activity: Arc<StdMutex<Instant>>,
-    approval_waiters: Arc<AtomicUsize>,
+}
+
+struct PendingSessionOpen {
+    owner_window_label: String,
+    responder: oneshot::Sender<Result<String, String>>,
 }
 
 struct ConnectionContext {
@@ -143,11 +171,12 @@ pub struct McpManager {
     shutdown: CancellationToken,
     credentials: RwLock<HashMap<String, Arc<Credential>>>,
     external: Mutex<Option<ExternalRuntime>>,
-    persistent_startup: Mutex<Option<ExternalMcpSettings>>,
+    startup_settings: Mutex<Option<ExternalMcpSettings>>,
     approvals: Arc<McpApprovalManager>,
     request_cancellations: Mutex<HashMap<String, (String, CancellationToken)>>,
     active_sessions: RwLock<HashMap<String, String>>,
     external_connections: AtomicUsize,
+    pending_session_opens: Mutex<HashMap<String, PendingSessionOpen>>,
     last_error: StdMutex<Option<String>>,
 }
 
@@ -167,11 +196,12 @@ impl McpManager {
             shutdown: CancellationToken::new(),
             credentials: RwLock::new(HashMap::new()),
             external: Mutex::new(None),
-            persistent_startup: Mutex::new(None),
+            startup_settings: Mutex::new(None),
             approvals: Arc::new(McpApprovalManager::default()),
             request_cancellations: Mutex::new(HashMap::new()),
             active_sessions: RwLock::new(HashMap::new()),
             external_connections: AtomicUsize::new(0),
+            pending_session_opens: Mutex::new(HashMap::new()),
             last_error: StdMutex::new(None),
         })
     }
@@ -189,16 +219,8 @@ impl McpManager {
         tauri::async_runtime::spawn(async move { manager.accept_loop(listener).await });
 
         let settings = crate::config::load_app_settings(&app)?.ai.external_mcp;
-        if settings.enabled && settings.server_mode == ExternalMcpServerMode::Persistent {
-            *self.persistent_startup.lock().await = Some(settings);
-        } else if settings.enabled {
-            let _ = crate::storage::update_settings_doc(
-                crate::storage::SettingsDocKey::AppSettings,
-                |stored: &mut crate::config::AppSettings| {
-                    stored.ai.external_mcp.enabled = false;
-                    Ok(())
-                },
-            );
+        if settings.enabled {
+            *self.startup_settings.lock().await = Some(settings);
         }
         Ok(())
     }
@@ -207,7 +229,7 @@ impl McpManager {
         self: &Arc<Self>,
         owner_window_label: &str,
     ) -> AppResult<McpRuntimeStatus> {
-        let settings = self.persistent_startup.lock().await.take();
+        let settings = self.startup_settings.lock().await.take();
         if let Some(settings) = settings {
             self.configure_external(settings, owner_window_label).await
         } else {
@@ -225,11 +247,6 @@ impl McpManager {
         settings: ExternalMcpSettings,
         owner_window_label: &str,
     ) -> AppResult<McpRuntimeStatus> {
-        if !(1..=120).contains(&settings.idle_timeout_minutes) {
-            return Err(AppError::Config(
-                "External MCP idle timeout must be between 1 and 120 minutes.".into(),
-            ));
-        }
         if !settings.enabled {
             self.disable_external(false).await?;
             return Ok(self.status().await);
@@ -268,21 +285,18 @@ impl McpManager {
             source: EXTERNAL_SOURCE.into(),
             owner_window_label: Some(owner_window_label.to_string()),
             cancellation: cancellation.clone(),
+            opened_session_ids: RwLock::new(HashSet::new()),
         });
         self.credentials
             .write()
             .await
             .insert(generation.clone(), credential);
-        let last_activity = Arc::new(StdMutex::new(Instant::now()));
-        let approval_waiters = Arc::new(AtomicUsize::new(0));
         *self.external.lock().await = Some(ExternalRuntime {
             settings: settings.clone(),
             owner_window_label: owner_window_label.to_string(),
             generation: generation.clone(),
             scope,
             cancellation: cancellation.clone(),
-            last_activity: last_activity.clone(),
-            approval_waiters: approval_waiters.clone(),
         });
         let document = DiscoveryDocument {
             version: PROTOCOL_VERSION,
@@ -299,20 +313,6 @@ impl McpManager {
             return Err(error);
         }
         self.set_error(None);
-        if settings.server_mode == ExternalMcpServerMode::Temporary {
-            let manager = self.clone();
-            tauri::async_runtime::spawn(async move {
-                manager
-                    .temporary_idle_worker(
-                        generation,
-                        settings.idle_timeout_minutes,
-                        last_activity,
-                        approval_waiters,
-                        cancellation,
-                    )
-                    .await;
-            });
-        }
         self.emit_status();
         Ok(self.status().await)
     }
@@ -339,16 +339,31 @@ impl McpManager {
         Ok(())
     }
 
-    pub async fn owner_window_closed(&self, label: &str) {
+    pub async fn owner_window_closed(self: &Arc<Self>, label: &str) {
         self.active_sessions.write().await.remove(label);
-        let matches = self
+        let settings = self
             .external
             .lock()
             .await
             .as_ref()
-            .is_some_and(|state| state.owner_window_label == label);
-        if matches {
-            let _ = self.disable_external(true).await;
+            .filter(|state| state.owner_window_label == label)
+            .map(|state| state.settings.clone());
+        let Some(settings) = settings else { return };
+
+        let replacement = self.app.get().and_then(|app| {
+            let mut windows = crate::app::main_windows(app)
+                .into_iter()
+                .filter(|window| window.label() != label)
+                .collect::<Vec<_>>();
+            windows.sort_by(|left, right| left.label().cmp(right.label()));
+            windows.first().map(|window| window.label().to_string())
+        });
+        let _ = self.disable_external(false).await;
+        if let Some(replacement) = replacement {
+            if let Err(error) = self.configure_external(settings, &replacement).await {
+                self.set_error(Some(error.to_string()));
+                self.emit_status();
+            }
         }
     }
 
@@ -405,6 +420,157 @@ impl McpManager {
         })
     }
 
+    fn connection_summaries(&self) -> AppResult<Vec<McpConnectionSummary>> {
+        let app = self
+            .app
+            .get()
+            .ok_or_else(|| AppError::Config("NyaTerm is not ready.".into()))?;
+        let config = crate::config::load_config(app)?;
+        Ok(connection_summaries_from_config(&config))
+    }
+
+    fn connection_summary(&self, connection_id: &str) -> AppResult<McpConnectionSummary> {
+        if connection_id.trim().is_empty() {
+            return Err(AppError::Config("connectionId is required.".into()));
+        }
+        self.connection_summaries()?
+            .into_iter()
+            .find(|connection| connection.id == connection_id)
+            .ok_or_else(|| {
+                AppError::Config(
+                    "The saved connection does not exist or is not a supported terminal connection."
+                        .into(),
+                )
+            })
+    }
+
+    pub async fn respond_session_open(
+        &self,
+        owner_window_label: &str,
+        request_id: &str,
+        session_id: Option<String>,
+        error: Option<String>,
+    ) -> AppResult<()> {
+        let pending = self
+            .pending_session_opens
+            .lock()
+            .await
+            .remove(request_id)
+            .ok_or_else(|| {
+                AppError::Config("The MCP session-open request is no longer pending.".into())
+            })?;
+        if pending.owner_window_label != owner_window_label {
+            self.pending_session_opens
+                .lock()
+                .await
+                .insert(request_id.to_string(), pending);
+            return Err(AppError::Config(
+                "Only the target main window can complete this MCP session-open request.".into(),
+            ));
+        }
+        let result = match (session_id, error) {
+            (Some(session_id), None) if !session_id.trim().is_empty() => Ok(session_id),
+            (None, Some(error)) if !error.trim().is_empty() => Err(error),
+            _ => Err("Invalid MCP session-open response.".into()),
+        };
+        pending
+            .responder
+            .send(result)
+            .map_err(|_| AppError::Cancelled("The MCP session-open request was cancelled.".into()))
+    }
+
+    async fn request_session_open(
+        &self,
+        context: &ConnectionContext,
+        connection: &McpConnectionSummary,
+        cancellation: &CancellationToken,
+    ) -> AppResult<String> {
+        let owner = context
+            .credential
+            .owner_window_label
+            .as_deref()
+            .ok_or_else(|| AppError::Config("The MCP owner window is unavailable.".into()))?;
+        let app = self
+            .app
+            .get()
+            .ok_or_else(|| AppError::Config("NyaTerm is not ready.".into()))?;
+        let window = app
+            .get_webview_window(owner)
+            .ok_or_else(|| AppError::Config("The MCP owner window is unavailable.".into()))?;
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let (tx, rx) = oneshot::channel();
+        self.pending_session_opens.lock().await.insert(
+            request_id.clone(),
+            PendingSessionOpen {
+                owner_window_label: owner.to_string(),
+                responder: tx,
+            },
+        );
+        let event = McpSessionOpenRequestEvent {
+            request_id: request_id.clone(),
+            connection_id: connection.id.clone(),
+            target_window_label: owner.to_string(),
+        };
+        if let Err(error) = window.emit("mcp-session-open-request", event) {
+            self.pending_session_opens.lock().await.remove(&request_id);
+            return Err(AppError::Config(format!(
+                "Failed to send the MCP session-open request: {error}"
+            )));
+        }
+
+        let result = tokio::select! {
+            _ = cancellation.cancelled() => {
+                self.pending_session_opens.lock().await.remove(&request_id);
+                let _ = window.emit("mcp-session-open-cancel", McpSessionOpenCancelEvent {
+                    request_id: request_id.clone(),
+                    target_window_label: owner.to_string(),
+                });
+                return Err(AppError::Cancelled("The MCP session-open request was cancelled.".into()));
+            }
+            result = rx => result.map_err(|_| AppError::Cancelled("The MCP session-open request was cancelled.".into()))?,
+        };
+        let session_id = result.map_err(AppError::Config)?;
+        let info = self.sessions.session_info(&session_id).await?;
+        if info.owner_window_label.as_deref() != Some(owner)
+            || info.connection_id.as_deref() != Some(connection.id.as_str())
+            || !info.connected
+            || !matches!(
+                info.session_type,
+                SessionType::SSH | SessionType::Local | SessionType::Telnet | SessionType::Serial
+            )
+        {
+            return Err(AppError::Config(
+                "The opened session does not match the requested saved connection.".into(),
+            ));
+        }
+        context
+            .credential
+            .opened_session_ids
+            .write()
+            .await
+            .insert(session_id.clone());
+        Ok(session_id)
+    }
+
+    async fn resolve_credential_scope(&self, credential: &Credential) -> McpScopeSnapshot {
+        let sessions = self.sessions.list_sessions().await;
+        let live_ids = sessions
+            .iter()
+            .map(|session| session.id.as_str())
+            .collect::<HashSet<_>>();
+        let mut scope = credential.scope.resolve(&sessions);
+        scope.session_ids.extend(
+            credential
+                .opened_session_ids
+                .read()
+                .await
+                .iter()
+                .filter(|id| live_ids.contains(id.as_str()))
+                .cloned(),
+        );
+        scope
+    }
+
     pub async fn create_ephemeral_credential(
         self: &Arc<Self>,
         source: &str,
@@ -432,6 +598,7 @@ impl McpManager {
                 source: source.to_string(),
                 owner_window_label,
                 cancellation: cancellation.clone(),
+                opened_session_ids: RwLock::new(HashSet::new()),
             }),
         );
         Ok(EphemeralMcpCredential {
@@ -581,7 +748,6 @@ impl McpManager {
         }
         if is_external {
             self.external_connections.fetch_add(1, Ordering::SeqCst);
-            self.touch_external(&context.generation).await;
             self.emit_status();
         }
         loop {
@@ -593,9 +759,6 @@ impl McpManager {
                 Ok(value) => value,
                 Err(_) => break,
             };
-            if is_external {
-                self.touch_external(&context.generation).await;
-            }
             let response = self.handle_request(&context, request).await;
             if write_response(&mut write, response).await.is_err() {
                 break;
@@ -664,9 +827,6 @@ impl McpManager {
                 let result = self
                     .execute_tool(context, &params.tool, params.arguments, token)
                     .await;
-                if context.credential.source == EXTERNAL_SOURCE {
-                    self.touch_external(&context.generation).await;
-                }
                 if let Some(id) = params.request_id.as_ref() {
                     self.request_cancellations.lock().await.remove(id);
                 }
@@ -742,10 +902,16 @@ impl McpManager {
                 }
             }
         }
-        let scope = context
-            .credential
-            .scope
-            .resolve(&self.sessions.list_sessions().await);
+        let scope = self.resolve_credential_scope(&context.credential).await;
+        let connection_target = if tool_name == tool::SESSION_OPEN {
+            let args = parse::<SessionOpenArgs>(arguments.clone())?;
+            Some(
+                self.connection_summary(&args.connection_id)
+                    .map_err(map_error)?,
+            )
+        } else {
+            None
+        };
         let session_id = match Self::resolve_session(&scope, tool_name, &arguments) {
             Ok(session_id) => session_id,
             Err(error) => {
@@ -833,9 +999,19 @@ impl McpManager {
             assessment.as_ref(),
         );
         let risk = assessment.as_ref().map(|value| value.level.clone());
-        let grant_key = session_id
-            .clone()
-            .map(|id| (id, definition.capability.to_string()));
+        let grant_key = connection_target
+            .as_ref()
+            .map(|connection| {
+                (
+                    format!("connection:{}", connection.id),
+                    definition.capability.to_string(),
+                )
+            })
+            .or_else(|| {
+                session_id
+                    .clone()
+                    .map(|id| (id, definition.capability.to_string()))
+            });
         let grantable = definition.access != CapabilityAccess::DestructiveWrite
             && assessment
                 .as_ref()
@@ -865,37 +1041,34 @@ impl McpManager {
             ));
         }
         if policy == PolicyDecision::RequireApproval && !granted {
-            let target = session_id.as_deref().ok_or_else(|| {
-                failure(
-                    "approval_denied",
-                    "A target session is required for approval.",
+            let info = if let Some(target) = session_id.as_deref() {
+                Some(
+                    self.sessions
+                        .session_info(target)
+                        .await
+                        .map_err(map_error)?,
                 )
-            })?;
-            let info = self
-                .sessions
-                .session_info(target)
-                .await
-                .map_err(map_error)?;
+            } else {
+                None
+            };
             let owner = info
-                .owner_window_label
-                .as_deref()
+                .as_ref()
+                .and_then(|info| info.owner_window_label.as_deref())
                 .or(context.credential.owner_window_label.as_deref())
                 .ok_or_else(|| {
                     failure(
                         "approval_denied",
-                        "The session owner window is unavailable for approval.",
+                        "The MCP owner window is unavailable for approval.",
                     )
                 })?;
-            let waiter = self.external_waiter(&context.generation).await;
-            if let Some(waiter) = waiter.as_ref() {
-                waiter.fetch_add(1, Ordering::SeqCst);
-            }
             let event = ApprovalRequestEvent {
                 request_id: uuid::Uuid::new_v4().to_string(),
                 client: context.client.lock().unwrap().clone(),
                 capability: definition.capability.to_string(),
-                session_id: Some(target.to_string()),
-                session_name: Some(info.name),
+                session_id: session_id.clone(),
+                session_name: info.as_ref().map(|info| info.name.clone()),
+                connection_id: connection_target.as_ref().map(|value| value.id.clone()),
+                connection_name: connection_target.as_ref().map(|value| value.name.clone()),
                 parameter_summary: summarize(tool_name, &arguments),
                 risk: risk
                     .clone()
@@ -913,16 +1086,13 @@ impl McpManager {
                     &cancellation,
                 )
                 .await;
-            if let Some(waiter) = waiter.as_ref() {
-                waiter.fetch_sub(1, Ordering::SeqCst);
-            }
             let decision = match result {
                 Ok(decision) => decision,
                 Err(error) => {
                     self.audit(
                         context,
                         definition.capability,
-                        Some(target),
+                        session_id.as_deref(),
                         risk.clone(),
                         Some("approval_unavailable"),
                         false,
@@ -939,7 +1109,7 @@ impl McpManager {
                 self.audit(
                     context,
                     definition.capability,
-                    Some(target),
+                    session_id.as_deref(),
                     risk,
                     approval,
                     false,
@@ -960,16 +1130,28 @@ impl McpManager {
                 context.grants.lock().await.insert(key);
             }
         }
-        let result = tokio::select! {
-            _ = cancellation.cancelled() => Err(failure("cancelled", "The MCP request was cancelled.")),
-            value = self.dispatch(
+        let result = if tool_name == tool::SESSION_OPEN {
+            self.dispatch(
                 context,
                 &scope,
                 tool_name,
                 arguments.clone(),
                 session_id.as_deref(),
                 cancellation.clone(),
-            ) => value,
+            )
+            .await
+        } else {
+            tokio::select! {
+                _ = cancellation.cancelled() => Err(failure("cancelled", "The MCP request was cancelled.")),
+                value = self.dispatch(
+                    context,
+                    &scope,
+                    tool_name,
+                    arguments.clone(),
+                    session_id.as_deref(),
+                    cancellation.clone(),
+                ) => value,
+            }
         };
         let elapsed = started.elapsed();
         match result {
@@ -1011,7 +1193,10 @@ impl McpManager {
         tool_name: &str,
         arguments: &Value,
     ) -> AppResult<Option<String>> {
-        if tool_name == tool::GET_ENVIRONMENT {
+        if matches!(
+            tool_name,
+            tool::GET_ENVIRONMENT | tool::CONNECTION_LIST | tool::SESSION_OPEN
+        ) {
             return Ok(None);
         }
         if tool_name == tool::TERMINAL_EXECUTE {
@@ -1057,6 +1242,31 @@ impl McpManager {
                     "activeSessionId": active_session_id,
                     "defaultSessionId": scope.default_session_id,
                     "sessions": sessions,
+                }))
+            }
+            tool::CONNECTION_LIST => Ok(json!({
+                "connections": self.connection_summaries().map_err(map_error)?,
+            })),
+            tool::SESSION_OPEN => {
+                let args: SessionOpenArgs = parse(arguments)?;
+                let connection = self
+                    .connection_summary(&args.connection_id)
+                    .map_err(map_error)?;
+                let session_id = self
+                    .request_session_open(context, &connection, &cancellation)
+                    .await
+                    .map_err(map_error)?;
+                let info = self
+                    .sessions
+                    .session_info(&session_id)
+                    .await
+                    .map_err(map_error)?;
+                Ok(json!({
+                    "sessionId": session_id,
+                    "connectionId": connection.id,
+                    "name": info.name,
+                    "type": session_type_name(&info.session_type),
+                    "connected": true,
                 }))
             }
             tool::SESSION_GET => {
@@ -1245,52 +1455,6 @@ impl McpManager {
         .then_some(credential)
     }
 
-    async fn temporary_idle_worker(
-        self: Arc<Self>,
-        generation: String,
-        minutes: u16,
-        last_activity: Arc<StdMutex<Instant>>,
-        approval_waiters: Arc<AtomicUsize>,
-        cancellation: CancellationToken,
-    ) {
-        let timeout = Duration::from_secs(u64::from(minutes) * 60);
-        loop {
-            tokio::select! { _ = cancellation.cancelled() => return, _ = tokio::time::sleep(Duration::from_secs(5)) => {} }
-            if approval_waiters.load(Ordering::SeqCst) > 0 {
-                continue;
-            }
-            if last_activity.lock().unwrap().elapsed() >= timeout {
-                if self
-                    .external
-                    .lock()
-                    .await
-                    .as_ref()
-                    .is_some_and(|state| state.generation == generation)
-                {
-                    let _ = self.disable_external(true).await;
-                }
-                return;
-            }
-        }
-    }
-
-    async fn touch_external(&self, generation: &str) {
-        if let Some(state) = self.external.lock().await.as_ref() {
-            if state.generation == generation {
-                *state.last_activity.lock().unwrap() = Instant::now();
-            }
-        }
-    }
-
-    async fn external_waiter(&self, generation: &str) -> Option<Arc<AtomicUsize>> {
-        self.external
-            .lock()
-            .await
-            .as_ref()
-            .filter(|state| state.generation == generation)
-            .map(|state| state.approval_waiters.clone())
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn audit(
         &self,
@@ -1378,6 +1542,7 @@ fn permission_mode_name(value: &AiPermissionMode) -> &'static str {
         AiPermissionMode::Observer => "observer",
         AiPermissionMode::Confirm => "confirm",
         AiPermissionMode::Auto => "auto",
+        AiPermissionMode::FullAccess => "full_access",
     }
 }
 fn session_type_name(value: &SessionType) -> &'static str {
@@ -1387,6 +1552,61 @@ fn session_type_name(value: &SessionType) -> &'static str {
         SessionType::Telnet => "telnet",
         SessionType::Serial => "serial",
     }
+}
+fn terminal_connection_type(value: &ConnectionType) -> Option<&'static str> {
+    match value {
+        ConnectionType::Ssh { .. } => Some("ssh"),
+        ConnectionType::LocalTerminal { .. } => Some("local_terminal"),
+        ConnectionType::Telnet { .. } => Some("telnet"),
+        ConnectionType::Serial { .. } => Some("serial"),
+        ConnectionType::Rdp { .. } | ConnectionType::Vnc { .. } => None,
+    }
+}
+fn connection_summaries_from_config(
+    config: &crate::config::AppConfig,
+) -> Vec<McpConnectionSummary> {
+    let groups = config
+        .groups
+        .iter()
+        .map(|group| (group.id.as_str(), group))
+        .collect::<HashMap<_, _>>();
+    let mut connections = config
+        .connections
+        .iter()
+        .filter_map(|connection| {
+            terminal_connection_type(&connection.config).map(|kind| McpConnectionSummary {
+                id: connection.id.clone(),
+                name: connection.name.clone(),
+                r#type: kind.to_string(),
+                group_path: connection_group_path(connection.group_id.as_deref(), &groups),
+            })
+        })
+        .collect::<Vec<_>>();
+    connections.sort_by(|left, right| {
+        left.group_path
+            .cmp(&right.group_path)
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    connections
+}
+fn connection_group_path(
+    group_id: Option<&str>,
+    groups: &HashMap<&str, &crate::config::Group>,
+) -> Vec<String> {
+    let mut path = Vec::new();
+    let mut visited = HashSet::new();
+    let mut current = group_id;
+    while let Some(id) = current {
+        if !visited.insert(id.to_string()) {
+            break;
+        }
+        let Some(group) = groups.get(id) else { break };
+        path.push(group.name.clone());
+        current = group.parent_id.as_deref();
+    }
+    path.reverse();
+    path
 }
 fn execution_profile_name(value: AiExecutionProfile) -> &'static str {
     match value {
@@ -1418,6 +1638,12 @@ fn access_risk(value: CapabilityAccess) -> RiskLevel {
 }
 fn summarize(name: &str, args: &Value) -> String {
     let value = match name {
+        tool::SESSION_OPEN => format!(
+            "connectionId={}",
+            args.get("connectionId")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+        ),
         tool::TERMINAL_EXECUTE => args
             .get("command")
             .and_then(Value::as_str)
@@ -1539,6 +1765,51 @@ mod tests {
     #[test]
     fn token_is_32_bytes() {
         assert_eq!(URL_SAFE_NO_PAD.decode(random_token()).unwrap().len(), 32);
+    }
+
+    #[test]
+    fn full_access_permission_name_is_written_to_metadata() {
+        assert_eq!(
+            permission_mode_name(&AiPermissionMode::FullAccess),
+            "full_access"
+        );
+    }
+
+    #[test]
+    fn connection_summaries_filter_graphical_connections_and_secrets() {
+        let config: crate::config::AppConfig = serde_json::from_value(json!({
+            "groups": [
+                { "id": "root", "name": "Production" },
+                { "id": "child", "name": "Linux", "parent_id": "root" }
+            ],
+            "connections": [
+                {
+                    "id": "ssh-1",
+                    "name": "Web server",
+                    "type": "ssh",
+                    "host": "secret.example.com",
+                    "username": "root",
+                    "group_id": "child"
+                },
+                {
+                    "id": "rdp-1",
+                    "name": "Desktop",
+                    "type": "rdp",
+                    "host": "desktop.example.com"
+                }
+            ]
+        }))
+        .expect("saved connections");
+
+        let summaries = connection_summaries_from_config(&config);
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].id, "ssh-1");
+        assert_eq!(summaries[0].r#type, "ssh");
+        assert_eq!(summaries[0].group_path, ["Production", "Linux"]);
+        let serialized = serde_json::to_string(&summaries).unwrap();
+        assert!(!serialized.contains("secret.example.com"));
+        assert!(!serialized.contains("username"));
+        assert!(!serialized.contains("rdp-1"));
     }
 
     #[test]

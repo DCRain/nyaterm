@@ -6,7 +6,7 @@ use bridge::{BridgeClient, BridgeEndpoint, endpoint_from_environment_or_discover
 use nyaterm_mcp_protocol::{
     EmptyArgs, MCP_TOOL_REGISTRY, McpToolDefinition, OutputReadArgs, PathArgs, SessionArgs,
     SftpChmodArgs, SftpMkdirArgs, SftpReadTextArgs, SftpRenameArgs, SftpWriteTextArgs,
-    TerminalExecuteArgs, TerminalRecentOutputArgs, tool,
+    SessionOpenArgs, TerminalExecuteArgs, TerminalRecentOutputArgs, tool,
 };
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, Implementation, ListToolsResult,
@@ -39,7 +39,7 @@ impl ServerHandler for NyaTermMcp {
                 "nyaterm-mcp",
                 env!("CARGO_PKG_VERSION"),
             ))
-            .with_instructions("Operate sessions already opened in NyaTerm. NyaTerm enforces session scope and approvals.")
+            .with_instructions("Discover saved terminal connections, open sessions in NyaTerm, and operate scoped sessions. NyaTerm enforces session scope and approvals.")
     }
 
     async fn call_tool(
@@ -93,6 +93,8 @@ fn build_tools() -> Vec<Tool> {
         .iter()
         .map(|definition| match definition.tool {
             tool::GET_ENVIRONMENT => tool_def::<EmptyArgs>(definition),
+            tool::CONNECTION_LIST => tool_def::<EmptyArgs>(definition),
+            tool::SESSION_OPEN => tool_def::<SessionOpenArgs>(definition),
             tool::SESSION_GET | tool::SFTP_HOME => tool_def::<SessionArgs>(definition),
             tool::TERMINAL_EXECUTE => tool_def::<TerminalExecuteArgs>(definition),
             tool::TERMINAL_RECENT_OUTPUT => tool_def::<TerminalRecentOutputArgs>(definition),
@@ -167,6 +169,29 @@ mod tests {
                 definition.open_world_hint
             );
         }
+
+        let connection_list = tools
+            .iter()
+            .find(|item| item.name == tool::CONNECTION_LIST)
+            .expect("connection_list tool");
+        let connection_list = serde_json::to_value(connection_list).unwrap();
+        assert_eq!(connection_list["inputSchema"]["type"], "object");
+        assert_eq!(connection_list["annotations"]["readOnlyHint"], true);
+
+        let session_open = tools
+            .iter()
+            .find(|item| item.name == tool::SESSION_OPEN)
+            .expect("session_open tool");
+        let session_open = serde_json::to_value(session_open).unwrap();
+        assert_eq!(
+            session_open["inputSchema"]["required"],
+            json!(["connectionId"])
+        );
+        assert_eq!(
+            session_open["inputSchema"]["properties"]["connectionId"]["type"],
+            "string"
+        );
+        assert_eq!(session_open["annotations"]["readOnlyHint"], false);
     }
 
     async fn send_client_message(writer: &mut WriteHalf<tokio::io::DuplexStream>, raw: &str) {
@@ -215,10 +240,33 @@ mod tests {
                         assert_eq!(request.params["name"], "integration-test");
                         json!({ "identified": true })
                     }
-                    "capability.execute" => {
-                        assert_eq!(request.params["tool"], tool::GET_ENVIRONMENT);
-                        json!({ "defaultSessionId": "session-1", "sessions": [] })
-                    }
+                    "capability.execute" => match request.params["tool"].as_str().unwrap() {
+                        tool::GET_ENVIRONMENT => {
+                            json!({ "defaultSessionId": "session-1", "sessions": [] })
+                        }
+                        tool::CONNECTION_LIST => json!({
+                            "connections": [{
+                                "id": "connection-1",
+                                "name": "Local shell",
+                                "type": "local_terminal",
+                                "groupPath": []
+                            }]
+                        }),
+                        tool::SESSION_OPEN => {
+                            assert_eq!(
+                                request.params["arguments"]["connectionId"],
+                                "connection-1"
+                            );
+                            json!({
+                                "sessionId": "session-2",
+                                "connectionId": "connection-1",
+                                "name": "Local shell",
+                                "type": "local",
+                                "connected": true
+                            })
+                        }
+                        other => panic!("unexpected tool: {other}"),
+                    },
                     other => panic!("unexpected bridge method: {other}"),
                 };
                 let response = RpcResponse {
@@ -271,7 +319,7 @@ mod tests {
         )
         .await;
         let listed = receive_response(&mut client_lines, 2).await;
-        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 14);
+        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 16);
 
         send_client_message(
             &mut client_writer,
@@ -287,6 +335,47 @@ mod tests {
         assert_eq!(
             called["result"]["structuredContent"]["defaultSessionId"],
             "session-1"
+        );
+
+        send_client_message(
+            &mut client_writer,
+            r#"{
+                    "jsonrpc": "2.0",
+                    "id": 4,
+                    "method": "tools/call",
+                    "params": { "name": "connection_list", "arguments": {} }
+                }"#,
+        )
+        .await;
+        let connections = receive_response(&mut client_lines, 4).await;
+        assert_eq!(
+            connections["result"]["structuredContent"]["connections"][0]["id"],
+            "connection-1"
+        );
+
+        send_client_message(
+            &mut client_writer,
+            r#"{
+                    "jsonrpc": "2.0",
+                    "id": 5,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "session_open",
+                        "arguments": { "connectionId": "connection-1" }
+                    }
+                }"#,
+        )
+        .await;
+        let opened = receive_response(&mut client_lines, 5).await;
+        assert_eq!(
+            opened["result"]["structuredContent"],
+            json!({
+                "sessionId": "session-2",
+                "connectionId": "connection-1",
+                "name": "Local shell",
+                "type": "local",
+                "connected": true
+            })
         );
 
         drop(client_writer);

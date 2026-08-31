@@ -647,8 +647,6 @@ export const DEFAULT_AI_SETTINGS: AISettings = {
     enabled: false,
     permission_mode: "confirm",
     session_scope: "current_window",
-    server_mode: "temporary",
-    idle_timeout_minutes: 10,
   },
 };
 

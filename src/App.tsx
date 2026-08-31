@@ -6,8 +6,8 @@ import { toast } from "sonner";
 import AppLayout from "./components/app/AppLayout";
 import AppPanelContent from "./components/app/AppPanelContent";
 import ActivityBarResetDialog from "./components/dialog/app/ActivityBarResetDialog";
-import { McpApprovalHost } from "./components/dialog/app/McpApprovalHost";
 import AppOverlayDialogs from "./components/dialog/app/AppOverlayDialogs";
+import { McpApprovalHost } from "./components/dialog/app/McpApprovalHost";
 import type { HostKeyVerifyRequest } from "./components/dialog/connections/HostKeyVerifyDialog";
 import type { OtpRequest } from "./components/dialog/connections/OtpDialog";
 import type { RdpCertificateVerifyRequest } from "./components/dialog/connections/RdpCertificateVerifyDialog";
@@ -58,15 +58,15 @@ import {
 } from "./lib/appSessionFactory";
 import {
   buildPanelOpenUpdate,
-  canUseFloatingPanel,
   canCreateSessionFromPane,
+  canUseFloatingPanel,
   clearUnavailableFloatingPanels,
   collectActiveNonSerialSessionIds,
   EXCLUSIVE_PANEL_IDS,
   type FloatingPanelsState,
+  getItemSide,
   getSideOpenPanels,
   getSideOverlayPanel,
-  getItemSide,
   getVisibleActivityIds,
   hasLiveSession,
   isActivityItemAvailable,
@@ -151,6 +151,8 @@ import type {
   AppSettings,
   AssetMetadata,
   CloudConflictPreview,
+  McpSessionOpenCancel,
+  McpSessionOpenRequest,
   PaneSplitDirection,
   RecordingMode,
   SavedConnection,
@@ -956,6 +958,9 @@ function App() {
       options?: {
         failureContext?: string;
         runtimeModeOverride?: SshRuntimeMode;
+        propagateError?: boolean;
+        onPending?: (pending: { tabId: string; createRequestId: string }) => void;
+        onSuccess?: (sessionId: string) => void;
       },
     ) => {
       const pending = addPendingTab(
@@ -967,6 +972,7 @@ function App() {
         { display: getRemoteDesktopPaneDisplay(connection) },
       );
       const { tabId, createRequestId } = pending;
+      options?.onPending?.({ tabId, createRequestId });
 
       try {
         const sessionId = await createSessionForConnection(
@@ -983,8 +989,10 @@ function App() {
         focusTerminalSession(sessionId);
         recordRecentConnection(connection.id);
         updateAutoIconForSessionStart(connection.id, sessionId);
+        options?.onSuccess?.(sessionId);
       } catch (error) {
         if (isSessionCreationCancelled(error) || !hasTab(tabId)) {
+          if (options?.propagateError) throw error;
           return;
         }
         const errorMessage = getErrorMessage(error);
@@ -1000,6 +1008,7 @@ function App() {
           sourceTabId: tabId,
         });
         toast.error(t("savedConnections.connectionFailed", { error: errorMessage }));
+        if (options?.propagateError) throw error;
       }
     },
     [
@@ -1013,6 +1022,89 @@ function App() {
       updateTabSession,
     ],
   );
+
+  const mcpSessionOpenRequestsRef = useRef(
+    new Map<string, { tabId: string; createRequestId: string }>(),
+  );
+  const cancelledMcpSessionOpenRequestsRef = useRef(new Set<string>());
+  useEffect(() => {
+    let disposed = false;
+    let unlistenOpen: (() => void) | undefined;
+    let unlistenCancel: (() => void) | undefined;
+
+    void listen<McpSessionOpenRequest>("mcp-session-open-request", ({ payload }) => {
+      if (disposed || !eventTargetsCurrentWindow(payload.targetWindowLabel)) return;
+      void (async () => {
+        const connections = savedConnections.some((item) => item.id === payload.connectionId)
+          ? savedConnections
+          : await invoke<SavedConnection[]>("get_saved_connections");
+        if (cancelledMcpSessionOpenRequestsRef.current.delete(payload.requestId)) return;
+        const connection = connections.find((item) => item.id === payload.connectionId);
+        if (!connection || connection.type === "rdp" || connection.type === "vnc") {
+          await invoke("respond_mcp_session_open", {
+            requestId: payload.requestId,
+            sessionId: null,
+            error: "The saved connection does not exist or is not a supported terminal connection.",
+          });
+          return;
+        }
+
+        let openedSessionId: string | null = null;
+        await connectSavedConnection(connection, {
+          failureContext: "MCP session open failed",
+          propagateError: true,
+          onPending: (pending) => {
+            mcpSessionOpenRequestsRef.current.set(payload.requestId, pending);
+          },
+          onSuccess: (sessionId) => {
+            openedSessionId = sessionId;
+          },
+        });
+        await invoke("respond_mcp_session_open", {
+          requestId: payload.requestId,
+          sessionId: openedSessionId,
+          error: openedSessionId ? null : "The MCP session-open request did not create a session.",
+        });
+      })()
+        .catch((error) => {
+          void invoke("respond_mcp_session_open", {
+            requestId: payload.requestId,
+            sessionId: null,
+            error: getErrorMessage(error),
+          }).catch(() => {});
+        })
+        .finally(() => {
+          mcpSessionOpenRequestsRef.current.delete(payload.requestId);
+          cancelledMcpSessionOpenRequestsRef.current.delete(payload.requestId);
+        });
+    }).then((dispose) => {
+      if (disposed) dispose();
+      else unlistenOpen = dispose;
+    });
+
+    void listen<McpSessionOpenCancel>("mcp-session-open-cancel", ({ payload }) => {
+      if (disposed || !eventTargetsCurrentWindow(payload.targetWindowLabel)) return;
+      const pending = mcpSessionOpenRequestsRef.current.get(payload.requestId);
+      if (!pending) {
+        cancelledMcpSessionOpenRequestsRef.current.add(payload.requestId);
+        return;
+      }
+      mcpSessionOpenRequestsRef.current.delete(payload.requestId);
+      closeTabs([pending.tabId]);
+      void invoke("cancel_session_creation", {
+        createRequestId: pending.createRequestId,
+      }).catch(() => {});
+    }).then((dispose) => {
+      if (disposed) dispose();
+      else unlistenCancel = dispose;
+    });
+
+    return () => {
+      disposed = true;
+      unlistenOpen?.();
+      unlistenCancel?.();
+    };
+  }, [closeTabs, connectSavedConnection, savedConnections]);
 
   const connectTemporaryConnection = useCallback(
     async (config: TemporaryLinkConfig) => {
@@ -1054,18 +1146,11 @@ function App() {
 
   const connectExternalLocalSession = useCallback(
     async (workingDir: string | null) => {
-      const pending = addPendingTab(
-        t("menu.newLocalTerminal"),
-        "Local",
-        undefined,
-      );
+      const pending = addPendingTab(t("menu.newLocalTerminal"), "Local", undefined);
       const { tabId, createRequestId } = pending;
 
       try {
-        const sessionId = await createExternalLocalSession(
-          workingDir,
-          createRequestId,
-        );
+        const sessionId = await createExternalLocalSession(workingDir, createRequestId);
         if (!hasTab(tabId)) {
           await closeStaleCreatedSession(sessionId);
           return;

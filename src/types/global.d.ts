@@ -1362,15 +1362,12 @@ export type RiskLevel = "low" | "medium" | "high" | "critical";
 export type AIMode = "ask" | "agent";
 export type AIAgentCommandExecutionMode = "confirm_each" | "smart" | "auto";
 export type AIAgentKind = "nyaterm" | "codex" | "claude_code";
-export type AIPermissionMode = "observer" | "confirm" | "auto";
+export type AIPermissionMode = "observer" | "confirm" | "auto" | "full_access";
 export type ExternalMcpSessionScope = "current_window" | "all_sessions";
-export type ExternalMcpServerMode = "temporary" | "persistent";
 export interface ExternalMcpSettings {
   enabled: boolean;
   permission_mode: AIPermissionMode;
   session_scope: ExternalMcpSessionScope;
-  server_mode: ExternalMcpServerMode;
-  idle_timeout_minutes: number;
 }
 export type AIReasoningEffort =
   | "auto"
@@ -1506,8 +1503,21 @@ export interface McpApprovalRequest {
   capability: string;
   sessionId?: string | null;
   sessionName?: string | null;
+  connectionId?: string | null;
+  connectionName?: string | null;
   parameterSummary: string;
   risk: RiskLevel;
+}
+
+export interface McpSessionOpenRequest {
+  requestId: string;
+  connectionId: string;
+  targetWindowLabel: string;
+}
+
+export interface McpSessionOpenCancel {
+  requestId: string;
+  targetWindowLabel: string;
 }
 
 export interface AIContext {

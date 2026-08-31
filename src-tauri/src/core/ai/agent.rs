@@ -368,6 +368,7 @@ fn safe_command_preview(command: &str) -> String {
 struct RiskAssessment {
     model_risk: RiskLevel,
     local_risk: RiskLevel,
+    local_auto_executable: bool,
     effective_risk: RiskLevel,
     risk_reason: Option<String>,
 }
@@ -574,14 +575,14 @@ fn risk_label(risk: &RiskLevel) -> &'static str {
     }
 }
 
-fn assess_local_command_risk(command: &str) -> (RiskLevel, String) {
+fn assess_local_command_risk(command: &str) -> (RiskLevel, String, bool) {
     let risk = crate::core::capabilities::assess_command_risk(command);
-    (risk.level, risk.reason)
+    (risk.level, risk.reason, risk.auto_executable)
 }
 
 fn assess_agent_command_risk(parsed: &AgentLlmResponse, command: &str) -> RiskAssessment {
     let model_risk = parsed.risk_level.clone().unwrap_or(RiskLevel::Medium);
-    let (local_risk, local_reason) = assess_local_command_risk(command);
+    let (local_risk, local_reason, local_auto_executable) = assess_local_command_risk(command);
     let effective_risk = max_risk(model_risk.clone(), local_risk.clone());
     let risk_reason = parsed
         .risk_reason
@@ -593,6 +594,7 @@ fn assess_agent_command_risk(parsed: &AgentLlmResponse, command: &str) -> RiskAs
     RiskAssessment {
         model_risk,
         local_risk,
+        local_auto_executable,
         effective_risk,
         risk_reason,
     }
@@ -636,13 +638,23 @@ fn decide_agent_command_execution(
 
 fn decide_external_agent_command_execution(
     mode: &AiPermissionMode,
+    assessment: &RiskAssessment,
 ) -> (ApprovalDecision, Option<String>) {
     match mode {
         AiPermissionMode::Observer | AiPermissionMode::Confirm => (
             ApprovalDecision::NeedsApproval,
             Some("external agent permission mode requires confirmation".to_string()),
         ),
-        AiPermissionMode::Auto => (ApprovalDecision::Auto, None),
+        AiPermissionMode::Auto
+            if assessment.local_auto_executable && assessment.effective_risk < RiskLevel::High =>
+        {
+            (ApprovalDecision::Auto, None)
+        }
+        AiPermissionMode::Auto => (
+            ApprovalDecision::NeedsApproval,
+            Some("safe auto requires confirmation for unknown or high-risk commands".to_string()),
+        ),
+        AiPermissionMode::FullAccess => (ApprovalDecision::Auto, None),
     }
 }
 
@@ -743,7 +755,8 @@ fn append_agent_command_audit(
             client: None,
             capability: None,
             session_id: None,
-            permission_mode: None,
+            permission_mode: (request.agent_kind != AiAgentKind::Nyaterm)
+                .then(|| request.permission_mode.clone()),
             approval_decision: None,
             success: None,
             duration_ms: None,
@@ -782,7 +795,7 @@ pub(super) async fn run_external_agent_command_step(
     let (decision, approval_reason) = if request.agent_kind == AiAgentKind::Nyaterm {
         decide_agent_command_execution(settings, &assessment)
     } else {
-        decide_external_agent_command_execution(&request.permission_mode)
+        decide_external_agent_command_execution(&request.permission_mode, &assessment)
     };
 
     if request.agent_kind != AiAgentKind::Nyaterm
@@ -1412,16 +1425,32 @@ mod tests {
 
     #[test]
     fn external_agent_permission_modes_are_explicit() {
+        let safe = assess_agent_command_risk(&parsed_response(None), "ls -la");
+        let high = assess_agent_command_risk(&parsed_response(None), "sudo reboot");
+        let unknown = assess_agent_command_risk(&parsed_response(None), "custom-deploy production");
+
         assert_eq!(
-            decide_external_agent_command_execution(&AiPermissionMode::Observer).0,
+            decide_external_agent_command_execution(&AiPermissionMode::Observer, &safe).0,
             ApprovalDecision::NeedsApproval
         );
         assert_eq!(
-            decide_external_agent_command_execution(&AiPermissionMode::Confirm).0,
+            decide_external_agent_command_execution(&AiPermissionMode::Confirm, &safe).0,
             ApprovalDecision::NeedsApproval
         );
         assert_eq!(
-            decide_external_agent_command_execution(&AiPermissionMode::Auto).0,
+            decide_external_agent_command_execution(&AiPermissionMode::Auto, &safe).0,
+            ApprovalDecision::Auto
+        );
+        assert_eq!(
+            decide_external_agent_command_execution(&AiPermissionMode::Auto, &high).0,
+            ApprovalDecision::NeedsApproval
+        );
+        assert_eq!(
+            decide_external_agent_command_execution(&AiPermissionMode::Auto, &unknown).0,
+            ApprovalDecision::NeedsApproval
+        );
+        assert_eq!(
+            decide_external_agent_command_execution(&AiPermissionMode::FullAccess, &high).0,
             ApprovalDecision::Auto
         );
     }

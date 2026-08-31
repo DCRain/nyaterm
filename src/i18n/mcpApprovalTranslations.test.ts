@@ -10,3 +10,37 @@ it("describes MCP approval grants as connection-scoped in every locale", () => {
   expect(zhTW.ai.externalMcpAllowSession).toBe("此連線期間允許");
   expect(ko.ai.externalMcpAllowSession).toBe("이 연결에서 허용");
 });
+
+it("labels both saved connections and sessions as MCP approval targets", () => {
+  expect(en.ai.externalMcpTarget).toBe("Target");
+  expect(zhCN.ai.externalMcpTarget).toBe("目标");
+  expect(zhTW.ai.externalMcpTarget).toBe("目標");
+  expect(ko.ai.externalMcpTarget).toBe("대상");
+});
+
+it("uses explicit names for all AI permission modes in every locale", () => {
+  expect([
+    en.ai.permissionObserver,
+    en.ai.permissionConfirm,
+    en.ai.permissionAuto,
+    en.ai.permissionFullAccess,
+  ]).toEqual(["Read-only", "Always confirm", "Safe auto", "Full access"]);
+  expect([
+    zhCN.ai.permissionObserver,
+    zhCN.ai.permissionConfirm,
+    zhCN.ai.permissionAuto,
+    zhCN.ai.permissionFullAccess,
+  ]).toEqual(["只读", "每次确认", "安全自动", "完全权限"]);
+  expect([
+    zhTW.ai.permissionObserver,
+    zhTW.ai.permissionConfirm,
+    zhTW.ai.permissionAuto,
+    zhTW.ai.permissionFullAccess,
+  ]).toEqual(["唯讀", "每次確認", "安全自動", "完全權限"]);
+  expect([
+    ko.ai.permissionObserver,
+    ko.ai.permissionConfirm,
+    ko.ai.permissionAuto,
+    ko.ai.permissionFullAccess,
+  ]).toEqual(["읽기 전용", "매번 확인", "안전 자동", "전체 권한"]);
+});

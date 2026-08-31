@@ -10,6 +10,8 @@ pub const MAX_TEXT_WRITE_BYTES: usize = 1024 * 1024;
 
 pub mod capability {
     pub const ENVIRONMENT: &str = "session.environment";
+    pub const CONNECTION_LIST: &str = "connection.list";
+    pub const SESSION_OPEN: &str = "session.open";
     pub const SESSION_GET: &str = "session.get";
     pub const TERMINAL_EXECUTE: &str = "terminal.execute";
     pub const TERMINAL_RECENT_OUTPUT: &str = "terminal.recent_output";
@@ -27,6 +29,8 @@ pub mod capability {
 
 pub mod tool {
     pub const GET_ENVIRONMENT: &str = "get_environment";
+    pub const CONNECTION_LIST: &str = "connection_list";
+    pub const SESSION_OPEN: &str = "session_open";
     pub const SESSION_GET: &str = "session_get";
     pub const TERMINAL_EXECUTE: &str = "terminal_execute";
     pub const TERMINAL_RECENT_OUTPUT: &str = "terminal_recent_output";
@@ -72,6 +76,26 @@ pub const MCP_TOOL_REGISTRY: &[McpToolDefinition] = &[
         read_only_hint: true,
         destructive_hint: false,
         open_world_hint: false,
+    },
+    McpToolDefinition {
+        tool: tool::CONNECTION_LIST,
+        capability: capability::CONNECTION_LIST,
+        description: "List saved terminal connections using safe metadata only.",
+        access: CapabilityAccess::Read,
+        requires_session: false,
+        read_only_hint: true,
+        destructive_hint: false,
+        open_world_hint: false,
+    },
+    McpToolDefinition {
+        tool: tool::SESSION_OPEN,
+        capability: capability::SESSION_OPEN,
+        description: "Open a new NyaTerm terminal session from a saved connection.",
+        access: CapabilityAccess::Write,
+        requires_session: false,
+        read_only_hint: false,
+        destructive_hint: false,
+        open_world_hint: true,
     },
     McpToolDefinition {
         tool: tool::SESSION_GET,
@@ -285,6 +309,12 @@ pub struct EmptyArgs {}
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionArgs {
     pub session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionOpenArgs {
+    pub connection_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

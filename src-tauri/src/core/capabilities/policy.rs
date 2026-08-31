@@ -21,6 +21,9 @@ pub fn decide_policy(
     access: CapabilityAccess,
     assessment: Option<&RiskAssessment>,
 ) -> PolicyDecision {
+    if *mode == AiPermissionMode::FullAccess {
+        return PolicyDecision::Allow;
+    }
     if matches!(
         access,
         CapabilityAccess::Write | CapabilityAccess::DestructiveWrite
@@ -38,6 +41,7 @@ pub fn decide_policy(
         return PolicyDecision::RequireApproval;
     }
     match (mode, access) {
+        (AiPermissionMode::FullAccess, _) => PolicyDecision::Allow,
         (_, CapabilityAccess::Read) => PolicyDecision::Allow,
         (AiPermissionMode::Auto, CapabilityAccess::SensitiveRead | CapabilityAccess::Write) => {
             PolicyDecision::Allow
@@ -562,6 +566,17 @@ mod tests {
         let safe = risk(RiskLevel::Medium, "known write", true);
         let unknown = risk(RiskLevel::Medium, "unknown", false);
         let high = risk(RiskLevel::High, "high", false);
+        for mode in [
+            AiPermissionMode::Observer,
+            AiPermissionMode::Confirm,
+            AiPermissionMode::Auto,
+            AiPermissionMode::FullAccess,
+        ] {
+            assert_eq!(
+                decide_policy(&mode, CapabilityAccess::Read, None),
+                PolicyDecision::Allow
+            );
+        }
         assert_eq!(
             decide_policy(&AiPermissionMode::Observer, CapabilityAccess::Write, None),
             PolicyDecision::Deny
@@ -571,6 +586,30 @@ mod tests {
                 &AiPermissionMode::Observer,
                 CapabilityAccess::SensitiveRead,
                 None
+            ),
+            PolicyDecision::RequireApproval
+        );
+        assert_eq!(
+            decide_policy(
+                &AiPermissionMode::Confirm,
+                CapabilityAccess::SensitiveRead,
+                None
+            ),
+            PolicyDecision::RequireApproval
+        );
+        assert_eq!(
+            decide_policy(
+                &AiPermissionMode::Auto,
+                CapabilityAccess::SensitiveRead,
+                None
+            ),
+            PolicyDecision::Allow
+        );
+        assert_eq!(
+            decide_policy(
+                &AiPermissionMode::Confirm,
+                CapabilityAccess::Write,
+                Some(&safe)
             ),
             PolicyDecision::RequireApproval
         );
@@ -605,6 +644,38 @@ mod tests {
                 None
             ),
             PolicyDecision::RequireApproval
+        );
+        assert_eq!(
+            decide_policy(
+                &AiPermissionMode::Observer,
+                CapabilityAccess::DestructiveWrite,
+                None
+            ),
+            PolicyDecision::Deny
+        );
+        assert_eq!(
+            decide_policy(
+                &AiPermissionMode::Confirm,
+                CapabilityAccess::DestructiveWrite,
+                None
+            ),
+            PolicyDecision::RequireApproval
+        );
+        assert_eq!(
+            decide_policy(
+                &AiPermissionMode::FullAccess,
+                CapabilityAccess::DestructiveWrite,
+                Some(&high)
+            ),
+            PolicyDecision::Allow
+        );
+        assert_eq!(
+            decide_policy(
+                &AiPermissionMode::FullAccess,
+                CapabilityAccess::Write,
+                Some(&unknown)
+            ),
+            PolicyDecision::Allow
         );
     }
 

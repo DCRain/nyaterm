@@ -419,6 +419,9 @@ fn claude_permission_mode(mode: &AiPermissionMode) -> &'static str {
         AiPermissionMode::Observer => "plan",
         AiPermissionMode::Confirm => "manual",
         AiPermissionMode::Auto => "auto",
+        // Full access only bypasses NyaTerm's own capability approvals. Do not
+        // widen Claude Code's native local-tool permissions.
+        AiPermissionMode::FullAccess => "auto",
     }
 }
 
@@ -893,6 +896,21 @@ mod tests {
             arg_value(&invocation.args, "--model"),
             Some("claude-default-model")
         );
+    }
+
+    #[test]
+    fn full_access_does_not_enable_claude_native_permission_bypass() {
+        let mut request = test_request();
+        request.permission_mode = AiPermissionMode::FullAccess;
+
+        let invocation =
+            build_claude_invocation(&request, &AiSettings::default(), "prompt".to_string());
+
+        assert_eq!(
+            arg_value(&invocation.args, "--permission-mode"),
+            Some("auto")
+        );
+        assert!(!invocation.args.iter().any(|arg| arg == "bypassPermissions"));
     }
 
     #[test]

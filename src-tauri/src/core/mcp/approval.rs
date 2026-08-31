@@ -36,6 +36,8 @@ pub struct ApprovalRequestEvent {
     pub capability: String,
     pub session_id: Option<String>,
     pub session_name: Option<String>,
+    pub connection_id: Option<String>,
+    pub connection_name: Option<String>,
     pub parameter_summary: String,
     pub risk: RiskLevel,
 }
