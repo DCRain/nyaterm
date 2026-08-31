@@ -117,59 +117,7 @@ fn set_private_file_permissions(path: &Path) -> AppResult<()> {
 
 #[cfg(windows)]
 fn set_windows_current_user_acl(path: &Path, directory: bool) -> AppResult<()> {
-    use std::os::windows::process::CommandExt;
-
-    // Build a protected DACL from the current token SID instead of a user name. Starting
-    // from a fresh ACL also removes explicit grants that may have existed on a stale runtime
-    // directory, so another local account cannot inherit or retain access to the credential.
-    const SCRIPT: &str = r#"
-$ErrorActionPreference = 'Stop'
-$target = $args[0]
-$isDirectory = $args[1] -eq '1'
-$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-$acl = if ($isDirectory) {
-  [System.Security.AccessControl.DirectorySecurity]::new()
-} else {
-  [System.Security.AccessControl.FileSecurity]::new()
-}
-$acl.SetOwner($sid)
-$acl.SetAccessRuleProtection($true, $false)
-$inheritance = if ($isDirectory) {
-  [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
-} else {
-  [System.Security.AccessControl.InheritanceFlags]::None
-}
-$rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
-  $sid,
-  [System.Security.AccessControl.FileSystemRights]::FullControl,
-  $inheritance,
-  [System.Security.AccessControl.PropagationFlags]::None,
-  [System.Security.AccessControl.AccessControlType]::Allow
-)
-$acl.SetAccessRule($rule)
-Set-Acl -LiteralPath $target -AclObject $acl
-"#;
-    let output = std::process::Command::new("powershell.exe")
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            SCRIPT,
-        ])
-        .arg(path)
-        .arg(if directory { "1" } else { "0" })
-        .creation_flags(0x0800_0000)
-        .output()?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(AppError::Config(
-            "Failed to apply a current-user-only ACL to MCP discovery data.".into(),
-        ))
-    }
+    super::windows_acl::set_current_user_only(path, directory)
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -193,5 +141,53 @@ mod tests {
         store.remove().unwrap();
         store.remove().unwrap();
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn discovery_replacement_preserves_private_acl_and_removes_temporary_files() {
+        let root = std::env::temp_dir().join(format!(
+            "nyaterm-mcp-discovery-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let store = DiscoveryStore::new(&root);
+        let first = discovery_document("first-token", "first-generation");
+        let second = discovery_document("second-token", "second-generation");
+
+        store.write(&first).unwrap();
+        store.write(&second).unwrap();
+
+        let actual: DiscoveryDocument =
+            serde_json::from_slice(&std::fs::read(&store.file).unwrap()).unwrap();
+        assert_eq!(actual.token, second.token);
+        assert_eq!(actual.generation, second.generation);
+        super::super::windows_acl::assert_current_user_only(&store.directory, true);
+        super::super::windows_acl::assert_current_user_only(&store.file, false);
+
+        let temporary_files = std::fs::read_dir(&store.directory)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with(".discovery-") && name.ends_with(".tmp")
+            })
+            .count();
+        assert_eq!(temporary_files, 0);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    fn discovery_document(token: &str, generation: &str) -> DiscoveryDocument {
+        DiscoveryDocument {
+            version: 1,
+            pid: std::process::id(),
+            host: "127.0.0.1".into(),
+            port: 47_123,
+            token: token.into(),
+            generation: generation.into(),
+            permission_mode: "read-only".into(),
+        }
     }
 }
