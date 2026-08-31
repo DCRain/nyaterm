@@ -87,19 +87,7 @@ runs:
 
     - name: Enable Win7-only Cargo patches
       shell: pwsh
-      run: |
-        $ErrorActionPreference = "Stop"
-
-        New-Item -ItemType Directory -Force -Path ".cargo" | Out-Null
-        @'
-        [patch.crates-io]
-        webview2-com-sys = { path = "src-tauri/vendor/webview2-com-sys" }
-        windows-core = { path = "src-tauri/vendor/windows-core" }
-        '@ | Set-Content -LiteralPath ".cargo/config.toml" -Encoding UTF8
-
-        cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 | Out-Null
-        Write-Host "Enabled Win7-only Cargo patches:"
-        Get-Content -LiteralPath ".cargo/config.toml"
+      run: ./.github/scripts/enable-win7-cargo-patches.ps1
 
     - name: Print build metadata
       shell: pwsh
