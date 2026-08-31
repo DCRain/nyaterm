@@ -27,6 +27,16 @@ interface ZmodemHandler {
   handle: (payload: ZmodemEventPayload) => void;
 }
 
+export async function replaySnapshotBeforeAttach(options: {
+  initialReplayPromise: Promise<void>;
+  replayPendingWakeEvents: () => void;
+  attachSession: () => Promise<void>;
+}) {
+  await options.initialReplayPromise.catch(() => {});
+  options.replayPendingWakeEvents();
+  await options.attachSession();
+}
+
 interface CreateXTerminalSessionEventsParams {
   sessionId: string;
   terminal: Terminal;
@@ -278,11 +288,12 @@ export function createXTerminalSessionEvents({
     );
     if (!addUnlistener(nextZmodemUnlisten)) return;
 
-    replayPendingWakeEvents();
-
     try {
-      await initialReplayPromise.catch(() => {});
-      await invoke("attach_session", { sessionId });
+      await replaySnapshotBeforeAttach({
+        initialReplayPromise,
+        replayPendingWakeEvents,
+        attachSession: () => invoke("attach_session", { sessionId }),
+      });
       detachedHibernateEpochRef.current = null;
       if (
         hibernationPhaseRef.current === "waking" ||

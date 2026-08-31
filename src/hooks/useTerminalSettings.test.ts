@@ -1,5 +1,5 @@
-import type { Terminal } from "@xterm/xterm";
 import { renderHook } from "@testing-library/react";
+import type { Terminal } from "@xterm/xterm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TerminalFitScheduler } from "@/components/terminal/terminalFitScheduler";
 import type { TerminalColors } from "@/lib/themes";
@@ -7,7 +7,10 @@ import type { AppSettings } from "@/types/global";
 import { useTerminalSettings } from "./useTerminalSettings";
 
 const webglMocks = vi.hoisted(() => ({
-  instances: [] as Array<{ dispose: ReturnType<typeof vi.fn>; contextLoss?: () => void }>,
+  instances: [] as Array<{
+    dispose: ReturnType<typeof vi.fn>;
+    contextLoss?: () => void;
+  }>,
 }));
 
 vi.mock("@xterm/addon-webgl", () => ({
@@ -19,7 +22,8 @@ vi.mock("@xterm/addon-webgl", () => ({
     }
 
     onContextLoss(callback: () => void) {
-      webglMocks.instances[webglMocks.instances.length - 1].contextLoss = callback;
+      webglMocks.instances[webglMocks.instances.length - 1].contextLoss =
+        callback;
       return { dispose: vi.fn() };
     }
   },
@@ -71,7 +75,9 @@ describe("useTerminalSettings renderer refresh", () => {
       return id;
     });
     vi.stubGlobal("requestAnimationFrame", rafRequests);
-    vi.stubGlobal("cancelAnimationFrame", (id: number) => rafCallbacks.delete(id));
+    vi.stubGlobal("cancelAnimationFrame", (id: number) =>
+      rafCallbacks.delete(id),
+    );
   });
 
   afterEach(() => {
@@ -87,7 +93,10 @@ describe("useTerminalSettings renderer refresh", () => {
     }
   };
 
-  function createHookHarness(rendererVisible = true) {
+  function createHookHarness(
+    rendererVisible = true,
+    snapshotRestoring = false,
+  ) {
     const terminal = {
       rows: 24,
       options: {},
@@ -99,8 +108,18 @@ describe("useTerminalSettings renderer refresh", () => {
     const fitSchedulerRef = {
       current: { schedule: vi.fn() } as unknown as TerminalFitScheduler,
     };
+    const snapshotRestoringRef = { current: snapshotRestoring };
+    const initialProps = {
+      visible: rendererVisible,
+      colors: theme("#000000"),
+      ui: appearance(14),
+    };
     const hook = renderHook(
-      (props: { visible: boolean; colors: TerminalColors; ui: AppSettings["appearance"] }) =>
+      (props: {
+        visible: boolean;
+        colors: TerminalColors;
+        ui: AppSettings["appearance"];
+      }) =>
         useTerminalSettings(
           terminalRef,
           fitSchedulerRef,
@@ -111,12 +130,20 @@ describe("useTerminalSettings renderer refresh", () => {
           props.visible,
           terminal,
           "session-1",
+          snapshotRestoringRef,
         ),
       {
-        initialProps: { visible: rendererVisible, colors: theme("#000000"), ui: appearance(14) },
+        initialProps,
       },
     );
-    return { ...hook, terminal, terminalRef, fitSchedulerRef };
+    return {
+      ...hook,
+      terminal,
+      terminalRef,
+      fitSchedulerRef,
+      initialProps,
+      snapshotRestoringRef,
+    };
   }
 
   it("installs WebGL and schedules only one reveal chain", () => {
@@ -137,15 +164,38 @@ describe("useTerminalSettings renderer refresh", () => {
     vi.mocked(harness.terminal.refresh).mockClear();
     vi.mocked(harness.terminal.clearTextureAtlas).mockClear();
 
-    harness.rerender({ visible: false, colors: stableColors, ui: stableAppearance });
+    harness.rerender({
+      visible: false,
+      colors: stableColors,
+      ui: stableAppearance,
+    });
     flushAnimationFrames();
     vi.mocked(harness.terminal.refresh).mockClear();
     vi.mocked(harness.terminal.clearTextureAtlas).mockClear();
-    harness.rerender({ visible: true, colors: stableColors, ui: stableAppearance });
+    harness.rerender({
+      visible: true,
+      colors: stableColors,
+      ui: stableAppearance,
+    });
     flushAnimationFrames();
 
     expect(harness.terminal.refresh).toHaveBeenCalledTimes(2);
     expect(harness.terminal.clearTextureAtlas).not.toHaveBeenCalled();
+  });
+
+  it("does not add WebGL or settings refreshes during snapshot restore", () => {
+    const harness = createHookHarness(true, true);
+    flushAnimationFrames();
+
+    expect(harness.terminal.loadAddon).toHaveBeenCalledTimes(1);
+    expect(harness.terminal.refresh).not.toHaveBeenCalled();
+    expect(harness.fitSchedulerRef.current?.schedule).not.toHaveBeenCalled();
+
+    harness.snapshotRestoringRef.current = false;
+    harness.rerender(harness.initialProps);
+    flushAnimationFrames();
+
+    expect(harness.terminal.refresh).not.toHaveBeenCalled();
   });
 
   it("still clears the texture atlas for theme and font changes", () => {
@@ -153,12 +203,20 @@ describe("useTerminalSettings renderer refresh", () => {
     flushAnimationFrames();
     vi.mocked(harness.terminal.clearTextureAtlas).mockClear();
 
-    harness.rerender({ visible: true, colors: theme("#101010"), ui: appearance(14) });
+    harness.rerender({
+      visible: true,
+      colors: theme("#101010"),
+      ui: appearance(14),
+    });
     flushAnimationFrames();
     expect(harness.terminal.clearTextureAtlas).toHaveBeenCalledTimes(1);
 
     vi.mocked(harness.terminal.clearTextureAtlas).mockClear();
-    harness.rerender({ visible: true, colors: theme("#101010"), ui: appearance(16) });
+    harness.rerender({
+      visible: true,
+      colors: theme("#101010"),
+      ui: appearance(16),
+    });
     flushAnimationFrames();
     expect(harness.terminal.clearTextureAtlas).toHaveBeenCalledTimes(1);
   });

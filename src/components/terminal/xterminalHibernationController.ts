@@ -57,6 +57,7 @@ interface CreateXTerminalHibernationControllerParams {
   updateOutputDrainMode: () => void;
   flushFrameGateAndDrain: (reason: string) => Promise<boolean>;
   captureReconnectSnapshot: () => TerminalReconnectSnapshot | null;
+  beginSnapshotRestore: (snapshot: TerminalReconnectSnapshot | null) => void;
   setTerminalReady: (ready: boolean) => void;
   setHibernated: (hibernated: boolean) => void;
   setTerminalGeneration: (updater: (generation: number) => number) => void;
@@ -104,6 +105,7 @@ export function createXTerminalHibernationController({
   updateOutputDrainMode,
   flushFrameGateAndDrain,
   captureReconnectSnapshot,
+  beginSnapshotRestore,
   setTerminalReady,
   setHibernated,
   setTerminalGeneration,
@@ -339,7 +341,9 @@ export function createXTerminalHibernationController({
         return;
       }
 
-      hibernationSnapshotRef.current = captureReconnectSnapshot();
+      const hibernationSnapshot = captureReconnectSnapshot();
+      hibernationSnapshotRef.current = hibernationSnapshot;
+      beginSnapshotRestore(hibernationSnapshot);
       hibernationCleanupRef.current = true;
       hibernationPhaseRef.current = "hibernated";
       outputDrain.setMode("hibernated");

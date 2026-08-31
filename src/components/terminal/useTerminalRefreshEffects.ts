@@ -17,6 +17,7 @@ interface UseTerminalRefreshEffectsParams {
   showGutter: boolean;
   showContentPadding: boolean;
   workspacePaddingSetting?: boolean;
+  snapshotRestoringRef?: RefObject<boolean>;
 }
 
 export function useTerminalRefreshEffects({
@@ -30,6 +31,7 @@ export function useTerminalRefreshEffects({
   showGutter,
   showContentPadding,
   workspacePaddingSetting,
+  snapshotRestoringRef,
 }: UseTerminalRefreshEffectsParams) {
   useEffect(() => {
     if (terminalReady && fitSchedulerRef.current && terminalRef.current) {
@@ -96,7 +98,13 @@ export function useTerminalRefreshEffects({
 
   useEffect(() => {
     const handleRefresh = () => {
-      if (!visible || !fitSchedulerRef.current || !terminalRef.current) return;
+      if (
+        snapshotRestoringRef?.current ||
+        !visible ||
+        !fitSchedulerRef.current ||
+        !terminalRef.current
+      )
+        return;
 
       fitSchedulerRef.current.schedule({
         reason: "global-refresh",
@@ -110,7 +118,7 @@ export function useTerminalRefreshEffects({
     return () => {
       window.removeEventListener("nyaterm:refresh-terminals", handleRefresh);
     };
-  }, [active, fitSchedulerRef, terminalRef, visible]);
+  }, [active, fitSchedulerRef, snapshotRestoringRef, terminalRef, visible]);
 
   useEffect(() => {
     if (!terminalReady) return;
@@ -128,6 +136,7 @@ export function useTerminalRefreshEffects({
       force = false,
       scaleFactor?: number,
     ) => {
+      if (snapshotRestoringRef?.current) return;
       const nextDevicePixelRatio = window.devicePixelRatio || 1;
       const dprChanged = Math.abs(nextDevicePixelRatio - lastDevicePixelRatio) > 0.001;
       if (dprChanged) {
@@ -216,7 +225,15 @@ export function useTerminalRefreshEffects({
       unlistenFocused?.();
       unlistenScale?.();
     };
-  }, [active, fitSchedulerRef, sessionId, terminalReady, terminalRef, visible]);
+  }, [
+    active,
+    fitSchedulerRef,
+    sessionId,
+    snapshotRestoringRef,
+    terminalReady,
+    terminalRef,
+    visible,
+  ]);
 
   useEffect(() => {
     const handleClear = () => {
