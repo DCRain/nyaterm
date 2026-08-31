@@ -123,6 +123,7 @@ import {
   writeTextInFrames,
 } from "./xterminalOutputQueue";
 import type { PerformanceMode, XTerminalProps } from "./xterminalTypes";
+import { shouldSuspendKeywordHighlighter } from "./xterminalKeywordHighlighting";
 import {
   createZmodemEventHandler,
   type ZmodemEventPayload,
@@ -1742,7 +1743,6 @@ export default function XTerminal({
       if (!visibleRef.current || !isTerminalAlive()) return;
       requestAnimationFrame(() => {
         if (!visibleRef.current || !isTerminalAlive()) return;
-        terminal.clearTextureAtlas();
         terminal.refresh(0, Math.max(0, terminal.rows - 1));
         requestAnimationFrame(() => {
           if (!visibleRef.current || !isTerminalAlive()) return;
@@ -2263,12 +2263,21 @@ export default function XTerminal({
   // isDark is derived from the terminal theme background so built-in rule colors
   // switch automatically when the user changes themes.
   const isDark = hexLuminance(terminalTheme.colors.terminal.background) < 0.5;
+  const keywordHighlighterSuspended = shouldSuspendKeywordHighlighter({
+    visible,
+    hibernated,
+    terminalReady,
+    performanceMode,
+  });
   useKeywordHighlighter(
     terminalInstance,
     terminalSettings,
     sessionId,
     isDark,
-    performanceMode !== "normal" || !visible,
+    {
+      suspended: keywordHighlighterSuspended,
+      releaseCachesAfterDelay: !visible || hibernated,
+    },
   );
 
   const { tooltipState, menuState, closeMenu } = useActionLinks(

@@ -89,7 +89,6 @@ export function useTerminalRefreshEffects({
         reason: "active",
         force: true,
         refresh: true,
-        clearTextureAtlas: true,
         focus: true,
       });
     }

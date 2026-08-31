@@ -99,7 +99,6 @@ export function useTerminalSettings(
       revealRefreshFrameRef.current = requestAnimationFrame(() => {
         const terminal = terminalRef.current;
         if (terminal) {
-          terminal.clearTextureAtlas();
           terminal.refresh(0, Math.max(0, terminal.rows - 1));
         }
 
@@ -172,7 +171,6 @@ export function useTerminalSettings(
     }
 
     clearHiddenWebglDisposeTimer();
-    scheduleRevealRefresh();
 
     const installWebgl = (targetTerminal: Terminal) => {
       try {
@@ -214,7 +212,9 @@ export function useTerminalSettings(
       }
     };
 
-    if (!webglAddonRef.current) {
+    if (webglAddonRef.current) {
+      scheduleRevealRefresh();
+    } else {
       installWebgl(terminal);
     }
   }, [
