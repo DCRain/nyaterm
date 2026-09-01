@@ -354,6 +354,8 @@ export default function NewSessionPage() {
           setRdpDomain(found.domain || "");
           setPasswordId(found.auth?.password_id || "");
           setHasPassword(found.auth?.has_password || false);
+          setProxyId(found.network?.proxy_id || "");
+          setJumpHostId(found.network?.proxy_jump_id || "");
           setRdpUseNla(found.security?.use_nla ?? true);
           setRdpCertificatePolicy(found.security?.certificate_policy ?? "prompt");
           setRdpDisplayMode(
