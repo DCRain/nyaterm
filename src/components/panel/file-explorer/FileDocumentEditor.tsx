@@ -198,7 +198,14 @@ export default function FileDocumentEditor({ pane, active }: FileDocumentEditorP
     });
     viewRef.current = view;
 
+    const resizeObserver = new ResizeObserver(() => {
+      view.requestMeasure?.();
+    });
+    resizeObserver.observe(parent);
+    requestAnimationFrame(() => view.requestMeasure?.());
+
     return () => {
+      resizeObserver.disconnect();
       view.destroy();
       viewRef.current = null;
     };
@@ -237,7 +244,7 @@ export default function FileDocumentEditor({ pane, active }: FileDocumentEditorP
 
   return (
     <div
-      className="flex h-full min-h-0 flex-col bg-background/60"
+      className="nyaterm-solid-surface flex h-full min-h-0 flex-col"
       data-file-document-mode="edit"
       onKeyDown={(event) => {
         if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
@@ -285,7 +292,7 @@ export default function FileDocumentEditor({ pane, active }: FileDocumentEditorP
           {error}
         </div>
       ) : null}
-      <div ref={editorParentRef} className="min-h-0 flex-1" />
+      <div ref={editorParentRef} className="min-h-0 flex-1 h-full" />
       <div className="flex h-7 shrink-0 items-center justify-between border-t px-3 text-[11px] text-muted-foreground">
         <span>{languageFromFilename(pane.name || pane.file.path).toLocaleUpperCase()}</span>
         <span className="flex items-center gap-2">

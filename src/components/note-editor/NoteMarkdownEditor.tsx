@@ -459,6 +459,17 @@ const NoteMarkdownEditor = forwardRef<NoteMarkdownEditorHandle, NoteMarkdownEdit
     const suppressChangeRef = useRef(false);
     const initialMarkdownRef = useRef(initialMarkdown);
     const colors = noteTheme.colors.notes;
+
+    useEffect(() => {
+      initialMarkdownRef.current = initialMarkdown;
+      const view = viewRef.current;
+      if (!view || view.state.doc.toString() === initialMarkdown) return;
+      suppressChangeRef.current = true;
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: initialMarkdown },
+      });
+      suppressChangeRef.current = false;
+    }, [initialMarkdown]);
     const colorsRef = useRef(colors);
     colorsRef.current = colors;
     gutterDividerColorRef.current = noteStrokeColor(colors);

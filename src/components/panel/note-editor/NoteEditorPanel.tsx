@@ -634,7 +634,7 @@ export default function NoteEditorPanel({ noteId, filePath, tabId }: NoteEditorP
                   : { minHeight: 0 }
               }
             >
-              {documentReady ? (
+              {documentReady && showEditor ? (
                 <NoteMarkdownEditor
                   key={`${documentKey}-${editorKey}-${noteTheme.id}`}
                   ref={editorRef}
