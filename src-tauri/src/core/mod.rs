@@ -26,6 +26,7 @@ pub mod remote_desktop;
 pub mod remote_exec;
 pub mod s3;
 pub mod ftp;
+mod storage_transfer;
 pub mod webdav;
 mod session;
 pub mod sftp;

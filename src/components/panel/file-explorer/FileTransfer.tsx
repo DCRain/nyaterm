@@ -38,6 +38,11 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useApp } from "@/context/AppContext";
 import { invoke } from "@/lib/invoke";
+import {
+  computeTransferProgressPercent,
+  isIndeterminateTransferProgress,
+  shouldShowTransferProgressBar,
+} from "@/lib/transferProgress";
 import { type TransferItem, useTransfer } from "../../../context/TransferContext";
 
 interface FileTransferProps {
@@ -138,22 +143,9 @@ function TransferRow({
           : MdDownload;
   const dirColor =
     item.direction === "copy" ? "#a78bfa" : item.direction === "upload" ? "#4ade80" : "#60a5fa";
-  const hasByteProgress = item.totalSize > 0;
-  const byteProgress = hasByteProgress
-    ? Math.min(100, Math.round((item.bytesTransferred / item.totalSize) * 100))
-    : 0;
-  const progress =
-    item.kind === "directory"
-      ? hasByteProgress
-        ? byteProgress
-        : item.itemCountTotal && item.itemCountTotal > 0
-          ? Math.min(100, Math.round(((item.itemCountCompleted ?? 0) / item.itemCountTotal) * 100))
-          : item.status === "completed"
-            ? 100
-            : 0
-      : item.totalSize > 0
-        ? Math.min(100, Math.round((item.bytesTransferred / item.totalSize) * 100))
-        : 0;
+  const progress = computeTransferProgressPercent(item);
+  const showProgressBar = shouldShowTransferProgressBar(item);
+  const indeterminateProgress = isIndeterminateTransferProgress(item);
   const isExternalTransfer = item.source === "zmodem" || item.source === "rdp-clipboard";
   const canPause = !isExternalTransfer && item.status === "transferring";
   const canPauseQueued = !isExternalTransfer && item.status === "queued";
@@ -239,7 +231,12 @@ function TransferRow({
                       {formatSize(item.bytesTransferred)} / {formatSize(item.totalSize)}
                     </span>
                   </>
-                ) : item.status === "completed" && item.size > 0 && item.totalSize === 0 ? (
+                ) : item.bytesTransferred > 0 ? (
+                  <>
+                    <span className="shrink-0">·</span>
+                    <span className="truncate">{formatSize(item.bytesTransferred)}</span>
+                  </>
+                ) : item.status === "completed" && item.size > 0 ? (
                   <>
                     <span className="shrink-0">·</span>
                     <span className="truncate">{formatSize(item.size)}</span>
@@ -276,24 +273,23 @@ function TransferRow({
             )}
           </div>
 
-          {(item.status === "transferring" || item.status === "paused") &&
-            (item.kind === "directory"
-              ? hasByteProgress || (item.itemCountTotal ?? 0) > 0
-              : item.totalSize > 0) && (
+          {(item.status === "transferring" || item.status === "paused") && showProgressBar && (
+            <div
+              className="mt-1 h-1 rounded-full overflow-hidden"
+              style={{ backgroundColor: "var(--df-border)" }}
+            >
               <div
-                className="mt-1 h-1 rounded-full overflow-hidden"
-                style={{ backgroundColor: "var(--df-border)" }}
-              >
-                <div
-                  className="h-full rounded-full transition-all duration-200"
-                  style={{
-                    width: `${progress}%`,
-                    backgroundColor: dirColor,
-                    opacity: item.status === "paused" ? 0.45 : 0.8,
-                  }}
-                />
-              </div>
-            )}
+                className={`h-full rounded-full transition-all duration-200${
+                  indeterminateProgress ? " animate-pulse" : ""
+                }`}
+                style={{
+                  width: indeterminateProgress ? "40%" : `${progress}%`,
+                  backgroundColor: dirColor,
+                  opacity: item.status === "paused" ? 0.45 : 0.8,
+                }}
+              />
+            </div>
+          )}
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="min-w-[180px]">
@@ -507,7 +503,7 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
         .filter(
           (transfer) =>
             transfer.source !== "zmodem" &&
-      transfer.source !== "rdp-clipboard" &&
+            transfer.source !== "rdp-clipboard" &&
             (transfer.status === "transferring" || transfer.status === "queued"),
         )
         .map((transfer) => pauseTransfer(transfer.id)),
@@ -546,7 +542,7 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
         .filter(
           (transfer) =>
             transfer.source !== "zmodem" &&
-      transfer.source !== "rdp-clipboard" &&
+            transfer.source !== "rdp-clipboard" &&
             (transfer.status === "queued" ||
               transfer.status === "transferring" ||
               transfer.status === "paused"),

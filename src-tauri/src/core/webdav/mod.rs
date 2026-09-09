@@ -18,6 +18,11 @@ use tokio::sync::Mutex;
 
 use crate::config::{ConnectionType, SavedConnection};
 use crate::core::sftp::{DirectoryChild, FileEntry, FileProperties};
+use crate::core::sftp::transfer::collect_local_directory_stats;
+use crate::core::storage_transfer::{
+    check_storage_control, finalize_completed_sizes, finish_storage_transfer,
+    is_transfer_cancelled, try_register_storage_transfer,
+};
 use crate::error::{AppError, AppResult};
 use crate::utils::crypto;
 
@@ -276,6 +281,17 @@ impl WebDavManager {
             .map_err(|err| AppError::Config(format!("Failed to open local file: {err}")))?;
 
         let emit = make_emitter(app, transfer_id, &session_id, &file_name, remote_path, local_path, "upload", "file", total_size);
+        let controller = try_register_storage_transfer(
+            transfer_id,
+            &session_id,
+            &file_name,
+            remote_path,
+            local_path,
+            "upload",
+            "file",
+            total_size,
+            None,
+        );
 
         if let Some(emitter) = emit.as_ref() {
             emitter.emit_status("started", 0, None);
@@ -291,6 +307,9 @@ impl WebDavManager {
                 let mut transferred: u64 = 0;
                 let mut last_progress = Instant::now();
                 loop {
+                    if let Some(controller) = controller.as_ref() {
+                        check_storage_control(controller).await?;
+                    }
                     let read = source
                         .read(&mut buffer)
                         .await
@@ -303,12 +322,22 @@ impl WebDavManager {
                         .await
                         .map_err(map_opendal_error)?;
                     transferred = transferred.saturating_add(read as u64);
+                    if let Some(controller) = controller.as_ref() {
+                        controller.update_progress(transferred, total_size);
+                    }
                     if let Some(emitter) = emit.as_ref() {
                         if last_progress.elapsed() >= WEBDAV_PROGRESS_INTERVAL {
                             last_progress = Instant::now();
                             emitter.emit_status("progress", transferred, None);
                         }
                     }
+                }
+                if let Some(controller) = controller.as_ref() {
+                    check_storage_control(controller).await?;
+                    controller.update_progress(transferred, total_size);
+                }
+                if let Some(emitter) = emit.as_ref() {
+                    emitter.emit_status("progress", transferred, None);
                 }
                 writer.close().await.map_err(map_opendal_error)?;
                 Ok(transferred)
@@ -317,11 +346,36 @@ impl WebDavManager {
                 if total_size > 0 {
                     data.reserve(total_size as usize);
                 }
-                source
-                    .read_to_end(&mut data)
-                    .await
-                    .map_err(|err| AppError::Config(format!("Failed to read local file: {err}")))?;
-                let transferred = data.len() as u64;
+                let mut buffer = vec![0u8; WEBDAV_CHUNK_SIZE];
+                let mut transferred: u64 = 0;
+                let mut last_progress = Instant::now();
+                loop {
+                    if let Some(controller) = controller.as_ref() {
+                        check_storage_control(controller).await?;
+                    }
+                    let read = source
+                        .read(&mut buffer)
+                        .await
+                        .map_err(|err| AppError::Config(format!("Failed to read local file: {err}")))?;
+                    if read == 0 {
+                        break;
+                    }
+                    data.extend_from_slice(&buffer[..read]);
+                    transferred = transferred.saturating_add(read as u64);
+                    if let Some(controller) = controller.as_ref() {
+                        controller.update_progress(transferred, total_size);
+                    }
+                    if let Some(emitter) = emit.as_ref() {
+                        if last_progress.elapsed() >= WEBDAV_PROGRESS_INTERVAL {
+                            last_progress = Instant::now();
+                            emitter.emit_status("progress", transferred, None);
+                        }
+                    }
+                }
+                if let Some(controller) = controller.as_ref() {
+                    check_storage_control(controller).await?;
+                    controller.update_progress(transferred, total_size);
+                }
                 if let Some(emitter) = emit.as_ref() {
                     emitter.emit_status("progress", transferred, None);
                 }
@@ -336,13 +390,19 @@ impl WebDavManager {
                 if let Some(emitter) = emit.as_ref() {
                     emitter.emit_status("completed", *transferred, None);
                 }
+                finish_storage_transfer(controller.as_ref());
                 Ok(())
+            }
+            Err(err) if is_transfer_cancelled(err) => {
+                finish_storage_transfer(controller.as_ref());
+                Err(AppError::Cancelled(err.to_string()))
             }
             Err(err) => {
                 let message = err.to_string();
                 if let Some(emitter) = emit.as_ref() {
                     emitter.emit_status("error", 0, Some(message.clone()));
                 }
+                finish_storage_transfer(controller.as_ref());
                 Err(AppError::Config(message))
             }
         }
@@ -392,6 +452,17 @@ impl WebDavManager {
         // each progress tick so the UI can show indeterminate progress.
         let total_size = op.stat(&key).await.map(|m| m.content_length()).unwrap_or(0);
         let emit = make_emitter(app, transfer_id, &session_id, &file_name, remote_path, local_path, "download", "file", total_size);
+        let controller = try_register_storage_transfer(
+            transfer_id,
+            &session_id,
+            &file_name,
+            remote_path,
+            local_path,
+            "download",
+            "file",
+            total_size,
+            None,
+        );
         if let Some(emitter) = emit.as_ref() {
             emitter.emit_status("started", 0, None);
         }
@@ -410,6 +481,9 @@ impl WebDavManager {
             let mut last_progress = Instant::now();
             use futures_util::AsyncReadExt;
             loop {
+                if let Some(controller) = controller.as_ref() {
+                    check_storage_control(controller).await?;
+                }
                 let read = reader
                     .read(&mut buf)
                     .await
@@ -422,6 +496,9 @@ impl WebDavManager {
                     .await
                     .map_err(|err| AppError::Config(format!("Failed to write local file: {err}")))?;
                 transferred = transferred.saturating_add(read as u64);
+                if let Some(controller) = controller.as_ref() {
+                    controller.update_progress(transferred, total_size);
+                }
                 if let Some(emitter) = emit.as_ref() {
                     if last_progress.elapsed() >= WEBDAV_PROGRESS_INTERVAL {
                         last_progress = Instant::now();
@@ -441,7 +518,13 @@ impl WebDavManager {
                 if let Some(emitter) = emit.as_ref() {
                     emitter.emit_status("completed", *transferred, None);
                 }
+                finish_storage_transfer(controller.as_ref());
                 Ok(())
+            }
+            Err(err) if is_transfer_cancelled(err) => {
+                let _ = tokio::fs::remove_file(local_path).await;
+                finish_storage_transfer(controller.as_ref());
+                Err(AppError::Cancelled(err.to_string()))
             }
             Err(err) => {
                 // Best-effort cleanup of partial file on failure.
@@ -450,6 +533,7 @@ impl WebDavManager {
                 if let Some(emitter) = emit.as_ref() {
                     emitter.emit_status("error", 0, Some(message.clone()));
                 }
+                finish_storage_transfer(controller.as_ref());
                 Err(AppError::Config(message))
             }
         }
@@ -482,6 +566,7 @@ impl WebDavManager {
             .find(|s| !s.is_empty())
             .unwrap_or(local_path)
             .to_string();
+        let stats = collect_local_directory_stats(local_path).await?;
         let emit = make_emitter(
             app,
             transfer_id,
@@ -491,12 +576,24 @@ impl WebDavManager {
             local_path,
             "upload",
             "directory",
-            0,
+            stats.total_size,
+        );
+        let controller = try_register_storage_transfer(
+            transfer_id,
+            &session_id,
+            &display_name,
+            remote_path,
+            local_path,
+            "upload",
+            "directory",
+            stats.total_size,
+            Some(stats.file_count),
         );
         if let Some(emitter) = emit.as_ref() {
-            emitter.emit_status("started", 0, None);
+            emitter.emit_started(stats.file_count);
         }
 
+        let mut completed = 0u64;
         let result: AppResult<()> = async {
             while let Some(dir) = stack.pop() {
                 let mut entries = tokio::fs::read_dir(&dir).await.map_err(|err| {
@@ -507,6 +604,9 @@ impl WebDavManager {
                     .await
                     .map_err(|err| AppError::Config(format!("Failed to read local entry: {err}")))?
                 {
+                    if let Some(controller) = controller.as_ref() {
+                        check_storage_control(controller).await?;
+                    }
                     let path = entry.path();
                     let rel = path.strip_prefix(root).map_err(|err| {
                         AppError::Config(format!("Invalid relative path: {err}"))
@@ -532,6 +632,13 @@ impl WebDavManager {
                     } else if file_type.is_file() {
                         self.upload_file(connection_id, path.to_string_lossy().as_ref(), &remote)
                             .await?;
+                        completed = completed.saturating_add(1);
+                        if let Some(controller) = controller.as_ref() {
+                            controller.update_item_progress(completed, stats.file_count);
+                        }
+                        if let Some(emitter) = emit.as_ref() {
+                            emitter.emit_item_progress(completed, stats.file_count);
+                        }
                     }
                 }
             }
@@ -542,15 +649,22 @@ impl WebDavManager {
         match &result {
             Ok(()) => {
                 if let Some(emitter) = emit.as_ref() {
-                    emitter.emit_status("completed", 0, None);
+                    emitter.emit_item_progress(stats.file_count, stats.file_count);
+                    emitter.emit_status("completed", stats.total_size, None);
                 }
+                finish_storage_transfer(controller.as_ref());
                 Ok(())
+            }
+            Err(err) if is_transfer_cancelled(err) => {
+                finish_storage_transfer(controller.as_ref());
+                Err(AppError::Cancelled(err.to_string()))
             }
             Err(err) => {
                 let message = err.to_string();
                 if let Some(emitter) = emit.as_ref() {
                     emitter.emit_status("error", 0, Some(message.clone()));
                 }
+                finish_storage_transfer(controller.as_ref());
                 Err(AppError::Config(message))
             }
         }
@@ -598,6 +712,15 @@ impl WebDavManager {
             .find(|s| !s.is_empty())
             .unwrap_or(remote_path)
             .to_string();
+        let file_entries: Vec<_> = entries
+            .iter()
+            .filter(|entry| !matches!(entry.metadata().mode(), EntryMode::DIR))
+            .collect();
+        let item_count_total = file_entries.len() as u64;
+        let total_size = file_entries
+            .iter()
+            .map(|entry| entry.metadata().content_length())
+            .fold(0u64, u64::saturating_add);
         let emit = make_emitter(
             app,
             transfer_id,
@@ -607,14 +730,29 @@ impl WebDavManager {
             local_path,
             "download",
             "directory",
-            0,
+            total_size,
+        );
+        let controller = try_register_storage_transfer(
+            transfer_id,
+            &session_id,
+            &display_name,
+            remote_path,
+            local_path,
+            "download",
+            "directory",
+            total_size,
+            Some(item_count_total),
         );
         if let Some(emitter) = emit.as_ref() {
-            emitter.emit_status("started", 0, None);
+            emitter.emit_started(item_count_total);
         }
 
+        let mut completed = 0u64;
         let result: AppResult<()> = async {
-            for entry in entries {
+            for entry in &entries {
+                if let Some(controller) = controller.as_ref() {
+                    check_storage_control(controller).await?;
+                }
                 let meta = entry.metadata();
                 let key = entry.path().trim_start_matches('/');
                 let prefix_trim = prefix.trim_start_matches('/').trim_end_matches('/');
@@ -630,16 +768,26 @@ impl WebDavManager {
                     tokio::fs::create_dir_all(&local).await.map_err(|err| {
                         AppError::Config(format!("Failed to create local dir: {err}"))
                     })?;
-                } else {
-                    if let Some(parent) = local.parent() {
-                        tokio::fs::create_dir_all(parent).await.map_err(|err| {
-                            AppError::Config(format!("Failed to create local dir: {err}"))
-                        })?;
-                    }
-                    let data = op.read(entry.path()).await.map_err(map_opendal_error)?;
-                    tokio::fs::write(&local, data.to_vec()).await.map_err(|err| {
-                        AppError::Config(format!("Failed to write local file: {err}"))
+                    continue;
+                }
+                if let Some(parent) = local.parent() {
+                    tokio::fs::create_dir_all(parent).await.map_err(|err| {
+                        AppError::Config(format!("Failed to create local dir: {err}"))
                     })?;
+                }
+                let remote = if key.starts_with('/') {
+                    key.to_string()
+                } else {
+                    format!("/{key}")
+                };
+                self.download_file(connection_id, &remote, local.to_string_lossy().as_ref())
+                    .await?;
+                completed = completed.saturating_add(1);
+                if let Some(controller) = controller.as_ref() {
+                    controller.update_item_progress(completed, item_count_total);
+                }
+                if let Some(emitter) = emit.as_ref() {
+                    emitter.emit_item_progress(completed, item_count_total);
                 }
             }
             Ok(())
@@ -649,32 +797,62 @@ impl WebDavManager {
         match &result {
             Ok(()) => {
                 if let Some(emitter) = emit.as_ref() {
-                    emitter.emit_status("completed", 0, None);
+                    emitter.emit_item_progress(item_count_total, item_count_total);
+                    emitter.emit_status("completed", total_size, None);
                 }
+                finish_storage_transfer(controller.as_ref());
                 Ok(())
+            }
+            Err(err) if is_transfer_cancelled(err) => {
+                finish_storage_transfer(controller.as_ref());
+                Err(AppError::Cancelled(err.to_string()))
             }
             Err(err) => {
                 let message = err.to_string();
                 if let Some(emitter) = emit.as_ref() {
                     emitter.emit_status("error", 0, Some(message.clone()));
                 }
+                finish_storage_transfer(controller.as_ref());
                 Err(AppError::Config(message))
             }
         }
     }
 }
 
-struct S3Emitter<'a> {
+struct WebDavEmitter<'a> {
     app: &'a AppHandle,
     base: WebDavTransferEvent,
 }
 
-impl<'a> S3Emitter<'a> {
+impl<'a> WebDavEmitter<'a> {
     fn emit_status(&self, status: &str, bytes_transferred: u64, error_msg: Option<String>) {
         let mut event = self.base.clone();
         event.status = status.to_string();
         event.bytes_transferred = bytes_transferred;
         event.error_msg = error_msg;
+        if status == "completed" {
+            let (size, total_size) =
+                finalize_completed_sizes(event.total_size, bytes_transferred);
+            event.size = size;
+            event.total_size = total_size;
+        }
+        let _ = self.app.emit("transfer-event", &event);
+    }
+
+    fn emit_started(&self, item_count_total: u64) {
+        let mut event = self.base.clone();
+        event.status = "started".to_string();
+        event.bytes_transferred = 0;
+        event.item_count_total = Some(item_count_total);
+        event.item_count_completed = Some(0);
+        let _ = self.app.emit("transfer-event", &event);
+    }
+
+    fn emit_item_progress(&self, completed: u64, total: u64) {
+        let mut event = self.base.clone();
+        event.status = "progress".to_string();
+        event.item_count_completed = Some(completed);
+        event.item_count_total = Some(total);
         let _ = self.app.emit("transfer-event", &event);
     }
 }
@@ -689,12 +867,12 @@ fn make_emitter<'a>(
     direction: &str,
     kind: &str,
     total_size: u64,
-) -> Option<S3Emitter<'a>> {
+) -> Option<WebDavEmitter<'a>> {
     let (app, id) = match (app, transfer_id) {
         (Some(app), Some(id)) if !id.is_empty() => (app, id),
         _ => return None,
     };
-    Some(S3Emitter {
+    Some(WebDavEmitter {
         app,
         base: WebDavTransferEvent {
             id: id.to_string(),
@@ -705,7 +883,7 @@ fn make_emitter<'a>(
             direction: direction.to_string(),
             kind: kind.to_string(),
             status: String::new(),
-            size: 0,
+            size: total_size,
             bytes_transferred: 0,
             total_size,
             parent_id: None,

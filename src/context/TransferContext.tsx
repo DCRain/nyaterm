@@ -16,6 +16,7 @@ import { getErrorMessage, humanizeBackendError } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import { copyStorageEntry } from "@/lib/storageCopy";
 import { filterEnqueueUploadRequests } from "@/lib/transferDuplicateResolution";
+import { resolveTransferTotalSize, shouldApplyTransferProgress } from "@/lib/transferProgress";
 import { pruneRetainedTransfers as pruneTransferMap } from "@/lib/transferRetention";
 
 export type TransferDirection = "upload" | "download" | "copy";
@@ -301,6 +302,10 @@ export function TransferProvider({ children }: { children: ReactNode }) {
         let updated: TransferItem;
 
         if (p.status === "progress") {
+          // Late progress ticks after pause/cancel must not flip UI back to transferring.
+          if (!shouldApplyTransferProgress(existing.status)) {
+            return pruneRetainedTransfers(prev, now);
+          }
           const speed = calculateTransferSpeed(
             transferSpeedSamplesRef.current.get(p.id),
             p.bytes_transferred,
@@ -312,7 +317,12 @@ export function TransferProvider({ children }: { children: ReactNode }) {
             status: "transferring",
             bytesTransferred: p.bytes_transferred,
             speedBytesPerSec: speed.speedBytesPerSec ?? existing.speedBytesPerSec ?? 0,
-            totalSize: p.total_size,
+            totalSize: resolveTransferTotalSize(
+              existing.totalSize,
+              p.total_size,
+              p.bytes_transferred,
+              false,
+            ),
             itemCountTotal: p.item_count_total ?? existing.itemCountTotal,
             itemCountCompleted: p.item_count_completed ?? existing.itemCountCompleted,
           };
@@ -323,7 +333,12 @@ export function TransferProvider({ children }: { children: ReactNode }) {
             status: "paused",
             bytesTransferred: p.bytes_transferred,
             speedBytesPerSec: undefined,
-            totalSize: p.total_size,
+            totalSize: resolveTransferTotalSize(
+              existing.totalSize,
+              p.total_size,
+              p.bytes_transferred,
+              false,
+            ),
             itemCountTotal: p.item_count_total ?? existing.itemCountTotal,
             itemCountCompleted: p.item_count_completed ?? existing.itemCountCompleted,
           };
@@ -339,7 +354,12 @@ export function TransferProvider({ children }: { children: ReactNode }) {
             status: "transferring",
             bytesTransferred: p.bytes_transferred,
             speedBytesPerSec: 0,
-            totalSize: p.total_size,
+            totalSize: resolveTransferTotalSize(
+              existing.totalSize,
+              p.total_size,
+              p.bytes_transferred,
+              false,
+            ),
             itemCountTotal: p.item_count_total ?? existing.itemCountTotal,
             itemCountCompleted: p.item_count_completed ?? existing.itemCountCompleted,
           };
@@ -350,7 +370,12 @@ export function TransferProvider({ children }: { children: ReactNode }) {
             status: "cancelled",
             bytesTransferred: p.bytes_transferred,
             speedBytesPerSec: undefined,
-            totalSize: p.total_size,
+            totalSize: resolveTransferTotalSize(
+              existing.totalSize,
+              p.total_size,
+              p.bytes_transferred,
+              false,
+            ),
             itemCountTotal: p.item_count_total ?? existing.itemCountTotal,
             itemCountCompleted: p.item_count_completed ?? existing.itemCountCompleted,
             queueState: undefined,
@@ -361,13 +386,19 @@ export function TransferProvider({ children }: { children: ReactNode }) {
           if (p.status === "completed" || p.status === "error") {
             transferSpeedSamplesRef.current.delete(p.id);
           }
+          const resolvedTotal = resolveTransferTotalSize(
+            existing.totalSize,
+            p.total_size,
+            p.bytes_transferred,
+            p.status === "completed",
+          );
           updated = {
             ...existing,
             status: p.status as TransferStatus,
-            size: p.size,
+            size: Math.max(p.size, p.status === "completed" ? p.bytes_transferred : 0),
             bytesTransferred: p.bytes_transferred,
             speedBytesPerSec: undefined,
-            totalSize: p.total_size,
+            totalSize: resolvedTotal,
             itemCountTotal: p.item_count_total ?? existing.itemCountTotal,
             itemCountCompleted: p.item_count_completed ?? existing.itemCountCompleted,
             queueState:

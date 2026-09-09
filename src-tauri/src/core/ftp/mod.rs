@@ -23,6 +23,11 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 
 use crate::config::{ConnectionType, SavedConnection};
 use crate::core::sftp::{DirectoryChild, FileEntry, FileProperties};
+use crate::core::sftp::transfer::{collect_local_directory_stats, TransferController};
+use crate::core::storage_transfer::{
+    check_storage_control, finalize_completed_sizes, finish_storage_transfer,
+    is_transfer_cancelled, try_register_storage_transfer,
+};
 use crate::error::{AppError, AppResult};
 use crate::storage::{FtpCertificateMetadata, KnownHostCheck};
 use crate::utils::crypto;
@@ -511,6 +516,7 @@ impl FtpManager {
             .find(|s| !s.is_empty())
             .unwrap_or(local_path)
             .to_string();
+        let stats = collect_local_directory_stats(local_path).await?;
         let emit = make_emitter(
             app,
             transfer_id,
@@ -520,18 +526,33 @@ impl FtpManager {
             local_path,
             "upload",
             "directory",
-            0,
+            stats.total_size,
+        );
+        let controller = try_register_storage_transfer(
+            transfer_id,
+            &session_id,
+            &display_name,
+            remote_path,
+            local_path,
+            "upload",
+            "directory",
+            stats.total_size,
+            Some(stats.file_count),
         );
         if let Some(emitter) = emit.as_ref() {
-            emitter.emit_status("started", 0, None);
+            emitter.emit_started(stats.file_count);
         }
         let mut stack = vec![root.to_path_buf()];
+        let mut completed = 0u64;
         let result: AppResult<()> = async {
             while let Some(dir) = stack.pop() {
                 let mut entries = tokio::fs::read_dir(&dir)
                     .await
                     .map_err(|err| AppError::Config(format!("Failed to read local dir: {err}")))?;
                 loop {
+                    if let Some(controller) = controller.as_ref() {
+                        check_storage_control(controller).await?;
+                    }
                     let entry = match entries.next_entry().await {
                         Ok(Some(entry)) => entry,
                         Ok(None) => break,
@@ -572,6 +593,13 @@ impl FtpManager {
                             target_window_label,
                         )
                         .await?;
+                        completed = completed.saturating_add(1);
+                        if let Some(controller) = controller.as_ref() {
+                            controller.update_item_progress(completed, stats.file_count);
+                        }
+                        if let Some(emitter) = emit.as_ref() {
+                            emitter.emit_item_progress(completed, stats.file_count);
+                        }
                     }
                 }
             }
@@ -581,15 +609,22 @@ impl FtpManager {
         match result {
             Ok(()) => {
                 if let Some(emitter) = emit.as_ref() {
-                    emitter.emit_status("completed", 0, None);
+                    emitter.emit_item_progress(stats.file_count, stats.file_count);
+                    emitter.emit_status("completed", stats.total_size, None);
                 }
+                finish_storage_transfer(controller.as_ref());
                 Ok(())
+            }
+            Err(err) if is_transfer_cancelled(&err) => {
+                finish_storage_transfer(controller.as_ref());
+                Err(err)
             }
             Err(err) => {
                 let message = err.to_string();
                 if let Some(emitter) = emit.as_ref() {
                     emitter.emit_status("error", 0, Some(message.clone()));
                 }
+                finish_storage_transfer(controller.as_ref());
                 Err(AppError::Config(message))
             }
         }
@@ -1192,35 +1227,136 @@ async fn ftp_upload_file(
         "file",
         total_size,
     );
+    let controller = try_register_storage_transfer(
+        transfer_id,
+        session_id,
+        &file_name,
+        remote_path,
+        local_path,
+        "upload",
+        "file",
+        total_size,
+        None,
+    );
     if let Some(emitter) = emit.as_ref() {
         emitter.emit_status("started", 0, None);
     }
 
-    let mut data = Vec::new();
-    source
-        .read_to_end(&mut data)
-        .await
-        .map_err(|err| AppError::Config(format!("Failed to read local file: {err}")))?;
-    let mut cursor = Cursor::new(data);
-    let result = match ftp {
-        LiveFtp::Plain(s) => map_ftp(s.put_file(&key, &mut cursor).await).map(|_| ()),
-        LiveFtp::Tls(s) => map_ftp(s.put_file(&key, &mut cursor).await).map(|_| ()),
-    };
-    match result {
-        Ok(()) => {
-            if let Some(emitter) = emit.as_ref() {
-                emitter.emit_status("completed", total_size, None);
+    let result: AppResult<u64> = async {
+        let mut buf = vec![0u8; FTP_CHUNK_SIZE.min(64 * 1024)];
+        let mut transferred = 0u64;
+        let mut last_progress = Instant::now();
+        match ftp {
+            LiveFtp::Plain(s) => {
+                let mut stream = map_ftp(s.put_with_stream(&key).await)?;
+                loop {
+                    if let Some(controller) = controller.as_ref() {
+                        check_storage_control(controller).await?;
+                    }
+                    let read = source
+                        .read(&mut buf)
+                        .await
+                        .map_err(|err| AppError::Config(format!("Failed to read local file: {err}")))?;
+                    if read == 0 {
+                        break;
+                    }
+                    AsyncWriteExt::write_all(&mut stream, &buf[..read])
+                        .await
+                        .map_err(|err| {
+                            AppError::Config(format!("Failed to write FTP file: {err}"))
+                        })?;
+                    transferred = transferred.saturating_add(read as u64);
+                    if let Some(controller) = controller.as_ref() {
+                        controller.update_progress(transferred, total_size);
+                    }
+                    if let Some(emitter) = emit.as_ref() {
+                        if last_progress.elapsed() >= FTP_PROGRESS_INTERVAL {
+                            last_progress = Instant::now();
+                            emitter.emit_status("progress", transferred, None);
+                        }
+                    }
+                }
+                map_ftp(s.finalize_put_stream(stream).await)?;
             }
+            LiveFtp::Tls(s) => {
+                let mut stream = map_ftp(s.put_with_stream(&key).await)?;
+                loop {
+                    if let Some(controller) = controller.as_ref() {
+                        check_storage_control(controller).await?;
+                    }
+                    let read = source
+                        .read(&mut buf)
+                        .await
+                        .map_err(|err| AppError::Config(format!("Failed to read local file: {err}")))?;
+                    if read == 0 {
+                        break;
+                    }
+                    AsyncWriteExt::write_all(&mut stream, &buf[..read])
+                        .await
+                        .map_err(|err| {
+                            AppError::Config(format!("Failed to write FTP file: {err}"))
+                        })?;
+                    transferred = transferred.saturating_add(read as u64);
+                    if let Some(controller) = controller.as_ref() {
+                        controller.update_progress(transferred, total_size);
+                    }
+                    if let Some(emitter) = emit.as_ref() {
+                        if last_progress.elapsed() >= FTP_PROGRESS_INTERVAL {
+                            last_progress = Instant::now();
+                            emitter.emit_status("progress", transferred, None);
+                        }
+                    }
+                }
+                map_ftp(s.finalize_put_stream(stream).await)?;
+            }
+        }
+        Ok(transferred)
+    }
+    .await;
+
+    match result {
+        Ok(transferred) => {
+            if let Some(emitter) = emit.as_ref() {
+                emitter.emit_status("completed", transferred, None);
+            }
+            finish_storage_transfer(controller.as_ref());
             Ok(())
+        }
+        Err(err) if is_transfer_cancelled(&err) => {
+            finish_storage_transfer(controller.as_ref());
+            Err(err)
         }
         Err(err) => {
             let message = err.to_string();
             if let Some(emitter) = emit.as_ref() {
                 emitter.emit_status("error", 0, Some(message.clone()));
             }
+            finish_storage_transfer(controller.as_ref());
             Err(AppError::Config(message))
         }
     }
+}
+
+async fn ftp_remote_size(ftp: &mut LiveFtp, key: &str) -> u64 {
+    let size_result = match ftp {
+        LiveFtp::Plain(s) => s.size(key).await,
+        LiveFtp::Tls(s) => s.size(key).await,
+    };
+    if let Ok(size) = size_result {
+        return size as u64;
+    }
+
+    // Fall back to LIST of the parent directory when SIZE is unsupported.
+    let parent = key.rsplit_once('/').map(|(p, _)| p).unwrap_or("/");
+    let name = key.rsplit('/').next().unwrap_or(key);
+    let Ok(entries) = ftp_list(ftp, parent).await else {
+        return 0;
+    };
+    entries
+        .into_iter()
+        .find(|entry| entry.name == name && !entry.is_dir)
+        .map(|entry| entry.size)
+        .unwrap_or(0)
 }
 
 async fn ftp_download_file(
@@ -1245,6 +1381,7 @@ async fn ftp_download_file(
     let mut target = tokio::fs::File::create(local_path)
         .await
         .map_err(|err| AppError::Config(format!("Failed to create local file: {err}")))?;
+    let total_size = ftp_remote_size(ftp, &key).await;
     let emit = make_emitter(
         app,
         transfer_id,
@@ -1254,7 +1391,18 @@ async fn ftp_download_file(
         local_path,
         "download",
         "file",
-        0,
+        total_size,
+    );
+    let controller = try_register_storage_transfer(
+        transfer_id,
+        session_id,
+        &file_name,
+        remote_path,
+        local_path,
+        "download",
+        "file",
+        total_size,
+        None,
     );
     if let Some(emitter) = emit.as_ref() {
         emitter.emit_status("started", 0, None);
@@ -1262,8 +1410,14 @@ async fn ftp_download_file(
 
     let result: AppResult<u64> = async {
         let transferred = match ftp {
-            LiveFtp::Plain(s) => copy_retr_plain(s, &key, &mut target, emit.as_ref()).await?,
-            LiveFtp::Tls(s) => copy_retr_tls(s, &key, &mut target, emit.as_ref()).await?,
+            LiveFtp::Plain(s) => {
+                copy_retr_plain(s, &key, &mut target, emit.as_ref(), controller.as_ref(), total_size)
+                    .await?
+            }
+            LiveFtp::Tls(s) => {
+                copy_retr_tls(s, &key, &mut target, emit.as_ref(), controller.as_ref(), total_size)
+                    .await?
+            }
         };
         target
             .flush()
@@ -1278,7 +1432,13 @@ async fn ftp_download_file(
             if let Some(emitter) = emit.as_ref() {
                 emitter.emit_status("completed", transferred, None);
             }
+            finish_storage_transfer(controller.as_ref());
             Ok(())
+        }
+        Err(err) if is_transfer_cancelled(&err) => {
+            let _ = tokio::fs::remove_file(local_path).await;
+            finish_storage_transfer(controller.as_ref());
+            Err(err)
         }
         Err(err) => {
             let _ = tokio::fs::remove_file(local_path).await;
@@ -1286,6 +1446,7 @@ async fn ftp_download_file(
             if let Some(emitter) = emit.as_ref() {
                 emitter.emit_status("error", 0, Some(message.clone()));
             }
+            finish_storage_transfer(controller.as_ref());
             Err(AppError::Config(message))
         }
     }
@@ -1296,12 +1457,17 @@ async fn copy_retr_plain(
     key: &str,
     target: &mut tokio::fs::File,
     emit: Option<&FtpEmitter<'_>>,
+    controller: Option<&Arc<TransferController>>,
+    total_size: u64,
 ) -> AppResult<u64> {
     let mut stream = map_ftp(ftp.retr_as_stream(key).await)?;
     let mut buf = vec![0u8; FTP_CHUNK_SIZE.min(64 * 1024)];
     let mut transferred = 0u64;
     let mut last_progress = Instant::now();
     loop {
+        if let Some(controller) = controller {
+            check_storage_control(controller).await?;
+        }
         let read = AsyncReadExt::read(&mut stream, &mut buf)
             .await
             .map_err(|err| AppError::Config(format!("Failed to read FTP file: {err}")))?;
@@ -1313,6 +1479,9 @@ async fn copy_retr_plain(
             .await
             .map_err(|err| AppError::Config(format!("Failed to write local file: {err}")))?;
         transferred = transferred.saturating_add(read as u64);
+        if let Some(controller) = controller {
+            controller.update_progress(transferred, total_size);
+        }
         if let Some(emitter) = emit {
             if last_progress.elapsed() >= FTP_PROGRESS_INTERVAL {
                 last_progress = Instant::now();
@@ -1329,12 +1498,17 @@ async fn copy_retr_tls(
     key: &str,
     target: &mut tokio::fs::File,
     emit: Option<&FtpEmitter<'_>>,
+    controller: Option<&Arc<TransferController>>,
+    total_size: u64,
 ) -> AppResult<u64> {
     let mut stream = map_ftp(ftp.retr_as_stream(key).await)?;
     let mut buf = vec![0u8; FTP_CHUNK_SIZE.min(64 * 1024)];
     let mut transferred = 0u64;
     let mut last_progress = Instant::now();
     loop {
+        if let Some(controller) = controller {
+            check_storage_control(controller).await?;
+        }
         let read = AsyncReadExt::read(&mut stream, &mut buf)
             .await
             .map_err(|err| AppError::Config(format!("Failed to read FTP file: {err}")))?;
@@ -1346,6 +1520,9 @@ async fn copy_retr_tls(
             .await
             .map_err(|err| AppError::Config(format!("Failed to write local file: {err}")))?;
         transferred = transferred.saturating_add(read as u64);
+        if let Some(controller) = controller {
+            controller.update_progress(transferred, total_size);
+        }
         if let Some(emitter) = emit {
             if last_progress.elapsed() >= FTP_PROGRESS_INTERVAL {
                 last_progress = Instant::now();
@@ -1372,6 +1549,9 @@ fn ftp_download_directory<'a>(
             .find(|s| !s.is_empty())
             .unwrap_or(remote_path)
             .to_string();
+        let mut file_count = 0u64;
+        let mut total_size = 0u64;
+        count_remote_dir_tree(ftp, remote_path, &mut file_count, &mut total_size).await?;
         let emit = make_emitter(
             app,
             transfer_id,
@@ -1381,30 +1561,83 @@ fn ftp_download_directory<'a>(
             local_path,
             "download",
             "directory",
-            0,
+            total_size,
+        );
+        let controller = try_register_storage_transfer(
+            transfer_id,
+            &session_id_owned,
+            &display_name,
+            remote_path,
+            local_path,
+            "download",
+            "directory",
+            total_size,
+            Some(file_count),
         );
         if let Some(emitter) = emit.as_ref() {
-            emitter.emit_status("started", 0, None);
+            emitter.emit_started(file_count);
         }
         tokio::fs::create_dir_all(local_path)
             .await
             .map_err(|err| AppError::Config(format!("Failed to create local dir: {err}")))?;
-        let result = download_dir_tree(ftp, remote_path, Path::new(local_path)).await;
+        let mut completed = 0u64;
+        let result = download_dir_tree(
+            ftp,
+            remote_path,
+            Path::new(local_path),
+            emit.as_ref(),
+            controller.as_ref(),
+            file_count,
+            &mut completed,
+        )
+        .await;
         match result {
             Ok(()) => {
                 if let Some(emitter) = emit.as_ref() {
-                    emitter.emit_status("completed", 0, None);
+                    emitter.emit_item_progress(file_count, file_count);
+                    emitter.emit_status("completed", total_size, None);
                 }
+                finish_storage_transfer(controller.as_ref());
                 Ok(())
+            }
+            Err(err) if is_transfer_cancelled(&err) => {
+                finish_storage_transfer(controller.as_ref());
+                Err(err)
             }
             Err(err) => {
                 let message = err.to_string();
                 if let Some(emitter) = emit.as_ref() {
                     emitter.emit_status("error", 0, Some(message.clone()));
                 }
+                finish_storage_transfer(controller.as_ref());
                 Err(AppError::Config(message))
             }
         }
+    })
+}
+
+fn count_remote_dir_tree<'a>(
+    ftp: &'a mut LiveFtp,
+    remote_path: &'a str,
+    file_count: &'a mut u64,
+    total_size: &'a mut u64,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = AppResult<()>> + Send + 'a>> {
+    Box::pin(async move {
+        let entries = ftp_list(ftp, remote_path).await?;
+        for entry in entries {
+            let remote = format!(
+                "{}/{}",
+                normalize_ftp_object_key(remote_path).trim_end_matches('/'),
+                entry.name
+            );
+            if entry.is_dir {
+                count_remote_dir_tree(ftp, &remote, file_count, total_size).await?;
+            } else {
+                *file_count = file_count.saturating_add(1);
+                *total_size = total_size.saturating_add(entry.size);
+            }
+        }
+        Ok(())
     })
 }
 
@@ -1412,10 +1645,17 @@ fn download_dir_tree<'a>(
     ftp: &'a mut LiveFtp,
     remote_path: &'a str,
     local_dir: &'a Path,
+    emit: Option<&'a FtpEmitter<'a>>,
+    controller: Option<&'a Arc<TransferController>>,
+    item_count_total: u64,
+    completed: &'a mut u64,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = AppResult<()>> + Send + 'a>> {
     Box::pin(async move {
         let entries = ftp_list(ftp, remote_path).await?;
         for entry in entries {
+            if let Some(controller) = controller {
+                check_storage_control(controller).await?;
+            }
             let remote = format!(
                 "{}/{}",
                 normalize_ftp_object_key(remote_path).trim_end_matches('/'),
@@ -1426,7 +1666,16 @@ fn download_dir_tree<'a>(
                 tokio::fs::create_dir_all(&local)
                     .await
                     .map_err(|err| AppError::Config(format!("Failed to create local dir: {err}")))?;
-                download_dir_tree(ftp, &remote, &local).await?;
+                download_dir_tree(
+                    ftp,
+                    &remote,
+                    &local,
+                    emit,
+                    controller,
+                    item_count_total,
+                    completed,
+                )
+                .await?;
             } else {
                 ftp_download_file(
                     ftp,
@@ -1437,6 +1686,13 @@ fn download_dir_tree<'a>(
                     "",
                 )
                 .await?;
+                *completed = completed.saturating_add(1);
+                if let Some(controller) = controller {
+                    controller.update_item_progress(*completed, item_count_total);
+                }
+                if let Some(emitter) = emit {
+                    emitter.emit_item_progress(*completed, item_count_total);
+                }
             }
         }
         Ok(())
@@ -1454,6 +1710,29 @@ impl<'a> FtpEmitter<'a> {
         event.status = status.to_string();
         event.bytes_transferred = bytes_transferred;
         event.error_msg = error_msg;
+        if status == "completed" {
+            let (size, total_size) =
+                finalize_completed_sizes(event.total_size, bytes_transferred);
+            event.size = size;
+            event.total_size = total_size;
+        }
+        let _ = self.app.emit("transfer-event", &event);
+    }
+
+    fn emit_started(&self, item_count_total: u64) {
+        let mut event = self.base.clone();
+        event.status = "started".to_string();
+        event.bytes_transferred = 0;
+        event.item_count_total = Some(item_count_total);
+        event.item_count_completed = Some(0);
+        let _ = self.app.emit("transfer-event", &event);
+    }
+
+    fn emit_item_progress(&self, completed: u64, total: u64) {
+        let mut event = self.base.clone();
+        event.status = "progress".to_string();
+        event.item_count_completed = Some(completed);
+        event.item_count_total = Some(total);
         let _ = self.app.emit("transfer-event", &event);
     }
 }
@@ -1484,7 +1763,7 @@ fn make_emitter<'a>(
             direction: direction.to_string(),
             kind: kind.to_string(),
             status: String::new(),
-            size: 0,
+            size: total_size,
             bytes_transferred: 0,
             total_size,
             parent_id: None,
