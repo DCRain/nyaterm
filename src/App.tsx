@@ -26,6 +26,7 @@ import { clearFileExplorerSessionCacheForSession } from "./components/panel/file
 import { useApp } from "./context/AppContext";
 import { TransferProvider } from "./context/TransferContext";
 import { useActivityBarController } from "./hooks/useActivityBarController";
+import { useActivitySessionCapabilities } from "./hooks/useActivitySessionCapabilities";
 import { type ExternalOpenRequest, useExternalOpenRequests } from "./hooks/useExternalOpenRequests";
 import { useFileDocumentCloseGuard } from "./hooks/useFileDocumentCloseGuard";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts";
@@ -96,6 +97,11 @@ import {
   carryOverSessionCwd,
 } from "./lib/terminalSessionCwd";
 import {
+  clearInapplicableFloatingPanels,
+  isSftpOnlyPane,
+  resolveActivitySessionContext,
+} from "./lib/activityBarSessionCapabilities";
+import {
   buildPanelOpenUpdate,
   canCreateSessionFromPane,
   canUseFloatingPanel,
@@ -105,7 +111,6 @@ import {
   type FloatingPanelsState,
   getItemSide,
   getSideOpenPanels,
-  getSideOverlayPanel,
   getVisibleActivityIds,
   hasLiveSession,
   isActivityItemAvailable,
@@ -242,18 +247,6 @@ function joinPath(dir: string, fileName: string) {
 
 function eventTargetsCurrentWindow(targetWindowLabel?: string | null) {
   return !targetWindowLabel || targetWindowLabel === getOwnerMainWindowLabel();
-}
-
-function isSftpOnlyPane(
-  pane: SessionPane | null | undefined,
-  sessionsById: Map<string, SessionInfo> | null | undefined,
-) {
-  return (
-    pane?.paneKind === "terminal" &&
-    pane.type === "SSH" &&
-    (pane.sshRuntimeMode === "sftp" ||
-      sessionsById?.get(pane.sessionId)?.ssh_runtime_mode === "sftp")
-  );
 }
 
 function isSftpOnlySession(
@@ -4061,6 +4054,23 @@ function App() {
   );
 
   const {
+    isApplicable,
+    isVisibleOnBar,
+    leftPanelIds,
+    rightPanelIds,
+    leftOverlayPanelId,
+    rightOverlayPanelId,
+    effectiveFloatingPanels,
+    stickyPatch,
+  } = useActivitySessionCapabilities({
+    activePane,
+    liveSessionsById,
+    uiConfig,
+    multiPanelOpen,
+    floatingPanels,
+  });
+
+  const {
     leftTopItems,
     leftBottomItems,
     rightTopItems,
@@ -4088,6 +4098,8 @@ function App() {
     recordingSessions,
     multiPanelOpen,
     panelOpenMode,
+    isItemVisibleOnBar: isVisibleOnBar,
+    isItemApplicable: isApplicable,
     onFloatingPanelSelect: handleFloatingPanelSelect,
     onFloatingPanelMove: handleFloatingPanelMove,
     updateUi,
@@ -4305,11 +4317,12 @@ function App() {
     return [...targetsById.values()];
   }, [liveSessionsById, tabsById, terminalWindows, dynamicTitles]);
 
-  const activeBottomPanel = uiConfig.show_serial_send_panel
-    ? "serialSend"
-    : uiConfig.show_quick_cmd_bar
-      ? "quickCmdBar"
-      : null;
+  const activeBottomPanel =
+    uiConfig.show_serial_send_panel && isApplicable("serialSend")
+      ? "serialSend"
+      : uiConfig.show_quick_cmd_bar && isApplicable("quickCmdBar")
+        ? "quickCmdBar"
+        : null;
   const temporarySshShortcut = resolveDisplayKeys("tab.temporarySshLink", appSettings.keybindings);
   const openChatShortcut = resolveDisplayKeys("view.openChat", appSettings.keybindings);
   const showCommandsShortcut = resolveDisplayKeys("view.showAllCommands", appSettings.keybindings);
@@ -4449,22 +4462,6 @@ function App() {
     [updateUi],
   );
 
-  const leftPanelIds = useMemo(
-    () => getSideOpenPanels(uiConfig, "left", multiPanelOpen),
-    [multiPanelOpen, uiConfig],
-  );
-  const rightPanelIds = useMemo(
-    () => getSideOpenPanels(uiConfig, "right", multiPanelOpen),
-    [multiPanelOpen, uiConfig],
-  );
-  const leftOverlayPanelId = useMemo(
-    () => getSideOverlayPanel(uiConfig, "left", multiPanelOpen),
-    [multiPanelOpen, uiConfig],
-  );
-  const rightOverlayPanelId = useMemo(
-    () => getSideOverlayPanel(uiConfig, "right", multiPanelOpen),
-    [multiPanelOpen, uiConfig],
-  );
   const leftActiveIds = useMemo(
     () => (multiPanelOpen ? new Set(leftPanelIds) : undefined),
     [leftPanelIds, multiPanelOpen],
@@ -4478,26 +4475,37 @@ function App() {
   const dockedLeftOverlayPanelId = panelOpenMode === "floating" ? null : leftOverlayPanelId;
   const dockedRightOverlayPanelId = panelOpenMode === "floating" ? null : rightOverlayPanelId;
   const visibleFloatingPanels =
-    panelOpenMode === "floating" ? floatingPanels : { left: null, right: null };
+    panelOpenMode === "floating" ? effectiveFloatingPanels : { left: null, right: null };
   const leftActivityActiveIds = useMemo(() => {
     if (panelOpenMode !== "floating") return leftActiveIds;
-    return floatingPanels.left ? new Set([floatingPanels.left]) : undefined;
-  }, [floatingPanels.left, leftActiveIds, panelOpenMode]);
+    return effectiveFloatingPanels.left ? new Set([effectiveFloatingPanels.left]) : undefined;
+  }, [effectiveFloatingPanels.left, leftActiveIds, panelOpenMode]);
   const rightActivityActiveIds = useMemo(() => {
     if (panelOpenMode !== "floating") return rightActiveIds;
-    return floatingPanels.right ? new Set([floatingPanels.right]) : undefined;
-  }, [floatingPanels.right, panelOpenMode, rightActiveIds]);
+    return effectiveFloatingPanels.right ? new Set([effectiveFloatingPanels.right]) : undefined;
+  }, [effectiveFloatingPanels.right, panelOpenMode, rightActiveIds]);
 
+  // Sticky sync: prune floating panels that UI flags or session context make unavailable.
   useEffect(() => {
     if (panelOpenMode !== "floating") return;
-    const next = clearUnavailableFloatingPanels(floatingPanels, uiConfig);
-    if (next === floatingPanels) return;
-    setFloatingPanels(next);
+    const context = resolveActivitySessionContext(activePane, liveSessionsById);
+    const merged = clearInapplicableFloatingPanels(
+      clearUnavailableFloatingPanels(floatingPanels, uiConfig),
+      context,
+    );
+    if (merged.left === floatingPanels.left && merged.right === floatingPanels.right) return;
+    setFloatingPanels(merged);
     setLastFloatingSide((current) => {
-      if (current && next[current]) return current;
-      return next.right ? "right" : next.left ? "left" : null;
+      if (current && merged[current]) return current;
+      return merged.right ? "right" : merged.left ? "left" : null;
     });
-  }, [floatingPanels, panelOpenMode, uiConfig]);
+  }, [activePane, floatingPanels, liveSessionsById, panelOpenMode, uiConfig]);
+
+  // Sticky sync: turn off bottom bars that no longer apply to the active session.
+  useEffect(() => {
+    if (!stickyPatch) return;
+    updateUi(stickyPatch);
+  }, [stickyPatch, updateUi]);
 
   useEffect(() => {
     if (panelOpenMode !== "floating") return;
@@ -4820,7 +4828,12 @@ function App() {
           items: leftTopItems,
           bottomItems: leftBottomItems,
           hiddenItems: leftHiddenItems,
-          activeId: panelOpenMode === "floating" ? null : uiConfig.active_left_panel,
+          activeId:
+            panelOpenMode === "floating"
+              ? null
+              : uiConfig.active_left_panel && isApplicable(uiConfig.active_left_panel)
+                ? uiConfig.active_left_panel
+                : null,
           activeIds: leftActivityActiveIds,
           activeBottomIds: toggleActiveIds,
           onSelect: handleItemSelect,
@@ -4842,7 +4855,12 @@ function App() {
           items: rightTopItems,
           bottomItems: rightBottomItems,
           hiddenItems: rightHiddenItems,
-          activeId: panelOpenMode === "floating" ? null : uiConfig.active_right_panel,
+          activeId:
+            panelOpenMode === "floating"
+              ? null
+              : uiConfig.active_right_panel && isApplicable(uiConfig.active_right_panel)
+                ? uiConfig.active_right_panel
+                : null,
           activeIds: rightActivityActiveIds,
           activeBottomIds: toggleActiveIds,
           onSelect: handleItemSelect,

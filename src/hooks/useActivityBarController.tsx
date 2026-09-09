@@ -256,6 +256,10 @@ interface UseActivityBarControllerOptions {
   recordingSessions: Set<string>;
   multiPanelOpen: boolean;
   panelOpenMode: PanelOpenMode;
+  /** Session-aware visibility for bar icons (UI flags ∧ session applicability). */
+  isItemVisibleOnBar?: (id: string) => boolean;
+  /** Session applicability only; used for user-hidden restore list. */
+  isItemApplicable?: (id: string) => boolean;
   onFloatingPanelSelect: (panelId: string, side: "left" | "right") => void;
   onFloatingPanelMove: (panelId: string, targetSide: "left" | "right") => void;
   updateUi: UpdateUi;
@@ -268,6 +272,8 @@ export function useActivityBarController({
   recordingSessions,
   multiPanelOpen,
   panelOpenMode,
+  isItemVisibleOnBar,
+  isItemApplicable,
   onFloatingPanelSelect,
   onFloatingPanelMove,
   updateUi,
@@ -313,9 +319,13 @@ export function useActivityBarController({
   const buildItems = useCallback(
     (ids: string[]): ActivityBarItem[] =>
       ids
-        .filter((id) => id in itemRegistry && isActivityBarItemVisible(id, uiConfig))
+        .filter((id) => {
+          if (!(id in itemRegistry)) return false;
+          if (isItemVisibleOnBar) return isItemVisibleOnBar(id);
+          return isActivityBarItemVisible(id, uiConfig);
+        })
         .map((id) => ({ id, ...itemRegistry[id] })),
-    [itemRegistry, uiConfig],
+    [isItemVisibleOnBar, itemRegistry, uiConfig],
   );
 
   const leftTopItems = useMemo(() => buildItems(layout.left_top), [buildItems, layout.left_top]);
@@ -331,25 +341,42 @@ export function useActivityBarController({
   const leftHiddenItems = useMemo(
     () =>
       getHiddenActivityItemsForSide(uiConfig, "left", ACTIVITY_BAR_ITEM_IDS)
-        .filter((id) => id in itemRegistry)
+        .filter((id) => {
+          if (!(id in itemRegistry)) return false;
+          return isItemApplicable ? isItemApplicable(id) : true;
+        })
         .map((id) => ({ id, ...itemRegistry[id] })),
-    [itemRegistry, uiConfig],
+    [isItemApplicable, itemRegistry, uiConfig],
   );
   const rightHiddenItems = useMemo(
     () =>
       getHiddenActivityItemsForSide(uiConfig, "right", ACTIVITY_BAR_ITEM_IDS)
-        .filter((id) => id in itemRegistry)
+        .filter((id) => {
+          if (!(id in itemRegistry)) return false;
+          return isItemApplicable ? isItemApplicable(id) : true;
+        })
         .map((id) => ({ id, ...itemRegistry[id] })),
-    [itemRegistry, uiConfig],
+    [isItemApplicable, itemRegistry, uiConfig],
   );
 
   const toggleActiveIds = useMemo(() => {
     const activeIds = new Set<string>();
-    if (uiConfig.show_quick_cmd_bar) activeIds.add("quickCmdBar");
-    if (uiConfig.show_serial_send_panel) activeIds.add("serialSend");
-    if (recordingSessions.size > 0) activeIds.add("recording");
+    if (uiConfig.show_quick_cmd_bar && (isItemApplicable?.("quickCmdBar") ?? true)) {
+      activeIds.add("quickCmdBar");
+    }
+    if (uiConfig.show_serial_send_panel && (isItemApplicable?.("serialSend") ?? true)) {
+      activeIds.add("serialSend");
+    }
+    if (recordingSessions.size > 0 && (isItemApplicable?.("recording") ?? true)) {
+      activeIds.add("recording");
+    }
     return activeIds;
-  }, [recordingSessions, uiConfig.show_quick_cmd_bar, uiConfig.show_serial_send_panel]);
+  }, [
+    isItemApplicable,
+    recordingSessions,
+    uiConfig.show_quick_cmd_bar,
+    uiConfig.show_serial_send_panel,
+  ]);
 
   useEffect(() => {
     if (!uiConfig.show_quick_cmd_bar || !uiConfig.show_serial_send_panel) return;
