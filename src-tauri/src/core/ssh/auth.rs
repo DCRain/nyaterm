@@ -702,13 +702,24 @@ fn remote_shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn build_initial_remote_dir_command(path: &str) -> String {
-    format!("cd {}", remote_shell_quote(path))
+fn build_initial_remote_dir_command(
+    path: &str,
+    ssh_profile: &crate::config::SshProfile,
+) -> String {
+    let cd = format!("cd {}", remote_shell_quote(path));
+    match ssh_profile {
+        // Network devices often lack clear/printf; only change directory.
+        crate::config::SshProfile::NetworkDevice => cd,
+        // clear wipes the viewport; printf ED3 clears xterm scrollback.
+        crate::config::SshProfile::Standard => {
+            format!("{cd}\nclear; printf '\\033[3J'")
+        }
+    }
 }
 
 fn resolve_post_login(conn: &crate::config::SavedConnection) -> Option<SshPostLoginConfig> {
-    let cd_command =
-        resolve_initial_remote_dir(conn).map(|path| build_initial_remote_dir_command(&path));
+    let cd_command = resolve_initial_remote_dir(conn)
+        .map(|path| build_initial_remote_dir_command(&path, &conn.ssh_profile));
     let user_post = conn.post_login.as_ref().and_then(|post_login| {
         if !post_login.enabled || post_login.command.trim().is_empty() {
             None
@@ -719,9 +730,10 @@ fn resolve_post_login(conn: &crate::config::SavedConnection) -> Option<SshPostLo
 
     match (cd_command, user_post) {
         (None, None) => None,
+        // No extra wait: the IO loop already defers until shell injection is Normal.
         (Some(cd), None) => Some(SshPostLoginConfig {
             command: cd,
-            delay_ms: 1000,
+            delay_ms: 0,
         }),
         (None, Some(post)) => Some(SshPostLoginConfig {
             command: post.command.clone(),
@@ -3531,6 +3543,18 @@ mod tests {
         initial_remote_dir: Option<&str>,
         post_login: Option<crate::config::ConnectionPostLogin>,
     ) -> crate::config::SavedConnection {
+        sample_ssh_connection_with_profile(
+            initial_remote_dir,
+            post_login,
+            crate::config::SshProfile::Standard,
+        )
+    }
+
+    fn sample_ssh_connection_with_profile(
+        initial_remote_dir: Option<&str>,
+        post_login: Option<crate::config::ConnectionPostLogin>,
+        ssh_profile: crate::config::SshProfile,
+    ) -> crate::config::SavedConnection {
         crate::config::SavedConnection {
             id: "conn".to_string(),
             name: "demo".to_string(),
@@ -3558,7 +3582,7 @@ mod tests {
             post_login,
             recording: None,
             ssh_algorithms: None,
-            ssh_profile: crate::config::SshProfile::Standard,
+            ssh_profile,
             terminal_type: None,
             sftp: crate::config::SftpSettings::default(),
             asset: None,
@@ -3569,11 +3593,26 @@ mod tests {
     }
 
     #[test]
-    fn resolve_post_login_synthesizes_cd_from_initial_remote_dir() {
+    fn resolve_post_login_synthesizes_cd_clear_and_scrollback_clear() {
         let conn = sample_ssh_connection(Some("/opt/app"), None);
         let resolved = super::resolve_post_login(&conn).expect("post login");
+        assert_eq!(
+            resolved.command,
+            "cd '/opt/app'\nclear; printf '\\033[3J'"
+        );
+        assert_eq!(resolved.delay_ms, 0);
+    }
+
+    #[test]
+    fn resolve_post_login_network_device_only_cds() {
+        let conn = sample_ssh_connection_with_profile(
+            Some("/opt/app"),
+            None,
+            crate::config::SshProfile::NetworkDevice,
+        );
+        let resolved = super::resolve_post_login(&conn).expect("post login");
         assert_eq!(resolved.command, "cd '/opt/app'");
-        assert_eq!(resolved.delay_ms, 1000);
+        assert_eq!(resolved.delay_ms, 0);
     }
 
     #[test]
@@ -3587,7 +3626,10 @@ mod tests {
             }),
         );
         let resolved = super::resolve_post_login(&conn).expect("post login");
-        assert_eq!(resolved.command, "cd '/var/www'\nuptime");
+        assert_eq!(
+            resolved.command,
+            "cd '/var/www'\nclear; printf '\\033[3J'\nuptime"
+        );
         assert_eq!(resolved.delay_ms, 1500);
     }
 }
