@@ -31,7 +31,7 @@ pub use locale::{detect_system_language, map_locale_to_app_language, resolve_ui_
 pub use connection::{
     AiExecutionProfile, AppConfig, AssetAccelerator, AssetAcceleratorType, AssetDeviceType,
     AssetDisk, AssetDiskKind, AssetDiskPurpose, AssetMetadata, ConnectionAuth,
-    ConnectionCustomIcon, ConnectionNetwork, ConnectionRecordingSettings, ConnectionType, Group,
+    ConnectionCustomIcon, ConnectionNetwork, ConnectionPostLogin, ConnectionRecordingSettings, ConnectionType, Group,
     MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS, MAX_SSH_AGENT_FORWARDING_ENDPOINTS,
     MAX_SSH_AGENT_FORWARDING_IDENTITIES, MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS, SavedConnection,
     SessionsConfig, SftpCwdFollowMode, SftpSettings, SshAgentEndpoint, SshAgentForwardingConfig,
