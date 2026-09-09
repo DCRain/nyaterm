@@ -1078,6 +1078,7 @@ fn prepare_termius_connections(
                 agent_forwarding_config: None,
                 encoding: String::new(),
                 dynamic_tab_title: false,
+                initial_remote_dir: None,
             },
             group_path,
             description: Some("Imported from Termius".to_string()),

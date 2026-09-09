@@ -127,6 +127,7 @@ fn prepare_nyaterm_json_session(
                     agent_forwarding_config: None,
                     encoding: String::new(),
                     dynamic_tab_title,
+                    initial_remote_dir: None,
                 },
                 group_path: normalize_optional_group_path(group_path, &context)?,
                 description: normalize_optional_string(description),

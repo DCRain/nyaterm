@@ -669,6 +669,7 @@ mod tests {
                     agent_forwarding_config: None,
                     encoding: String::new(),
                     dynamic_tab_title: true,
+                initial_remote_dir: None,
                 },
                 group_id: None,
                 description: None,
@@ -721,6 +722,7 @@ mod tests {
             &sessions.connections[0].config,
             config::ConnectionType::Ssh {
                 dynamic_tab_title: true,
+                initial_remote_dir: None,
                 ..
             }
         ));

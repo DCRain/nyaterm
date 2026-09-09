@@ -574,6 +574,7 @@ mod tests {
             &prepared.connections[0].config,
             ConnectionType::Ssh {
                 dynamic_tab_title: true,
+                initial_remote_dir: None,
                 ..
             }
         ));

@@ -369,6 +369,7 @@ export default function NewSessionPage() {
   const [postLoginEnabled, setPostLoginEnabled] = useState(false);
   const [postLoginCommand, setPostLoginCommand] = useState("");
   const [postLoginDelayMs, setPostLoginDelayMs] = useState(DEFAULT_POST_LOGIN_DELAY_MS);
+  const [initialRemoteDir, setInitialRemoteDir] = useState("");
   const [sshBackspaceMode, setSshBackspaceMode] = useState("del");
   const [x11Forwarding, setX11Forwarding] = useState(false);
   const [authAgentEndpoint, setAuthAgentEndpoint] = useState<SshAgentEndpoint>({ type: "auto" });
@@ -481,6 +482,7 @@ export default function NewSessionPage() {
           setPostLoginEnabled(found.post_login?.enabled ?? false);
           setPostLoginCommand(found.post_login?.command ?? "");
           setPostLoginDelayMs(found.post_login?.delay_ms ?? DEFAULT_POST_LOGIN_DELAY_MS);
+          setInitialRemoteDir(found.initial_remote_dir || "");
           setSshBackspaceMode(found.backspace_mode || "del");
           setX11Forwarding(found.x11_forwarding ?? false);
           setAuthAgentEndpoint(found.auth_agent_endpoint ?? { type: "auto" });
@@ -655,6 +657,7 @@ export default function NewSessionPage() {
     setPostLoginEnabled(false);
     setPostLoginCommand("");
     setPostLoginDelayMs(DEFAULT_POST_LOGIN_DELAY_MS);
+    setInitialRemoteDir("");
     setSshBackspaceMode("del");
     setX11Forwarding(false);
     setAuthAgentEndpoint({ type: "auto" });
@@ -1274,6 +1277,10 @@ export default function NewSessionPage() {
               auth,
               network,
               post_login: postLogin,
+              initial_remote_dir: (() => {
+                const normalized = initialRemoteDir.trim();
+                return normalized || undefined;
+              })(),
               ssh_algorithms: sshAlgorithms,
               ssh_profile: sshProfile,
               terminal_type: sshTerminalType === "default" ? undefined : sshTerminalType,
@@ -2082,6 +2089,8 @@ export default function NewSessionPage() {
                 setPostLoginDelayMs={setPostLoginDelayMs}
                 minPostLoginDelayMs={MIN_POST_LOGIN_DELAY_MS}
                 maxPostLoginDelayMs={MAX_POST_LOGIN_DELAY_MS}
+                initialRemoteDir={initialRemoteDir}
+                setInitialRemoteDir={setInitialRemoteDir}
                 backspaceMode={sshBackspaceMode}
                 setBackspaceMode={setSshBackspaceMode}
                 x11Forwarding={x11Forwarding}

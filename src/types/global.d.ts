@@ -552,6 +552,8 @@ export interface SavedConnection {
   host?: string;
   port?: number;
   username?: string;
+  /** SSH-only: remote directory to `cd` into after the shell is ready. */
+  initial_remote_dir?: string;
   /** Local terminal fields (present when type === "local_terminal"). */
   shell_path?: string;
   shell_args?: string;

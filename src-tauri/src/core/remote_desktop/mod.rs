@@ -86,6 +86,7 @@ mod tests {
                 agent_forwarding_config: None,
                 encoding: String::new(),
                 dynamic_tab_title: false,
+                initial_remote_dir: None,
             })
             .is_err()
         );

@@ -1134,6 +1134,7 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
                 agent_forwarding_config: None,
                 encoding: String::new(),
                 dynamic_tab_title: false,
+            initial_remote_dir: None,
             },
             group_id: None,
             description: None,

@@ -326,6 +326,14 @@ function getConnectionDetailRows(
           multiline: true,
         });
       }
+      const initialRemoteDir = formatOptionalDetailValue(conn.initial_remote_dir);
+      if (initialRemoteDir) {
+        rows.push({
+          label: t("savedConnections.initialRemoteDir"),
+          value: initialRemoteDir,
+          copyValue: getCopyDetailValue(conn.initial_remote_dir),
+        });
+      }
       rows.push({
         label: t("savedConnections.description"),
         value: description,

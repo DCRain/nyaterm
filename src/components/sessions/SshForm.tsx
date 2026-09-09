@@ -145,6 +145,8 @@ interface SshFormProps {
   setPostLoginDelayMs: (v: number) => void;
   minPostLoginDelayMs: number;
   maxPostLoginDelayMs: number;
+  initialRemoteDir: string;
+  setInitialRemoteDir: (v: string) => void;
   backspaceMode: string;
   setBackspaceMode: (v: string) => void;
   x11Forwarding: boolean;
@@ -476,6 +478,8 @@ export function SshForm({
   setPostLoginDelayMs,
   minPostLoginDelayMs,
   maxPostLoginDelayMs,
+  initialRemoteDir,
+  setInitialRemoteDir,
   backspaceMode,
   setBackspaceMode,
   x11Forwarding,
@@ -1630,7 +1634,23 @@ export function SshForm({
             </TabsList>
 
             <TabsContent value="post-login" className="mt-3 border-0 outline-none">
-              <div className="rounded-lg border bg-accent/25 p-3">
+              <div className="space-y-3">
+                <div className="rounded-lg border bg-accent/25 p-3">
+                  <div className="min-w-0 space-y-0.5">
+                    <div className="text-xs font-medium">{t("dialog.initialRemoteDir")}</div>
+                    <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+                      {t("dialog.initialRemoteDirDesc")}
+                    </p>
+                  </div>
+                  <Input
+                    className="mt-3 h-8 font-mono text-xs"
+                    placeholder={t("dialog.initialRemoteDirPlaceholder")}
+                    value={initialRemoteDir}
+                    onChange={(event) => setInitialRemoteDir(event.target.value)}
+                  />
+                </div>
+
+                <div className="rounded-lg border bg-accent/25 p-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 space-y-0.5">
                     <div className="text-xs font-medium">{t("dialog.postLoginCommand")}</div>
@@ -1683,6 +1703,7 @@ export function SshForm({
                     </div>
                   </div>
                 </div>
+              </div>
               </div>
             </TabsContent>
 

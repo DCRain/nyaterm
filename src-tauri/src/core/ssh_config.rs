@@ -594,6 +594,7 @@ fn entry_to_saved_connection(
             agent_forwarding_config: None,
             encoding: String::new(),
             dynamic_tab_title: false,
+            initial_remote_dir: None,
         },
         group_id: None,
         description: Some(description),

@@ -583,6 +583,10 @@ pub enum ConnectionType {
         /// Allow sanitized remote OSC 0/2 titles to decorate this saved SSH tab.
         #[serde(default, skip_serializing_if = "is_false")]
         dynamic_tab_title: bool,
+        /// Optional remote directory to `cd` into after the SSH shell is ready.
+        /// Synthesized ahead of any explicit `post_login` command.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        initial_remote_dir: Option<String>,
     },
     LocalTerminal {
         #[serde(default)]
@@ -1842,6 +1846,7 @@ mod tests {
             }),
             encoding: String::new(),
             dynamic_tab_title: false,
+            initial_remote_dir: None,
         };
 
         let error = validate_ssh_agent_settings(&config).expect_err("endpoint limit");
@@ -1893,6 +1898,7 @@ mod tests {
             }),
             encoding: String::new(),
             dynamic_tab_title: false,
+            initial_remote_dir: None,
         };
         assert!(validate_ssh_agent_settings(&config).is_err());
     }
@@ -1939,6 +1945,7 @@ mod tests {
             }),
             encoding: String::new(),
             dynamic_tab_title: false,
+            initial_remote_dir: None,
         };
 
         let error = validate_ssh_agent_settings(&config).expect_err("duplicate endpoint");
@@ -1972,6 +1979,7 @@ mod tests {
             }),
             encoding: String::new(),
             dynamic_tab_title: false,
+            initial_remote_dir: None,
         };
 
         let error = validate_ssh_agent_settings(&config).expect_err("duplicate endpoint");
@@ -1995,6 +2003,7 @@ mod tests {
             }),
             encoding: String::new(),
             dynamic_tab_title: false,
+            initial_remote_dir: None,
         };
 
         let duplicate = base(vec!["SHA256:test".to_string(), "SHA256:test".to_string()]);
@@ -2448,6 +2457,7 @@ mod tests {
             legacy.config,
             ConnectionType::Ssh {
                 dynamic_tab_title: false,
+            initial_remote_dir: None,
                 ..
             }
         ));
@@ -2466,6 +2476,7 @@ mod tests {
             enabled.config,
             ConnectionType::Ssh {
                 dynamic_tab_title: true,
+            initial_remote_dir: None,
                 ..
             }
         ));
@@ -2474,6 +2485,44 @@ mod tests {
             serialized.get("dynamic_tab_title"),
             Some(&serde_json::json!(true))
         );
+    }
+
+    #[test]
+    fn ssh_initial_remote_dir_round_trips_and_skips_when_empty() {
+        let with_dir: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "conn-dir",
+            "name": "With Dir",
+            "type": "ssh",
+            "host": "example.com",
+            "port": 22,
+            "username": "root",
+            "initial_remote_dir": "/opt/app"
+        }))
+        .expect("connection with initial_remote_dir");
+        assert!(matches!(
+            &with_dir.config,
+            ConnectionType::Ssh {
+                initial_remote_dir: Some(path),
+                ..
+            } if path == "/opt/app"
+        ));
+        let serialized = serde_json::to_value(with_dir).expect("serialize");
+        assert_eq!(
+            serialized.get("initial_remote_dir"),
+            Some(&serde_json::json!("/opt/app"))
+        );
+
+        let without_dir: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "conn-no-dir",
+            "name": "No Dir",
+            "type": "ssh",
+            "host": "example.com",
+            "port": 22,
+            "username": "root"
+        }))
+        .expect("connection without initial_remote_dir");
+        let serialized = serde_json::to_value(without_dir).expect("serialize");
+        assert!(serialized.get("initial_remote_dir").is_none());
     }
 
     #[test]

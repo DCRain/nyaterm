@@ -534,6 +534,7 @@ pub(crate) fn build_test_ssh_config(
             agent_forwarding_config: None,
             encoding: String::new(),
             dynamic_tab_title: false,
+            initial_remote_dir: None,
         },
         group_id: None,
         description: None,
@@ -637,6 +638,7 @@ fn resolve_saved_ssh_config(
             &conn.config,
             crate::config::ConnectionType::Ssh {
                 dynamic_tab_title: true,
+            initial_remote_dir: None,
                 ..
             }
         ),
@@ -676,16 +678,60 @@ fn resolve_ssh_backspace_mode(conn: &crate::config::SavedConnection) -> String {
     }
 }
 
-fn resolve_post_login(conn: &crate::config::SavedConnection) -> Option<SshPostLoginConfig> {
-    let post_login = conn.post_login.as_ref()?;
-    if !post_login.enabled || post_login.command.trim().is_empty() {
-        return None;
+fn resolve_initial_remote_dir(conn: &crate::config::SavedConnection) -> Option<String> {
+    match &conn.config {
+        crate::config::ConnectionType::Ssh {
+            initial_remote_dir, ..
+        } => {
+            let trimmed = initial_remote_dir.as_ref()?.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        _ => None,
     }
+}
 
-    Some(SshPostLoginConfig {
-        command: post_login.command.clone(),
-        delay_ms: post_login.delay_ms,
-    })
+/// Quote a path for a remote POSIX shell (`cd` target).
+fn remote_shell_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn build_initial_remote_dir_command(path: &str) -> String {
+    format!("cd {}", remote_shell_quote(path))
+}
+
+fn resolve_post_login(conn: &crate::config::SavedConnection) -> Option<SshPostLoginConfig> {
+    let cd_command =
+        resolve_initial_remote_dir(conn).map(|path| build_initial_remote_dir_command(&path));
+    let user_post = conn.post_login.as_ref().and_then(|post_login| {
+        if !post_login.enabled || post_login.command.trim().is_empty() {
+            None
+        } else {
+            Some(post_login)
+        }
+    });
+
+    match (cd_command, user_post) {
+        (None, None) => None,
+        (Some(cd), None) => Some(SshPostLoginConfig {
+            command: cd,
+            delay_ms: 1000,
+        }),
+        (None, Some(post)) => Some(SshPostLoginConfig {
+            command: post.command.clone(),
+            delay_ms: post.delay_ms,
+        }),
+        (Some(cd), Some(post)) => Some(SshPostLoginConfig {
+            command: format!("{}\n{}", cd, post.command.trim_start_matches(['\r', '\n'])),
+            delay_ms: post.delay_ms,
+        }),
+    }
 }
 
 fn resolve_ssh_target(conn: &crate::config::SavedConnection) -> AppResult<(String, u16, String)> {
@@ -3479,5 +3525,69 @@ mod tests {
         let retried = manager.register("second".to_string()).await;
         assert!(manager.respond("second", SshAgentAuthAction::Retry).await);
         assert!(matches!(retried.await, Ok(SshAgentAuthAction::Retry)));
+    }
+
+    fn sample_ssh_connection(
+        initial_remote_dir: Option<&str>,
+        post_login: Option<crate::config::ConnectionPostLogin>,
+    ) -> crate::config::SavedConnection {
+        crate::config::SavedConnection {
+            id: "conn".to_string(),
+            name: "demo".to_string(),
+            config: crate::config::ConnectionType::Ssh {
+                host: "example.com".to_string(),
+                port: 22,
+                username: "root".to_string(),
+                backspace_mode: "del".to_string(),
+                x11_forwarding: false,
+                auth_agent_endpoint: None,
+                legacy_agent_forwarding: None,
+                agent_forwarding_config: None,
+                encoding: String::new(),
+                dynamic_tab_title: false,
+                initial_remote_dir: initial_remote_dir.map(str::to_string),
+            },
+            group_id: None,
+            description: None,
+            sort_order: 0,
+            open_on_startup: false,
+            icon: None,
+            icon_auto_detect: None,
+            auth: None,
+            network: None,
+            post_login,
+            recording: None,
+            ssh_algorithms: None,
+            ssh_profile: crate::config::SshProfile::Standard,
+            terminal_type: None,
+            sftp: crate::config::SftpSettings::default(),
+            asset: None,
+            created_at_ms: None,
+            updated_at_ms: None,
+            last_used_at_ms: None,
+        }
+    }
+
+    #[test]
+    fn resolve_post_login_synthesizes_cd_from_initial_remote_dir() {
+        let conn = sample_ssh_connection(Some("/opt/app"), None);
+        let resolved = super::resolve_post_login(&conn).expect("post login");
+        assert_eq!(resolved.command, "cd '/opt/app'");
+        assert_eq!(resolved.delay_ms, 1000);
+    }
+
+    #[test]
+    fn resolve_post_login_prepends_cd_before_user_commands() {
+        let conn = sample_ssh_connection(
+            Some("/var/www"),
+            Some(crate::config::ConnectionPostLogin {
+                enabled: true,
+                command: "uptime".to_string(),
+                delay_ms: 1500,
+            }),
+        );
+        let resolved = super::resolve_post_login(&conn).expect("post login");
+        assert_eq!(resolved.command, "cd '/var/www'\nuptime");
+        assert_eq!(resolved.delay_ms, 1500);
     }
 }

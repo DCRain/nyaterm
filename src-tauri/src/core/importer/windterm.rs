@@ -127,6 +127,7 @@ fn parse_windterm_content_with_crypto(
                 agent_forwarding_config: None,
                 encoding: String::new(),
                 dynamic_tab_title: false,
+                initial_remote_dir: None,
             },
             group_path,
             description,
