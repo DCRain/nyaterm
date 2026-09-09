@@ -1591,15 +1591,6 @@ function App() {
   }, [openSshTerminalAtRemotePath]);
 
 
-  const openSavedConnectionWithSftp = useCallback(
-    (connection: SavedConnection) =>
-      connectSavedConnection(connection, {
-        runtimeModeOverride: "sftp",
-        failureContext: "SFTP-only connection failed",
-      }),
-    [connectSavedConnection],
-  );
-
   const mcpSessionOpenRequestsRef = useRef(
     new Map<string, { tabId: string; createRequestId: string }>(),
   );
@@ -4671,7 +4662,7 @@ function App() {
         onOpenS3={openS3Workspace}
         onOpenFtp={openFtpWorkspace}
         onOpenWebDav={openWebDavWorkspace}
-        onOpenSftpConnection={openSavedConnectionWithSftp}        onSessionClick={handleSessionClick}
+        onSessionClick={handleSessionClick}
         onSessionReconnect={handleReconnectSessionById}
         onSessionDisconnect={handleDisconnectSessionById}
         canReconnect={canReconnectSessionById}
@@ -4708,7 +4699,7 @@ function App() {
       openS3Workspace,
       openFtpWorkspace,
       openWebDavWorkspace,
-      openSavedConnectionWithSftp,      recordingStatuses,
+      recordingStatuses,
       uiConfig.show_ascend_npu_monitor,
       uiConfig.show_gpu_monitor,
       uiConfig.transfer_height,

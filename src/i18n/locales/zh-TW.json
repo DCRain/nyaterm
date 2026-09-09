@@ -2109,7 +2109,6 @@
     "openSftpSshOnly": "僅 SSH 連線支援開啟 SFTP。",
     "openWebDav": "開啟 WebDAV 資源管理員",
     "openWebDavOnly": "僅 WebDAV 連線支援開啟資源管理員。",
-    "openWithSftp": "使用 SFTP 開啟",
     "parity": "校驗位",
     "port": "埠",
     "rename": "重新命名",

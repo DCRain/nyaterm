@@ -1,5 +1,4 @@
 import type { TFunction } from "i18next";
-import { FolderOpen } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   MdContentCopy,
@@ -427,7 +426,6 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
     handleConnect,
     handleConnectOnly,
     handleOpenSftp,
-    handleOpenSftpConnection,
     handleConnectSelected,
     handleOpenS3,
     handleOpenFtp,
@@ -758,17 +756,6 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
           >
             <MdFolderOpen className="text-[0.875rem] text-muted-foreground mr-2" />
             {t("savedConnections.openSftp")}
-          </ContextMenuItem>
-        ) : null}
-        {canOpenSavedConnectionWithSftp(conn) ? (
-          <ContextMenuItem
-            onClick={() => {
-              closeAndSuppressDetails();
-              handleOpenSftpConnection(conn);
-            }}
-          >
-            <FolderOpen className="mr-2 size-3.5 text-muted-foreground" />
-            {t("savedConnections.openWithSftp")}
           </ContextMenuItem>
         ) : null}
         {conn.type === "s3" ? (

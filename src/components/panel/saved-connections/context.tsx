@@ -42,7 +42,6 @@ export interface SavedConnectionsContextValue {
   handleConnect: (conn: SavedConnection) => void;
   handleConnectOnly: (conn: SavedConnection) => void;
   handleOpenSftp: (conn: SavedConnection) => void;
-  handleOpenSftpConnection: (conn: SavedConnection) => void;
   handleConnectSelected: () => void;
   handleOpenS3: (conn: SavedConnection) => void;
   handleOpenFtp: (conn: SavedConnection) => void;

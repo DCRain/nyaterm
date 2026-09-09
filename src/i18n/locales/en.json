@@ -2112,7 +2112,6 @@
     "openSftpSshOnly": "SFTP is only available for SSH connections.",
     "openWebDav": "Open WebDAV file explorer",
     "openWebDavOnly": "WebDAV file explorer is only available for WebDAV connections.",
-    "openWithSftp": "Open with SFTP",
     "parity": "Parity",
     "port": "Port",
     "rename": "Rename",

@@ -55,7 +55,6 @@ import { resolveShortcutKeys } from "@/hooks/useShortcutMap";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
-import { openSavedConnectionWithSftp } from "@/lib/sftpRuntime";
 import { matchesKeyEvent } from "@/lib/shortcutRegistry";
 import type { NewSessionTarget } from "@/lib/windowManager";
 import type { ConnectionTypeTag, Group, SavedConnection } from "@/types/global";
@@ -84,7 +83,6 @@ interface SavedConnectionsProps {
   onOpenS3?: (connection: SavedConnection) => Promise<void> | void;
   onOpenFtp?: (connection: SavedConnection) => Promise<void> | void;
   onOpenWebDav?: (connection: SavedConnection) => Promise<void> | void;
-  onOpenSftpConnection: (connection: SavedConnection) => Promise<void> | void;
 }
 
 type HeaderActionButtonProps = ComponentProps<typeof Button> & {
@@ -185,7 +183,6 @@ export default function SavedConnections({
   onOpenS3,
   onOpenFtp,
   onOpenWebDav,
-  onOpenSftpConnection,
 }: SavedConnectionsProps) {
   const { savedConnections, savedGroups, refreshConnections, appSettings, updateUi } = useApp();
   const { t } = useTranslation();
@@ -749,10 +746,6 @@ export default function SavedConnections({
 
   const handleConnectOnly = (conn: SavedConnection) => {
     openConnections([conn]);
-  };
-
-  const handleOpenSftpConnection = (conn: SavedConnection) => {
-    openSavedConnectionWithSftp(conn, onOpenSftpConnection);
   };
 
   const handleConnect = (conn: SavedConnection) => {
@@ -1584,7 +1577,6 @@ export default function SavedConnections({
     handleConnect,
     handleConnectOnly,
     handleOpenSftp,
-    handleOpenSftpConnection,
     handleConnectSelected,
     handleOpenS3,
     handleOpenFtp,

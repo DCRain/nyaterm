@@ -2111,7 +2111,6 @@
     "openSftpSshOnly": "SFTP는 SSH 연결에서만 사용할 수 있습니다.",
     "openWebDav": "WebDAV 파일 탐색기 열기",
     "openWebDavOnly": "WebDAV 파일 탐색기는 WebDAV 연결에서만 사용할 수 있습니다.",
-    "openWithSftp": "SFTP로 열기",
     "parity": "패리티",
     "port": "포트",
     "rename": "이름 바꾸기",

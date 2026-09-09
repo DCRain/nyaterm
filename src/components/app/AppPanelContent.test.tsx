@@ -52,7 +52,6 @@ function renderFileExplorer(activePane: FileDocumentPane) {
       onNewConnection={vi.fn()}
       onEditConnection={vi.fn()}
       onConnectConnection={vi.fn()}
-      onOpenSftpConnection={vi.fn()}
       onSessionClick={vi.fn()}
       onSessionReconnect={vi.fn()}
       onSessionDisconnect={vi.fn()}
