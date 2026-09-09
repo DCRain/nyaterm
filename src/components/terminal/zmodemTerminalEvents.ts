@@ -278,12 +278,11 @@ export function createZmodemEventHandler(
     payload: Extract<NormalizedZmodemPayload, { type: "detected" }>,
   ) => {
     const t = getT();
-    const { open: openDialog } = await import("@tauri-apps/plugin-dialog");
     if (disposed) return;
 
     if (payload.direction === "download") {
       writeTerminalStatus(`\r\n\x1b[36m[ZMODEM] ${t("zmodem.selectSaveDir")}\x1b[0m\r\n`);
-      const dir = await openDialog({ directory: true, multiple: false });
+      const dir = await invoke<string | null>("zmodem_pick_download_dir");
       if (disposed) return;
       if (dir) {
         await invoke("zmodem_accept_download", {
@@ -319,7 +318,7 @@ export function createZmodemEventHandler(
       return;
     }
 
-    const selected = await openDialog({ multiple: true });
+    const selected = await invoke<string[] | null>("zmodem_pick_upload_files");
     if (disposed) return;
     if (selected && selected.length > 0) {
       const filePaths = selected.map(String);

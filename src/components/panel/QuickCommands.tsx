@@ -130,6 +130,7 @@ import { QUICK_ICONS } from "../icons";
 interface QuickCommandsProps {
   onSend: (command: string, execute?: boolean) => void;
   onSendToAll?: (command: string, execute?: boolean) => void;
+  sendDisabled?: boolean;
 }
 
 interface NewQuickCommandCategoryDraft {
@@ -288,7 +289,7 @@ function NewQuickCommandCategoryDialog({
   );
 }
 
-function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
+function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickCommandsProps) {
   const { t } = useTranslation();
   const { appSettings, updateUi } = useApp();
   const [commands, setCommands] = useState<QuickCommand[]>([]);
@@ -514,6 +515,7 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
 
   const handleCommandClick = useCallback(
     (cmd: QuickCommand) => {
+      if (sendDisabled) return;
       incrementUseCount(cmd.id);
       const vars = parseCommandVariables(cmd.command);
 
@@ -524,12 +526,12 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
         onSend(cmd.command, cmd.execution_mode !== "append");
       }
     },
-    [onSend, incrementUseCount],
+    [incrementUseCount, onSend, sendDisabled],
   );
 
   const handleSendToAll = useCallback(
     (cmd: QuickCommand) => {
-      if (!onSendToAll) return;
+      if (!onSendToAll || sendDisabled) return;
       incrementUseCount(cmd.id);
       const vars = parseCommandVariables(cmd.command);
       if (vars.length > 0) {
@@ -540,11 +542,12 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
         onSendToAll(cmd.command, cmd.execution_mode !== "append");
       }
     },
-    [onSendToAll, incrementUseCount],
+    [incrementUseCount, onSendToAll, sendDisabled],
   );
 
   const handlePromptSubmit = useCallback(
     (resolvedCommand: string) => {
+      if (sendDisabled) return;
       if (promptCmd) {
         if (promptSendToAll && onSendToAll) {
           onSendToAll(resolvedCommand, promptCmd.execution_mode !== "append");
@@ -555,16 +558,17 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
         setPromptSendToAll(false);
       }
     },
-    [promptCmd, promptSendToAll, onSend, onSendToAll],
+    [onSend, onSendToAll, promptCmd, promptSendToAll, sendDisabled],
   );
 
   const handleAiPromptSubmit = useCallback(() => {
+    if (sendDisabled) return;
     const userInput = aiPrompt.trim();
     if (!userInput) return;
     setAiPrompt("");
     setAiPopoverOpen(false);
     openAIAssistant({ action: "generate_command", userInput });
-  }, [aiPrompt]);
+  }, [aiPrompt, sendDisabled]);
 
   const handleCopyCommand = useCallback(
     async (command: string) => {
@@ -1214,7 +1218,10 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
             {t("quickCommands.edit")}
           </DropdownMenuItem>
           {onSendToAll && (
-            <DropdownMenuItem onClick={() => handleSendToAll(cmd)}>
+            <DropdownMenuItem
+              disabled={sendDisabled}
+              onClick={() => handleSendToAll(cmd)}
+            >
               <BsFillSendPlusFill className="text-[0.875rem]" />
               {t("quickCommands.sendToAll")}
             </DropdownMenuItem>
@@ -1230,7 +1237,7 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
         </DropdownMenuContent>
       </DropdownMenu>
     ),
-    [handleSendToAll, onSendToAll, t],
+    [handleSendToAll, onSendToAll, sendDisabled, t],
   );
   const renderCommandActions = useCallback(
     (cmd: QuickCommand, options?: { showBadge?: boolean }) => (
@@ -1243,6 +1250,7 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
               size="icon-sm"
               className="h-7 w-7 rounded p-0 text-muted-foreground hover:bg-[var(--df-bg-hover)] hover:text-foreground"
               aria-label={t("quickCommands.send")}
+              disabled={sendDisabled}
               onClick={() => handleCommandClick(cmd)}
             >
               <MdSend className="text-[0.875rem]" />
@@ -1259,6 +1267,7 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
       renderCommandDetailsPopover,
       renderExecutionBadge,
       renderMoreMenu,
+      sendDisabled,
       t,
     ],
   );
@@ -1275,6 +1284,7 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
         {onSendToAll && (
           <ContextMenuItem
             className="text-xs gap-2"
+            disabled={sendDisabled}
             onClick={() => handleSendToAll(cmd)}
           >
             <BsFillSendPlusFill className="text-[0.875rem]" />
@@ -1290,7 +1300,7 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
         </ContextMenuItem>
       </ContextMenuContent>
     ),
-    [handleSendToAll, onSendToAll, t],
+    [handleSendToAll, onSendToAll, sendDisabled, t],
   );
   const renderCommandListItem = useCallback(
     (cmd: QuickCommand) => {
@@ -1317,6 +1327,7 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
             <button
               type="button"
               className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded px-1 text-left"
+              disabled={sendDisabled}
               onClick={() => handleCommandClick(cmd)}
             >
               <span className="flex h-4 w-4 shrink-0 items-center justify-center">
@@ -1355,6 +1366,7 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
       renderCommandActions,
       renderCommandIcon,
       renderContextMenuContent,
+      sendDisabled,
     ],
   );
   const renderCommandCompactItem = useCallback(
@@ -1382,6 +1394,7 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
             <button
               type="button"
               className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded px-0.5 text-left"
+              disabled={sendDisabled}
               onClick={() => handleCommandClick(cmd)}
             >
               <span className="flex h-4 w-4 shrink-0 items-center justify-center">
@@ -1416,6 +1429,7 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
       renderCommandActions,
       renderCommandIcon,
       renderContextMenuContent,
+      sendDisabled,
     ],
   );
   const renderCommandTile = useCallback(
@@ -1444,6 +1458,7 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
                     isDropTarget && "ring-1 ring-primary/70",
                   )}
                   style={{ color: "var(--df-text)" }}
+                  disabled={sendDisabled}
                   onClick={() => handleCommandClick(cmd)}
                 >
                   <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
@@ -1521,6 +1536,7 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
       renderCommandIcon,
       renderCommandPreview,
       renderContextMenuContent,
+      sendDisabled,
       t,
     ],
   );
@@ -1774,6 +1790,7 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
                     </div>
                     <Input
                       value={aiPrompt}
+                      disabled={sendDisabled}
                       onChange={(event) => setAiPrompt(event.target.value)}
                       placeholder={t("ai.quickPrompt")}
                       className="h-8 text-xs"
@@ -1787,7 +1804,7 @@ function QuickCommands({ onSend, onSendToAll }: QuickCommandsProps) {
                     <div className="flex justify-end">
                       <Button
                         size="xs"
-                        disabled={!aiPrompt.trim()}
+                        disabled={sendDisabled || !aiPrompt.trim()}
                         onClick={handleAiPromptSubmit}
                       >
                         <MdAutoAwesome />

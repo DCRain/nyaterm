@@ -5,11 +5,13 @@
 
 pub mod ai;
 pub mod backup;
+pub mod capabilities;
 pub mod capture;
 pub mod cloud_sync;
 pub mod history;
 pub mod importer;
 pub(crate) mod input;
+pub mod mcp;
 pub mod monitoring;
 pub mod network;
 pub mod note_crypto;
@@ -28,6 +30,7 @@ pub mod webdav;
 mod session;
 pub mod sftp;
 pub mod ssh;
+pub mod ssh_config;
 pub(crate) mod terminal_session;
 pub mod translate;
 pub mod vnc;
@@ -46,10 +49,14 @@ pub use recording::{
     TerminalHistorySearchResponse,
 };
 pub use session::{
-    SessionCommand, SessionHandle, SessionInfo, SessionManager, SessionReadyHook, SessionType,
-    SharedCwd,
+    CwdPresentation, DynamicTitleCapabilities, SessionCommand, SessionCommandReceiver,
+    SessionCommandSender, SessionHandle, SessionInfo, SessionManager, SessionReadyHook,
+    SessionType, SharedCwd,
 };
-pub(crate) use session::{now_session_started_at, update_cwd_if_changed};
+pub(crate) use session::{
+    SessionCwdReplacement, now_session_started_at, replace_cwd_state, session_command_channel,
+    update_cwd_if_changed,
+};
 pub use terminal_session::local::{
     LocalSessionConfig, LocalShellOption, create_local_session, list_local_shells,
 };

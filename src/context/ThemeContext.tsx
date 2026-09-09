@@ -85,6 +85,7 @@ export function applyTerminalThemeToDOM(colors: ThemeColors["terminal"]) {
   const root = document.documentElement.style;
   root.setProperty("--df-terminal-bg", colors.background);
   root.setProperty("--df-terminal-fg", colors.foreground);
+  root.setProperty("--df-terminal-selection", colors.selectionBackground);
 }
 
 function normalizeNoteThemePreference(

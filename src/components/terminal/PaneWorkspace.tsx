@@ -1,6 +1,7 @@
-import type { ComponentProps } from "react";
-import { memo, useCallback, useMemo, useRef, useState } from "react";
-import { useTranslation } from "react-i18next";
+﻿import type { ComponentProps } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { FolderOpen } from "lucide-react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";import { useTranslation } from "react-i18next";
 import { MdErrorOutline } from "react-icons/md";
 import StartWorkspace from "@/components/app/start-workspace/StartWorkspace";
 import ResizeHandle from "@/components/layout/ResizeHandle";
@@ -23,13 +24,13 @@ import {
   removeSessionFromGroup,
   resumeSessionInGroup,
 } from "@/lib/syncInputGroups";
-import { isSplitPane } from "@/lib/workspaceTabs";
+import { findPaneBySessionId, findTabBySessionId, isSplitPane } from "@/lib/workspaceTabs";
 import type {
   PaneNode,
   RecordingMode,
   RecordingStatus,
-  SessionType,
-  SplitPane,
+  SessionInfo,
+  SessionType,  SplitPane,
   Tab,
   TerminalSessionPane,
 } from "@/types/global";
@@ -41,6 +42,7 @@ interface PaneWorkspaceProps {
   tab: Tab;
   visible: boolean;
   workbench?: WorkbenchRenderProps;
+  sessionInfoById?: Map<string, SessionInfo> | null;
   onActivatePane: (paneId: string) => void;
   onUpdateSplitRatio: (splitId: string, ratio: number) => void;
   onReconnectPane?: (tabId: string, paneId: string) => void | Promise<void>;
@@ -57,6 +59,7 @@ function SplitView({
   tab,
   visible,
   workbench,
+  sessionInfoById,
   onActivatePane,
   onUpdateSplitRatio,
   onReconnectPane,
@@ -71,6 +74,7 @@ function SplitView({
   tab: Tab;
   visible: boolean;
   workbench?: WorkbenchRenderProps;
+  sessionInfoById?: Map<string, SessionInfo> | null;
   onActivatePane: (paneId: string) => void;
   onUpdateSplitRatio: (splitId: string, ratio: number) => void;
   onReconnectPane?: (tabId: string, paneId: string) => void | Promise<void>;
@@ -111,6 +115,7 @@ function SplitView({
           node={split.first}
           tab={tab}
           visible={visible}
+          sessionInfoById={sessionInfoById}
           showChrome
           workbench={workbench}
           onActivatePane={onActivatePane}
@@ -140,6 +145,7 @@ function SplitView({
           node={split.second}
           tab={tab}
           visible={visible}
+          sessionInfoById={sessionInfoById}
           showChrome
           workbench={workbench}
           onActivatePane={onActivatePane}
@@ -161,6 +167,7 @@ function PaneNodeView({
   node,
   tab,
   visible,
+  sessionInfoById,
   showChrome,
   workbench,
   onActivatePane,
@@ -176,6 +183,7 @@ function PaneNodeView({
   node: PaneNode;
   tab: Tab;
   visible: boolean;
+  sessionInfoById?: Map<string, SessionInfo> | null;
   showChrome: boolean;
   workbench?: WorkbenchRenderProps;
   onActivatePane: (paneId: string) => void;
@@ -191,6 +199,39 @@ function PaneNodeView({
   const { t } = useTranslation();
   const { syncGroups, broadcastToAll } = useApp();
   const [isReconnectPending, setIsReconnectPending] = useState(false);
+  const [closedSftpSessionId, setClosedSftpSessionId] = useState<string | null>(null);
+  const splitNode = isSplitPane(node);
+  const requestedSftp = !splitNode && node.sshRuntimeMode === "sftp";
+  const effectiveSftp =
+    !splitNode && sessionInfoById?.get(node.sessionId)?.ssh_runtime_mode === "sftp";
+  const sessionId = splitNode ? null : node.sessionId;
+  const observedSftpRef = useRef({ sessionId, enabled: requestedSftp || effectiveSftp });
+  if (observedSftpRef.current.sessionId !== sessionId) {
+    observedSftpRef.current = {
+      sessionId,
+      enabled: requestedSftp || effectiveSftp,
+    };
+  } else if (requestedSftp || effectiveSftp) {
+    observedSftpRef.current.enabled = true;
+  }
+  const isSftpOnly = !splitNode && observedSftpRef.current.enabled;
+
+  useEffect(() => {
+    if (!isSftpOnly || !sessionId) return;
+    setClosedSftpSessionId(null);
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen(`session-closed-${sessionId}`, () => {
+      if (!disposed) setClosedSftpSessionId(sessionId);
+    }).then((dispose) => {
+      if (disposed) dispose();
+      else unlisten = dispose;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [isSftpOnly, sessionId]);
 
   const handleReconnectClick = async () => {
     if (!onReconnectPane || isReconnectPending) return;
@@ -209,6 +250,7 @@ function PaneNodeView({
         tab={tab}
         visible={visible}
         workbench={workbench}
+        sessionInfoById={sessionInfoById}
         onActivatePane={onActivatePane}
         onUpdateSplitRatio={onUpdateSplitRatio}
         onReconnectPane={onReconnectPane}
@@ -471,8 +513,40 @@ function PaneNodeView({
             }
           />
         )
-      ) : node.type === "S3" || node.type === "FTP" || node.type === "WebDAV" ? null : (
-        <PaneXTerminal
+      ) : node.type === "S3" || node.type === "FTP" || node.type === "WebDAV" ? null : isSftpOnly ? (
+        <div
+          className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center text-sm"
+          style={{ color: "var(--df-text-dimmed)" }}
+          aria-live="polite"
+          data-testid="sftp-only-placeholder"
+        >
+          <FolderOpen className="size-9" style={{ color: "var(--df-primary)" }} />
+          <div className="space-y-1">
+            <div className="font-medium" style={{ color: "var(--df-text)" }}>
+              {closedSftpSessionId === node.sessionId
+                ? t("sftpRuntime.disconnected")
+                : t("sftpRuntime.title")}
+            </div>
+            <div className="max-w-[24rem] text-xs">
+              {t("sftpRuntime.openedWithoutShell")}
+            </div>
+            <div className="max-w-[24rem] text-xs">
+              {t("sftpRuntime.useFileExplorer")}
+            </div>
+          </div>
+          {closedSftpSessionId === node.sessionId && showReconnectAction ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={isReconnectPending}
+              aria-busy={isReconnectPending}
+              onClick={() => void handleReconnectClick()}
+            >
+              {t("tabCtx.reconnect")}
+            </Button>
+          ) : null}
+        </div>
+      ) : (        <PaneXTerminal
           sessionId={node.sessionId}
           sessionName={node.name}
           active={isActive}
@@ -489,6 +563,7 @@ function PaneNodeView({
           }
           syncGroups={syncGroups}
           broadcastToAll={broadcastToAll}
+          sessionInfoById={sessionInfoById}
           recordingStatus={recordingStatuses?.find((status) => status.sessionId === node.sessionId)}
           onToggleRecording={onToggleSessionRecording}
           onSaveTranscript={onSaveSessionTranscript}
@@ -511,6 +586,7 @@ function PaneXTerminal({
   onConnectionError,
   syncGroups,
   broadcastToAll,
+  sessionInfoById,
   recordingStatus,
   onToggleRecording,
   onSaveTranscript,
@@ -527,6 +603,7 @@ function PaneXTerminal({
   onConnectionError?: (sessionId: string, error: string) => void;
   syncGroups: import("@/types/global").SyncGroup[];
   broadcastToAll: boolean;
+  sessionInfoById?: Map<string, SessionInfo> | null;
   recordingStatus?: RecordingStatus;
   onToggleRecording?: (sessionId: string, mode?: RecordingMode) => Promise<void> | void;
   onSaveTranscript?: (sessionId: string, sessionName?: string) => Promise<void> | void;
@@ -534,8 +611,15 @@ function PaneXTerminal({
   const { tabs, setSyncGroups } = useApp();
 
   const syncPeerSessionIds = useMemo(() => {
-    return getSessionInputPeerIds(sessionId, syncGroups, tabs, broadcastToAll);
-  }, [sessionId, syncGroups, broadcastToAll, tabs]);
+    return getSessionInputPeerIds(sessionId, syncGroups, tabs, broadcastToAll).filter(
+      (peerSessionId) => {
+        if (sessionInfoById?.get(peerSessionId)?.ssh_runtime_mode === "sftp") return false;
+        const peerTab = findTabBySessionId(tabs, peerSessionId);
+        const peerPane = peerTab ? findPaneBySessionId(peerTab, peerSessionId) : null;
+        return peerPane?.sshRuntimeMode !== "sftp";
+      },
+    );
+  }, [broadcastToAll, sessionId, sessionInfoById, syncGroups, tabs]);
 
   const activeGroup = useMemo(
     () => getActiveGroupForSession(sessionId, syncGroups),
@@ -622,6 +706,7 @@ function PaneWorkspace({
   tab,
   visible,
   workbench,
+  sessionInfoById,
   onActivatePane,
   onUpdateSplitRatio,
   onReconnectPane,
@@ -641,6 +726,7 @@ function PaneWorkspace({
         node={tab.root}
         tab={tab}
         visible={visible}
+        sessionInfoById={sessionInfoById}
         showChrome={isSplitPane(tab.root)}
         workbench={workbench}
         onActivatePane={onActivatePane}

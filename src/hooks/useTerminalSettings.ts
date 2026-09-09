@@ -11,6 +11,10 @@ import { XTERM_PERFORMANCE_CONFIG } from "@/lib/xtermPerformance";
 import type { TerminalFitScheduler } from "@/components/terminal/terminalFitScheduler";
 import type { AppSettings } from "@/types/global";
 
+function isSnapshotRestoreActive(ref?: RefObject<boolean>) {
+  return ref?.current === true;
+}
+
 export function useTerminalSettings(
   terminalRef: RefObject<Terminal | null>,
   fitSchedulerRef: RefObject<TerminalFitScheduler | null>,
@@ -21,6 +25,7 @@ export function useTerminalSettings(
   rendererVisible = true,
   terminalInstance: Terminal | null = null,
   sessionId?: string,
+  snapshotRestoringRef?: RefObject<boolean>,
 ) {
   const webglAddonRef = useRef<WebglAddon | null>(null);
   const webglTerminalRef = useRef<Terminal | null>(null);
@@ -69,24 +74,30 @@ export function useTerminalSettings(
   }, []);
 
   const scheduleTextureRefresh = useCallback(() => {
+    if (isSnapshotRestoreActive(snapshotRestoringRef)) return;
     if (textureRefreshFrameRef.current !== null) return;
     textureRefreshFrameRef.current = requestAnimationFrame(() => {
       textureRefreshFrameRef.current = null;
+      if (isSnapshotRestoreActive(snapshotRestoringRef)) return;
       const terminal = terminalRef.current;
       if (!terminal) return;
       terminal.clearTextureAtlas();
       terminal.refresh(0, Math.max(0, terminal.rows - 1));
     });
-  }, [terminalRef]);
+  }, [snapshotRestoringRef, terminalRef]);
 
   const scheduleRevealRefresh = useCallback(() => {
     cancelRevealRefresh();
+    if (isSnapshotRestoreActive(snapshotRestoringRef)) return;
     let remainingFrames = XTERM_PERFORMANCE_CONFIG.webgl.revealRefreshFrames;
     const refreshNextFrame = () => {
       revealRefreshFrameRef.current = requestAnimationFrame(() => {
+        if (isSnapshotRestoreActive(snapshotRestoringRef)) {
+          revealRefreshFrameRef.current = null;
+          return;
+        }
         const terminal = terminalRef.current;
         if (terminal) {
-          terminal.clearTextureAtlas();
           terminal.refresh(0, Math.max(0, terminal.rows - 1));
         }
 
@@ -99,7 +110,7 @@ export function useTerminalSettings(
       });
     };
     refreshNextFrame();
-  }, [cancelRevealRefresh, terminalRef]);
+  }, [cancelRevealRefresh, snapshotRestoringRef, terminalRef]);
 
   useEffect(() => {
     return () => {
@@ -158,7 +169,6 @@ export function useTerminalSettings(
     }
 
     clearHiddenWebglDisposeTimer();
-    scheduleRevealRefresh();
 
     const installWebgl = (targetTerminal: Terminal) => {
       try {
@@ -208,7 +218,9 @@ export function useTerminalSettings(
       }
     };
 
-    if (!webglAddonRef.current) {
+    if (webglAddonRef.current) {
+      scheduleRevealRefresh();
+    } else {
       installWebgl(terminal);
     }
   }, [
@@ -248,12 +260,14 @@ export function useTerminalSettings(
       scheduleTextureRefresh();
 
       // Auto-fit on font size change
-      fitSchedulerRef.current?.schedule({
-        reason: "appearance",
-        force: true,
-        refresh: true,
-        clearTextureAtlas: true,
-      });
+      if (!isSnapshotRestoreActive(snapshotRestoringRef)) {
+        fitSchedulerRef.current?.schedule({
+          reason: "appearance",
+          force: true,
+          refresh: true,
+          clearTextureAtlas: true,
+        });
+      }
     }
   }, [
     appearance,
@@ -261,6 +275,7 @@ export function useTerminalSettings(
     terminalRef,
     fitSchedulerRef,
     scheduleTextureRefresh,
+    snapshotRestoringRef,
   ]);
 
   // React to terminal core settings changes: scrollback

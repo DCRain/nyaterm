@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { FaMemory } from "react-icons/fa6";
 import { LuCpu } from "react-icons/lu";
@@ -12,8 +12,22 @@ import {
 } from "react-icons/md";
 import PanelHeader from "@/components/layout/PanelHeader";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  type NetworkHistoryStore,
+  useNetworkHistorySeries,
+} from "@/hooks/useNetworkHistory";
 import type { RemoteStatsState } from "@/hooks/useRemoteStats";
+import NetworkTrafficChart, { formatNetworkRate } from "./NetworkTrafficChart";
+
+const ALL_NETWORK_INTERFACES = "__all__";
 
 function formatBytes(bytes: number): string {
   if (bytes <= 0) return "0 B";
@@ -21,14 +35,6 @@ function formatBytes(bytes: number): string {
   const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   const val = bytes / 1024 ** i;
   return `${val < 10 ? val.toFixed(2) : val < 100 ? val.toFixed(1) : val.toFixed(0)} ${units[i]}`;
-}
-
-function formatRate(bytesPerSec: number): string {
-  if (bytesPerSec <= 0) return "0 B/s";
-  const units = ["B/s", "KB/s", "MB/s", "GB/s"];
-  const i = Math.min(Math.floor(Math.log(bytesPerSec) / Math.log(1024)), units.length - 1);
-  const val = bytesPerSec / 1024 ** i;
-  return `${val < 10 ? val.toFixed(1) : val.toFixed(0)} ${units[i]}`;
 }
 
 function formatUptime(
@@ -132,11 +138,13 @@ function SectionCard({
   title,
   children,
   accent,
+  action,
 }: {
   icon: React.ReactNode;
   title: string;
   children: React.ReactNode;
   accent?: boolean;
+  action?: React.ReactNode;
 }) {
   return (
     <div
@@ -150,16 +158,19 @@ function SectionCard({
           : "var(--df-bg)",
       }}
     >
-      <div className="flex items-center gap-1.5">
-        <span
-          className="text-sm"
-          style={{ color: accent ? "var(--df-primary)" : "var(--df-text-muted)" }}
-        >
-          {icon}
-        </span>
-        <span className="text-xs font-semibold tracking-wide" style={{ color: "var(--df-text)" }}>
-          {title}
-        </span>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span
+            className="text-sm"
+            style={{ color: accent ? "var(--df-primary)" : "var(--df-text-muted)" }}
+          >
+            {icon}
+          </span>
+          <span className="truncate text-xs font-semibold tracking-wide" style={{ color: "var(--df-text)" }}>
+            {title}
+          </span>
+        </div>
+        {action}
       </div>
       {children}
     </div>
@@ -170,16 +181,69 @@ interface ResourceMonitorProps {
   activeSessionId: string | null;
   enabled: boolean;
   remoteStats: RemoteStatsState;
+  networkHistoryStore: NetworkHistoryStore;
 }
 
 export default function ResourceMonitor({
   activeSessionId,
   enabled,
   remoteStats,
+  networkHistoryStore,
 }: ResourceMonitorProps) {
   const { t } = useTranslation();
+  const networkHistory = useNetworkHistorySeries(networkHistoryStore, activeSessionId);
   const [cpuExpanded, setCpuExpanded] = useState(false);
+  const [selectedNetworkInterfaces, setSelectedNetworkInterfaces] = useState<Record<string, string>>(
+    {},
+  );
   const { stats, error, isManualRefreshing, refresh } = remoteStats;
+
+  const selectedNetworkInterface = activeSessionId
+    ? (selectedNetworkInterfaces[activeSessionId] ?? ALL_NETWORK_INTERFACES)
+    : ALL_NETWORK_INTERFACES;
+  const selectedNetwork =
+    selectedNetworkInterface === ALL_NETWORK_INTERFACES
+      ? null
+      : (stats?.networks.find((network) => network.nic === selectedNetworkInterface) ?? null);
+  const effectiveNetworkInterface =
+    selectedNetworkInterface === ALL_NETWORK_INTERFACES || selectedNetwork
+      ? selectedNetworkInterface
+      : ALL_NETWORK_INTERFACES;
+
+  useEffect(() => {
+    if (
+      !activeSessionId ||
+      !stats ||
+      selectedNetworkInterface === ALL_NETWORK_INTERFACES ||
+      selectedNetwork
+    ) {
+      return;
+    }
+    setSelectedNetworkInterfaces((current) => ({
+      ...current,
+      [activeSessionId]: ALL_NETWORK_INTERFACES,
+    }));
+  }, [activeSessionId, selectedNetwork, selectedNetworkInterface, stats]);
+
+  const currentTraffic =
+    effectiveNetworkInterface === ALL_NETWORK_INTERFACES
+      ? stats?.network_summary
+      : selectedNetwork;
+  const networkHistoryPoints =
+    effectiveNetworkInterface === ALL_NETWORK_INTERFACES
+      ? networkHistory.summary
+      : (networkHistory.interfaces[effectiveNetworkInterface] ?? []);
+  const networkHistoryMinutes =
+    networkHistoryPoints.length >= 2
+      ? Math.max(
+          0.1,
+          Math.round(
+            ((networkHistoryPoints[networkHistoryPoints.length - 1]?.timestamp ?? 0) -
+              networkHistoryPoints[0].timestamp) /
+              6000,
+          ) / 10,
+        )
+      : null;
 
   const memTotal = stats ? stats.memory.used + stats.memory.available : 0;
   const memUsedPct = memTotal > 0 ? (stats!.memory.used / memTotal) * 100 : 0;
@@ -375,17 +439,67 @@ export default function ResourceMonitor({
             </SectionCard>
 
             {/* Network */}
-            <SectionCard icon={<MdSwapVert />} title={t("resourceMonitor.network")}>
+            <SectionCard
+              icon={<MdSwapVert />}
+              title={t("resourceMonitor.network")}
+              action={
+                stats.networks.length > 0 ? (
+                  <Select
+                    value={effectiveNetworkInterface}
+                    onValueChange={(value) => {
+                      if (!activeSessionId) return;
+                      setSelectedNetworkInterfaces((current) => ({
+                        ...current,
+                        [activeSessionId]: value,
+                      }));
+                    }}
+                  >
+                    <SelectTrigger
+                      size="sm"
+                      className="h-6 max-w-[9rem] border-0 px-1.5 text-[0.6875rem] shadow-none"
+                      aria-label={t("resourceMonitor.nic")}
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent align="end">
+                      <SelectItem value={ALL_NETWORK_INTERFACES}>
+                        {t("resourceMonitor.allInterfaces")}
+                      </SelectItem>
+                      {stats.networks.map((network) => (
+                        <SelectItem key={network.nic} value={network.nic}>
+                          {network.nic}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : undefined
+              }
+            >
               {stats.networks.length > 0 ? (
-                <div className="space-y-0">
-                  {stats.networks.map((net) => (
-                    <NetworkRow
-                      key={net.nic}
-                      nic={net.nic}
-                      tx={net.tx_bytes_per_sec}
-                      rx={net.rx_bytes_per_sec}
+                <div className="space-y-2.5">
+                  <div className="grid grid-cols-2 gap-2">
+                    <NetworkMetric
+                      label={t("resourceMonitor.download")}
+                      value={formatNetworkRate(currentTraffic?.rx_bytes_per_sec ?? 0)}
+                      arrow="↓"
+                      color="#3b82f6"
                     />
-                  ))}
+                    <NetworkMetric
+                      label={t("resourceMonitor.upload")}
+                      value={formatNetworkRate(currentTraffic?.tx_bytes_per_sec ?? 0)}
+                      arrow="↑"
+                      color="#22c55e"
+                    />
+                  </div>
+                  <NetworkTrafficChart points={networkHistoryPoints} />
+                  {networkHistoryMinutes != null && (
+                    <div
+                      className="text-right text-[0.625rem]"
+                      style={{ color: "var(--df-text-dimmed)" }}
+                    >
+                      {t("resourceMonitor.recentMinutes", { count: networkHistoryMinutes })}
+                    </div>
+                  )}
                 </div>
               ) : (
                 <span className="text-xs" style={{ color: "var(--df-text-dimmed)" }}>
@@ -597,34 +711,37 @@ function DiskRow({
   );
 }
 
-function NetworkRow({ nic, tx, rx }: { nic: string; tx: number; rx: number }) {
+function NetworkMetric({
+  label,
+  value,
+  arrow,
+  color,
+}: {
+  label: string;
+  value: string;
+  arrow: string;
+  color: string;
+}) {
   return (
     <div
-      className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b py-2 first:pt-0 last:border-b-0 last:pb-0"
-      style={{ borderColor: "color-mix(in srgb, var(--df-border) 60%, transparent)" }}
+      className="min-w-0 rounded-md border px-2 py-1.5"
+      style={{
+        backgroundColor: "color-mix(in srgb, var(--df-border) 18%, var(--df-bg))",
+        borderColor: "color-mix(in srgb, var(--df-border) 70%, transparent)",
+      }}
     >
-      <span
-        className="min-w-[5rem] flex-1 truncate text-xs font-mono font-medium"
+      <div className="text-[0.625rem]" style={{ color: "var(--df-text-dimmed)" }}>
+        <span className="mr-1" style={{ color }}>
+          {arrow}
+        </span>
+        {label}
+      </div>
+      <div
+        className="mt-0.5 truncate text-xs font-bold font-mono tabular-nums"
         style={{ color: "var(--df-text)" }}
-        title={nic}
+        title={value}
       >
-        {nic}
-      </span>
-      <div className="ml-auto flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-x-2 gap-y-0.5">
-        <span
-          className="inline-flex items-center gap-0.5 text-[0.6875rem] font-mono tabular-nums whitespace-nowrap"
-          style={{ color: "var(--df-text-muted)" }}
-        >
-          <span style={{ color: "#22c55e" }}>↑</span>
-          {formatRate(tx)}
-        </span>
-        <span
-          className="inline-flex items-center gap-0.5 text-[0.6875rem] font-mono tabular-nums whitespace-nowrap"
-          style={{ color: "var(--df-text-muted)" }}
-        >
-          <span style={{ color: "#3b82f6" }}>↓</span>
-          {formatRate(rx)}
-        </span>
+        {value}
       </div>
     </div>
   );

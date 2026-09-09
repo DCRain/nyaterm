@@ -7,6 +7,7 @@ import type {
   RestorablePaneNode,
   RestorableTab,
   SessionPane,
+  SessionTitleSnapshot,
   SessionType,
   SplitPane,
   Tab,
@@ -122,6 +123,7 @@ export function createSessionPane(
     createRequestId: overrides?.createRequestId,
     connectError: overrides?.connectError,
     temporaryConfig: overrides?.temporaryConfig,
+    sshRuntimeMode: overrides?.sshRuntimeMode,
   } as SessionPane;
 }
 
@@ -261,6 +263,7 @@ export function updateSessionPane(
       | "connectError"
       | "createRequestId"
       | "temporaryConfig"
+      | "sshRuntimeMode"
     >
   > & {
     display?: RemoteDesktopDisplay;
@@ -343,12 +346,40 @@ export function getActivePane(tab: Tab): SessionPane | null {
   );
 }
 
-export function getTabDisplayName(tab: Tab): string {
-  return tab.customName || getActivePane(tab)?.name || "Session";
+export function getTabDisplayName(
+  tab: Tab,
+  dynamicTitle?: string | null,
+): string {
+  if (tab.customName) return tab.customName;
+  const activePane = getActivePane(tab);
+  const dynamic = dynamicTitle?.trim();
+  if (activePane?.paneKind === "terminal" && dynamic) return dynamic;
+  return activePane?.name || "Session";
 }
 
 export function getTabActiveSessionId(tab: Tab) {
   return getActivePane(tab)?.sessionId ?? null;
+}
+
+/** Resolve the display name from the active pane's dynamic-title snapshot. */
+export function getActiveSessionTabDisplayName(
+  tab: Tab,
+  getDynamicTitle: (sessionId: string | null) => string | null | undefined,
+): string {
+  return getTabDisplayName(tab, getDynamicTitle(getTabActiveSessionId(tab)));
+}
+
+/** Resolve a row whose identity is a session, without changing legacy rows. */
+export function getSessionRowDisplayName(
+  tab: Tab,
+  sessionName: string,
+  dynamicSnapshot: SessionTitleSnapshot | null | undefined,
+): string {
+  if (tab.customName) return tab.customName;
+  if (dynamicSnapshot?.enabled) {
+    return dynamicSnapshot.effectiveTitle || sessionName;
+  }
+  return getTabDisplayName(tab);
 }
 
 export function getTabActiveConnectionId(tab: Tab) {
@@ -468,6 +499,7 @@ function serializePane(node: PaneNode): RestorablePaneNode | null {
           : undefined,
       note_id: node.view === "note" ? node.noteId : undefined,
       // externalMarkdown tabs are intentionally not persisted across restarts.
+      ssh_runtime_mode: node.sshRuntimeMode,
       display: isRemoteDesktopPane(node) ? node.display : undefined,
     };
   }
@@ -615,6 +647,7 @@ function restorePane(node: RestorablePaneNode): PaneNode | null {
       connectionId: node.connection_id,
       view,
       noteId: view === "note" ? node.note_id : undefined,
+      sshRuntimeMode: node.ssh_runtime_mode,
       display: remoteDesktop
         ? {
             ...DEFAULT_REMOTE_DESKTOP_DISPLAY,

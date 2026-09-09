@@ -1,4 +1,4 @@
-import type { FileEntry } from "@/types/global";
+import type { FileEntry, SessionInfo } from "@/types/global";
 
 export interface ResolvedLocalDropPathEntry {
   path: string;
@@ -49,6 +49,72 @@ export type FileExplorerBackendKind = "remote" | "local" | "s3" | "ftp" | "webda
 
 export function isPosixExplorerBackend(backend: FileExplorerBackendKind): boolean {
   return backend === "remote" || backend === "s3" || backend === "ftp" || backend === "webdav";
+}
+
+export function canTrackTerminalCwd(
+  session:
+    | Pick<
+        SessionInfo,
+        "session_type" | "injection_active" | "dynamic_title_integration_active"
+      >
+    | null
+    | undefined,
+) {
+  if (!session) return false;
+  if (session.session_type === "Local") {
+    return session.dynamic_title_integration_active;
+  }
+  return session.session_type === "SSH" && session.injection_active;
+}
+
+export function subscribeFileExplorerSessionSnapshots<T>({
+  listenSessionsChanged,
+  readSessions,
+  onSessions,
+  onError,
+}: {
+  listenSessionsChanged: (handler: () => void) => Promise<() => void>;
+  readSessions: () => Promise<T[]>;
+  onSessions: (sessions: T[]) => void;
+  onError: () => void;
+}) {
+  let cancelled = false;
+  let refreshGeneration = 0;
+
+  const refreshSessions = () => {
+    const generation = ++refreshGeneration;
+    void readSessions()
+      .then((sessions) => {
+        if (cancelled || generation !== refreshGeneration) return;
+        onSessions(sessions);
+      })
+      .catch(() => {
+        if (cancelled || generation !== refreshGeneration) return;
+        onError();
+      });
+  };
+
+  const listener = listenSessionsChanged(refreshSessions)
+    .then((dispose) => {
+      if (cancelled) {
+        dispose();
+        return null;
+      }
+      // Register before taking the initial snapshot so a Local ready event
+      // cannot land between list_sessions and sessions-changed subscription.
+      refreshSessions();
+      return dispose;
+    })
+    .catch(() => {
+      if (!cancelled) onError();
+      return null;
+    });
+
+  return () => {
+    cancelled = true;
+    refreshGeneration += 1;
+    void listener.then((dispose) => dispose?.());
+  };
 }
 
 export type BreadcrumbSegment = {
@@ -713,23 +779,25 @@ export function isMoveToSameDirectory(
   targetDirectory: string,
   backend: FileExplorerBackendKind,
 ) {
-  const normalizedSourceDirectory = normalizeExplorerPath(
-    sourceDirectory,
-    backend,
-  );
-  const normalizedTargetDirectory = normalizeExplorerPath(
-    targetDirectory,
-    backend,
-  );
-  if (!normalizedSourceDirectory || !normalizedTargetDirectory) return false;
+  return isSameExplorerDirectory(sourceDirectory, targetDirectory, backend);
+}
+
+export function isSameExplorerDirectory(
+  firstPath: string,
+  secondPath: string,
+  backend: FileExplorerBackendKind,
+) {
+  const normalizedFirstPath = normalizeExplorerPath(firstPath, backend);
+  const normalizedSecondPath = normalizeExplorerPath(secondPath, backend);
+  if (!normalizedFirstPath || !normalizedSecondPath) return false;
   if (isPosixExplorerBackend(backend)) {
-    return normalizedSourceDirectory === normalizedTargetDirectory;
+    return normalizedFirstPath === normalizedSecondPath;
   }
-  return isLocalWindowsStylePath(normalizedSourceDirectory) ||
-    isLocalWindowsStylePath(normalizedTargetDirectory)
-    ? normalizedSourceDirectory.toLocaleLowerCase() ===
-        normalizedTargetDirectory.toLocaleLowerCase()
-    : normalizedSourceDirectory === normalizedTargetDirectory;
+  return isLocalWindowsStylePath(normalizedFirstPath) ||
+    isLocalWindowsStylePath(normalizedSecondPath)
+    ? normalizedFirstPath.toLocaleLowerCase() ===
+        normalizedSecondPath.toLocaleLowerCase()
+    : normalizedFirstPath === normalizedSecondPath;
 }
 
 export function buildMoveSuccessRefreshPlan(
@@ -905,7 +973,7 @@ export function syncExplorerDirectoryToTerminalCwdChange({
   const normalizedCwd = normalizeExplorerPath(cwd, backend);
   if (
     !normalizedCwd ||
-    normalizedCwd === normalizeExplorerPath(currentPath, backend)
+    isSameExplorerDirectory(normalizedCwd, currentPath, backend)
   ) {
     return false;
   }
@@ -931,7 +999,7 @@ export async function syncExplorerDirectoryToTerminalCwd({
       (await readTerminalCwd(sessionId)) ?? "",
       backend,
     );
-    if (!cwd || cwd === normalizeExplorerPath(currentPath, backend)) {
+    if (!cwd || isSameExplorerDirectory(cwd, currentPath, backend)) {
       return false;
     }
     return loadDirectory(cwd, { silent: true });

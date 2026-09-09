@@ -327,7 +327,9 @@ export function parseSshRuntimeMode(
 ): SshRuntimeMode | null {
   const normalized = (value ?? "").trim().toLowerCase();
   if (!normalized) return "standard";
-  if (normalized === "standard" || normalized === "terminal") return normalized;
+  if (normalized === "standard" || normalized === "terminal" || normalized === "sftp") {
+    return normalized;
+  }
   return null;
 }
 

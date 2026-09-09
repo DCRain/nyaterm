@@ -1,5 +1,4 @@
 use crate::config;
-use crate::core::monitoring::stats::RemoteStatsSampler;
 use crate::core::ssh::{
     self, HostKeyVerifyManager, PendingAuthManager, PendingSshAgentAuthManager,
     PendingSshAuthManager, SshAgentAuthAction, SshAuthResponse,
@@ -138,6 +137,7 @@ fn normalize_temporary_ssh_config(mut config: ssh::SshConfig, encoding: &str) ->
     config.proxy_jump = None;
     config.post_login = None;
     config.ssh_algorithms = None;
+    config.dynamic_tab_title = false;
     if config.ssh_profile == crate::config::SshProfile::NetworkDevice
         && config.terminal_type == crate::config::SshTerminalType::Xterm256Color
     {
@@ -202,6 +202,7 @@ pub async fn create_local_session(
                 shell_path,
                 shell_args,
                 working_dir: saved_working_dir,
+                dynamic_tab_title,
                 ..
             } => {
                 let (working_dir, fail_on_missing_working_dir) =
@@ -215,6 +216,7 @@ pub async fn create_local_session(
                     name: conn.name,
                     encoding,
                     elevated: false,
+                    dynamic_tab_title,
                 })
             }
             _ => None,
@@ -239,6 +241,7 @@ pub async fn create_local_session(
                 .unwrap_or_else(|| "Local Terminal".to_string()),
             encoding,
             elevated: elevated.unwrap_or(false),
+            dynamic_tab_title: false,
         })
     } else if working_dir.is_some() {
         let encoding = crate::config::load_app_settings(&app)
@@ -253,6 +256,7 @@ pub async fn create_local_session(
             name: "Local Terminal".to_string(),
             encoding,
             elevated: false,
+            dynamic_tab_title: false,
         })
     } else {
         None
@@ -965,6 +969,45 @@ pub async fn ack_session_output(
 }
 
 #[tauri::command]
+pub async fn zmodem_pick_download_dir(
+    window: tauri::Window,
+) -> AppResult<Option<tauri_plugin_dialog::FilePath>> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+    let dialog = window.dialog().file();
+    #[cfg(any(windows, target_os = "macos"))]
+    let dialog = dialog.set_parent(&window);
+    dialog.pick_folder(move |path| {
+        let _ = result_tx.send(path.map(|path| path.simplified()));
+    });
+
+    result_rx
+        .await
+        .map_err(|_| AppError::Channel("ZMODEM folder picker result was dropped".to_string()))
+}
+
+#[tauri::command]
+pub async fn zmodem_pick_upload_files(
+    window: tauri::Window,
+) -> AppResult<Option<Vec<tauri_plugin_dialog::FilePath>>> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+    let dialog = window.dialog().file();
+    #[cfg(any(windows, target_os = "macos"))]
+    let dialog = dialog.set_parent(&window);
+    dialog.pick_files(move |paths| {
+        let _ = result_tx
+            .send(paths.map(|paths| paths.into_iter().map(|path| path.simplified()).collect()));
+    });
+
+    result_rx
+        .await
+        .map_err(|_| AppError::Channel("ZMODEM file picker result was dropped".to_string()))
+}
+
+#[tauri::command]
 pub async fn zmodem_accept_download(
     state: tauri::State<'_, Arc<SessionManager>>,
     session_id: String,
@@ -1052,9 +1095,13 @@ pub async fn attach_session(
         client_timestamp: None,
     });
 
+    let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
     state
-        .send_command(&session_id, SessionCommand::Attach)
+        .send_command(&session_id, SessionCommand::AttachConfirmed { ack: ack_tx })
+        .await?;
+    ack_rx
         .await
+        .map_err(|_| AppError::Channel("Session attach acknowledgement was dropped".to_string()))
 }
 
 #[tauri::command]
@@ -1082,7 +1129,6 @@ pub async fn detach_session_renderer(
 pub async fn close_session(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<SessionManager>>,
-    stats_sampler: tauri::State<'_, Arc<RemoteStatsSampler>>,
     session_id: String,
 ) -> AppResult<()> {
     let session_id_clone = session_id.clone();
@@ -1102,8 +1148,6 @@ pub async fn close_session(
         Err(AppError::SessionNotFound(_)) => Ok(()),
         other => other,
     };
-
-    stats_sampler.clear_session(&session_id).await;
 
     // Concurrently tidy up any downloaded/watcher temporary files stored in the OS temp directory
     tauri::async_runtime::spawn(async move {
@@ -1152,6 +1196,14 @@ pub async fn list_sessions(
 }
 
 #[tauri::command]
+pub async fn get_session_cwd_presentation(
+    state: tauri::State<'_, Arc<SessionManager>>,
+    session_id: String,
+) -> AppResult<Option<crate::core::CwdPresentation>> {
+    Ok(state.session_cwd_presentation(&session_id).await)
+}
+
+#[tauri::command]
 pub async fn add_command_history(
     state: tauri::State<'_, Arc<SessionManager>>,
     session_id: String,
@@ -1171,6 +1223,17 @@ pub async fn register_command_submission(
         .register_command_submission(&session_id, command)
         .await;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn register_command_confirmation_candidate(
+    state: tauri::State<'_, Arc<SessionManager>>,
+    session_id: String,
+    command: String,
+) -> AppResult<bool> {
+    Ok(state
+        .register_confirmation_candidate(&session_id, command)
+        .await)
 }
 
 #[tauri::command]

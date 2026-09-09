@@ -1,14 +1,19 @@
 use crate::error::{AppError, AppResult};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
 const MAX_SAMPLE_WINDOW: Duration = Duration::from_secs(5 * 60);
 const SAMPLE_TTL: Duration = Duration::from_secs(10 * 60);
+const DISK_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const CPU_USAGE_DIFF_THRESHOLD: f64 = 5.0;
 const CPU_TOTAL_GAP_RATIO_THRESHOLD: f64 = 0.02;
 
-#[derive(serde::Serialize, Default, Clone)]
+#[derive(serde::Serialize, Default, Clone, Debug, PartialEq, Eq)]
 pub struct SystemInfo {
     pub hostname: String,
     pub uptime_sec: u64,
@@ -69,7 +74,7 @@ pub struct NetworkSummaryInfo {
     pub tx_bytes_per_sec: f64,
 }
 
-#[derive(serde::Serialize, Clone)]
+#[derive(serde::Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct DiskInfo {
     pub device: String,
     pub mount: String,
@@ -128,10 +133,28 @@ pub struct ParsedRemoteStats {
     stats: RemoteStats,
     cpu_snapshot: Option<CpuSnapshot>,
     networks: BTreeMap<String, NetworkCounters>,
+    static_info: Option<StaticRemoteStats>,
+    disks: Option<Vec<DiskInfo>>,
+    disk_probe_attempted: bool,
+}
+
+#[derive(Debug, Clone)]
+struct StaticRemoteStats {
+    system: SystemInfo,
+    cpu_model: String,
+    cpu_cores: u32,
+}
+
+#[derive(Debug, Clone)]
+struct CachedDisks {
+    values: Vec<DiskInfo>,
 }
 
 #[derive(Debug, Clone)]
 struct CachedRemoteSample {
+    static_info: Option<StaticRemoteStats>,
+    disks: Option<CachedDisks>,
+    disk_attempted_at: Option<Instant>,
     cpu_snapshot: Option<CpuSnapshot>,
     networks: BTreeMap<String, NetworkCounters>,
     updated_at: Instant,
@@ -140,62 +163,187 @@ struct CachedRemoteSample {
 #[derive(Default)]
 pub struct RemoteStatsSampler {
     samples: Mutex<HashMap<String, CachedRemoteSample>>,
+    session_states: Mutex<HashMap<String, Arc<SessionProbeState>>>,
+}
+
+#[derive(Default)]
+struct SessionProbeState {
+    lock: Arc<Mutex<()>>,
+    invalidated: AtomicBool,
+}
+
+pub struct RemoteStatsProbeLease {
+    state: Arc<SessionProbeState>,
+    _guard: OwnedMutexGuard<()>,
+}
+
+impl RemoteStatsProbeLease {
+    pub fn is_current(&self) -> bool {
+        !self.state.invalidated.load(Ordering::Acquire)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StatsProbePlan {
+    pub include_static: bool,
+    pub include_disk: bool,
 }
 
 impl RemoteStatsSampler {
-    pub async fn complete_snapshot(
+    pub async fn lock_session(&self, session_id: &str) -> RemoteStatsProbeLease {
+        let state = {
+            let mut states = self.session_states.lock().await;
+            states
+                .entry(session_id.to_string())
+                .or_insert_with(|| Arc::new(SessionProbeState::default()))
+                .clone()
+        };
+        let guard = state.lock.clone().lock_owned().await;
+        RemoteStatsProbeLease {
+            state,
+            _guard: guard,
+        }
+    }
+
+    pub async fn probe_plan(&self, session_id: &str) -> StatsProbePlan {
+        self.probe_plan_at(session_id, Instant::now()).await
+    }
+
+    async fn probe_plan_at(&self, session_id: &str, now: Instant) -> StatsProbePlan {
+        let mut samples = self.samples.lock().await;
+        prune_stale_samples(&mut samples, now);
+        let sample = samples.get(session_id);
+
+        StatsProbePlan {
+            include_static: sample
+                .and_then(|sample| sample.static_info.as_ref())
+                .is_none(),
+            include_disk: sample
+                .and_then(|sample| sample.disk_attempted_at)
+                .is_none_or(|attempted_at| {
+                    now.saturating_duration_since(attempted_at) >= DISK_REFRESH_INTERVAL
+                }),
+        }
+    }
+
+    #[cfg(test)]
+    async fn complete_snapshot(&self, session_id: &str, parsed: ParsedRemoteStats) -> RemoteStats {
+        let lease = self.lock_session(session_id).await;
+        self.complete_snapshot_with_lease(session_id, &lease, parsed)
+            .await
+    }
+
+    pub async fn complete_snapshot_with_lease(
         &self,
         session_id: &str,
+        lease: &RemoteStatsProbeLease,
         parsed: ParsedRemoteStats,
     ) -> RemoteStats {
-        let now = Instant::now();
+        self.complete_snapshot_at(session_id, lease, parsed, Instant::now())
+            .await
+    }
+
+    async fn complete_snapshot_at(
+        &self,
+        session_id: &str,
+        lease: &RemoteStatsProbeLease,
+        parsed: ParsedRemoteStats,
+        now: Instant,
+    ) -> RemoteStats {
         let mut samples = self.samples.lock().await;
         prune_stale_samples(&mut samples, now);
 
         let previous = samples.get(session_id).cloned();
         let mut stats = parsed.stats;
 
+        let static_info = parsed.static_info.clone().or_else(|| {
+            previous
+                .as_ref()
+                .and_then(|sample| sample.static_info.clone())
+        });
+        if let Some(static_info) = static_info.as_ref() {
+            let uptime_sec = stats.system.uptime_sec;
+            stats.system = static_info.system.clone();
+            stats.system.uptime_sec = uptime_sec;
+            stats.cpu.model.clone_from(&static_info.cpu_model);
+            stats.cpu.cores = static_info.cpu_cores;
+        }
+
+        let disks = match parsed.disks {
+            Some(values) => Some(CachedDisks { values }),
+            None => previous.as_ref().and_then(|sample| sample.disks.clone()),
+        };
+        let disk_attempted_at = if parsed.disk_probe_attempted {
+            Some(now)
+        } else {
+            previous
+                .as_ref()
+                .and_then(|sample| sample.disk_attempted_at)
+        };
+        if let Some(disks) = disks.as_ref() {
+            stats.disks.clone_from(&disks.values);
+        }
+
         if let Some(previous) = previous.as_ref() {
+            let sample_window = now.saturating_duration_since(previous.updated_at);
             if let (Some(previous_cpu), Some(current_cpu)) =
                 (previous.cpu_snapshot.as_ref(), parsed.cpu_snapshot.as_ref())
             {
-                apply_cpu_usage(session_id, previous, previous_cpu, current_cpu, &mut stats);
+                apply_cpu_usage(
+                    session_id,
+                    sample_window,
+                    previous_cpu,
+                    current_cpu,
+                    &mut stats,
+                );
             }
 
-            apply_network_rates(previous, &parsed.networks, &mut stats);
+            apply_network_rates(previous, sample_window, &parsed.networks, &mut stats);
         }
 
-        samples.insert(
-            session_id.to_string(),
-            CachedRemoteSample {
-                cpu_snapshot: parsed.cpu_snapshot,
-                networks: parsed.networks,
-                updated_at: now,
-            },
-        );
+        if lease.is_current() {
+            samples.insert(
+                session_id.to_string(),
+                CachedRemoteSample {
+                    static_info,
+                    disks,
+                    disk_attempted_at,
+                    cpu_snapshot: parsed.cpu_snapshot,
+                    networks: parsed.networks,
+                    updated_at: now,
+                },
+            );
+        }
 
         update_network_summary(&mut stats);
         stats
     }
 
     pub async fn clear_session(&self, session_id: &str) {
-        self.samples.lock().await.remove(session_id);
+        // Invalidate while holding the state map so a same-id replacement cannot be
+        // created until the old sample has also been removed.
+        let mut states = self.session_states.lock().await;
+        if let Some(state) = states.remove(session_id) {
+            state.invalidated.store(true, Ordering::Release);
+        }
+        let mut samples = self.samples.lock().await;
+        samples.remove(session_id);
+        drop(samples);
+        drop(states);
     }
 }
 
 fn prune_stale_samples(samples: &mut HashMap<String, CachedRemoteSample>, now: Instant) {
-    samples.retain(|_, sample| now.duration_since(sample.updated_at) <= SAMPLE_TTL);
+    samples.retain(|_, sample| now.saturating_duration_since(sample.updated_at) <= SAMPLE_TTL);
 }
 
 fn apply_cpu_usage(
     session_id: &str,
-    previous_sample: &CachedRemoteSample,
+    sample_window: Duration,
     previous: &CpuSnapshot,
     current: &CpuSnapshot,
     stats: &mut RemoteStats,
 ) {
-    let sample_window = previous_sample.updated_at.elapsed();
-
     if sample_window > MAX_SAMPLE_WINDOW || current.uptime_sec < previous.uptime_sec {
         return;
     }
@@ -260,10 +408,11 @@ fn apply_cpu_usage(
 
 fn apply_network_rates(
     previous: &CachedRemoteSample,
+    sample_window: Duration,
     current_networks: &BTreeMap<String, NetworkCounters>,
     stats: &mut RemoteStats,
 ) {
-    let elapsed = previous.updated_at.elapsed().as_secs_f64();
+    let elapsed = sample_window.as_secs_f64();
     if elapsed <= 0.0 || elapsed > MAX_SAMPLE_WINDOW.as_secs_f64() {
         return;
     }
@@ -322,19 +471,152 @@ fn usage_percent(delta: CpuDelta) -> f64 {
     delta.busy as f64 * 100.0 / delta.total as f64
 }
 
-pub const SYSINFO_SCRIPT: &str = r#"sh -c '
+pub fn build_stats_script(plan: StatsProbePlan) -> String {
+    if !plan.include_static && !plan.include_disk {
+        return FAST_STATS_SCRIPT.to_string();
+    }
+
+    format!(
+        "NYATERM_STATIC={} NYATERM_DISK={} {SYSINFO_SCRIPT}",
+        u8::from(plan.include_static),
+        u8::from(plan.include_disk),
+    )
+}
+
+const FAST_STATS_SCRIPT: &str = r#"sh -c '
 LC_ALL=C
 export LC_ALL
 
-base=${TMPDIR:-/tmp}/sysinfo.$$;
-hostf=$base.host;
-archf=$base.arch;
-cpucoref=$base.cpucores;
-diskf=$base.disk;
-diskraw=$base.diskraw;
-dfraw=$base.dfraw;
+uptime_sec=0;
+if [ -r /proc/uptime ]; then
+  read upraw _ </proc/uptime || upraw=0;
+  uptime_sec=${upraw%.*};
+fi;
+[ -n "$uptime_sec" ] || uptime_sec=0;
 
-trap "rm -f \"$base\".*" 0 HUP INT TERM;
+l1=0;
+l5=0;
+l15=0;
+if [ -r /proc/loadavg ]; then
+  read l1 l5 l15 _ </proc/loadavg || {
+    l1=0;
+    l5=0;
+    l15=0;
+  };
+fi;
+
+mem_total_kb=0;
+mem_avail_kb=0;
+mem_buffers_kb=0;
+mem_cached_kb=0;
+mem_reclaimable_kb=0;
+if [ -r /proc/meminfo ]; then
+  while read -r mem_key mem_value mem_unit mem_rest; do
+    case "$mem_key" in
+      MemTotal:) mem_total_kb=${mem_value:-0} ;;
+      MemAvailable:) mem_avail_kb=${mem_value:-0} ;;
+      Buffers:) mem_buffers_kb=${mem_value:-0} ;;
+      Cached:) mem_cached_kb=${mem_value:-0} ;;
+      SReclaimable:) mem_reclaimable_kb=${mem_value:-0} ;;
+    esac;
+  done </proc/meminfo;
+fi;
+mem_used=$(((mem_total_kb - mem_avail_kb) * 1024));
+mem_avail=$((mem_avail_kb * 1024));
+mem_cache=$(((mem_buffers_kb + mem_cached_kb + mem_reclaimable_kb) * 1024));
+
+printf "UPTIME\t%s\n" "$uptime_sec";
+printf "LOAD\t%s\t%s\t%s\n" "$l1" "$l5" "$l15";
+
+if [ -r /proc/stat ]; then
+  while read -r name user nice system idle iowait irq softirq steal guest guest_nice rest; do
+    case "$name" in
+      cpu|cpu[0-9]*)
+        printf "CPUTICKS\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+          "$name" \
+          "${user:-0}" \
+          "${nice:-0}" \
+          "${system:-0}" \
+          "${idle:-0}" \
+          "${iowait:-0}" \
+          "${irq:-0}" \
+          "${softirq:-0}" \
+          "${steal:-0}" \
+          "${guest:-0}" \
+          "${guest_nice:-0}";
+        ;;
+      *)
+        break;
+        ;;
+    esac;
+  done </proc/stat;
+fi;
+
+printf "MEMORY\t%s\t%s\t%s\n" "$mem_used" "$mem_avail" "$mem_cache";
+
+if [ -r /proc/net/dev ]; then
+  while IFS=: read -r nic_fields counter_fields; do
+    set -- $nic_fields;
+    nic=${1:-};
+    [ -n "$nic" ] || continue;
+    [ "$nic" != "lo" ] || continue;
+    case "$nic" in
+      docker*|veth*|br-*|virbr*|flannel*|cali*|tun*|tap*|vnet*|kube-ipvs0|cni*|zt*|tailscale*|wg*|dummy*|ifb*|sit*|gre*|gretap*|ip6tnl*|vxlan*|geneve*|erspan*)
+        continue;
+        ;;
+    esac;
+    if [ ! -e "/sys/class/net/$nic/device" ]; then
+      derived=false;
+      [ -d "/sys/class/net/$nic/bridge" ] && derived=true;
+      [ -d "/sys/class/net/$nic/bonding" ] && derived=true;
+      [ -d "/sys/class/net/$nic/team" ] && derived=true;
+      if [ "$derived" = false ]; then
+        for lower in "/sys/class/net/$nic"/lower_*; do
+          if [ -e "$lower" ]; then
+            derived=true;
+            break;
+          fi;
+        done;
+      fi;
+      [ "$derived" = false ] || continue;
+    fi;
+
+    set -- $counter_fields;
+    rx=${1:-0};
+    tx=${9:-0};
+
+    state=unknown;
+    if [ -r "/sys/class/net/$nic/operstate" ]; then
+      IFS= read -r state <"/sys/class/net/$nic/operstate" || state=unknown;
+    fi;
+    [ -n "$state" ] || state=unknown;
+    carrier=0;
+    if [ -r "/sys/class/net/$nic/carrier" ]; then
+      IFS= read -r carrier <"/sys/class/net/$nic/carrier" || carrier=0;
+    fi;
+    if [ "$state" != "up" ] && [ "$carrier" != "1" ]; then
+      continue;
+    fi;
+
+    printf "NETDEV\t%s\t%s\t%s\t%s\n" "$nic" "$state" "${rx:-0}" "${tx:-0}";
+  done </proc/net/dev;
+fi
+'"#;
+
+const SYSINFO_SCRIPT: &str = r#"sh -c '
+LC_ALL=C
+export LC_ALL
+
+if [ "$NYATERM_STATIC" = 1 ] || [ "$NYATERM_DISK" = 1 ]; then
+  base=${TMPDIR:-/tmp}/sysinfo.$$;
+  hostf=$base.host;
+  archf=$base.arch;
+  cpucoref=$base.cpucores;
+  diskf=$base.disk;
+  diskraw=$base.diskraw;
+  dfraw=$base.dfraw;
+  trap "rm -f \"$base\".*" 0 HUP INT TERM;
+fi;
 
 run_limited() {
   run_out=$1;
@@ -373,57 +655,42 @@ run_limited() {
   return 1;
 }
 
-host=unknown;
-if [ -r /proc/sys/kernel/hostname ]; then
-  IFS= read -r host </proc/sys/kernel/hostname || host=unknown;
-fi;
-
-if [ -z "$host" ] || [ "$host" = "unknown" ]; then
-  if run_limited "$hostf" 1 uname -n && [ -s "$hostf" ]; then
-    IFS= read -r host <"$hostf" || host=unknown;
+if [ "$NYATERM_STATIC" = 1 ]; then
+  host=unknown;
+  if [ -r /proc/sys/kernel/hostname ]; then
+    IFS= read -r host </proc/sys/kernel/hostname || host=unknown;
   fi;
-fi;
 
-[ -n "$host" ] || host=unknown;
-host=$(printf "%s" "$host" | tr "\t\r\n" "   ");
-
-uptime_sec=0;
-if [ -r /proc/uptime ]; then
-  read upraw _ </proc/uptime || upraw=0;
-  uptime_sec=${upraw%.*};
-fi;
-[ -n "$uptime_sec" ] || uptime_sec=0;
-
-os=unknown;
-if [ -r /etc/os-release ]; then
-  . /etc/os-release;
-  os=${PRETTY_NAME:-unknown};
-else
-  if run_limited "$hostf" 1 uname -s && [ -s "$hostf" ]; then
-    IFS= read -r os <"$hostf" || os=unknown;
+  if [ -z "$host" ] || [ "$host" = "unknown" ]; then
+    if run_limited "$hostf" 1 uname -n && [ -s "$hostf" ]; then
+      IFS= read -r host <"$hostf" || host=unknown;
+    fi;
   fi;
-fi;
-[ -n "$os" ] || os=unknown;
-os=$(printf "%s" "$os" | tr "\t\r\n" "   ");
 
-arch=unknown;
-if run_limited "$archf" 1 uname -m && [ -s "$archf" ]; then
-  IFS= read -r arch <"$archf" || arch=unknown;
-fi;
-[ -n "$arch" ] || arch=unknown;
+  [ -n "$host" ] || host=unknown;
+  host=$(printf "%s" "$host" | tr "\t\r\n" "   ");
 
-l1=0;
-l5=0;
-l15=0;
-if [ -r /proc/loadavg ]; then
-  read l1 l5 l15 _ </proc/loadavg || {
-    l1=0;
-    l5=0;
-    l15=0;
-  };
+  os=unknown;
+  if [ -r /etc/os-release ]; then
+    . /etc/os-release;
+    os=${PRETTY_NAME:-unknown};
+  else
+    if run_limited "$hostf" 1 uname -s && [ -s "$hostf" ]; then
+      IFS= read -r os <"$hostf" || os=unknown;
+    fi;
+  fi;
+  [ -n "$os" ] || os=unknown;
+  os=$(printf "%s" "$os" | tr "\t\r\n" "   ");
+
+  arch=unknown;
+  if run_limited "$archf" 1 uname -m && [ -s "$archf" ]; then
+    IFS= read -r arch <"$archf" || arch=unknown;
+  fi;
+  [ -n "$arch" ] || arch=unknown;
 fi;
 
-cpu_model=$(awk -F: '"'"'
+if [ "$NYATERM_STATIC" = 1 ]; then
+  cpu_model=$(awk -F: '"'"'
 /^(model name|Hardware|Processor|cpu model)[[:space:]]*:/ && !m {
   gsub(/^[ \t]+/, "", $2);
   m=$2;
@@ -434,109 +701,31 @@ END {
 }
 '"'"' /proc/cpuinfo 2>/dev/null);
 
-cpu_model=$(printf "%s" "$cpu_model" | tr "\t\r\n" "   ");
-[ -n "$cpu_model" ] || cpu_model=unknown;
+  cpu_model=$(printf "%s" "$cpu_model" | tr "\t\r\n" "   ");
+  [ -n "$cpu_model" ] || cpu_model=unknown;
 
-cpu_cores=$(awk '"'"'
+  cpu_cores=$(awk '"'"'
 /^processor[[:space:]]*:/ { c++ }
 END { print c+0 }
 '"'"' /proc/cpuinfo 2>/dev/null);
 
-case $cpu_cores in
-  ""|0)
-    if run_limited "$cpucoref" 1 getconf _NPROCESSORS_ONLN && [ -s "$cpucoref" ]; then
-      IFS= read -r cpu_cores <"$cpucoref" || cpu_cores=0;
-    fi;
-    ;;
-esac;
-[ -n "$cpu_cores" ] || cpu_cores=0;
-
-set -- $(awk '"'"'
-/MemTotal:/ { t=$2 }
-/MemAvailable:/ { a=$2 }
-/Buffers:/ { b=$2 }
-/^Cached:/ { c=$2 }
-/SReclaimable:/ { s=$2 }
-END {
-  if (!t) t=0;
-  if (!a) a=0;
-  if (!b) b=0;
-  if (!c) c=0;
-  if (!s) s=0;
-  printf "%.0f %.0f %.0f\n", (t-a)*1024, a*1024, (b+c+s)*1024;
-}
-'"'"' /proc/meminfo 2>/dev/null);
-
-mem_used=${1:-0};
-mem_avail=${2:-0};
-mem_cache=${3:-0};
-
-printf "SYSTEM\t%s\t%s\t%s\t%s\n" "$host" "$uptime_sec" "$os" "$arch";
-printf "LOAD\t%s\t%s\t%s\n" "$l1" "$l5" "$l15";
-printf "CPU\t%s\t%s\n" "$cpu_model" "$cpu_cores";
-
-if [ -r /proc/stat ]; then
-  while read -r name user nice system idle iowait irq softirq steal guest guest_nice rest; do
-    case "$name" in
-      cpu|cpu[0-9]*)
-        printf "CPUTICKS\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-          "$name" \
-          "${user:-0}" \
-          "${nice:-0}" \
-          "${system:-0}" \
-          "${idle:-0}" \
-          "${iowait:-0}" \
-          "${irq:-0}" \
-          "${softirq:-0}" \
-          "${steal:-0}" \
-          "${guest:-0}" \
-          "${guest_nice:-0}";
-        ;;
-      *)
-        break;
-        ;;
-    esac;
-  done </proc/stat;
+  case $cpu_cores in
+    ""|0)
+      if run_limited "$cpucoref" 1 getconf _NPROCESSORS_ONLN && [ -s "$cpucoref" ]; then
+        IFS= read -r cpu_cores <"$cpucoref" || cpu_cores=0;
+      fi;
+      ;;
+  esac;
+  [ -n "$cpu_cores" ] || cpu_cores=0;
 fi;
 
-printf "MEMORY\t%s\t%s\t%s\n" "$mem_used" "$mem_avail" "$mem_cache";
-
-if [ -r /proc/net/dev ]; then
-  awk '"'"'
-NR>2 {
-  line=$0;
-  sub(/^[ \t]+/, "", line);
-  split(line, a, ":");
-  nic=a[1];
-  gsub(/^[ \t]+|[ \t]+$/, "", nic);
-  gsub(/^[ \t]+/, "", a[2]);
-  split(a[2], f, /[ \t]+/);
-  print nic "\t" f[1] "\t" f[9];
-}
-'"'"' /proc/net/dev 2>/dev/null | while IFS="$(printf "\t")" read -r nic rx tx; do
-    [ -n "$nic" ] || continue;
-    [ "$nic" != "lo" ] || continue;
-    case "$nic" in
-      docker*|veth*|br-*|virbr*|flannel*|cali*|tunl*|kube-ipvs0|cni*|zt*|tailscale*|wg*|tap*|vnet*)
-        continue;
-        ;;
-    esac;
-    [ -e "/sys/class/net/$nic/device" ] || continue;
-
-    state=unknown;
-    if [ -r "/sys/class/net/$nic/operstate" ]; then
-      IFS= read -r state <"/sys/class/net/$nic/operstate" || state=unknown;
-    fi;
-    [ "$state" = "up" ] || continue;
-
-    printf "NETDEV\t%s\t%s\t%s\t%s\n" "$nic" "$state" "${rx:-0}" "${tx:-0}";
-  done;
-fi;
-
-: >"$diskf";
+if [ "$NYATERM_DISK" = 1 ]; then
+  : >"$diskf";
+  disk_ok=0;
 
 if command -v findmnt >/dev/null 2>&1; then
   if run_limited "$diskraw" 2 findmnt -b -rn -o SOURCE,TARGET,FSTYPE,SIZE,AVAIL,USE%; then
+    disk_ok=1;
     awk '"'"'
   BEGIN {
     OFS="\t";
@@ -565,6 +754,7 @@ fi;
 
 if [ ! -s "$diskf" ] && command -v df >/dev/null 2>&1; then
   if run_limited "$dfraw" 2 df -B1 -P; then
+    disk_ok=1;
     awk '"'"'
   BEGIN {
     OFS="\t";
@@ -588,13 +778,140 @@ if [ ! -s "$diskf" ] && command -v df >/dev/null 2>&1; then
   fi;
 fi;
 
-if [ -s "$diskf" ]; then
-  while IFS="$(printf "\t")" read -r disk mp total avail usep; do
-    [ -n "$disk" ] || continue;
-    printf "DISK\t%s\t%s\t%s\t%s\t%s\n" "$disk" "$mp" "$total" "$avail" "$usep";
-  done <"$diskf";
+  if [ -s "$diskf" ]; then
+    while IFS="$(printf "\t")" read -r disk mp total avail usep; do
+      [ -n "$disk" ] || continue;
+      printf "DISK\t%s\t%s\t%s\t%s\t%s\n" "$disk" "$mp" "$total" "$avail" "$usep";
+    done <"$diskf";
+  fi;
+
+  if [ "$disk_ok" = 1 ]; then
+    printf "DISKSTATUS\tok\n";
+  else
+    printf "DISKSTATUS\terror\n";
+  fi;
+fi;
+
+# Keep the fast snapshot last so Rust timestamps it immediately after collection,
+# even when a static or disk probe took several seconds.
+uptime_sec=0;
+if [ -r /proc/uptime ]; then
+  read upraw _ </proc/uptime || upraw=0;
+  uptime_sec=${upraw%.*};
+fi;
+[ -n "$uptime_sec" ] || uptime_sec=0;
+
+l1=0;
+l5=0;
+l15=0;
+if [ -r /proc/loadavg ]; then
+  read l1 l5 l15 _ </proc/loadavg || {
+    l1=0;
+    l5=0;
+    l15=0;
+  };
+fi;
+
+mem_total_kb=0;
+mem_avail_kb=0;
+mem_buffers_kb=0;
+mem_cached_kb=0;
+mem_reclaimable_kb=0;
+if [ -r /proc/meminfo ]; then
+  while read -r mem_key mem_value mem_unit mem_rest; do
+    case "$mem_key" in
+      MemTotal:) mem_total_kb=${mem_value:-0} ;;
+      MemAvailable:) mem_avail_kb=${mem_value:-0} ;;
+      Buffers:) mem_buffers_kb=${mem_value:-0} ;;
+      Cached:) mem_cached_kb=${mem_value:-0} ;;
+      SReclaimable:) mem_reclaimable_kb=${mem_value:-0} ;;
+    esac;
+  done </proc/meminfo;
+fi;
+mem_used=$(((mem_total_kb - mem_avail_kb) * 1024));
+mem_avail=$((mem_avail_kb * 1024));
+mem_cache=$(((mem_buffers_kb + mem_cached_kb + mem_reclaimable_kb) * 1024));
+
+if [ "$NYATERM_STATIC" = 1 ]; then
+  printf "SYSTEM\t%s\t%s\t%s\t%s\n" "$host" "$uptime_sec" "$os" "$arch";
+  printf "CPU\t%s\t%s\n" "$cpu_model" "$cpu_cores";
 else
-  printf "DISK\t-\t-\t0\t0\t0\n";
+  printf "UPTIME\t%s\n" "$uptime_sec";
+fi;
+printf "LOAD\t%s\t%s\t%s\n" "$l1" "$l5" "$l15";
+
+if [ -r /proc/stat ]; then
+  while read -r name user nice system idle iowait irq softirq steal guest guest_nice rest; do
+    case "$name" in
+      cpu|cpu[0-9]*)
+        printf "CPUTICKS\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+          "$name" \
+          "${user:-0}" \
+          "${nice:-0}" \
+          "${system:-0}" \
+          "${idle:-0}" \
+          "${iowait:-0}" \
+          "${irq:-0}" \
+          "${softirq:-0}" \
+          "${steal:-0}" \
+          "${guest:-0}" \
+          "${guest_nice:-0}";
+        ;;
+      *)
+        break;
+        ;;
+    esac;
+  done </proc/stat;
+fi;
+
+printf "MEMORY\t%s\t%s\t%s\n" "$mem_used" "$mem_avail" "$mem_cache";
+
+if [ -r /proc/net/dev ]; then
+  while IFS=: read -r nic_fields counter_fields; do
+    set -- $nic_fields;
+    nic=${1:-};
+    [ -n "$nic" ] || continue;
+    [ "$nic" != "lo" ] || continue;
+    case "$nic" in
+      docker*|veth*|br-*|virbr*|flannel*|cali*|tun*|tap*|vnet*|kube-ipvs0|cni*|zt*|tailscale*|wg*|dummy*|ifb*|sit*|gre*|gretap*|ip6tnl*|vxlan*|geneve*|erspan*)
+        continue;
+        ;;
+    esac;
+    if [ ! -e "/sys/class/net/$nic/device" ]; then
+      derived=false;
+      [ -d "/sys/class/net/$nic/bridge" ] && derived=true;
+      [ -d "/sys/class/net/$nic/bonding" ] && derived=true;
+      [ -d "/sys/class/net/$nic/team" ] && derived=true;
+      if [ "$derived" = false ]; then
+        for lower in "/sys/class/net/$nic"/lower_*; do
+          if [ -e "$lower" ]; then
+            derived=true;
+            break;
+          fi;
+        done;
+      fi;
+      [ "$derived" = false ] || continue;
+    fi;
+
+    set -- $counter_fields;
+    rx=${1:-0};
+    tx=${9:-0};
+
+    state=unknown;
+    if [ -r "/sys/class/net/$nic/operstate" ]; then
+      IFS= read -r state <"/sys/class/net/$nic/operstate" || state=unknown;
+    fi;
+    [ -n "$state" ] || state=unknown;
+    carrier=0;
+    if [ -r "/sys/class/net/$nic/carrier" ]; then
+      IFS= read -r carrier <"/sys/class/net/$nic/carrier" || carrier=0;
+    fi;
+    if [ "$state" != "up" ] && [ "$carrier" != "1" ]; then
+      continue;
+    fi;
+
+    printf "NETDEV\t%s\t%s\t%s\t%s\n" "$nic" "$state" "${rx:-0}" "${tx:-0}";
+  done </proc/net/dev;
 fi
 '"#;
 
@@ -604,6 +921,10 @@ pub fn parse_stats_output(output: &str) -> AppResult<ParsedRemoteStats> {
     let mut has_cpu_snapshot = false;
     let mut networks = BTreeMap::new();
     let mut seen_disk_mounts = HashSet::new();
+    let mut static_system = None;
+    let mut static_cpu = None;
+    let mut saw_disk_line = false;
+    let mut disk_probe_succeeded = None;
 
     for line in output.lines() {
         let cols: Vec<&str> = line.split('\t').collect();
@@ -622,6 +943,13 @@ pub fn parse_stats_output(output: &str) -> AppResult<ParsedRemoteStats> {
                     os: cols[3].to_string(),
                     arch: cols[4].to_string(),
                 };
+                static_system = Some(stats.system.clone());
+            }
+
+            "UPTIME" if cols.len() >= 2 => {
+                let uptime_sec = parse_u64_field(cols[1], "UPTIME")?;
+                cpu_snapshot.uptime_sec = uptime_sec;
+                stats.system.uptime_sec = uptime_sec;
             }
 
             "LOAD" if cols.len() >= 4 => {
@@ -633,14 +961,17 @@ pub fn parse_stats_output(output: &str) -> AppResult<ParsedRemoteStats> {
             }
 
             "CPU" if cols.len() >= 3 => {
+                let model = cols[1].to_string();
+                let cores = cols[2].parse().unwrap_or(0);
                 stats.cpu = CpuInfo {
-                    model: cols[1].to_string(),
-                    cores: cols[2].parse().unwrap_or(0),
+                    model: model.clone(),
+                    cores,
                     usage: None,
                     per_core: Vec::new(),
                     sample_window_ms: None,
                     usage_source: CpuUsageSource::WarmingUp,
                 };
+                static_cpu = Some((model, cores));
             }
 
             "CPUTICKS" if cols.len() >= 12 => {
@@ -695,6 +1026,7 @@ pub fn parse_stats_output(output: &str) -> AppResult<ParsedRemoteStats> {
             }
 
             "DISK" if cols.len() >= 6 => {
+                saw_disk_line = true;
                 if cols[1] != "-" {
                     let mount = cols[2].trim();
 
@@ -714,16 +1046,40 @@ pub fn parse_stats_output(output: &str) -> AppResult<ParsedRemoteStats> {
                 }
             }
 
+            "DISKSTATUS" if cols.len() >= 2 => {
+                disk_probe_succeeded = Some(cols[1] == "ok");
+            }
+
             _ => {}
         }
     }
 
     update_network_summary(&mut stats);
 
+    let static_info = static_system
+        .zip(static_cpu)
+        .map(|(system, (cpu_model, cpu_cores))| StaticRemoteStats {
+            system,
+            cpu_model,
+            cpu_cores,
+        });
+    let disks = match disk_probe_succeeded {
+        Some(true) => Some(stats.disks.clone()),
+        Some(false) => {
+            stats.disks.clear();
+            None
+        }
+        None if saw_disk_line => Some(stats.disks.clone()),
+        None => None,
+    };
+
     Ok(ParsedRemoteStats {
         stats,
         cpu_snapshot: has_cpu_snapshot.then_some(cpu_snapshot),
         networks,
+        static_info,
+        disks,
+        disk_probe_attempted: disk_probe_succeeded.is_some() || saw_disk_line,
     })
 }
 
@@ -751,9 +1107,10 @@ fn parse_u64_field(value: &str, field: &str) -> AppResult<u64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CpuTicks, CpuUsageSource, RemoteStatsSampler, calculate_delta, parse_stats_output,
-        usage_percent,
+        CpuTicks, CpuUsageSource, DISK_REFRESH_INTERVAL, RemoteStatsSampler, StatsProbePlan,
+        build_stats_script, calculate_delta, parse_stats_output, usage_percent,
     };
+    use std::time::{Duration, Instant};
 
     fn cpu_line(model: &str, cores: u32) -> String {
         format!("CPU\t{model}\t{cores}\n")
@@ -877,6 +1234,252 @@ mod tests {
         assert_eq!(stats.disks[0].device, "/dev/sda1");
         assert_eq!(stats.disks[0].mount, "/");
         assert_eq!(stats.disks[1].mount, "/data");
+    }
+
+    #[test]
+    fn fast_script_contains_only_proc_and_sys_probes() {
+        let script = build_stats_script(StatsProbePlan {
+            include_static: false,
+            include_disk: false,
+        });
+
+        for forbidden in [
+            "findmnt",
+            "df -B1",
+            "uname",
+            "getconf",
+            "/proc/cpuinfo",
+            "run_limited",
+        ] {
+            assert!(
+                !script.contains(forbidden),
+                "fast script contains {forbidden}"
+            );
+        }
+        assert!(script.contains("/proc/stat"));
+        assert!(script.contains("/proc/meminfo"));
+        assert!(script.contains("/proc/net/dev"));
+        assert!(script.contains("/sys/class/net"));
+    }
+
+    #[test]
+    fn network_probe_keeps_main_virtual_nics_and_filters_derived_interfaces() {
+        for plan in [
+            StatsProbePlan {
+                include_static: false,
+                include_disk: false,
+            },
+            StatsProbePlan {
+                include_static: true,
+                include_disk: true,
+            },
+        ] {
+            let script = build_stats_script(plan);
+
+            assert!(!script.contains("[ -e \"/sys/class/net/$nic/device\" ] || continue"));
+            assert!(script.contains("if [ ! -e \"/sys/class/net/$nic/device\" ]; then"));
+            assert!(script.contains("/sys/class/net/$nic/bridge"));
+            assert!(script.contains("/sys/class/net/$nic/bonding"));
+            assert!(script.contains("/sys/class/net/$nic/team"));
+            assert!(script.contains("\"/sys/class/net/$nic\"/lower_*"));
+            assert!(script.contains("/sys/class/net/$nic/carrier"));
+            assert!(
+                script.contains("if [ \"$state\" != \"up\" ] && [ \"$carrier\" != \"1\" ]; then")
+            );
+        }
+    }
+
+    #[test]
+    fn combined_script_collects_slow_data_before_fast_counters() {
+        let script = build_stats_script(StatsProbePlan {
+            include_static: true,
+            include_disk: true,
+        });
+        let static_probe = script.find("/proc/cpuinfo").unwrap();
+        let disk_probe = script.find("findmnt -b").unwrap();
+        let fast_probe = script.rfind("/proc/uptime").unwrap();
+        let network_probe = script.rfind("/proc/net/dev").unwrap();
+
+        assert!(static_probe < disk_probe);
+        assert!(disk_probe < fast_probe);
+        assert!(fast_probe < network_probe);
+    }
+
+    #[tokio::test]
+    async fn injected_sample_times_drive_network_rate_and_sample_window() {
+        let sampler = RemoteStatsSampler::default();
+        let lease = sampler.lock_session("s1").await;
+        let started_at = Instant::now();
+        let first =
+            parse_stats_output(&snapshot_output(10, (100, 0, 0, 900), &[(0, 100, 900)])).unwrap();
+        sampler
+            .complete_snapshot_at("s1", &lease, first, started_at)
+            .await;
+
+        let second_output = snapshot_output(12, (120, 0, 0, 1080), &[(0, 120, 1080)]).replace(
+            "NETDEV\teth0\tup\t1000\t2000",
+            "NETDEV\teth0\tup\t1600\t3000",
+        );
+        let second = parse_stats_output(&second_output).unwrap();
+        let stats = sampler
+            .complete_snapshot_at("s1", &lease, second, started_at + Duration::from_secs(2))
+            .await;
+
+        assert_eq!(stats.cpu.sample_window_ms, Some(2_000));
+        assert!((stats.networks[0].rx_bytes_per_sec - 300.0).abs() < f64::EPSILON);
+        assert!((stats.networks[0].tx_bytes_per_sec - 500.0).abs() < f64::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn static_and_disk_cache_are_isolated_and_cleared_per_session() {
+        let sampler = RemoteStatsSampler::default();
+        assert_eq!(
+            sampler.probe_plan("s1").await,
+            StatsProbePlan {
+                include_static: true,
+                include_disk: true,
+            }
+        );
+
+        let initial =
+            parse_stats_output(&snapshot_output(10, (100, 0, 0, 900), &[(0, 100, 900)])).unwrap();
+        sampler.complete_snapshot("s1", initial).await;
+
+        assert_eq!(
+            sampler.probe_plan("s1").await,
+            StatsProbePlan {
+                include_static: false,
+                include_disk: false,
+            }
+        );
+        assert_eq!(
+            sampler.probe_plan("s2").await,
+            StatsProbePlan {
+                include_static: true,
+                include_disk: true,
+            }
+        );
+
+        let fast = parse_stats_output(
+            "UPTIME\t11\nLOAD\t0.10\t0.20\t0.30\n\
+             CPUTICKS\tcpu\t110\t0\t0\t990\t0\t0\t0\t0\t0\t0\n\
+             CPUTICKS\tcpu0\t110\t0\t0\t990\t0\t0\t0\t0\t0\t0\n\
+             MEMORY\t1000\t3000\t500\nNETDEV\teth0\tup\t1100\t2200\n",
+        )
+        .unwrap();
+        let stats = sampler.complete_snapshot("s1", fast).await;
+        assert_eq!(stats.system.hostname, "node-1");
+        assert_eq!(stats.system.uptime_sec, 11);
+        assert_eq!(stats.cpu.model, "AMD Ryzen");
+        assert_eq!(stats.disks[0].mount, "/");
+
+        sampler.clear_session("s1").await;
+        assert_eq!(
+            sampler.probe_plan("s1").await,
+            StatsProbePlan {
+                include_static: true,
+                include_disk: true,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn clear_invalidates_in_flight_work_and_allows_same_id_reuse() {
+        let sampler = RemoteStatsSampler::default();
+        let stale_lease = sampler.lock_session("s1").await;
+        assert!(stale_lease.is_current());
+
+        sampler.clear_session("s1").await;
+        assert!(!stale_lease.is_current());
+        assert!(sampler.session_states.lock().await.is_empty());
+
+        let stale =
+            parse_stats_output(&snapshot_output(10, (100, 0, 0, 900), &[(0, 100, 900)])).unwrap();
+        sampler
+            .complete_snapshot_at("s1", &stale_lease, stale, Instant::now())
+            .await;
+
+        assert_eq!(
+            sampler.probe_plan("s1").await,
+            StatsProbePlan {
+                include_static: true,
+                include_disk: true,
+            }
+        );
+
+        let replacement_lease = sampler.lock_session("s1").await;
+        assert!(replacement_lease.is_current());
+        let replacement =
+            parse_stats_output(&snapshot_output(11, (110, 0, 0, 990), &[(0, 110, 990)])).unwrap();
+        sampler
+            .complete_snapshot_at("s1", &replacement_lease, replacement, Instant::now())
+            .await;
+        assert_eq!(
+            sampler.probe_plan("s1").await,
+            StatsProbePlan {
+                include_static: false,
+                include_disk: false,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_disk_refresh_failure_preserves_and_throttles_the_old_cache() {
+        let sampler = RemoteStatsSampler::default();
+        let initial =
+            parse_stats_output(&snapshot_output(10, (100, 0, 0, 900), &[(0, 100, 900)])).unwrap();
+        sampler.complete_snapshot("s1", initial).await;
+
+        let now = Instant::now();
+        let attempted_at = sampler
+            .samples
+            .lock()
+            .await
+            .get("s1")
+            .unwrap()
+            .disk_attempted_at
+            .unwrap();
+        assert!(
+            !sampler
+                .probe_plan_at(
+                    "s1",
+                    attempted_at + DISK_REFRESH_INTERVAL - Duration::from_millis(1),
+                )
+                .await
+                .include_disk
+        );
+        {
+            let mut cached_samples = sampler.samples.lock().await;
+            cached_samples.get_mut("s1").unwrap().disk_attempted_at =
+                Some(now.checked_sub(DISK_REFRESH_INTERVAL).unwrap());
+        }
+        assert!(sampler.probe_plan_at("s1", now).await.include_disk);
+
+        let failed_refresh = parse_stats_output(
+            "UPTIME\t11\nCPUTICKS\tcpu\t110\t0\t0\t990\t0\t0\t0\t0\t0\t0\n\
+             MEMORY\t1000\t3000\t500\nDISKSTATUS\terror\n",
+        )
+        .unwrap();
+        let stats = sampler.complete_snapshot("s1", failed_refresh).await;
+
+        assert_eq!(stats.disks.len(), 1);
+        assert_eq!(stats.disks[0].mount, "/");
+        assert!(!sampler.probe_plan("s1").await.include_disk);
+    }
+
+    #[tokio::test]
+    async fn successful_disk_refresh_replaces_and_reuses_the_cache() {
+        let sampler = RemoteStatsSampler::default();
+        let refresh = parse_stats_output(
+            "SYSTEM\tnode-1\t10\tLinux\tx86_64\nCPU\tCPU\t1\n\
+             CPUTICKS\tcpu\t100\t0\t0\t900\t0\t0\t0\t0\t0\t0\n\
+             DISK\t/dev/sdb1\t/data\t20000\t15000\t25\nDISKSTATUS\tok\n",
+        )
+        .unwrap();
+        let stats = sampler.complete_snapshot("s1", refresh).await;
+
+        assert_eq!(stats.disks[0].mount, "/data");
+        assert!(!sampler.probe_plan("s1").await.include_disk);
     }
 
     #[tokio::test]

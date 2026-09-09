@@ -55,6 +55,7 @@ import { resolveShortcutKeys } from "@/hooks/useShortcutMap";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
+import { openSavedConnectionWithSftp } from "@/lib/sftpRuntime";
 import { matchesKeyEvent } from "@/lib/shortcutRegistry";
 import type { NewSessionTarget } from "@/lib/windowManager";
 import type { ConnectionTypeTag, Group, SavedConnection } from "@/types/global";
@@ -83,6 +84,7 @@ interface SavedConnectionsProps {
   onOpenS3?: (connection: SavedConnection) => Promise<void> | void;
   onOpenFtp?: (connection: SavedConnection) => Promise<void> | void;
   onOpenWebDav?: (connection: SavedConnection) => Promise<void> | void;
+  onOpenSftpConnection: (connection: SavedConnection) => Promise<void> | void;
 }
 
 type HeaderActionButtonProps = ComponentProps<typeof Button> & {
@@ -183,6 +185,7 @@ export default function SavedConnections({
   onOpenS3,
   onOpenFtp,
   onOpenWebDav,
+  onOpenSftpConnection,
 }: SavedConnectionsProps) {
   const { savedConnections, savedGroups, refreshConnections, appSettings, updateUi } = useApp();
   const { t } = useTranslation();
@@ -214,7 +217,9 @@ export default function SavedConnections({
   const [selectedConnectionIds, setSelectedConnectionIds] = useState<Set<string>>(new Set());
   const [filterText, setFilterText] = useState("");
   const [typeFilter, setTypeFilter] = useState<ConnectionTypeFilter>("all");
+  const [isSearchExpanded, setIsSearchExpanded] = useState(false);
   const [keyboardActiveConnectionId, setKeyboardActiveConnectionId] = useState<string | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const searchExpandedBaseRef = useRef<Set<string> | null>(null);
   const searchAutoExpandedGroupIdsRef = useRef<Set<string>>(new Set());
   const previousFilterKeyRef = useRef("");
@@ -257,6 +262,19 @@ export default function SavedConnections({
     () => new Map(savedConnections.map((connection) => [connection.id, connection])),
     [savedConnections],
   );
+
+  useEffect(() => {
+    if (!isSearchExpanded) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      const input = searchInputRef.current;
+      if (!input) return;
+      input.focus();
+      input.select();
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [isSearchExpanded]);
 
   // ── Derived tree ──────────────────────────────────────────────────────────
   const { rootNodes, ungrouped } = useMemo(() => {
@@ -733,6 +751,10 @@ export default function SavedConnections({
     openConnections([conn]);
   };
 
+  const handleOpenSftpConnection = (conn: SavedConnection) => {
+    openSavedConnectionWithSftp(conn, onOpenSftpConnection);
+  };
+
   const handleConnect = (conn: SavedConnection) => {
     if (selectedConnectionIds.has(conn.id) && selectedConnectionIds.size > 1) {
       handleConnectSelected();
@@ -787,8 +809,20 @@ export default function SavedConnections({
   };
 
   const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (!keyword || visibleConnectionIds.length === 0) return;
     if (event.nativeEvent.isComposing || event.key === "Process") return;
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (filterText) {
+        setFilterText("");
+      } else {
+        setIsSearchExpanded(false);
+      }
+      return;
+    }
+
+    if (!keyword || visibleConnectionIds.length === 0) return;
 
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
@@ -1549,8 +1583,9 @@ export default function SavedConnections({
     toggleGroup,
     handleConnect,
     handleConnectOnly,
-    handleConnectSelected,
     handleOpenSftp,
+    handleOpenSftpConnection,
+    handleConnectSelected,
     handleOpenS3,
     handleOpenFtp,
     handleOpenWebDav,
@@ -1599,7 +1634,7 @@ export default function SavedConnections({
         />
 
         <div
-          className="nyaterm-wallpaper-transparent-surface flex items-center gap-1.5 px-2 py-1.5 shrink-0 border-b"
+          className="nyaterm-wallpaper-transparent-surface relative flex items-center gap-1.5 px-2 py-1.5 min-h-10 shrink-0 border-b"
           style={{
             borderColor: "color-mix(in srgb, var(--df-border) 40%, transparent)",
             backgroundColor: "var(--df-bg-section-header)",
@@ -1610,26 +1645,16 @@ export default function SavedConnections({
             <input
               type="text"
               value={filterText}
-              onChange={(e) => setFilterText(e.target.value)}
-              onKeyDown={handleSearchKeyDown}
+              readOnly
+              onFocus={() => setIsSearchExpanded(true)}
+              onClick={() => setIsSearchExpanded(true)}
               placeholder={t("savedConnections.filter")}
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-              autoComplete="off"
-              className="w-full pl-8 pr-7 py-1 h-7 text-xs rounded-md bg-[var(--df-bg-hover)] border border-transparent outline-none transition-all placeholder:text-[var(--df-text-dimmed)] focus:bg-transparent focus:border-[var(--df-primary)] focus:ring-1 focus:ring-[var(--df-primary)] text-[var(--df-text)]"
+              aria-label={t("savedConnections.search")}
+              className="w-full pl-8 pr-3 py-1 h-7 text-xs rounded-md bg-[var(--df-bg-hover)] border border-transparent outline-none transition-all cursor-text placeholder:text-[var(--df-text-dimmed)] focus:bg-transparent focus:border-[var(--df-primary)] focus:ring-1 focus:ring-[var(--df-primary)] text-[var(--df-text)]"
             />
-            {filterText && (
-              <button
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded transition-colors hover:text-[var(--df-text)] text-[var(--df-text-dimmed)]"
-                onClick={() => setFilterText("")}
-              >
-                <MdClose className="text-xs" />
-              </button>
-            )}
           </div>
 
-          <div className="flex items-center gap-0.5 shrink-0">
+          <div className="ml-auto flex items-center gap-0.5 shrink-0">
             <HeaderActionButton
               variant="ghost"
               size="icon-sm"
@@ -1756,6 +1781,50 @@ export default function SavedConnections({
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
+
+          {isSearchExpanded && (
+            <div
+              className="nyaterm-wallpaper-control-surface absolute inset-x-2 top-1.5 bottom-1.5 z-20 flex items-center gap-1 rounded-md border px-1.5 shadow-sm"
+              style={{
+                backgroundColor: "var(--df-bg-panel)",
+                borderColor: "var(--df-primary)",
+              }}
+            >
+              <MdSearch className="h-4 w-4 shrink-0 translate-y-px text-primary" />
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={filterText}
+                onChange={(event) => setFilterText(event.target.value)}
+                onKeyDown={handleSearchKeyDown}
+                placeholder={t("savedConnections.filter")}
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                autoComplete="off"
+                className="h-full min-w-0 flex-1 bg-transparent px-1 text-xs text-[var(--df-text)] outline-none placeholder:text-[var(--df-text-dimmed)]"
+              />
+              <button
+                type="button"
+                className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--df-text-dimmed)] transition-colors hover:bg-[var(--df-bg-hover)] hover:text-[var(--df-text)]"
+                aria-label={
+                  filterText
+                    ? t("savedConnections.clearSearch")
+                    : t("common.close")
+                }
+                onClick={() => {
+                  if (filterText) {
+                    setFilterText("");
+                    searchInputRef.current?.focus();
+                  } else {
+                    setIsSearchExpanded(false);
+                  }
+                }}
+              >
+                <MdClose className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
         </div>
 
         <div

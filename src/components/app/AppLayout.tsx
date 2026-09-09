@@ -1,10 +1,11 @@
-import type { TFunction } from "i18next";
+﻿import type { TFunction } from "i18next";
 import {
   type ComponentProps,
   type ReactNode,
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import FloatingPanel from "@/components/app/FloatingPanel";
@@ -131,6 +132,7 @@ interface AppLayoutProps {
     activeSerialSessionId: string | null;
     activeNonSerialSessionId: string | null;
     activeNonSerialSessionIds: string[];
+    quickCommandsDisabled: boolean;
     syncGroups: SyncGroup[];
     currentWindowLabel: string;
     sessionTargets: {
@@ -212,6 +214,9 @@ export default function AppLayout({
   const [backgroundDataUrl, setBackgroundDataUrl] = useState("");
   const [serialSendRunning, setSerialSendRunning] = useState(false);
   const [terminalFullscreen, setTerminalFullscreen] = useState(false);
+  // Latch the first time the serial send panel is shown so it stays mounted
+  // (but hidden) afterwards, preserving the user's input across hide/show cycles.
+  const serialSendEverShownRef = useRef(false);
 
   const toggleTerminalFullscreen = useCallback(async () => {
     try {
@@ -361,12 +366,32 @@ export default function AppLayout({
     rightActivityBarVisible &&
     (rightPanelIds.length > 0 || Boolean(rightOverlayPanelId));
   const serialSendVisible = bottomPanel.activePanel === "serialSend";
-  const serialSendMounted = serialSendVisible || serialSendRunning;
+  if (serialSendVisible) {
+    serialSendEverShownRef.current = true;
+  }
+  const serialSendMounted =
+    serialSendVisible || serialSendRunning || serialSendEverShownRef.current;
   // When side chrome is gone, round the terminal so it doesn't cover window corners.
   const leftEdgeOccupied =
     !terminalFullscreen && ((hasLeftActivityItems && leftActivityBarVisible) || leftPanelOpen);
   const rightEdgeOccupied =
     !terminalFullscreen && ((hasRightActivityItems && rightActivityBarVisible) || rightPanelOpen);
+
+  useEffect(() => {
+    if (!hasLeftActivityItems && mobile.leftOpen) {
+      mobile.setLeftOpen(false);
+    }
+    if (!hasRightActivityItems && mobile.rightOpen) {
+      mobile.setRightOpen(false);
+    }
+  }, [
+    hasLeftActivityItems,
+    hasRightActivityItems,
+    mobile.leftOpen,
+    mobile.rightOpen,
+    mobile.setLeftOpen,
+    mobile.setRightOpen,
+  ]);
 
   return (
     <div
@@ -535,6 +560,7 @@ export default function AppLayout({
                   <QuickCommands
                     onSend={bottomPanel.onCommandSend}
                     onSendToAll={bottomPanel.onSendToAllSessions}
+                    sendDisabled={bottomPanel.quickCommandsDisabled}
                   />
                 </div>
               </>

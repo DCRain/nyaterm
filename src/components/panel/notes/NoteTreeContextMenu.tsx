@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import {
   MdAdd,
   MdCreateNewFolder,
@@ -85,6 +86,7 @@ export default function NoteTreeContextMenu({
   onLock,
   onRefresh,
 }: NoteTreeContextMenuProps) {
+  const preventNextContextMenuAutoFocusRef = useRef(false);
   const parentId = node?.kind === "folder" ? node.id : (node?.parentId ?? null);
   const moveTargets = folderTargets.filter(
     (item) =>
@@ -99,7 +101,14 @@ export default function NoteTreeContextMenu({
     folderSessionUnlocked;
 
   return (
-    <ContextMenuContent className="min-w-40">
+    <ContextMenuContent
+      className="min-w-40"
+      onCloseAutoFocus={(event) => {
+        if (!preventNextContextMenuAutoFocusRef.current) return;
+        preventNextContextMenuAutoFocusRef.current = false;
+        event.preventDefault();
+      }}
+    >
       {node?.kind === "note" ? (
         <ContextMenuItem onClick={() => onOpen(node)}>
           <MdOpenInNew />
@@ -120,7 +129,12 @@ export default function NoteTreeContextMenu({
               </ContextMenuItem>
             </>
           ) : null}
-          <ContextMenuItem onClick={() => onRename(node)}>
+          <ContextMenuItem
+            onClick={() => {
+              preventNextContextMenuAutoFocusRef.current = true;
+              onRename(node);
+            }}
+          >
             <MdEdit />
             {labels.rename}
           </ContextMenuItem>

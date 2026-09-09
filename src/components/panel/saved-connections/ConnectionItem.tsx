@@ -1,4 +1,5 @@
 import type { TFunction } from "i18next";
+import { FolderOpen } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   MdContentCopy,
@@ -18,6 +19,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { canOpenSavedConnectionWithSftp } from "@/lib/sftpRuntime";
 import type { SavedConnection } from "@/types/global";
 import { resolveConnectionIcon } from "../../icons";
 import { useSavedConnectionsContext } from "./context";
@@ -424,8 +426,9 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
     savedGroups,
     handleConnect,
     handleConnectOnly,
-    handleConnectSelected,
     handleOpenSftp,
+    handleOpenSftpConnection,
+    handleConnectSelected,
     handleOpenS3,
     handleOpenFtp,
     handleOpenWebDav,
@@ -746,17 +749,26 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
           <MdLink className="text-[0.875rem] text-muted-foreground mr-2" />
           {connectLabel}
         </ContextMenuItem>
-        {conn.type === "ssh" ? (
+        {canOpenSavedConnectionWithSftp(conn) ? (
           <ContextMenuItem
-            disabled={conn.sftp?.enabled === false}
             onClick={() => {
-              if (conn.sftp?.enabled === false) return;
               closeAndSuppressDetails();
               handleOpenSftp(conn);
             }}
           >
             <MdFolderOpen className="text-[0.875rem] text-muted-foreground mr-2" />
             {t("savedConnections.openSftp")}
+          </ContextMenuItem>
+        ) : null}
+        {canOpenSavedConnectionWithSftp(conn) ? (
+          <ContextMenuItem
+            onClick={() => {
+              closeAndSuppressDetails();
+              handleOpenSftpConnection(conn);
+            }}
+          >
+            <FolderOpen className="mr-2 size-3.5 text-muted-foreground" />
+            {t("savedConnections.openWithSftp")}
           </ContextMenuItem>
         ) : null}
         {conn.type === "s3" ? (

@@ -4,26 +4,30 @@ use super::client::{
 use crate::config::SftpCwdFollowMode;
 use crate::core::capture::OutputCaptureProcessor;
 use crate::core::input::remap_del_to_bs;
+use crate::core::monitoring::stats::RemoteStatsSampler;
 use crate::core::ssh::osc::{self, OscStripper, ShellKind};
+use crate::core::terminal_session::local::split_startup_passthrough;
 use crate::core::terminal_session::{TerminalOutputDecoder, encode_terminal_input};
 use crate::core::zmodem::{
     ZmodemAction, ZmodemDetectResult, ZmodemDetector, ZmodemDirection, ZmodemDownloadOoDrain,
     ZmodemEvent, ZmodemTransfer, ZmodemUploadDrain, start_zmodem_transfer,
 };
 use crate::core::{
-    RecordingManager, SessionCommand, SessionManager, SessionOutputCoalescer, SharedCwd,
+    InputOrigin, RecordingManager, SessionCommand, SessionCommandReceiver, SessionCommandSender,
+    SessionCwdReplacement, SessionManager, SessionOutputCoalescer, SharedCwd, replace_cwd_state,
     update_cwd_if_changed,
 };
 use crate::error::{AppError, AppResult};
 use russh::{ChannelMsg, client};
 use std::{pin::Pin, sync::Arc, time::Instant};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::mpsc;
 use tokio::time::{Duration, Sleep, timeout};
 
-const INJECT_TIMEOUT_SECS: u64 = 30;
+const INJECT_TIMEOUT_SECS: u64 = 8;
 const INITIAL_INJECT_DELAY_MS: u64 = 500;
 const SUPPRESSED_VISIBLE_FALLBACK_MAX_BYTES: usize = 64 * 1024;
+const SUPPRESSION_DIAGNOSTIC_INITIAL_MS: u64 = 1_000;
+const SUPPRESSION_DIAGNOSTIC_INTERVAL_MS: u64 = 2_000;
 
 #[derive(Debug)]
 enum ShellDetectionResult {
@@ -283,6 +287,58 @@ async fn install_remote_shell_integration<H: client::Handler>(
         .map(|_| ())
 }
 
+const CHANNEL_REQUEST_REPLY_TIMEOUT_MS: u64 = 10_000;
+
+async fn wait_channel_request_reply(
+    channel: &mut russh::Channel<client::Msg>,
+    request_name: &str,
+) -> AppResult<()> {
+    let reply = timeout(
+        Duration::from_millis(CHANNEL_REQUEST_REPLY_TIMEOUT_MS),
+        async {
+            loop {
+                match channel.wait().await {
+                    Some(ChannelMsg::Success) => return Ok(()),
+                    Some(ChannelMsg::Failure) => {
+                        return Err(AppError::Channel(format!(
+                            "{request_name} request rejected by server"
+                        )));
+                    }
+                    Some(ChannelMsg::Close | ChannelMsg::Eof) | None => {
+                        return Err(AppError::Channel(format!(
+                            "SSH channel closed before {request_name} request completed"
+                        )));
+                    }
+                    Some(_) => {}
+                }
+            }
+        },
+    )
+    .await;
+
+    match reply {
+        Ok(result) => result,
+        Err(_) => Err(AppError::Channel(format!(
+            "{request_name} request timed out"
+        ))),
+    }
+}
+
+async fn close_failed_interactive_channel(
+    channel: &russh::Channel<client::Msg>,
+    session_id: &str,
+    stage: &str,
+) {
+    if let Err(error) = channel.close().await {
+        tracing::debug!(
+            session_id = %session_id,
+            stage,
+            %error,
+            "Failed to close rejected SSH interactive channel"
+        );
+    }
+}
+
 /// Opens a PTY shell channel and detects the remote shell type.
 ///
 /// Returns `(channel, Option<injection_script>, ready_marker)`.
@@ -314,7 +370,7 @@ pub(super) async fn open_shell_channel<H: client::Handler>(
         session_id = %session_id,
         "SSH interactive channel opening"
     );
-    let channel = match handle.channel_open_session().await {
+    let mut channel = match handle.channel_open_session().await {
         Ok(channel) => {
             tracing::info!(
                 session_id = %session_id,
@@ -346,16 +402,28 @@ pub(super) async fn open_shell_channel<H: client::Handler>(
         }
     }
     if let Some(fake_cookie_hex) = x11_fake_cookie_hex {
-        if let Err(error) = channel
+        match channel
             .request_x11(true, false, "MIT-MAGIC-COOKIE-1", fake_cookie_hex, 0)
             .await
         {
-            tracing::warn!(
-                session_id = %session_id,
-                %error,
-                "Could not enable X11 forwarding"
-            );
-            local_notice = Some(super::x11_forwarding::enable_failed_message());
+            Ok(()) => {
+                if let Err(error) = wait_channel_request_reply(&mut channel, "X11").await {
+                    tracing::warn!(
+                        session_id = %session_id,
+                        %error,
+                        "Could not enable X11 forwarding"
+                    );
+                    local_notice = Some(super::x11_forwarding::enable_failed_message());
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    session_id = %session_id,
+                    %error,
+                    "Could not enable X11 forwarding"
+                );
+                local_notice = Some(super::x11_forwarding::enable_failed_message());
+            }
         }
     }
 
@@ -370,7 +438,7 @@ pub(super) async fn open_shell_channel<H: client::Handler>(
         "SSH PTY request sending"
     );
     if let Err(error) = channel
-        .request_pty(false, terminal_type, 80, 24, 0, 0, &[])
+        .request_pty(true, terminal_type, 80, 24, 0, 0, &[])
         .await
     {
         tracing::warn!(
@@ -378,7 +446,17 @@ pub(super) async fn open_shell_channel<H: client::Handler>(
             %error,
             "SSH PTY request failed"
         );
+        close_failed_interactive_channel(&channel, session_id, "pty-send").await;
         return Err(AppError::Channel(format!("PTY request failed: {}", error)));
+    }
+    if let Err(error) = wait_channel_request_reply(&mut channel, "PTY").await {
+        tracing::warn!(
+            session_id = %session_id,
+            %error,
+            "SSH PTY request rejected"
+        );
+        close_failed_interactive_channel(&channel, session_id, "pty-reply").await;
+        return Err(error);
     }
     tracing::info!(
         session_id = %session_id,
@@ -403,16 +481,26 @@ pub(super) async fn open_shell_channel<H: client::Handler>(
         );
     }
 
-    if let Err(error) = channel.request_shell(false).await {
+    if let Err(error) = channel.request_shell(true).await {
         tracing::warn!(
             session_id = %session_id,
             %error,
             "SSH shell request failed"
         );
+        close_failed_interactive_channel(&channel, session_id, "shell-send").await;
         return Err(AppError::Channel(format!(
             "Shell request failed: {}",
             error
         )));
+    }
+    if let Err(error) = wait_channel_request_reply(&mut channel, "Shell").await {
+        tracing::warn!(
+            session_id = %session_id,
+            %error,
+            "SSH shell request rejected"
+        );
+        close_failed_interactive_channel(&channel, session_id, "shell-reply").await;
+        return Err(error);
     }
     tracing::info!(
         session_id = %session_id,
@@ -589,6 +677,8 @@ enum InjectionEvent {
     None,
     Inject,
     Ready { visible_after_ready: String },
+    Failed { visible_after_ready: String },
+    RuntimeFailed { visible: String },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -597,12 +687,96 @@ enum InjectionTimeoutEvent {
     FallbackToNormal,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InjectionTimeoutSource {
+    Deadline,
+    WallClock,
+}
+
+impl std::fmt::Display for InjectionTimeoutSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Deadline => f.write_str("deadline"),
+            Self::WallClock => f.write_str("wall_clock"),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct SuppressionDiagnostics {
+    rx_bytes_total: u64,
+    rx_chunks: u64,
+    first_rx_after_ms: Option<u64>,
+    last_rx_after_ms: Option<u64>,
+    pre_ready_write_bytes: u64,
+    pre_ready_write_chunks: u64,
+    last_diagnostic_at: Option<Instant>,
+}
+
+impl SuppressionDiagnostics {
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    fn record_rx(&mut self, bytes: usize, injection_sent_at: &Instant, now: Instant) {
+        let elapsed_ms = elapsed_ms_at(injection_sent_at, now);
+        self.rx_bytes_total = self
+            .rx_bytes_total
+            .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
+        self.rx_chunks = self.rx_chunks.saturating_add(1);
+        self.first_rx_after_ms.get_or_insert(elapsed_ms);
+        self.last_rx_after_ms = Some(elapsed_ms);
+    }
+
+    fn record_pre_ready_write(&mut self, bytes: usize) {
+        self.pre_ready_write_bytes = self
+            .pre_ready_write_bytes
+            .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
+        self.pre_ready_write_chunks = self.pre_ready_write_chunks.saturating_add(1);
+    }
+
+    fn should_log_suppression_diagnostic(
+        &mut self,
+        injection_sent_at: &Instant,
+        now: Instant,
+    ) -> bool {
+        if now.saturating_duration_since(*injection_sent_at)
+            < Duration::from_millis(SUPPRESSION_DIAGNOSTIC_INITIAL_MS)
+        {
+            return false;
+        }
+
+        if self.last_diagnostic_at.is_some_and(|last| {
+            now.saturating_duration_since(last)
+                < Duration::from_millis(SUPPRESSION_DIAGNOSTIC_INTERVAL_MS)
+        }) {
+            return false;
+        }
+
+        self.last_diagnostic_at = Some(now);
+        true
+    }
+}
+
 struct PendingStartupCommand {
     input: Vec<u8>,
     delay_ms: u64,
 }
 
+/// Build renderer-supplied startup input without allowing terminal controls.
 pub(super) fn build_startup_command_input(command: &str) -> Option<Vec<u8>> {
+    if command.trim().is_empty() || contains_terminal_control(command) {
+        return None;
+    }
+
+    let mut input = command.as_bytes().to_vec();
+    if !input.ends_with(b"\r") {
+        input.push(b'\r');
+    }
+    Some(input)
+}
+
+fn build_post_login_command_input(command: &str) -> Option<Vec<u8>> {
     if command.trim().is_empty() {
         return None;
     }
@@ -613,6 +787,12 @@ pub(super) fn build_startup_command_input(command: &str) -> Option<Vec<u8>> {
         input.push(b'\r');
     }
     Some(input)
+}
+
+fn contains_terminal_control(value: &str) -> bool {
+    value
+        .chars()
+        .any(|ch| matches!(ch, '\u{0000}'..='\u{001F}' | '\u{007F}'..='\u{009F}'))
 }
 
 fn arm_post_login_timer(
@@ -637,6 +817,48 @@ fn should_send_initial_injection(phase: &IoPhase, has_pending_script: bool) -> b
     *phase == IoPhase::WaitInitial && has_pending_script
 }
 
+fn cancel_pending_injection_for_input(
+    phase: &mut IoPhase,
+    pending_script: &mut Option<String>,
+    origin: InputOrigin,
+) -> bool {
+    if *phase != IoPhase::WaitInitial
+        || pending_script.is_none()
+        || origin == InputOrigin::TerminalResponse
+    {
+        return false;
+    }
+
+    pending_script.take();
+    *phase = IoPhase::Normal;
+    true
+}
+
+async fn handle_input_before_initial_injection(
+    phase: &mut IoPhase,
+    pending_script: &mut Option<String>,
+    origin: InputOrigin,
+    manager: &SessionManager,
+    session_id: &str,
+    pending_post_login: &Option<PendingStartupCommand>,
+    post_login_deadline: &mut Option<Pin<Box<Sleep>>>,
+) {
+    if !cancel_pending_injection_for_input(phase, pending_script, origin) {
+        return;
+    }
+
+    tracing::info!(
+        session_id = %session_id,
+        ?origin,
+        phase_transition = "WaitInitial -> Normal",
+        "SSH shell integration injection cancelled by terminal input"
+    );
+    manager
+        .set_dynamic_title_integration_active(session_id, false)
+        .await;
+    arm_post_login_timer(phase, pending_post_login, post_login_deadline);
+}
+
 fn on_initial_injection_sent(phase: &mut IoPhase) {
     if *phase == IoPhase::WaitInitial {
         *phase = IoPhase::Suppressing;
@@ -645,9 +867,12 @@ fn on_initial_injection_sent(phase: &mut IoPhase) {
 
 fn handle_injection_result(phase: &mut IoPhase, result: &osc::OscResult) -> InjectionEvent {
     match phase {
-        IoPhase::WaitInitial => {
-            *phase = IoPhase::Suppressing;
-            InjectionEvent::Inject
+        IoPhase::WaitInitial => InjectionEvent::Inject,
+        IoPhase::Suppressing if result.ready_failed => {
+            *phase = IoPhase::Normal;
+            InjectionEvent::Failed {
+                visible_after_ready: result.visible_after_ready.clone(),
+            }
         }
         IoPhase::Suppressing if result.ready => {
             *phase = IoPhase::Normal;
@@ -656,38 +881,172 @@ fn handle_injection_result(phase: &mut IoPhase, result: &osc::OscResult) -> Inje
             }
         }
         IoPhase::Suppressing => InjectionEvent::None,
+        IoPhase::Normal if result.ready_failed => InjectionEvent::RuntimeFailed {
+            visible: result.visible.clone(),
+        },
         IoPhase::Normal => InjectionEvent::None,
     }
 }
 
 fn handle_injection_timeout(phase: &mut IoPhase) -> InjectionTimeoutEvent {
     match phase {
-        IoPhase::WaitInitial | IoPhase::Suppressing => {
+        IoPhase::Suppressing => {
             *phase = IoPhase::Normal;
             InjectionTimeoutEvent::FallbackToNormal
         }
-        IoPhase::Normal => InjectionTimeoutEvent::None,
+        IoPhase::WaitInitial | IoPhase::Normal => InjectionTimeoutEvent::None,
     }
 }
 
-fn append_suppressed_visible(buffer: &mut String, visible: &str) {
-    if visible.is_empty() {
-        return;
-    }
+fn elapsed_ms_at(started_at: &Instant, now: Instant) -> u64 {
+    u64::try_from(now.saturating_duration_since(*started_at).as_millis()).unwrap_or(u64::MAX)
+}
 
+fn injection_has_timed_out_at(
+    phase: &IoPhase,
+    injection_sent_at: Option<&Instant>,
+    now: Instant,
+) -> bool {
+    *phase == IoPhase::Suppressing
+        && injection_sent_at.is_some_and(|started| {
+            now.saturating_duration_since(*started) >= Duration::from_secs(INJECT_TIMEOUT_SECS)
+        })
+}
+
+fn injection_has_timed_out(phase: &IoPhase, injection_sent_at: Option<&Instant>) -> bool {
+    injection_has_timed_out_at(phase, injection_sent_at, Instant::now())
+}
+
+fn append_suppressed_visible_and_take_passthrough(buffer: &mut String, visible: &str) -> String {
     buffer.push_str(visible);
-    while buffer.len() > SUPPRESSED_VISIBLE_FALLBACK_MAX_BYTES {
-        let Some(first_char) = buffer.chars().next() else {
+    let (mut suppressed, passthrough) = split_startup_passthrough(buffer);
+    while suppressed.len() > SUPPRESSED_VISIBLE_FALLBACK_MAX_BYTES {
+        let Some(first_char) = suppressed.chars().next() else {
             break;
         };
-        buffer.drain(..first_char.len_utf8());
+        suppressed.drain(..first_char.len_utf8());
     }
+    *buffer = suppressed;
+    passthrough
 }
 
 fn discard_suppressed_output(buffer: &mut String, flushed_osc_buffer: String) -> usize {
     let discarded_len = buffer.len() + flushed_osc_buffer.len();
     buffer.clear();
     discarded_len
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn send_shell_integration_injection(
+    channel: &mut russh::Channel<client::Msg>,
+    pending_script: &mut Option<String>,
+    inject_deadline: &mut Pin<&mut Sleep>,
+    phase: &mut IoPhase,
+    session_id: &str,
+    shell_kind: Option<ShellKind>,
+    injection_sent_at: &mut Option<Instant>,
+    suppression_diagnostics: &mut SuppressionDiagnostics,
+) {
+    let Some(script) = pending_script.take() else {
+        return;
+    };
+    let script_bytes = script.len();
+    let script_lines = script.lines().count();
+    let max_line_bytes = script.lines().map(str::len).max().unwrap_or_default();
+
+    tracing::info!(
+        session_id = %session_id,
+        shell = ?shell_kind,
+        phase = %phase,
+        script_bytes,
+        script_lines,
+        max_line_bytes,
+        "SSH shell integration injection sending"
+    );
+
+    match channel.data(script.as_bytes()).await {
+        Ok(()) => {
+            let sent_at = Instant::now();
+            *injection_sent_at = Some(sent_at);
+            suppression_diagnostics.reset();
+            on_initial_injection_sent(phase);
+            inject_deadline
+                .as_mut()
+                .reset(tokio::time::Instant::now() + Duration::from_secs(INJECT_TIMEOUT_SECS));
+            tracing::info!(
+                session_id = %session_id,
+                shell = ?shell_kind,
+                script_bytes,
+                script_lines,
+                max_line_bytes,
+                phase_transition = "WaitInitial -> Suppressing",
+                "SSH shell integration injection sent"
+            );
+        }
+        Err(error) => {
+            let previous_phase = phase.to_string();
+            *phase = IoPhase::Normal;
+            *injection_sent_at = None;
+            let phase_transition = format!("{previous_phase} -> {phase}");
+            tracing::warn!(
+                session_id = %session_id,
+                shell = ?shell_kind,
+                error = %error,
+                phase_transition = %phase_transition,
+                "SSH shell integration injection send failed; continuing in passive mode"
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fallback_shell_integration_timeout(
+    phase: &mut IoPhase,
+    stripper: &mut OscStripper,
+    suppressed_visible_fallback: &mut String,
+    session_id: &str,
+    shell_kind: Option<ShellKind>,
+    injection_sent_at: Option<&Instant>,
+    suppression_diagnostics: &SuppressionDiagnostics,
+    timeout_source: InjectionTimeoutSource,
+    pending_post_login: &Option<PendingStartupCommand>,
+    post_login_deadline: &mut Option<Pin<Box<Sleep>>>,
+) -> bool {
+    if *phase != IoPhase::Suppressing || injection_sent_at.is_none() {
+        return false;
+    }
+
+    let previous_phase = phase.to_string();
+    let timeout_event = handle_injection_timeout(phase);
+    debug_assert_eq!(timeout_event, InjectionTimeoutEvent::FallbackToNormal);
+    let flushed = stripper.flush();
+    let osc_buffer_bytes = flushed.len();
+    let suppressed_visible_bytes = suppressed_visible_fallback.len();
+    let discarded_visible_bytes = discard_suppressed_output(suppressed_visible_fallback, flushed);
+    let elapsed_ms = injection_sent_at
+        .map(|started| elapsed_ms_at(started, Instant::now()))
+        .unwrap_or(0);
+    let phase_transition = format!("{previous_phase} -> {phase}");
+    tracing::warn!(
+        session_id = %session_id,
+        shell = ?shell_kind,
+        elapsed_ms,
+        injection_timeout_secs = INJECT_TIMEOUT_SECS,
+        suppression_rx_bytes = suppression_diagnostics.rx_bytes_total,
+        suppression_rx_chunks = suppression_diagnostics.rx_chunks,
+        first_suppression_rx_after_ms = ?suppression_diagnostics.first_rx_after_ms,
+        last_suppression_rx_after_ms = ?suppression_diagnostics.last_rx_after_ms,
+        suppressed_visible_bytes,
+        osc_buffer_bytes,
+        discarded_visible_bytes,
+        pre_ready_write_bytes = suppression_diagnostics.pre_ready_write_bytes,
+        pre_ready_write_chunks = suppression_diagnostics.pre_ready_write_chunks,
+        timeout_source = %timeout_source,
+        phase_transition = %phase_transition,
+        "SSH shell integration injection timed out"
+    );
+    arm_post_login_timer(phase, pending_post_login, post_login_deadline);
+    true
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -707,15 +1066,24 @@ async fn handle_osc_result(
     suppressed_visible_fallback: &mut String,
     shell_kind: Option<ShellKind>,
     injection_sent_at: &mut Option<Instant>,
+    suppression_diagnostics: &mut SuppressionDiagnostics,
 ) {
-    match handle_injection_result(phase, result) {
+    let was_suppressing = *phase == IoPhase::Suppressing;
+    let injection_event = handle_injection_result(phase, result);
+    let suppressed_passthrough = if was_suppressing {
+        let before_ready_len = result
+            .visible
+            .len()
+            .saturating_sub(result.visible_after_ready.len());
+        append_suppressed_visible_and_take_passthrough(
+            suppressed_visible_fallback,
+            &result.visible[..before_ready_len],
+        )
+    } else {
+        String::new()
+    };
+    match injection_event {
         InjectionEvent::Inject => {
-            tracing::info!(
-                session_id = %session_id,
-                shell = ?shell_kind,
-                phase = "WaitInitial",
-                "SSH shell integration injection sending"
-            );
             emit_output(
                 app,
                 output,
@@ -727,20 +1095,17 @@ async fn handle_osc_result(
                 result,
             )
             .await;
-
-            if let Some(script) = pending_script.take() {
-                let _ = channel.data(script.as_bytes()).await;
-                *injection_sent_at = Some(Instant::now());
-                tracing::info!(
-                    session_id = %session_id,
-                    shell = ?shell_kind,
-                    phase_transition = "WaitInitial -> Suppressing",
-                    "SSH shell integration injection sent"
-                );
-            }
-            inject_deadline
-                .as_mut()
-                .reset(tokio::time::Instant::now() + Duration::from_secs(INJECT_TIMEOUT_SECS));
+            send_shell_integration_injection(
+                channel,
+                pending_script,
+                inject_deadline,
+                phase,
+                session_id,
+                shell_kind,
+                injection_sent_at,
+                suppression_diagnostics,
+            )
+            .await;
         }
         InjectionEvent::Ready {
             visible_after_ready,
@@ -763,10 +1128,58 @@ async fn handle_osc_result(
                 phase_transition = "Suppressing -> Normal",
                 "SSH shell integration ready marker received"
             );
+            // Exact OSC 0/2 and terminal queries retain their original order
+            // while source-command echo remains suppressed.
+            let mut release_output = suppressed_passthrough;
+            release_output.push_str(&visible_after_ready);
             emit_metadata(app, cwd_event, cwd, manager, session_id, result).await;
-            if !visible_after_ready.is_empty() {
-                emit_visible_text(output, recording_mgr, session_id, &visible_after_ready);
+            emit_visible_text(output, recording_mgr, session_id, &release_output);
+        }
+        InjectionEvent::Failed {
+            visible_after_ready,
+        } => {
+            let suppressed_visible_bytes = result
+                .visible
+                .len()
+                .saturating_sub(visible_after_ready.len())
+                + suppressed_visible_fallback.len();
+            suppressed_visible_fallback.clear();
+            let mut release_output = suppressed_passthrough;
+            release_output.push_str(&visible_after_ready);
+            tracing::warn!(
+                session_id = %session_id,
+                shell = ?shell_kind,
+                elapsed_ms = injection_sent_at
+                    .as_ref()
+                    .map(|started| started.elapsed().as_millis() as u64)
+                    .unwrap_or(0),
+                suppressed_visible_bytes,
+                phase_transition = "Suppressing -> Normal",
+                "SSH shell integration reported installation failure; continuing in passive mode"
+            );
+            emit_metadata(app, cwd_event, cwd, manager, session_id, result).await;
+            emit_visible_text(output, recording_mgr, session_id, &release_output);
+        }
+        InjectionEvent::RuntimeFailed { visible } => {
+            tracing::warn!(
+                session_id = %session_id,
+                shell = ?shell_kind,
+                "SSH shell integration failed after startup; clearing stale cwd"
+            );
+            emit_metadata(app, cwd_event, cwd, manager, session_id, result).await;
+            let changes = replace_cwd_state(
+                cwd,
+                SessionCwdReplacement {
+                    legacy_path: None,
+                    operational_path: None,
+                    presentation: None,
+                },
+            )
+            .await;
+            if changes.operational_changed {
+                let _ = app.emit(cwd_event, "");
             }
+            emit_visible_text(output, recording_mgr, session_id, &visible);
         }
         InjectionEvent::None if *phase == IoPhase::Normal => {
             emit_output(
@@ -782,7 +1195,9 @@ async fn handle_osc_result(
             .await;
         }
         InjectionEvent::None => {
-            append_suppressed_visible(suppressed_visible_fallback, &result.visible);
+            // Transport terminal queries and bounded OSC 0/2 in their exact
+            // source order while all remaining startup text stays hidden.
+            emit_visible_text(output, recording_mgr, session_id, &suppressed_passthrough);
             emit_metadata(app, cwd_event, cwd, manager, session_id, result).await;
         }
     }
@@ -794,8 +1209,8 @@ pub(super) async fn ssh_io_loop(
     manager: Arc<SessionManager>,
     mut channel: russh::Channel<client::Msg>,
     _handle: SshHandle,
-    mut cmd_rx: mpsc::UnboundedReceiver<SessionCommand>,
-    output_control_tx: mpsc::UnboundedSender<SessionCommand>,
+    mut cmd_rx: SessionCommandReceiver,
+    output_control_tx: SessionCommandSender,
     cwd: SharedCwd,
     connection_id: Option<String>,
     injection_script: Option<String>,
@@ -846,8 +1261,9 @@ pub(super) async fn ssh_io_loop(
     let mut pending_script = injection_script;
     let mut initial_remote_data_logged = false;
     let mut injection_sent_at: Option<Instant> = None;
+    let mut suppression_diagnostics = SuppressionDiagnostics::default();
     let mut pending_post_login = post_login.and_then(|config| {
-        build_startup_command_input(&config.command).map(|input| PendingStartupCommand {
+        build_post_login_command_input(&config.command).map(|input| PendingStartupCommand {
             input,
             delay_ms: config.delay_ms,
         })
@@ -881,27 +1297,71 @@ pub(super) async fn ssh_io_loop(
     tokio::pin!(inject_deadline);
 
     let close_reason = loop {
+        if injection_has_timed_out(&phase, injection_sent_at.as_ref()) {
+            fallback_shell_integration_timeout(
+                &mut phase,
+                &mut stripper,
+                &mut suppressed_visible_fallback,
+                &session_id,
+                shell_kind,
+                injection_sent_at.as_ref(),
+                &suppression_diagnostics,
+                InjectionTimeoutSource::WallClock,
+                &pending_post_login,
+                &mut post_login_deadline,
+            );
+        }
+
         tokio::select! {
             biased;
 
+            _ = &mut inject_deadline,
+                if phase == IoPhase::Suppressing && injection_sent_at.is_some() =>
+            {
+                fallback_shell_integration_timeout(
+                    &mut phase,
+                    &mut stripper,
+                    &mut suppressed_visible_fallback,
+                    &session_id,
+                    shell_kind,
+                    injection_sent_at.as_ref(),
+                    &suppression_diagnostics,
+                    InjectionTimeoutSource::Deadline,
+                    &pending_post_login,
+                    &mut post_login_deadline,
+                );
+            }
             cmd = cmd_rx.recv() => {
                 match cmd {
-                    Some(SessionCommand::Attach) => {
-                        output.attach();
+                    Some(SessionCommand::AttachConfirmed { ack }) => {
+                        output.attach_confirmed(ack);
                     }
                     Some(SessionCommand::DetachRenderer) => {
                         output.detach();
                     }
-                    Some(SessionCommand::Write { mut data, .. }) => {
+                    Some(SessionCommand::Write { mut data, origin, .. }) => {
                         if zmodem_transfer.is_some()
                             || zmodem_upload_drain.should_suppress(std::time::Instant::now())
                         {
                             continue;
                         }
+                        handle_input_before_initial_injection(
+                            &mut phase,
+                            &mut pending_script,
+                            origin,
+                            &manager,
+                            &session_id,
+                            &pending_post_login,
+                            &mut post_login_deadline,
+                        )
+                        .await;
                         if backspace_as_bs {
                             remap_del_to_bs(&mut data);
                         }
                         let send_data = encode_terminal_input(&data, &encoding);
+                        if phase == IoPhase::Suppressing {
+                            suppression_diagnostics.record_pre_ready_write(send_data.len());
+                        }
                         let _ = channel.data(&send_data[..]).await;
                     }
                     Some(SessionCommand::Resize { cols, rows }) => {
@@ -917,6 +1377,16 @@ pub(super) async fn ssh_io_loop(
                         output.ack(bytes);
                     }
                     Some(SessionCommand::CaptureExec { marker_id, wrapped_command, result_tx }) => {
+                        handle_input_before_initial_injection(
+                            &mut phase,
+                            &mut pending_script,
+                            InputOrigin::AiAgent,
+                            &manager,
+                            &session_id,
+                            &pending_post_login,
+                            &mut post_login_deadline,
+                        )
+                        .await;
                         capture_processor.register(marker_id, result_tx);
                         let send_command = encode_terminal_input(&wrapped_command, &encoding);
                         let _ = channel.data(&send_command[..]).await;
@@ -973,6 +1443,39 @@ pub(super) async fn ssh_io_loop(
             msg = channel.wait(), if !output_paused => {
                 match msg {
                     Some(ChannelMsg::Data { ref data }) => {
+                        if phase == IoPhase::Suppressing {
+                            let now = Instant::now();
+                            if let Some(sent_at) = injection_sent_at.as_ref() {
+                                suppression_diagnostics.record_rx(data.len(), sent_at, now);
+                                if injection_has_timed_out_at(&phase, Some(sent_at), now) {
+                                    fallback_shell_integration_timeout(
+                                        &mut phase,
+                                        &mut stripper,
+                                        &mut suppressed_visible_fallback,
+                                        &session_id,
+                                        shell_kind,
+                                        injection_sent_at.as_ref(),
+                                        &suppression_diagnostics,
+                                        InjectionTimeoutSource::WallClock,
+                                        &pending_post_login,
+                                        &mut post_login_deadline,
+                                    );
+                                } else if suppression_diagnostics
+                                    .should_log_suppression_diagnostic(sent_at, now)
+                                {
+                                    tracing::info!(
+                                        session_id = %session_id,
+                                        shell = ?shell_kind,
+                                        elapsed_ms = elapsed_ms_at(sent_at, now),
+                                        suppression_rx_bytes = suppression_diagnostics.rx_bytes_total,
+                                        suppression_rx_chunks = suppression_diagnostics.rx_chunks,
+                                        last_rx_after_ms = ?suppression_diagnostics.last_rx_after_ms,
+                                        osc_buffer_bytes = stripper.buffered_len(),
+                                        "SSH shell integration still suppressing"
+                                    );
+                                }
+                            }
+                        }
                         if !initial_remote_data_logged {
                             initial_remote_data_logged = true;
                             tracing::info!(
@@ -1077,6 +1580,7 @@ pub(super) async fn ssh_io_loop(
                                         &mut suppressed_visible_fallback,
                                         shell_kind,
                                         &mut injection_sent_at,
+                                        &mut suppression_diagnostics,
                                     ).await;
                                     arm_post_login_timer(
                                         &phase,
@@ -1146,53 +1650,16 @@ pub(super) async fn ssh_io_loop(
                 }
             }
             _ = &mut initial_inject_deadline, if should_send_initial_injection(&phase, pending_script.is_some()) => {
-                if let Some(script) = pending_script.take() {
-                    tracing::info!(
-                        session_id = %session_id,
-                        shell = ?shell_kind,
-                        phase = %phase,
-                        "SSH shell integration injection sending"
-                    );
-                    let _ = channel.data(script.as_bytes()).await;
-                    injection_sent_at = Some(Instant::now());
-                    tracing::info!(
-                        session_id = %session_id,
-                        shell = ?shell_kind,
-                        phase_transition = "WaitInitial -> Suppressing",
-                        "SSH shell integration injection sent"
-                    );
-                    on_initial_injection_sent(&mut phase);
-                    inject_deadline.as_mut().reset(
-                        tokio::time::Instant::now()
-                            + std::time::Duration::from_secs(INJECT_TIMEOUT_SECS),
-                    );
-                }
-            }
-            _ = &mut inject_deadline, if phase != IoPhase::Normal => {
-                let previous_phase = phase.to_string();
-                let timeout_event = handle_injection_timeout(&mut phase);
-                let flushed = stripper.flush();
-                let osc_buffer_bytes = flushed.len();
-                let suppressed_visible_bytes = suppressed_visible_fallback.len();
-                let discarded_visible_bytes = discard_suppressed_output(
-                    &mut suppressed_visible_fallback,
-                    flushed,
-                );
-                let phase_transition = format!("{previous_phase} -> {phase}");
-                tracing::warn!(
-                    session_id = %session_id,
-                    shell = ?shell_kind,
-                    elapsed_ms = injection_sent_at
-                        .as_ref()
-                        .map(|started| started.elapsed().as_millis() as u64)
-                        .unwrap_or(0),
-                    suppressed_visible_bytes,
-                    osc_buffer_bytes,
-                    discarded_visible_bytes,
-                    phase_transition = %phase_transition,
-                    "SSH shell integration injection timed out"
-                );
-                let _ = timeout_event;
+                send_shell_integration_injection(
+                    &mut channel,
+                    &mut pending_script,
+                    &mut inject_deadline,
+                    &mut phase,
+                    &session_id,
+                    shell_kind,
+                    &mut injection_sent_at,
+                    &mut suppression_diagnostics,
+                ).await;
                 arm_post_login_timer(&phase, &pending_post_login, &mut post_login_deadline);
             }
             _ = async {
@@ -1240,6 +1707,9 @@ pub(super) async fn ssh_io_loop(
     }
 
     manager.remove_session(&session_id).await;
+    if let Some(stats_sampler) = app.try_state::<Arc<RemoteStatsSampler>>() {
+        stats_sampler.clear_session(&session_id).await;
+    }
 
     if let Some(ref conn_id) = connection_id {
         if let Some(tunnel_mgr) = app.try_state::<Arc<super::TunnelManager>>() {
@@ -1256,6 +1726,90 @@ pub(super) async fn ssh_io_loop(
         remote_exit_signal = remote_exit_signal.as_deref(),
         "SSH session closed"
     );
+    let _ = app.emit(&closed_event, ());
+}
+
+async fn run_sftp_only_session_commands(
+    session_id: &str,
+    manager: &Arc<SessionManager>,
+    mut cmd_rx: SessionCommandReceiver,
+    mut disconnect_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
+) -> &'static str {
+    let close_reason = loop {
+        tokio::select! {
+            disconnect = disconnect_rx.recv() => {
+                match disconnect {
+                    Some(reason) => {
+                        tracing::info!(
+                            session_id = %session_id,
+                            %reason,
+                            "SFTP-only SSH transport disconnected"
+                        );
+                        break "remote-transport-disconnect";
+                    }
+                    None => break "remote-transport-ended",
+                }
+            }
+            command = cmd_rx.recv() => match command {
+                Some(SessionCommand::AttachConfirmed { ack }) => {
+                    let _ = ack.send(());
+                }
+                Some(SessionCommand::CaptureExec { result_tx, .. }) => {
+                    drop(result_tx);
+                }
+                Some(SessionCommand::Close) => break "local-close-request",
+                Some(
+                    SessionCommand::DetachRenderer
+                    | SessionCommand::Write { .. }
+                    | SessionCommand::PauseOutput
+                    | SessionCommand::ResumeOutput
+                    | SessionCommand::AckOutput { .. }
+                    | SessionCommand::Resize { .. }
+                    | SessionCommand::CancelCapture { .. }
+                    | SessionCommand::ZmodemAcceptDownload { .. }
+                    | SessionCommand::ZmodemAcceptUpload { .. }
+                    | SessionCommand::ZmodemCancel,
+                ) => {}
+                None => break "session-command-channel-closed",
+            }
+        }
+    };
+
+    manager.remove_session(session_id).await;
+    close_reason
+}
+
+pub(super) async fn sftp_only_ssh_lifecycle_loop(
+    app: AppHandle,
+    session_id: String,
+    manager: Arc<SessionManager>,
+    _handle: SshHandle,
+    cmd_rx: SessionCommandReceiver,
+    disconnect_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
+    connection_id: Option<String>,
+) {
+    tracing::info!(session_id = %session_id, "SFTP-only SSH lifecycle loop started");
+    let close_reason =
+        run_sftp_only_session_commands(&session_id, &manager, cmd_rx, disconnect_rx).await;
+
+    if let Some(stats_sampler) = app.try_state::<Arc<RemoteStatsSampler>>() {
+        stats_sampler.clear_session(&session_id).await;
+    }
+
+    if let Some(ref conn_id) = connection_id {
+        if let Some(tunnel_mgr) = app.try_state::<Arc<super::TunnelManager>>() {
+            tunnel_mgr
+                .close_auto_tunnels_for_connection(&app, conn_id)
+                .await;
+        }
+    }
+
+    tracing::info!(
+        session_id = %session_id,
+        close_reason,
+        "SFTP-only SSH session closed"
+    );
+    let closed_event = format!("session-closed-{session_id}");
     let _ = app.emit(&closed_event, ());
 }
 
@@ -1307,16 +1861,18 @@ async fn emit_metadata(
     }
 
     for command in &result.accepted_commands {
-        manager
+        let accepted = manager
             .confirm_command_submission(session_id, command.clone())
             .await;
-        let _ = app.emit(
-            "session-command-accepted",
-            serde_json::json!({
-                "sessionId": session_id,
-                "command": command,
-            }),
-        );
+        if accepted {
+            let _ = app.emit(
+                "session-command-accepted",
+                serde_json::json!({
+                    "sessionId": session_id,
+                    "command": command,
+                }),
+            );
+        }
     }
 }
 
@@ -1341,17 +1897,27 @@ fn emit_visible_text(
 mod tests {
     use super::{
         INITIAL_INJECT_DELAY_MS, INJECT_TIMEOUT_SECS, InjectionEvent, InjectionTimeoutEvent,
-        IoPhase, PendingStartupCommand, SUPPRESSED_VISIBLE_FALLBACK_MAX_BYTES,
-        append_suppressed_visible, build_startup_command_input, discard_suppressed_output,
-        handle_injection_result, handle_injection_timeout, open_shell_channel,
-        should_send_initial_injection,
+        InjectionTimeoutSource, IoPhase, PendingStartupCommand,
+        SUPPRESSED_VISIBLE_FALLBACK_MAX_BYTES, SUPPRESSION_DIAGNOSTIC_INITIAL_MS,
+        SUPPRESSION_DIAGNOSTIC_INTERVAL_MS, SuppressionDiagnostics,
+        append_suppressed_visible_and_take_passthrough, build_post_login_command_input,
+        build_startup_command_input, cancel_pending_injection_for_input, discard_suppressed_output,
+        fallback_shell_integration_timeout, handle_injection_result, handle_injection_timeout,
+        injection_has_timed_out_at, on_initial_injection_sent, open_shell_channel,
+        run_sftp_only_session_commands, should_send_initial_injection,
     };
-    use crate::config::SftpCwdFollowMode;
-    use crate::core::ssh::osc::OscResult;
+    use crate::config::{AiExecutionProfile, SftpCwdFollowMode, SshProfile};
+    use crate::core::InputOrigin;
+    use crate::core::ssh::osc::{OscResult, OscStripper, build_ready_marker};
+    use crate::core::{
+        DynamicTitleCapabilities, SessionCommand, SessionHandle, SessionInfo, SessionManager,
+        SessionType, session_command_channel,
+    };
     use russh::{Channel, ChannelId, Disconnect, client, server};
     use std::pin::Pin;
     use std::sync::Arc;
-    use tokio::sync::mpsc;
+    use std::time::Instant;
+    use tokio::sync::{mpsc, oneshot};
     use tokio::time::{Duration, Sleep, timeout};
 
     struct TestClient;
@@ -1367,8 +1933,18 @@ mod tests {
         }
     }
 
+    fn assert_fake_server_session(result: Result<(), russh::Error>) {
+        match result {
+            Ok(()) => {}
+            Err(russh::Error::IO(error)) if error.kind() == std::io::ErrorKind::BrokenPipe => {}
+            Err(error) => panic!("fake SSH server session: {error:?}"),
+        }
+    }
+
     struct TestServer {
         agent_request_tx: mpsc::UnboundedSender<()>,
+        reject_shell: bool,
+        accept_x11: bool,
     }
 
     impl server::Handler for TestServer {
@@ -1385,6 +1961,51 @@ mod tests {
             _session: &mut server::Session,
         ) -> Result<(), Self::Error> {
             reply.accept().await;
+            Ok(())
+        }
+
+        async fn pty_request(
+            &mut self,
+            channel: ChannelId,
+            _term: &str,
+            _col_width: u32,
+            _row_height: u32,
+            _pix_width: u32,
+            _pix_height: u32,
+            _modes: &[(russh::Pty, u32)],
+            session: &mut server::Session,
+        ) -> Result<(), Self::Error> {
+            let _ = session.channel_success(channel);
+            Ok(())
+        }
+
+        async fn shell_request(
+            &mut self,
+            channel: ChannelId,
+            session: &mut server::Session,
+        ) -> Result<(), Self::Error> {
+            if self.reject_shell {
+                let _ = session.channel_failure(channel);
+            } else {
+                let _ = session.channel_success(channel);
+            }
+            Ok(())
+        }
+
+        async fn x11_request(
+            &mut self,
+            channel: ChannelId,
+            _single_connection: bool,
+            _x11_auth_protocol: &str,
+            _x11_auth_cookie: &str,
+            _x11_screen_number: u32,
+            session: &mut server::Session,
+        ) -> Result<(), Self::Error> {
+            if self.accept_x11 {
+                let _ = session.channel_success(channel);
+            } else {
+                let _ = session.channel_failure(channel);
+            }
             Ok(())
         }
 
@@ -1415,11 +2036,15 @@ mod tests {
             let session = server::run_stream(
                 server_config,
                 server_stream,
-                TestServer { agent_request_tx },
+                TestServer {
+                    agent_request_tx,
+                    reject_shell: false,
+                    accept_x11: true,
+                },
             )
             .await
             .expect("fake SSH server handshake");
-            session.await.expect("fake SSH server session");
+            assert_fake_server_session(session.await);
         });
 
         let mut handle = client::connect_stream(
@@ -1478,28 +2103,412 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn interactive_shell_rejection_is_reported() {
+        let (client_stream, server_stream) = tokio::io::duplex(1024 * 1024);
+        let (agent_request_tx, _agent_request_rx) = mpsc::unbounded_channel();
+        let mut rng = russh::keys::key::safe_rng();
+        let server_config = Arc::new(server::Config {
+            auth_rejection_time: Duration::ZERO,
+            auth_rejection_time_initial: Some(Duration::ZERO),
+            keys: vec![
+                russh::keys::PrivateKey::random(&mut rng, russh::keys::Algorithm::Ed25519)
+                    .expect("test server key"),
+            ],
+            ..server::Config::default()
+        });
+        let server_task = tokio::spawn(async move {
+            let session = server::run_stream(
+                server_config,
+                server_stream,
+                TestServer {
+                    agent_request_tx,
+                    reject_shell: true,
+                    accept_x11: true,
+                },
+            )
+            .await
+            .expect("fake SSH server handshake");
+            assert_fake_server_session(session.await);
+        });
+
+        let mut handle = client::connect_stream(
+            Arc::new(client::Config::default()),
+            client_stream,
+            TestClient,
+        )
+        .await
+        .expect("fake SSH client handshake");
+        assert!(
+            handle
+                .authenticate_none("test")
+                .await
+                .expect("none authentication")
+                .success()
+        );
+
+        let result = open_shell_channel(
+            &mut handle,
+            "shell-rejection-test",
+            None,
+            false,
+            "xterm-256color",
+            true,
+            false,
+            SftpCwdFollowMode::Off,
+            100,
+            None,
+        )
+        .await;
+        let error = match result {
+            Ok(_) => panic!("rejected shell request must fail interactive setup"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("Shell request rejected by server")
+        );
+
+        handle
+            .disconnect(Disconnect::ByApplication, "test complete", "")
+            .await
+            .expect("disconnect fake SSH session");
+        timeout(Duration::from_secs(1), server_task)
+            .await
+            .expect("fake SSH server should stop")
+            .expect("fake SSH server task");
+    }
+
+    #[tokio::test]
     async fn interactive_shell_requests_agent_forwarding_only_when_enabled() {
         assert_agent_forwarding_request(false).await;
         assert_agent_forwarding_request(true).await;
     }
 
+    #[tokio::test]
+    async fn x11_success_does_not_hide_shell_rejection() {
+        let (client_stream, server_stream) = tokio::io::duplex(1024 * 1024);
+        let (agent_request_tx, _agent_request_rx) = mpsc::unbounded_channel();
+        let mut rng = russh::keys::key::safe_rng();
+        let server_config = Arc::new(server::Config {
+            auth_rejection_time: Duration::ZERO,
+            auth_rejection_time_initial: Some(Duration::ZERO),
+            keys: vec![
+                russh::keys::PrivateKey::random(&mut rng, russh::keys::Algorithm::Ed25519)
+                    .expect("test server key"),
+            ],
+            ..server::Config::default()
+        });
+        let server_task = tokio::spawn(async move {
+            let session = server::run_stream(
+                server_config,
+                server_stream,
+                TestServer {
+                    agent_request_tx,
+                    reject_shell: true,
+                    accept_x11: true,
+                },
+            )
+            .await
+            .expect("fake SSH server handshake");
+            assert_fake_server_session(session.await);
+        });
+
+        let mut handle = client::connect_stream(
+            Arc::new(client::Config::default()),
+            client_stream,
+            TestClient,
+        )
+        .await
+        .expect("fake SSH client handshake");
+        assert!(
+            handle
+                .authenticate_none("test")
+                .await
+                .expect("none authentication")
+                .success()
+        );
+
+        let error = open_shell_channel(
+            &mut handle,
+            "x11-shell-rejection-test",
+            Some("00112233445566778899aabbccddeeff"),
+            false,
+            "xterm-256color",
+            true,
+            false,
+            SftpCwdFollowMode::Off,
+            100,
+            None,
+        )
+        .await
+        .expect_err("Shell rejection must not be consumed as an earlier X11 reply");
+        assert!(
+            error
+                .to_string()
+                .contains("Shell request rejected by server")
+        );
+
+        handle
+            .disconnect(Disconnect::ByApplication, "test complete", "")
+            .await
+            .expect("disconnect fake SSH session");
+        timeout(Duration::from_secs(1), server_task)
+            .await
+            .expect("fake SSH server should stop")
+            .expect("fake SSH server task");
+    }
+
+    #[tokio::test]
+    async fn x11_rejection_is_non_fatal_when_pty_and_shell_succeed() {
+        let (client_stream, server_stream) = tokio::io::duplex(1024 * 1024);
+        let (agent_request_tx, _agent_request_rx) = mpsc::unbounded_channel();
+        let mut rng = russh::keys::key::safe_rng();
+        let server_config = Arc::new(server::Config {
+            auth_rejection_time: Duration::ZERO,
+            auth_rejection_time_initial: Some(Duration::ZERO),
+            keys: vec![
+                russh::keys::PrivateKey::random(&mut rng, russh::keys::Algorithm::Ed25519)
+                    .expect("test server key"),
+            ],
+            ..server::Config::default()
+        });
+        let server_task = tokio::spawn(async move {
+            let session = server::run_stream(
+                server_config,
+                server_stream,
+                TestServer {
+                    agent_request_tx,
+                    reject_shell: false,
+                    accept_x11: false,
+                },
+            )
+            .await
+            .expect("fake SSH server handshake");
+            assert_fake_server_session(session.await);
+        });
+
+        let mut handle = client::connect_stream(
+            Arc::new(client::Config::default()),
+            client_stream,
+            TestClient,
+        )
+        .await
+        .expect("fake SSH client handshake");
+        assert!(
+            handle
+                .authenticate_none("test")
+                .await
+                .expect("none authentication")
+                .success()
+        );
+
+        let (channel, _, _, _, notice) = open_shell_channel(
+            &mut handle,
+            "x11-rejection-test",
+            Some("00112233445566778899aabbccddeeff"),
+            false,
+            "xterm-256color",
+            true,
+            false,
+            SftpCwdFollowMode::Off,
+            100,
+            None,
+        )
+        .await
+        .expect("X11 rejection must not fail an otherwise valid interactive shell");
+        assert!(notice.is_some());
+
+        drop(channel);
+        handle
+            .disconnect(Disconnect::ByApplication, "test complete", "")
+            .await
+            .expect("disconnect fake SSH session");
+        timeout(Duration::from_secs(1), server_task)
+            .await
+            .expect("fake SSH server should stop")
+            .expect("fake SSH server task");
+    }
+
+    #[tokio::test]
+    async fn sftp_only_session_close_cleans_up() {
+        let session_id = "sftp-only-session".to_string();
+        let manager = Arc::new(SessionManager::new());
+        let (cmd_tx, cmd_rx) = session_command_channel(session_id.clone());
+        let info = SessionInfo {
+            id: session_id.clone(),
+            name: "sftp-only".to_string(),
+            session_type: SessionType::SSH,
+            started_at: String::new(),
+            connection_id: None,
+            connected: true,
+            owner_window_label: None,
+            ai_execution_profile: AiExecutionProfile::Disabled,
+            injection_active: false,
+            dynamic_title_capabilities: DynamicTitleCapabilities::default(),
+            remote_file_browser_enabled: true,
+            remote_stats_enabled: false,
+            ssh_profile: Some(SshProfile::Standard),
+            ssh_runtime_mode: Some(crate::config::SshRuntimeMode::Sftp),
+        };
+        manager
+            .add_session(SessionHandle {
+                info,
+                cmd_tx,
+                startup_input_barrier: None,
+                ssh_config: None,
+                ssh_handle: None,
+                cwd: Arc::new(tokio::sync::Mutex::new(Default::default())),
+                remote_fs: None,
+            })
+            .await;
+
+        let loop_manager = manager.clone();
+        let loop_session_id = session_id.clone();
+        let (_disconnect_tx, disconnect_rx) = mpsc::unbounded_channel();
+        let loop_task = tokio::spawn(async move {
+            run_sftp_only_session_commands(&loop_session_id, &loop_manager, cmd_rx, disconnect_rx)
+                .await
+        });
+
+        let (attach_tx, attach_rx) = oneshot::channel();
+        manager
+            .send_command(
+                &session_id,
+                SessionCommand::AttachConfirmed { ack: attach_tx },
+            )
+            .await
+            .expect("attach command");
+        timeout(Duration::from_secs(1), attach_rx)
+            .await
+            .expect("attach acknowledgement must not block")
+            .expect("attach acknowledgement sender");
+
+        let (capture_tx, capture_rx) = oneshot::channel();
+        manager
+            .send_command(
+                &session_id,
+                SessionCommand::CaptureExec {
+                    marker_id: "capture".to_string(),
+                    wrapped_command: b"echo blocked".to_vec(),
+                    result_tx: capture_tx,
+                },
+            )
+            .await
+            .expect("capture command");
+        let capture_result = timeout(Duration::from_secs(1), capture_rx)
+            .await
+            .expect("capture result sender must be dropped immediately");
+        assert!(capture_result.is_err());
+
+        manager
+            .send_command(&session_id, SessionCommand::Close)
+            .await
+            .expect("close command");
+        let close_reason = timeout(Duration::from_secs(1), loop_task)
+            .await
+            .expect("SFTP-only loop must close promptly")
+            .expect("SFTP-only loop task");
+
+        assert_eq!(close_reason, "local-close-request");
+        assert!(manager.list_sessions().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn sftp_only_session_remote_disconnect_cleans_up() {
+        let session_id = "sftp-only-remote-disconnect".to_string();
+        let manager = Arc::new(SessionManager::new());
+        let (cmd_tx, cmd_rx) = session_command_channel(session_id.clone());
+        let info = SessionInfo {
+            id: session_id.clone(),
+            name: "sftp-only".to_string(),
+            session_type: SessionType::SSH,
+            started_at: String::new(),
+            connection_id: None,
+            connected: true,
+            owner_window_label: None,
+            ai_execution_profile: AiExecutionProfile::Disabled,
+            injection_active: false,
+            dynamic_title_capabilities: DynamicTitleCapabilities::default(),
+            remote_file_browser_enabled: true,
+            remote_stats_enabled: false,
+            ssh_profile: Some(SshProfile::Standard),
+            ssh_runtime_mode: Some(crate::config::SshRuntimeMode::Sftp),
+        };
+        manager
+            .add_session(SessionHandle {
+                info,
+                cmd_tx,
+                startup_input_barrier: None,
+                ssh_config: None,
+                ssh_handle: None,
+                cwd: Arc::new(tokio::sync::Mutex::new(Default::default())),
+                remote_fs: None,
+            })
+            .await;
+
+        let (disconnect_tx, disconnect_rx) = mpsc::unbounded_channel();
+        let loop_manager = manager.clone();
+        let loop_session_id = session_id.clone();
+        let loop_task = tokio::spawn(async move {
+            run_sftp_only_session_commands(&loop_session_id, &loop_manager, cmd_rx, disconnect_rx)
+                .await
+        });
+
+        disconnect_tx
+            .send("SSH server disconnected: test".to_string())
+            .expect("disconnect notification");
+        let close_reason = timeout(Duration::from_secs(1), loop_task)
+            .await
+            .expect("SFTP-only loop must react to remote disconnect")
+            .expect("SFTP-only loop task");
+
+        assert_eq!(close_reason, "remote-transport-disconnect");
+        assert!(manager.list_sessions().await.is_empty());
+    }
+
     #[test]
     fn post_login_input_normalizes_line_endings_and_adds_enter() {
-        let input = build_startup_command_input("cd /opt/app\nclear").expect("input");
+        let input = build_post_login_command_input("cd /opt/app\nclear").expect("input");
 
         assert_eq!(input, b"cd /opt/app\rclear\r");
     }
 
     #[test]
     fn post_login_input_preserves_existing_trailing_enter() {
-        let input = build_startup_command_input("uptime\r").expect("input");
+        let input = build_post_login_command_input("uptime\r").expect("input");
 
         assert_eq!(input, b"uptime\r");
     }
 
     #[test]
     fn post_login_input_ignores_blank_commands() {
-        assert!(build_startup_command_input(" \n\t ").is_none());
+        assert!(build_post_login_command_input(" \n\t ").is_none());
+    }
+
+    #[test]
+    fn startup_input_rejects_c0_del_and_c1_controls() {
+        for code in 0x00..=0x1f {
+            let command = format!("cd /tmp/a{}b", char::from_u32(code).expect("C0 code point"));
+            assert!(
+                build_startup_command_input(&command).is_none(),
+                "C0 control U+{code:04X} must be rejected"
+            );
+        }
+        for code in 0x7f..=0x9f {
+            let command = format!("cd /tmp/a{}b", char::from_u32(code).expect("C1 code point"));
+            assert!(
+                build_startup_command_input(&command).is_none(),
+                "DEL/C1 control U+{code:04X} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn startup_input_adds_enter_to_a_safe_command() {
+        let input = build_startup_command_input("cd '/opt/app'").expect("input");
+
+        assert_eq!(input, b"cd '/opt/app'\r");
     }
 
     fn osc_result(ready: bool, visible_after_ready: &str) -> OscResult {
@@ -1507,7 +2516,11 @@ mod tests {
             visible: "suppressed output".to_string(),
             visible_after_ready: visible_after_ready.to_string(),
             cwd_paths: Vec::new(),
+            cwd_payloads: Vec::new(),
+            cwd_payload_invalidated: false,
+            cwd_payload_events: Vec::new(),
             ready,
+            ready_failed: false,
             accepted_commands: Vec::new(),
         }
     }
@@ -1519,11 +2532,107 @@ mod tests {
         assert!(!should_send_initial_injection(&IoPhase::WaitInitial, false));
         assert!(!should_send_initial_injection(&IoPhase::Suppressing, true));
         assert!(!should_send_initial_injection(&IoPhase::Normal, true));
+
+        let mut phase = IoPhase::WaitInitial;
+        assert_eq!(
+            handle_injection_result(&mut phase, &osc_result(false, "")),
+            InjectionEvent::Inject
+        );
+        assert_eq!(phase, IoPhase::WaitInitial);
+        on_initial_injection_sent(&mut phase);
+        assert_eq!(phase, IoPhase::Suppressing);
+    }
+
+    #[test]
+    fn real_input_before_initial_injection_cancels_pending_script_and_preserves_output() {
+        let ready_marker = build_ready_marker("session-1");
+        let mut stripper = OscStripper::new(&ready_marker);
+        let mut phase = IoPhase::WaitInitial;
+        let mut pending_script =
+            Some("source ~/.config/nyaterm/shell-integration.bash\n".to_string());
+
+        assert!(cancel_pending_injection_for_input(
+            &mut phase,
+            &mut pending_script,
+            InputOrigin::Keyboard,
+        ));
+        assert_eq!(phase, IoPhase::Normal);
+        assert!(pending_script.is_none());
+
+        let chunks = [
+            "\x1b[38;5;14mubuntu-logo\x1b[0m\nOS: Ubuntu 22.04\n",
+            "Kernel: 6.8.0\nUptime: 1 day\n",
+        ];
+        let mut visible = String::new();
+        for chunk in chunks {
+            let result = stripper.push(chunk);
+            assert_eq!(
+                handle_injection_result(&mut phase, &result),
+                InjectionEvent::None
+            );
+            assert_eq!(phase, IoPhase::Normal);
+            visible.push_str(&result.visible);
+        }
+
+        assert_eq!(visible, chunks.concat());
+    }
+
+    #[test]
+    fn terminal_response_keeps_pending_initial_injection() {
+        let mut phase = IoPhase::WaitInitial;
+        let mut pending_script = Some("integration-script".to_string());
+
+        assert!(!cancel_pending_injection_for_input(
+            &mut phase,
+            &mut pending_script,
+            InputOrigin::TerminalResponse,
+        ));
+        assert_eq!(phase, IoPhase::WaitInitial);
+        assert!(pending_script.is_some());
+        assert_eq!(
+            handle_injection_result(&mut phase, &osc_result(false, "")),
+            InjectionEvent::Inject
+        );
+        on_initial_injection_sent(&mut phase);
+        assert_eq!(phase, IoPhase::Suppressing);
+    }
+
+    #[test]
+    fn input_after_initial_injection_does_not_end_suppression() {
+        let ready_marker = build_ready_marker("session-1");
+        let mut stripper = OscStripper::new(&ready_marker);
+        let mut phase = IoPhase::Suppressing;
+        let mut pending_script = None;
+
+        assert!(!cancel_pending_injection_for_input(
+            &mut phase,
+            &mut pending_script,
+            InputOrigin::Keyboard,
+        ));
+        let source_echo = stripper.push("hidden integration echo");
+        assert_eq!(
+            handle_injection_result(&mut phase, &source_echo),
+            InjectionEvent::None
+        );
+        assert_eq!(phase, IoPhase::Suppressing);
+
+        let ready = stripper.push(&ready_marker);
+        assert!(matches!(
+            handle_injection_result(&mut phase, &ready),
+            InjectionEvent::Ready { .. }
+        ));
+        assert_eq!(phase, IoPhase::Normal);
     }
 
     #[test]
     fn ready_marker_in_suppressing_enters_normal_and_preserves_prompt_after_ready() {
         let mut phase = IoPhase::Suppressing;
+        let sent_at = Instant::now();
+        assert!(!injection_has_timed_out_at(
+            &phase,
+            Some(&sent_at),
+            sent_at + Duration::from_millis(7_900)
+        ));
         let result = osc_result(true, "[user@host ~]$ ");
 
         let event = handle_injection_result(&mut phase, &result);
@@ -1538,17 +2647,189 @@ mod tests {
     }
 
     #[test]
-    fn injection_timeout_is_30s_and_falls_back_to_normal() {
-        assert_eq!(INJECT_TIMEOUT_SECS, 30);
+    fn failure_marker_in_suppressing_enters_normal_and_preserves_prompt() {
+        let mut phase = IoPhase::Suppressing;
+        let mut result = osc_result(false, "prompt-after-failure");
+        result.ready_failed = true;
+
+        let event = handle_injection_result(&mut phase, &result);
+
+        assert_eq!(phase, IoPhase::Normal);
+        assert_eq!(
+            event,
+            InjectionEvent::Failed {
+                visible_after_ready: "prompt-after-failure".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn failure_marker_after_startup_preserves_visible_output_and_reports_runtime_failure() {
+        let mut phase = IoPhase::Normal;
+        let mut result = osc_result(false, "prompt-after-failure");
+        result.visible = "beforeprompt-after-failure".to_string();
+        result.ready_failed = true;
+
+        let event = handle_injection_result(&mut phase, &result);
+
+        assert_eq!(phase, IoPhase::Normal);
+        assert_eq!(
+            event,
+            InjectionEvent::RuntimeFailed {
+                visible: "beforeprompt-after-failure".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn suppression_transport_preserves_interleaved_title_query_order() {
+        let mut buffer = String::new();
+        let controls = concat!(
+            "\x1b]2;first\x07",
+            "\x1b[c",
+            "\x1b]0;final\x1b\\",
+            "\x1b]11;?\x07"
+        );
+
+        let passthrough = append_suppressed_visible_and_take_passthrough(
+            &mut buffer,
+            &format!("hidden{controls}tail"),
+        );
+
+        assert_eq!(passthrough, controls);
+        assert_eq!(buffer, "hiddentail");
+    }
+
+    #[test]
+    fn oversized_startup_queries_and_titles_remain_suppressed() {
+        let mut buffer = String::new();
+        let huge_dcs = format!("\x1bP$q{}\x1b\\", "x".repeat(17 * 1024));
+        let huge_title = format!("\x1b]2;{}\x07", "x".repeat(17 * 1024));
+
+        let passthrough = append_suppressed_visible_and_take_passthrough(
+            &mut buffer,
+            &format!("{huge_dcs}{huge_title}"),
+        );
+
+        assert!(passthrough.is_empty());
+        assert!(buffer.len() <= SUPPRESSED_VISIBLE_FALLBACK_MAX_BYTES);
+    }
+
+    #[test]
+    fn suppression_title_transport_is_exactly_once_across_split_ready_and_normal_phases() {
+        let ready_marker = build_ready_marker("session-1");
+        let mut stripper = OscStripper::new(&ready_marker);
+        let mut phase = IoPhase::Suppressing;
+        let mut buffer = String::new();
+        let mut emitted = String::new();
+
+        let incomplete = stripper.push("hidden source\x1b]2;split");
+        let _ = handle_injection_result(&mut phase, &incomplete);
+        emitted.push_str(&append_suppressed_visible_and_take_passthrough(
+            &mut buffer,
+            &incomplete.visible,
+        ));
+
+        let completed = stripper.push(" title\x07hidden tail");
+        let _ = handle_injection_result(&mut phase, &completed);
+        emitted.push_str(&append_suppressed_visible_and_take_passthrough(
+            &mut buffer,
+            &completed.visible,
+        ));
+
+        let ready = stripper.push(&format!("{ready_marker}[user@host]$ "));
+        let event = handle_injection_result(&mut phase, &ready);
+        let before_ready_len = ready.visible.len() - ready.visible_after_ready.len();
+        emitted.push_str(&append_suppressed_visible_and_take_passthrough(
+            &mut buffer,
+            &ready.visible[..before_ready_len],
+        ));
+        assert!(matches!(event, InjectionEvent::Ready { .. }));
+        emitted.push_str(&ready.visible_after_ready);
+        buffer.clear();
+
+        let normal = stripper.push("\x1b]2;normal title\x07prompt");
+        let event = handle_injection_result(&mut phase, &normal);
+        assert_eq!(event, InjectionEvent::None);
+        emitted.push_str(&normal.visible);
+
+        assert_eq!(phase, IoPhase::Normal);
+        assert_eq!(emitted.matches("\x1b]2;split title\x07").count(), 1);
+        assert_eq!(emitted.matches("\x1b]2;normal title\x07").count(), 1);
+        assert!(!emitted.contains("hidden source"));
+        assert!(!emitted.contains("hidden tail"));
+        assert!(
+            emitted.find("\x1b]2;split title\x07").unwrap()
+                < emitted.find("[user@host]$ ").unwrap()
+        );
+        assert!(
+            emitted.find("[user@host]$ ").unwrap()
+                < emitted.find("\x1b]2;normal title\x07").unwrap()
+        );
+    }
+
+    #[test]
+    fn title_transport_cap_is_per_sequence_and_keeps_final_semantics() {
+        let first = format!("\x1b]2;{}\x07", "x".repeat(16_395));
+        let final_title = "\x1b]2;final\x07";
+        let mut buffer = String::new();
+
+        let passthrough = append_suppressed_visible_and_take_passthrough(
+            &mut buffer,
+            &format!("{first}{final_title}"),
+        );
+
+        assert_eq!(passthrough, format!("{first}{final_title}"));
+        assert!(passthrough.ends_with(final_title));
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn delivered_suppression_title_survives_timeout_fallback() {
+        let mut buffer = String::new();
+        let delivered = append_suppressed_visible_and_take_passthrough(
+            &mut buffer,
+            "\x1b]2;delivered\x07hidden",
+        );
+        let mut phase = IoPhase::Suppressing;
+
+        assert_eq!(
+            handle_injection_timeout(&mut phase),
+            InjectionTimeoutEvent::FallbackToNormal
+        );
+        assert_eq!(delivered, "\x1b]2;delivered\x07");
+        assert_eq!(buffer, "hidden");
+        assert_eq!(phase, IoPhase::Normal);
+    }
+
+    #[test]
+    fn injection_timeout_is_8s_and_only_applies_after_injection_is_sent() {
+        assert_eq!(INJECT_TIMEOUT_SECS, 8);
 
         let mut wait_initial = IoPhase::WaitInitial;
         assert_eq!(
             handle_injection_timeout(&mut wait_initial),
-            InjectionTimeoutEvent::FallbackToNormal
+            InjectionTimeoutEvent::None
         );
-        assert_eq!(wait_initial, IoPhase::Normal);
+        assert_eq!(wait_initial, IoPhase::WaitInitial);
+        let sent_at = Instant::now();
+        assert!(!injection_has_timed_out_at(
+            &wait_initial,
+            Some(&sent_at),
+            sent_at + Duration::from_secs(INJECT_TIMEOUT_SECS)
+        ));
 
         let mut suppressing = IoPhase::Suppressing;
+        assert!(!injection_has_timed_out_at(
+            &suppressing,
+            None,
+            sent_at + Duration::from_secs(INJECT_TIMEOUT_SECS)
+        ));
+        assert!(injection_has_timed_out_at(
+            &suppressing,
+            Some(&sent_at),
+            sent_at + Duration::from_secs(INJECT_TIMEOUT_SECS)
+        ));
         assert_eq!(
             handle_injection_timeout(&mut suppressing),
             InjectionTimeoutEvent::FallbackToNormal
@@ -1557,23 +2838,189 @@ mod tests {
     }
 
     #[test]
-    fn suppressed_visible_fallback_keeps_recent_visible_text() {
-        let mut buffer = String::new();
+    fn continuous_remote_data_cannot_extend_wall_clock_timeout() {
+        let sent_at = Instant::now();
+        let mut phase = IoPhase::Suppressing;
+        let mut diagnostics = SuppressionDiagnostics::default();
 
-        append_suppressed_visible(&mut buffer, "prompt-before-ready");
+        for chunk in 0..80 {
+            let now = sent_at + Duration::from_millis(chunk * 100);
+            diagnostics.record_rx(4, &sent_at, now);
+            assert!(!injection_has_timed_out_at(&phase, Some(&sent_at), now));
+        }
 
-        assert_eq!(buffer, "prompt-before-ready");
+        let timeout_at = sent_at + Duration::from_secs(INJECT_TIMEOUT_SECS);
+        diagnostics.record_rx(4, &sent_at, timeout_at);
+        assert!(injection_has_timed_out_at(
+            &phase,
+            Some(&sent_at),
+            timeout_at
+        ));
+        assert_eq!(diagnostics.rx_bytes_total, 324);
+        assert_eq!(diagnostics.rx_chunks, 81);
+        assert_eq!(diagnostics.first_rx_after_ms, Some(0));
+        assert_eq!(diagnostics.last_rx_after_ms, Some(8_000));
+        assert_eq!(
+            handle_injection_timeout(&mut phase),
+            InjectionTimeoutEvent::FallbackToNormal
+        );
+        assert_eq!(phase, IoPhase::Normal);
+    }
+
+    #[tokio::test]
+    async fn expired_injection_deadline_wins_over_ready_remote_data() {
+        let deadline = tokio::time::sleep(Duration::ZERO);
+        tokio::pin!(deadline);
+        let remote_data = std::future::ready(());
+
+        let selected = tokio::select! {
+            biased;
+            () = &mut deadline => "deadline",
+            () = remote_data => "remote_data",
+        };
+
+        assert_eq!(selected, "deadline");
     }
 
     #[test]
-    fn suppressed_visible_fallback_is_bounded() {
-        let mut buffer = String::new();
-
-        append_suppressed_visible(
-            &mut buffer,
-            &"x".repeat(SUPPRESSED_VISIBLE_FALLBACK_MAX_BYTES + 16),
+    fn ready_marker_after_timeout_stays_normal_and_is_safely_stripped() {
+        let ready_marker = build_ready_marker("session-1");
+        let mut stripper = OscStripper::new(&ready_marker);
+        let mut phase = IoPhase::Suppressing;
+        assert_eq!(
+            handle_injection_timeout(&mut phase),
+            InjectionTimeoutEvent::FallbackToNormal
         );
 
+        let result = stripper.push(&format!("{ready_marker}late prompt"));
+        let event = handle_injection_result(&mut phase, &result);
+
+        assert_eq!(phase, IoPhase::Normal);
+        assert_eq!(event, InjectionEvent::None);
+        assert_eq!(result.visible, "late prompt");
+        assert!(result.ready);
+    }
+
+    #[test]
+    fn pre_ready_writes_are_counted_without_extending_timeout() {
+        let sent_at = Instant::now();
+        let phase = IoPhase::Suppressing;
+        let mut diagnostics = SuppressionDiagnostics::default();
+
+        diagnostics.record_pre_ready_write(3);
+        diagnostics.record_pre_ready_write(5);
+
+        assert_eq!(diagnostics.pre_ready_write_bytes, 8);
+        assert_eq!(diagnostics.pre_ready_write_chunks, 2);
+        assert!(injection_has_timed_out_at(
+            &phase,
+            Some(&sent_at),
+            sent_at + Duration::from_secs(INJECT_TIMEOUT_SECS)
+        ));
+    }
+
+    #[test]
+    fn suppression_diagnostic_is_delayed_and_rate_limited() {
+        assert_eq!(SUPPRESSION_DIAGNOSTIC_INITIAL_MS, 1_000);
+        assert_eq!(SUPPRESSION_DIAGNOSTIC_INTERVAL_MS, 2_000);
+        let sent_at = Instant::now();
+        let mut diagnostics = SuppressionDiagnostics::default();
+
+        assert!(
+            !diagnostics
+                .should_log_suppression_diagnostic(&sent_at, sent_at + Duration::from_millis(999))
+        );
+        assert!(
+            diagnostics
+                .should_log_suppression_diagnostic(&sent_at, sent_at + Duration::from_secs(1))
+        );
+        assert!(
+            !diagnostics.should_log_suppression_diagnostic(
+                &sent_at,
+                sent_at + Duration::from_millis(2_999)
+            )
+        );
+        assert!(
+            diagnostics
+                .should_log_suppression_diagnostic(&sent_at, sent_at + Duration::from_secs(3))
+        );
+    }
+
+    #[tokio::test]
+    async fn timeout_fallback_is_idempotent_flushes_buffers_and_arms_post_login() {
+        let ready_marker = build_ready_marker("session-1");
+        let mut stripper = OscStripper::new(&ready_marker);
+        let _ = stripper.push("\x1b]2;unfinished");
+        let mut suppressed_visible = "hidden startup output".to_string();
+        let mut phase = IoPhase::Suppressing;
+        let sent_at = Instant::now()
+            .checked_sub(Duration::from_secs(INJECT_TIMEOUT_SECS))
+            .expect("test instant should support an eight-second subtraction");
+        let diagnostics = SuppressionDiagnostics::default();
+        let pending_post_login = Some(PendingStartupCommand {
+            input: b"uptime\r".to_vec(),
+            delay_ms: 1,
+        });
+        let mut post_login_deadline: Option<Pin<Box<Sleep>>> = None;
+
+        assert!(fallback_shell_integration_timeout(
+            &mut phase,
+            &mut stripper,
+            &mut suppressed_visible,
+            "session-1",
+            Some(crate::core::ssh::osc::ShellKind::Bash),
+            Some(&sent_at),
+            &diagnostics,
+            InjectionTimeoutSource::Deadline,
+            &pending_post_login,
+            &mut post_login_deadline,
+        ));
+        assert_eq!(phase, IoPhase::Normal);
+        assert!(suppressed_visible.is_empty());
+        assert_eq!(stripper.buffered_len(), 0);
+        assert!(post_login_deadline.is_some());
+
+        assert!(!fallback_shell_integration_timeout(
+            &mut phase,
+            &mut stripper,
+            &mut suppressed_visible,
+            "session-1",
+            Some(crate::core::ssh::osc::ShellKind::Bash),
+            Some(&sent_at),
+            &diagnostics,
+            InjectionTimeoutSource::WallClock,
+            &pending_post_login,
+            &mut post_login_deadline,
+        ));
+    }
+
+    #[test]
+    fn suppressed_visible_fallback_keeps_recent_text_and_extracts_split_passthrough() {
+        let mut buffer = String::new();
+
+        assert!(
+            append_suppressed_visible_and_take_passthrough(&mut buffer, "hidden\x1b[").is_empty()
+        );
+        let passthrough =
+            append_suppressed_visible_and_take_passthrough(&mut buffer, "cstill-hidden");
+
+        assert_eq!(passthrough, "\x1b[c");
+        assert_eq!(buffer, "hiddenstill-hidden");
+    }
+
+    #[test]
+    fn suppressed_visible_fallback_is_bounded_after_passthrough_extraction() {
+        let mut buffer = String::new();
+
+        let passthrough = append_suppressed_visible_and_take_passthrough(
+            &mut buffer,
+            &format!(
+                "{}\x1b]11;?\x07",
+                "x".repeat(SUPPRESSED_VISIBLE_FALLBACK_MAX_BYTES + 16)
+            ),
+        );
+
+        assert_eq!(passthrough, "\x1b]11;?\x07");
         assert_eq!(buffer.len(), SUPPRESSED_VISIBLE_FALLBACK_MAX_BYTES);
     }
 
@@ -1615,6 +3062,51 @@ mod tests {
             &mut post_login_deadline,
         );
 
+        assert!(post_login_deadline.is_some());
+        post_login_deadline.as_mut().unwrap().as_mut().await;
+    }
+
+    #[tokio::test]
+    async fn early_input_cancellation_arms_post_login_timer() {
+        let pending_post_login = Some(PendingStartupCommand {
+            input: b"uptime\r".to_vec(),
+            delay_ms: 1,
+        });
+        let mut pending_script = Some("integration-script".to_string());
+        let mut phase = IoPhase::WaitInitial;
+        let mut post_login_deadline: Option<Pin<Box<Sleep>>> = None;
+
+        assert!(cancel_pending_injection_for_input(
+            &mut phase,
+            &mut pending_script,
+            InputOrigin::QuickCommand,
+        ));
+        super::arm_post_login_timer(&phase, &pending_post_login, &mut post_login_deadline);
+
+        assert_eq!(phase, IoPhase::Normal);
+        assert!(post_login_deadline.is_some());
+        post_login_deadline.as_mut().unwrap().as_mut().await;
+    }
+
+    #[tokio::test]
+    async fn capture_exec_before_initial_injection_cancels_pending_script() {
+        let pending_post_login = Some(PendingStartupCommand {
+            input: b"uptime\r".to_vec(),
+            delay_ms: 1,
+        });
+        let mut pending_script = Some("integration-script".to_string());
+        let mut phase = IoPhase::WaitInitial;
+        let mut post_login_deadline: Option<Pin<Box<Sleep>>> = None;
+
+        assert!(cancel_pending_injection_for_input(
+            &mut phase,
+            &mut pending_script,
+            InputOrigin::AiAgent,
+        ));
+        super::arm_post_login_timer(&phase, &pending_post_login, &mut post_login_deadline);
+
+        assert_eq!(phase, IoPhase::Normal);
+        assert!(pending_script.is_none());
         assert!(post_login_deadline.is_some());
         post_login_deadline.as_mut().unwrap().as_mut().await;
     }

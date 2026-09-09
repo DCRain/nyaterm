@@ -44,6 +44,7 @@ import { useTheme } from "@/context/ThemeContext";
 import type { AIErrorDetectedDetail } from "@/lib/aiEvents";
 import { AI_ERROR_DETECTED_EVENT } from "@/lib/aiEvents";
 import { DEFAULT_AI_SETTINGS, getEnabledAIModels, resolveAILanguage, selectDefaultAIModel } from "@/lib/aiSettings";
+import { classifyAIStreamControlEvent } from "@/lib/aiStreamEvent";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import { getNextQuickCommandCategorySortOrder } from "@/lib/quickCommandCategories";
@@ -305,6 +306,16 @@ function AIAssistantPanel({
       ai: { ...aiSettings, default_mode: "ask", default_agent_kind: "nyaterm" },
     });
   }, [aiSettings, configuredRunMode, runMode, updateAppSettings]);
+
+  const openTerminalScopeKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const tab of tabs) {
+      for (const pane of collectSessionPanes(tab.root)) {
+        if (pane.paneKind === "terminal") keys.add(buildAIScopeKey(pane));
+      }
+    }
+    return keys;
+  }, [tabs]);
 
   const allSessionPanes = useMemo(() => {
     const panes: SessionPane[] = [];
@@ -984,9 +995,19 @@ function AIAssistantPanel({
               return;
             }
 
-            if (payload.type === "done") {
+            const controlEvent = classifyAIStreamControlEvent(payload.type);
+            if (controlEvent.kind === "warning") {
+              const warning =
+                payload.error === "codex_mcp_fallback"
+                  ? t("ai.codexMcpFallback")
+                  : (payload.error ?? t("ai.requestFailed"));
+              toast.warning(warning);
+              return;
+            }
+
+            if (controlEvent.kind === "done") {
               if (payload.sessionId) bindRealSessionId(payload.sessionId);
-              cleanupStreamListener(requestStreamId);
+              if (controlEvent.terminatesStream) cleanupStreamListener(requestStreamId);
               const newMsgId = payload.message?.id;
               if (payload.message) {
                 updateMessagesForSession(resolvedSessionId, (prev) =>
@@ -1009,19 +1030,24 @@ function AIAssistantPanel({
               return;
             }
 
-            if (payload.type === "error") {
-              cleanupStreamListener(requestStreamId);
+            if (controlEvent.kind === "error") {
+              const errorMessage = payload.error?.startsWith("claude_mcp_unavailable:")
+                ? t("ai.claudeMcpUnavailable", {
+                    reason: payload.error.slice("claude_mcp_unavailable:".length),
+                  })
+                : (payload.error ?? t("ai.requestFailed"));
+              if (controlEvent.terminatesStream) cleanupStreamListener(requestStreamId);
               updateMessagesForSession(resolvedSessionId, (prev) =>
                 prev.map((message) =>
                   message.id === assistantId
                     ? {
                         ...message,
-                        content: payload.error ?? t("ai.requestFailed"),
+                        content: errorMessage,
                       }
                     : message,
                 ),
               );
-              toast.error(payload.error ?? t("ai.requestFailed"));
+              toast.error(errorMessage);
             }
           },
         );
@@ -1341,10 +1367,12 @@ function AIAssistantPanel({
 
   const isSessionUsedByAnotherScope = useCallback(
     (sessionId: string) =>
+      !!streamRuntimeBySession[sessionId] ||
       Object.entries(activeSessionIdByScope).some(
-        ([key, value]) => key !== scopeKey && value === sessionId,
+        ([key, value]) =>
+          key !== scopeKey && value === sessionId && openTerminalScopeKeys.has(key),
       ),
-    [activeSessionIdByScope, scopeKey],
+    [activeSessionIdByScope, openTerminalScopeKeys, scopeKey, streamRuntimeBySession],
   );
 
   const openHistorySession = useCallback(
@@ -2078,7 +2106,8 @@ function AIAssistantPanel({
                 isComposingRef.current = false;
               }}
               onKeyDown={(event) => {
-                const isComposing = isComposingRef.current || event.nativeEvent.isComposing || event.keyCode === 229;
+                const isComposing =
+                  isComposingRef.current || event.nativeEvent.isComposing || event.keyCode === 229;
                 if (showMentionPopover) {
                   if (event.key === "Escape") {
                     event.preventDefault();

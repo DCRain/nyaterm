@@ -70,6 +70,9 @@ pub struct SshConfig {
     pub otp_id: Option<String>,
     #[serde(default)]
     pub auto_fill_otp: bool,
+    /// Allow sanitized remote OSC 0/2 titles to decorate this saved SSH tab.
+    #[serde(default)]
+    pub dynamic_tab_title: bool,
 }
 
 fn default_encoding() -> String {

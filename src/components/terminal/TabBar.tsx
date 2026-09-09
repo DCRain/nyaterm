@@ -49,15 +49,23 @@ import {
 import {
   collectSessionPanes,
   getActivePane,
+  getActiveSessionTabDisplayName,
+  getTabActiveSessionId,
   getTabDisplayName,
 } from "@/lib/workspaceTabs";
 import type {
   Group,
   PaneSplitDirection,
   SavedConnection,
+  SessionInfo,
   Tab,
 } from "@/types/global";
 import { useApp } from "../../context/AppContext";
+import {
+  getDynamicTitle,
+  getDynamicTitleSnapshot,
+  useDynamicTitles,
+} from "@/lib/dynamicTabTitles";
 import { resolveConnectionIcon } from "../icons";
 import {
   DropdownMenu,
@@ -82,6 +90,7 @@ interface TabBarProps {
   disconnectedTabIds?: Set<string>;
   /** Embed in the app header between menu and window controls. */
   variant?: "default" | "header";
+  sessionInfoById?: Map<string, SessionInfo> | null;
   onTabChange: (tabId: string) => void;
   onTabClose: (tab: Tab) => void | Promise<void>;
   onAddTab: () => void;
@@ -230,12 +239,15 @@ function getTabServerIp(tab: Tab, savedConnections: SavedConnection[]): string |
 function canMultiplexTab(
   tab: Tab,
   savedConnections: SavedConnection[],
+  sessionInfoById?: Map<string, SessionInfo> | null,
 ): boolean {
   const pane = getActivePane(tab);
   return (
     !!pane &&
     pane.paneKind === "terminal" &&
     isSshTab(tab, savedConnections) &&
+    pane.sshRuntimeMode !== "sftp" &&
+    sessionInfoById?.get(pane.sessionId)?.ssh_runtime_mode !== "sftp" &&
     !pane.connecting &&
     !pane.connectError &&
     !!pane.sessionId
@@ -323,6 +335,7 @@ function TabBar({
   unreadTabIds,
   disconnectedTabIds,
   variant = "default",
+  sessionInfoById,
   onTabChange,
   onTabClose,
   onAddTab,
@@ -347,6 +360,7 @@ function TabBar({
   onMoveTabHere,
 }: TabBarProps) {
   const { t } = useTranslation();
+  useDynamicTitles();
   const {
     appSettings,
     savedConnections,
@@ -634,7 +648,7 @@ function TabBar({
   );
 
   const handleRenameTab = useCallback((tab: Tab) => {
-    setRenameValue(getTabDisplayName(tab));
+    setRenameValue(getActiveSessionTabDisplayName(tab, getDynamicTitle));
     setRenameTab(tab);
   }, []);
 
@@ -663,7 +677,9 @@ function TabBar({
   const handleCopyTabName = useCallback(
     async (tab: Tab) => {
       try {
-        await navigator.clipboard.writeText(getTabDisplayName(tab));
+        await navigator.clipboard.writeText(
+          getActiveSessionTabDisplayName(tab, getDynamicTitle),
+        );
         toast.success(t("tabCtx.nameCopied"));
       } catch {
         toast.error(t("tabCtx.copyFailed"));
@@ -761,7 +777,7 @@ function TabBar({
       if (!tab) return;
       if (
         detail.action === "multiplex" &&
-        !canMultiplexTab(tab, savedConnections)
+        !canMultiplexTab(tab, savedConnections, sessionInfoById)
       )
         return;
       if (detail.action === "duplicate" && !canSpawnSessionFromTab(tab)) return;
@@ -778,7 +794,7 @@ function TabBar({
         listener,
       );
     };
-  }, [openCommandDialog, savedConnections, tabs]);
+  }, [openCommandDialog, savedConnections, sessionInfoById, tabs]);
 
   const isTabMouseActionEnabled = useCallback(
     (tab: Tab, action: TabMouseAction) => {
@@ -793,7 +809,7 @@ function TabBar({
         case "duplicate_session":
           return canSpawnSessionFromTab(tab);
         case "multiplex_ssh":
-          return canMultiplexTab(tab, savedConnections);
+          return canMultiplexTab(tab, savedConnections, sessionInfoById);
         case "reconnect_session":
           return canReconnectTab(tab);
         case "disconnect_session":
@@ -802,7 +818,7 @@ function TabBar({
           return !tab.locked;
       }
     },
-    [savedConnections],
+    [savedConnections, sessionInfoById],
   );
 
   const runTabMouseAction = useCallback(
@@ -1238,12 +1254,22 @@ function TabBar({
       : showUnreadIndicator
         ? "var(--df-link)"
         : undefined;
-    const displayName = getTabDisplayName(tab);
+    const activePane = getActivePane(tab);
+    const activeSessionId = getTabActiveSessionId(tab);
+    const dynamicSnapshot = getDynamicTitleSnapshot(activeSessionId);
+    const displayName = getTabDisplayName(
+      tab,
+      dynamicSnapshot?.effectiveTitle ?? null,
+    );
+    const cwdPresentation =
+      activePane?.paneKind === "terminal" && dynamicSnapshot?.enabled
+        ? dynamicSnapshot.cwd
+        : null;
     const isDirty = collectSessionPanes(tab.root).some(
       (pane) =>
         pane.paneKind === "file" && fileDocumentStates.get(pane.id)?.dirty,
     );
-    const activePaneIsFile = getActivePane(tab)?.paneKind === "file";
+    const activePaneIsFile = activePane?.paneKind === "file";
     const accentColor = tab.tabColor;
     const conn = getTabConnection(tab, savedConnections);
     const canCopyIp = !!getTabServerIp(tab, savedConnections);
@@ -1267,6 +1293,7 @@ function TabBar({
       value: string,
       label: string,
       copiedMessage: string,
+      copyValue = value,
     ) => (
       <div className="flex min-w-0 items-center gap-2 text-[var(--df-text-muted)]">
         <span className="min-w-0 truncate">{value}</span>
@@ -1277,7 +1304,7 @@ function TabBar({
           onClick={(event) => {
             event.stopPropagation();
             navigator.clipboard
-              .writeText(value)
+              .writeText(copyValue)
               .then(() => toast.success(copiedMessage))
               .catch(() => toast.error(t("tabCtx.copyFailed")));
           }}
@@ -1294,7 +1321,8 @@ function TabBar({
       groupPath ||
       isDisconnected ||
       showUnreadIndicator ||
-      isDirty ? (
+      isDirty ||
+      cwdPresentation ? (
         <div className="flex max-w-[260px] min-w-0 flex-col gap-1">
           {isDirty && (
             <div className="flex min-w-0 items-center gap-2 text-[var(--df-primary)]">
@@ -1346,6 +1374,13 @@ function TabBar({
               t("tabCtx.copySshAddress"),
               t("tabCtx.sshAddressCopied"),
             )}
+          {cwdPresentation &&
+            renderTooltipCopyRow(
+              cwdPresentation.displayPath,
+              t("tabCtx.copyWorkingDirectory"),
+              t("tabCtx.workingDirectoryCopied"),
+              cwdPresentation.copyValue,
+            )}
         </div>
       ) : undefined;
 
@@ -1364,7 +1399,7 @@ function TabBar({
               ? `color-mix(in srgb, ${accentColor} 18%, var(--df-bg-panel))`
               : "color-mix(in srgb, var(--df-primary) 14%, var(--df-bg-panel))"
             : accentColor
-              ? `color-mix(in srgb, ${accentColor} 5%, transparent)`
+              ? `color-mix(in srgb, ${accentColor} 12%, var(--df-bg-panel))`
               : "transparent",
           color: isActive ? "var(--df-text)" : "var(--df-text-muted)",
         }}
@@ -1374,6 +1409,7 @@ function TabBar({
             return;
           }
           onTabChange(tab.id);
+          focusOpenTabTerminal(tab);
         }}
         onDoubleClick={(event) => {
           if (
@@ -1521,6 +1557,11 @@ function TabBar({
 
         <TabContextMenu
           tab={tab}
+          sftpOnly={
+            getActivePane(tab)?.sshRuntimeMode === "sftp" ||
+            sessionInfoById?.get(getActivePane(tab)?.sessionId ?? "")?.ssh_runtime_mode ===
+              "sftp"
+          }
           tooltipContent={tooltipContent}
           tabs={tabs}
           onDuplicateSession={onDuplicateSession}
@@ -1573,7 +1614,7 @@ function TabBar({
 
   const renderOpenTabMenuItem = (tab: Tab, index: number) => {
     const isActive = activeTabId === tab.id;
-    const displayName = getTabDisplayName(tab);
+    const displayName = getActiveSessionTabDisplayName(tab, getDynamicTitle);
     const isDirty = collectSessionPanes(tab.root).some(
       (pane) =>
         pane.paneKind === "file" && fileDocumentStates.get(pane.id)?.dirty,

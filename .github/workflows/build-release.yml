@@ -279,13 +279,12 @@ jobs:
 
   build-win7:
     name: Build Windows 7 x64
-    needs: build
     runs-on: windows-2022
 
     if: startsWith(github.ref, 'refs/tags/v')
 
     permissions:
-      contents: write
+      contents: read
 
     steps:
       - name: Checkout repository
@@ -309,24 +308,49 @@ jobs:
         with:
           artifact-version: ${{ steps.version.outputs.version }}
 
+      - name: Upload Win7 build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-windows-x64-win7
+          path: ${{ steps.win7.outputs.installer-path }}
+          if-no-files-found: error
+          retention-days: 7
+
+  upload-win7-release:
+    name: Upload Windows 7 release asset
+    needs:
+      - build
+      - build-win7
+    runs-on: ubuntu-latest
+
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Win7 build artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: release-assets-windows-x64-win7
+          path: release-assets
+
       - name: Upload Win7 installer to GitHub release
-        shell: pwsh
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $ErrorActionPreference = "Stop"
+          set -euo pipefail
 
-          gh release upload `
-            "$env:GITHUB_REF_NAME" `
-            "${{ steps.win7.outputs.installer-path }}" `
-            --repo "$env:GITHUB_REPOSITORY" `
+          gh release upload "$GITHUB_REF_NAME" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" \
             --clobber
 
   rename-assets:
     name: Rename release assets
     needs:
       - build
-      - build-win7
+      - upload-win7-release
     runs-on: ubuntu-latest
 
     if: startsWith(github.ref, 'refs/tags/v')

@@ -33,6 +33,15 @@ describe("parseTemporarySshLink runtime mode", () => {
     }
   });
 
+  it("accepts explicit sftp mode", () => {
+    const result = parseTemporarySshLink("ssh://root@example.com?mode=sftp");
+
+    expect(result.ok).toBe(true);
+    if (result.ok && result.config.protocol === "ssh") {
+      expect(result.config.runtime_mode).toBe("sftp");
+    }
+  });
+
   it("rejects invalid runtime mode values", () => {
     const result = parseTemporarySshLink("ssh://root@example.com?mode=foo");
 

@@ -632,6 +632,13 @@ fn resolve_saved_ssh_config(
             .as_ref()
             .map(|auth| auth.auto_fill_otp)
             .unwrap_or(false),
+        dynamic_tab_title: matches!(
+            &conn.config,
+            crate::config::ConnectionType::Ssh {
+                dynamic_tab_title: true,
+                ..
+            }
+        ),
     })
 }
 

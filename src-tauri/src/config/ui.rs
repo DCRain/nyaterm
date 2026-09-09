@@ -48,6 +48,8 @@ pub enum RestorablePaneNode {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssh_runtime_mode: Option<crate::config::SshRuntimeMode>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         display: Option<RemoteDesktopDisplayMetadata>,
     },
     #[serde(rename = "split")]
@@ -126,6 +128,7 @@ impl RestorableTab {
                 connection_id: self.connection_id.clone(),
                 view: None,
                 note_id: None,
+                ssh_runtime_mode: None,
                 display: None,
             });
             if self.active_pane_id.is_none() {

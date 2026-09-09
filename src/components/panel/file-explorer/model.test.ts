@@ -3,7 +3,9 @@ import {
   buildMoveSuccessRefreshPlan,
   buildMoveOperations,
   buildMoveTargetPath,
+  canTrackTerminalCwd,
   isMoveToSameDirectory,
+  subscribeFileExplorerSessionSnapshots,
   syncExplorerDirectoryToTerminalCwd,
   syncExplorerDirectoryToTerminalCwdChange,
 } from "./model";
@@ -122,6 +124,88 @@ describe("file explorer move path helpers", () => {
 });
 
 describe("file explorer terminal cwd sync", () => {
+  it("uses the Local managed cwd integration capability instead of command injection", () => {
+    expect(
+      canTrackTerminalCwd({
+        session_type: "Local",
+        injection_active: false,
+        dynamic_title_integration_active: true,
+      }),
+    ).toBe(true);
+    expect(
+      canTrackTerminalCwd({
+        session_type: "Local",
+        injection_active: true,
+        dynamic_title_integration_active: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps SSH cwd tracking tied to command injection", () => {
+    expect(
+      canTrackTerminalCwd({
+        session_type: "SSH",
+        injection_active: true,
+        dynamic_title_integration_active: false,
+      }),
+    ).toBe(true);
+    expect(
+      canTrackTerminalCwd({
+        session_type: "SSH",
+        injection_active: false,
+        dynamic_title_integration_active: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("registers sessions-changed before the initial snapshot and observes Local ready", async () => {
+    let resolveListen!: (dispose: () => void) => void;
+    let sessionsChanged!: () => void;
+    let integrationActive = false;
+    let cwdTrackingActive = false;
+    const readSessions = vi.fn(async () => [
+      {
+        session_type: "Local" as const,
+        injection_active: false,
+        dynamic_title_integration_active: integrationActive,
+      },
+    ]);
+    const listenSessionsChanged = vi.fn(
+      (handler: () => void) =>
+        new Promise<() => void>((resolve) => {
+          sessionsChanged = handler;
+          resolveListen = resolve;
+        }),
+    );
+
+    const stop = subscribeFileExplorerSessionSnapshots({
+      listenSessionsChanged,
+      readSessions,
+      onSessions: (sessions) => {
+        cwdTrackingActive = canTrackTerminalCwd(sessions[0]);
+      },
+      onError: vi.fn(),
+    });
+
+    await Promise.resolve();
+    expect(readSessions).not.toHaveBeenCalled();
+
+    resolveListen(() => {});
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(readSessions).toHaveBeenCalledTimes(1);
+    expect(cwdTrackingActive).toBe(false);
+
+    integrationActive = true;
+    sessionsChanged();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(readSessions).toHaveBeenCalledTimes(2);
+    expect(cwdTrackingActive).toBe(true);
+
+    stop();
+  });
+
   it("loads the terminal cwd silently when auto-sync is enabled and the path changed", async () => {
     const readTerminalCwd = vi.fn().mockResolvedValue("/new");
     const loadDirectory = vi.fn().mockResolvedValue(true);
@@ -159,6 +243,25 @@ describe("file explorer terminal cwd sync", () => {
     ).resolves.toBe(false);
 
     expect(readTerminalCwd).toHaveBeenCalledWith("session-1");
+    expect(loadDirectory).not.toHaveBeenCalled();
+  });
+
+  it("does not reload a Windows Local path for drive-case or trailing-separator differences", async () => {
+    const readTerminalCwd = vi.fn().mockResolvedValue("c:\\Work\\Project\\");
+    const loadDirectory = vi.fn().mockResolvedValue(true);
+
+    await expect(
+      syncExplorerDirectoryToTerminalCwd({
+        enabled: true,
+        canBrowseFiles: true,
+        sessionId: "session-1",
+        backend: "local",
+        currentPath: "C:\\Work\\Project",
+        readTerminalCwd,
+        loadDirectory,
+      }),
+    ).resolves.toBe(false);
+
     expect(loadDirectory).not.toHaveBeenCalled();
   });
 
@@ -245,6 +348,21 @@ describe("file explorer terminal cwd sync", () => {
         backend: "remote",
         currentPath: "/old",
         cwd: "/old/",
+        loadDirectory,
+      }),
+    ).toBe(false);
+
+    expect(loadDirectory).not.toHaveBeenCalled();
+  });
+
+  it("ignores Windows Local cwd events that differ only by drive case or trailing separator", () => {
+    const loadDirectory = vi.fn().mockResolvedValue(true);
+
+    expect(
+      syncExplorerDirectoryToTerminalCwdChange({
+        backend: "local",
+        currentPath: "C:\\Work\\Project",
+        cwd: "c:\\Work\\Project\\",
         loadDirectory,
       }),
     ).toBe(false);

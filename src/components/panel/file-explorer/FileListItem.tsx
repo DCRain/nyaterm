@@ -77,8 +77,8 @@ interface FileListItemProps {
   onCopyPath: (entry: FileEntry, mode: "dir" | "name" | "full") => void;
   /** Hide terminal path/CD actions (SFTP workspace has no shell). Default true. */
   showTerminalActions?: boolean;
-  onSendToTerminal: (entry: FileEntry, mode: "dir" | "name" | "full") => void;
-  onCdToDirectory: (entry: FileEntry) => void;
+  onSendToTerminal?: (entry: FileEntry, mode: "dir" | "name" | "full") => void;
+  onCdToDirectory?: (entry: FileEntry) => void;
   /** Open a new SSH terminal at this directory (SFTP remote). */
   onOpenTerminalHere?: (entry: FileEntry) => void;
   onProperties: (entry: FileEntry) => void;
@@ -595,7 +595,7 @@ export function FileListItem({
               <MdFolderCopy className="text-[0.875rem] text-muted-foreground mr-2" />
               {t("fileExplorer.cmCopyDirPath")}
             </ContextMenuItem>
-            {showTerminalActions && (
+            {showTerminalActions && onSendToTerminal ? (
               <>
                 <ContextMenuSeparator />
                 <ContextMenuItem onClick={() => onSendToTerminal(entry, "full")}>
@@ -610,12 +610,14 @@ export function FileListItem({
                   <MdKeyboardDoubleArrowRight className="text-[0.875rem] text-muted-foreground mr-2" />
                   {t("fileExplorer.cmTerminalDirPath")}
                 </ContextMenuItem>
-                <ContextMenuItem onClick={() => onCdToDirectory(entry)}>
-                  <MdOutlineSubdirectoryArrowRight className="text-[0.875rem] text-muted-foreground mr-2" />
-                  {t("fileExplorer.cmCdToDirectory")}
-                </ContextMenuItem>
+                {onCdToDirectory ? (
+                  <ContextMenuItem onClick={() => onCdToDirectory(entry)}>
+                    <MdOutlineSubdirectoryArrowRight className="text-[0.875rem] text-muted-foreground mr-2" />
+                    {t("fileExplorer.cmCdToDirectory")}
+                  </ContextMenuItem>
+                ) : null}
               </>
-            )}
+            ) : null}
             <ContextMenuSeparator />
             {aiActions.length > 0 && (
               <ContextMenuSub>

@@ -43,7 +43,7 @@ import { detectCredentialPromptKind } from "@/lib/credentialAutofill";
 import { invoke } from "@/lib/invoke";
 import { hexLuminance } from "@/lib/keywordHighlightPresets";
 import { logger } from "@/lib/logger";
-import { isMacOS } from "@/lib/platform";
+import { isMacOS, isWindows } from "@/lib/platform";
 import { openSendCommandPanel } from "@/lib/sendCommandPanelEvents";
 import {
   buildTerminalCommandInput,
@@ -70,6 +70,12 @@ import {
   registerTerminalReconnectCapture,
   type TerminalReconnectSnapshot,
 } from "@/lib/terminalReconnectHistory";
+import {
+  buildReconnectCwdStartupCommand,
+  carryOverSessionCwd,
+  recordSessionCwd,
+} from "@/lib/terminalSessionCwd";
+import { buildStartupCommandPayload } from "@/lib/appSessionFactory";
 import { TERMINAL_SEARCH_VISIBLE_MATCH_LIMIT } from "@/lib/terminalSearch";
 import type { AiCaptureEvent } from "@/types/global";
 import ActionLinkMenu from "./ActionLinkMenu";
@@ -107,22 +113,38 @@ import {
   quotePosixPath,
 } from "./xterminalClipboard";
 import { createXTerminalHibernationController } from "./xterminalHibernationController";
+import { createXTerminalImeTracker } from "./xterminalIme";
 import { installXTerminalKeyboardController } from "./xterminalKeyboardController";
 import { createXTerminalOutputController } from "./xterminalOutputController";
 import { installXTerminalSelectionController } from "./xterminalSelectionController";
 import { createXTerminalSessionEvents } from "./xterminalSessionEvents";
+import { createXTerminalSnapshotRestoreController } from "./xterminalSnapshotRestoreController";
 import type {
   HibernationLogEvent,
   HibernationPhase,
   PendingWakeEvent,
   XTermInternalTrimSource,
 } from "./xterminalInternalTypes";
-import { isSessionNotFoundError } from "./xterminalKeyboardInput";
+import {
+  createXTerminalDataOriginTracker,
+  isSessionNotFoundError,
+  resolveXTerminalDataOrigin,
+} from "./xterminalKeyboardInput";
+import {
+  markTerminalUserInput,
+  registerTerminalUserInputMarker,
+} from "@/lib/terminalControlInput";
+import { XTERM_SECURE_WINDOW_OPTIONS } from "@/lib/xtermSecurity";
+import {
+  publishApplicationTitle,
+  resumeDynamicTitlePublication,
+} from "@/lib/dynamicTabTitles";
 import {
   serializeTerminalSnapshot,
   writeTextInFrames,
 } from "./xterminalOutputQueue";
 import type { PerformanceMode, XTerminalProps } from "./xterminalTypes";
+import { shouldSuspendKeywordHighlighter } from "./xterminalKeywordHighlighting";
 import {
   createZmodemEventHandler,
   type ZmodemEventPayload,
@@ -164,6 +186,15 @@ export default function XTerminal({
     null,
   );
   const [terminalReady, setTerminalReady] = useState(false);
+  const [restoringSnapshot, setRestoringSnapshot] = useState(false);
+  const restoringSnapshotRef = useRef(false);
+  const [snapshotRestoreController] = useState(() =>
+    createXTerminalSnapshotRestoreController({
+      restoringRef: restoringSnapshotRef,
+      setRestoring: setRestoringSnapshot,
+      setTerminalReady,
+    }),
+  );
   const [performanceMode, setPerformanceMode] =
     useState<PerformanceMode>("normal");
   const [terminalGeneration, setTerminalGeneration] = useState(0);
@@ -476,6 +507,30 @@ export default function XTerminal({
   }, [hibernated, requestWake, sessionId]);
 
   useEffect(() => {
+    let disposed = false;
+    let cwdEventObserved = false;
+    const unlisten = listen<string>(`cwd-changed-${sessionId}`, (event) => {
+      cwdEventObserved = true;
+      recordSessionCwd(sessionId, event.payload);
+    });
+    void unlisten.then(() => {
+      if (disposed) return;
+      void invoke<string | null>("try_get_terminal_cwd", { sessionId }).then(
+        (cwd) => {
+          if (disposed || cwdEventObserved) return;
+          // A successful null snapshot is authoritative and clears a carried cwd.
+          recordSessionCwd(sessionId, cwd ?? "");
+        },
+        () => {},
+      );
+    });
+    return () => {
+      disposed = true;
+      void unlisten.then((fn) => fn());
+    };
+  }, [sessionId]);
+
+  useEffect(() => {
     return () => {
       clearHibernateTimer();
       hibernationEpochRef.current += 1;
@@ -488,6 +543,7 @@ export default function XTerminal({
             detachedHibernateEpochRef.current = null;
           }
           hibernationPhaseRef.current = "idle";
+          resumeDynamicTitlePublication(sessionIdRef.current);
           logHibernation(
             "rollback",
             "Rolled back detached renderer on component unmount",
@@ -499,6 +555,7 @@ export default function XTerminal({
         })
         .catch((error) => {
           hibernationPhaseRef.current = "failed";
+          resumeDynamicTitlePublication(sessionIdRef.current);
           logHibernation(
             "fail",
             "Failed to roll back detached renderer on component unmount",
@@ -721,6 +778,16 @@ export default function XTerminal({
     setPerformanceMode("normal");
     let disposed = false;
 
+    const preservedReconnectSnapshot =
+      hibernationSnapshotRef.current ??
+      preservedReconnectContentRef.current ??
+      consumePreservedTerminalReconnectContent(sessionId);
+    const restoringInitialSnapshot = snapshotRestoreController.begin(
+      preservedReconnectSnapshot,
+    );
+    hibernationSnapshotRef.current = null;
+    preservedReconnectContentRef.current = null;
+
     const terminal = new Terminal({
       scrollback: terminalSettings.scrollback_lines,
       cursorBlink: appearance.cursor_blink,
@@ -739,6 +806,7 @@ export default function XTerminal({
       theme: { ...terminalThemeColors },
       allowTransparency: terminalTransparencyEnabled,
       allowProposedApi: true,
+      windowOptions: XTERM_SECURE_WINDOW_OPTIONS,
       vtExtensions: { kittyKeyboard: true },
     });
 
@@ -793,6 +861,85 @@ export default function XTerminal({
     terminal.loadAddon(unicodeGraphemesAddon);
     installTerminalImageAddon(terminal, { sessionId, sessionType });
     terminal.open(containerRef.current);
+    const imeTracker = createXTerminalImeTracker(terminal.textarea);
+
+    const coreService = (terminal as Terminal & XTermInternalTrimSource)._core
+      ?.coreService;
+    const canDistinguishTerminalResponses =
+      typeof coreService?.onUserInput === "function";
+    const inputOriginTracker = createXTerminalDataOriginTracker();
+    const userInputDisposable = coreService?.onUserInput?.(() => {
+      inputOriginTracker.markUserInput();
+    });
+    const unregisterUserInputMarker = registerTerminalUserInputMarker(
+      terminal,
+      () => inputOriginTracker.markUserInput(),
+    );
+    let fallbackFocusReport: "\x1b[I" | "\x1b[O" | null = null;
+    const fallbackUserInputEvents = [
+      "keydown",
+      "beforeinput",
+      "paste",
+      "compositionend",
+      "pointerdown",
+      "pointermove",
+      "pointerup",
+      "wheel",
+      "drop",
+    ] as const;
+    const markFallbackUserInput = (event: Event) => {
+      if (
+        typeof PointerEvent !== "undefined" &&
+        event instanceof PointerEvent &&
+        event.type === "pointermove" &&
+        event.buttons === 0
+      ) {
+        return;
+      }
+      if (
+        event.type === "compositionend" ||
+        (typeof KeyboardEvent !== "undefined" &&
+          event instanceof KeyboardEvent &&
+          event.keyCode === 229)
+      ) {
+        // xterm defers IME data with setTimeout(0), beyond this DOM event.
+        inputOriginTracker.markDeferredUserInput();
+      }
+      inputOriginTracker.beginUserInputEvent();
+      queueMicrotask(() => inputOriginTracker.endUserInputEvent());
+    };
+    const markFallbackFocusReport = (event: Event) => {
+      fallbackFocusReport = event.type === "focusin" ? "\x1b[I" : "\x1b[O";
+      queueMicrotask(() => {
+        fallbackFocusReport = null;
+      });
+    };
+    if (!canDistinguishTerminalResponses) {
+      for (const eventName of fallbackUserInputEvents) {
+        containerRef.current.addEventListener(
+          eventName,
+          markFallbackUserInput,
+          true,
+        );
+      }
+      containerRef.current.addEventListener(
+        "focusin",
+        markFallbackFocusReport,
+        true,
+      );
+      containerRef.current.addEventListener(
+        "focusout",
+        markFallbackFocusReport,
+        true,
+      );
+    }
+
+    const flushPendingDynamicTitle = () => {
+      resumeDynamicTitlePublication(sessionId);
+    };
+    const titleDisposable = terminal.onTitleChange((title) => {
+      publishApplicationTitle(sessionId, title);
+    });
 
     const trimDisposable = (
       terminal as Terminal & XTermInternalTrimSource
@@ -886,12 +1033,6 @@ export default function XTerminal({
       }
     };
 
-    const preservedReconnectSnapshot =
-      hibernationSnapshotRef.current ??
-      preservedReconnectContentRef.current ??
-      consumePreservedTerminalReconnectContent(sessionId);
-    hibernationSnapshotRef.current = null;
-    preservedReconnectContentRef.current = null;
     const initialReplayPromise = preservedReconnectSnapshot?.content
       ? writeTextInFrames(terminal, preservedReconnectSnapshot.content).then(
           () => {
@@ -913,19 +1054,24 @@ export default function XTerminal({
       }
     };
 
-    const sendRawInput = (data: string, command: string | null) => {
+    const sendRawInput = (
+      data: string,
+      command: string | null,
+      origin: "keyboard" | "terminal_response" = "keyboard",
+    ) => {
       const peers = syncPeerSessionIdsRef.current;
-      if (peers && peers.length > 0) {
+      if (origin === "keyboard" && peers && peers.length > 0) {
         return sendSessionInputWithSync(sessionId, data, peers, {
           preview: null,
           registerSubmission: command,
+          origin,
         }).catch(() => {});
-      } else {
+      }
         return sendSessionInput(sessionId, data, {
           preview: null,
           registerSubmission: command,
+        origin,
         }).catch(() => {});
-      }
     };
 
     const canReconnectDisconnectedSession = () =>
@@ -956,6 +1102,15 @@ export default function XTerminal({
     const createReconnectedSession = () => {
       const connectionId = connectionIdRef.current;
       const temporaryConfig = temporaryConfigRef.current;
+      const settingsSnapshot = terminalAppSettingsRef.current;
+      const restoreCwdStartupCommand =
+        sessionTypeRef.current === "SSH" &&
+        (settingsSnapshot.terminal.reconnect_restore_cwd ?? false)
+          ? buildReconnectCwdStartupCommand(
+              sessionIdRef.current,
+              settingsSnapshot.interaction.duplicate_session_command_delay_ms,
+            )
+          : undefined;
 
       switch (sessionTypeRef.current) {
         case "Local":
@@ -993,16 +1148,23 @@ export default function XTerminal({
           return invoke<string>("create_serial_session", { connectionId });
         default:
           if (connectionId) {
-            return invoke<string>("create_ssh_session", { connectionId });
+            return invoke<string>("create_ssh_session", {
+              connectionId,
+              startupCommand: buildStartupCommandPayload(restoreCwdStartupCommand),
+            });
           }
           assertTemporaryConfigMatchesSessionType();
           if (temporaryConfig?.protocol === "ssh") {
             const { protocol: _protocol, ...sshConfig } = temporaryConfig;
             return invoke<string>("create_temporary_ssh_session", {
               config: sshConfig,
+              startupCommand: buildStartupCommandPayload(restoreCwdStartupCommand),
             });
           }
-          return invoke<string>("create_ssh_session", { connectionId });
+          return invoke<string>("create_ssh_session", {
+            connectionId,
+            startupCommand: buildStartupCommandPayload(restoreCwdStartupCommand),
+          });
       }
     };
 
@@ -1181,6 +1343,7 @@ export default function XTerminal({
       }
 
       const runPaste = () => {
+        markTerminalUserInput(terminal);
         terminal.paste(text);
         terminal.focus();
         requestAnimationFrame(() => {
@@ -1368,6 +1531,7 @@ export default function XTerminal({
 
     installXTerminalKeyboardController({
       terminal,
+      imeTracker,
       terminalAppSettingsRef,
       sessionTypeRef,
       inputStateRef,
@@ -1575,6 +1739,7 @@ export default function XTerminal({
       if (!isTerminalAlive()) return;
       sendBackendResize(terminal.cols, terminal.rows, result.reason);
       refreshGutter();
+      snapshotRestoreController.completeAfterFinalFit();
     };
 
     const fitScheduler = createTerminalFitScheduler({
@@ -1643,6 +1808,7 @@ export default function XTerminal({
     };
 
     const {
+      outputAckLease,
       outputScheduler,
       outputDrain,
       frameGate,
@@ -1655,6 +1821,7 @@ export default function XTerminal({
       flushQueuedOutputBeforeStatusNotice,
     } = createXTerminalOutputController({
       sessionId,
+      terminalGeneration,
       terminal,
       outputDrainRef,
       frameGateRef,
@@ -1736,13 +1903,27 @@ export default function XTerminal({
     };
 
     const repaintVisibleTerminal = () => {
-      if (!visibleRef.current || !isTerminalAlive()) return;
+      if (
+        restoringSnapshotRef.current ||
+        !visibleRef.current ||
+        !isTerminalAlive()
+      )
+        return;
       requestAnimationFrame(() => {
-        if (!visibleRef.current || !isTerminalAlive()) return;
-        terminal.clearTextureAtlas();
+        if (
+          restoringSnapshotRef.current ||
+          !visibleRef.current ||
+          !isTerminalAlive()
+        )
+          return;
         terminal.refresh(0, Math.max(0, terminal.rows - 1));
         requestAnimationFrame(() => {
-          if (!visibleRef.current || !isTerminalAlive()) return;
+          if (
+            restoringSnapshotRef.current ||
+            !visibleRef.current ||
+            !isTerminalAlive()
+          )
+            return;
           terminal.refresh(0, Math.max(0, terminal.rows - 1));
         });
       });
@@ -1810,42 +1991,45 @@ export default function XTerminal({
 
     const { applyVisibilityPolicy, noteOutputActivity } =
       createXTerminalHibernationController({
-      sessionId,
-      terminal,
-      outputDrain,
-      visibleRef,
-      sessionTypeRef,
-      aiCapturingRef,
-      zmodemActiveRef,
-      syncPeerSessionIdsRef,
-      outputDrainRef,
-      disconnectedRef,
-      reconnectingRef,
-      hibernateTimerRef,
-      hibernationEpochRef,
-      hibernationPendingRef,
-      hibernationPhaseRef,
-      detachedHibernateEpochRef,
-      hibernationSnapshotRef,
-      hibernationCleanupRef,
-      hibernatedRef,
-      lastOutputActivityAtRef,
-      showSearchBar,
-      activeMode,
-      isTerminalAlive,
-      logHibernation,
-      clearHibernateTimer,
-      enterDisconnectedStateIfAttachSessionMissing,
-      updateOutputDrainMode,
-      flushFrameGateAndDrain,
-      captureReconnectSnapshot,
-      setTerminalReady,
-      setHibernated,
-      setTerminalGeneration,
-      maybeRecoverPerformanceMode,
-      refreshOutputPressureMode,
-      repaintVisibleTerminal,
-    });
+        sessionId,
+        terminal,
+        outputDrain,
+        visibleRef,
+        sessionTypeRef,
+        aiCapturingRef,
+        zmodemActiveRef,
+        syncPeerSessionIdsRef,
+        outputDrainRef,
+        disconnectedRef,
+        reconnectingRef,
+        hibernateTimerRef,
+        hibernationEpochRef,
+        hibernationPendingRef,
+        hibernationPhaseRef,
+        detachedHibernateEpochRef,
+        hibernationSnapshotRef,
+        hibernationCleanupRef,
+        hibernatedRef,
+        lastOutputActivityAtRef,
+        showSearchBar,
+        activeMode,
+        isTerminalAlive,
+        logHibernation,
+        clearHibernateTimer,
+        enterDisconnectedStateIfAttachSessionMissing,
+        updateOutputDrainMode,
+        flushFrameGateAndDrain,
+        captureReconnectSnapshot,
+        beginSnapshotRestore: (snapshot) => {
+          snapshotRestoreController.begin(snapshot);
+        },
+        setTerminalReady,
+        setHibernated,
+        setTerminalGeneration,
+        maybeRecoverPerformanceMode,
+        refreshOutputPressureMode,
+        repaintVisibleTerminal,
+      });
 
     handleVisibilityChangeRef.current = applyVisibilityPolicy;
     applyVisibilityPolicy();
@@ -1884,8 +2068,20 @@ export default function XTerminal({
       logHibernation,
       zmodemHandler,
       replayPendingWakeEvents,
+      settleOutputAfterAttach: () =>
+        flushFrameGateAndDrain("dynamic_title_attach"),
+      flushPendingDynamicTitle,
     });
-    void sessionEvents.setup();
+    const sessionSetupPromise = sessionEvents.setup().catch((error) => {
+      resumeDynamicTitlePublication(sessionId);
+      logger.error({
+        domain: "session.lifecycle",
+        event: "session_listener_setup_failed",
+        message: "Failed to initialize terminal session listeners",
+        ids: { session_id: sessionId },
+        error,
+      });
+    });
 
     const removePreviewListener = listenSessionInputPreview(
       sessionId,
@@ -1893,6 +2089,18 @@ export default function XTerminal({
     );
 
     const dataDisposable = terminal.onData((data) => {
+      const trackedOrigin = inputOriginTracker.consume();
+      const origin = resolveXTerminalDataOrigin(
+        trackedOrigin,
+        data,
+        canDistinguishTerminalResponses,
+        fallbackFocusReport,
+      );
+      if (data === fallbackFocusReport) fallbackFocusReport = null;
+      if (origin === "terminal_response") {
+        void sendRawInput(data, null, origin);
+        return;
+      }
       if (aiCapturingRef.current) return;
       if (hibernationPhaseRef.current !== "idle") {
         requestWake("input");
@@ -1911,8 +2119,11 @@ export default function XTerminal({
                 `\r\n\x1b[36m[${tRef.current("terminal.reconnecting")}]\x1b[0m\r\n`,
               );
               const newSessionId = await createReconnectedSession();
-              preservedReconnectContentRef.current = captureReconnectSnapshot();
+              const reconnectSnapshot = captureReconnectSnapshot();
+              preservedReconnectContentRef.current = reconnectSnapshot;
+              snapshotRestoreController.begin(reconnectSnapshot);
               const oldSessionId = sessionIdRef.current;
+              carryOverSessionCwd(oldSessionId, newSessionId);
               disconnectedRef.current = false;
               disconnectedNoticeShownRef.current = false;
               disconnectedCloseRequestedRef.current = false;
@@ -2095,6 +2306,7 @@ export default function XTerminal({
     });
 
     const observer = new ResizeObserver((entries) => {
+      if (restoringSnapshotRef.current) return;
       const entry = entries[0];
       if (!entry) return;
       fitScheduler.observeResize(
@@ -2109,6 +2321,9 @@ export default function XTerminal({
       terminal,
       containerEl,
       isMacOS,
+      isWindows,
+      activeRef,
+      visibleRef,
       terminalAppSettingsRef,
       pendingSearchSelectionRef,
       searchSelectionTextRef,
@@ -2127,16 +2342,24 @@ export default function XTerminal({
       pasteClipboard,
     });
 
-    fitScheduler.schedule({
-      reason: "initial",
-      force: true,
-      refresh: true,
-      onComplete: () => {
+    if (restoringInitialSnapshot) {
+      void sessionSetupPromise.then(() => {
         if (!isTerminalAlive()) return;
-        setTerminalReady(true);
-        refreshGutter();
-      },
-    });
+        snapshotRestoreController.markReplayAndAttachComplete();
+      });
+    } else {
+      void sessionSetupPromise;
+      fitScheduler.schedule({
+        reason: "initial",
+        force: true,
+        refresh: true,
+        onComplete: () => {
+          if (!isTerminalAlive()) return;
+          setTerminalReady(true);
+          refreshGutter();
+        },
+      });
+    }
 
     return () => {
       disposed = true;
@@ -2157,6 +2380,7 @@ export default function XTerminal({
               detachedHibernateEpochRef.current = null;
             }
             hibernationPhaseRef.current = "idle";
+            resumeDynamicTitlePublication(sessionId);
             logHibernation(
               "rollback",
               "Rolled back detached renderer during cleanup",
@@ -2168,6 +2392,7 @@ export default function XTerminal({
           })
           .catch((error) => {
             hibernationPhaseRef.current = "failed";
+            resumeDynamicTitlePublication(sessionId);
             logHibernation(
               "fail",
               "Failed to roll back detached renderer during cleanup",
@@ -2177,6 +2402,7 @@ export default function XTerminal({
           });
       }
       setTerminalReady(false);
+      imeTracker.dispose();
       selectionController.dispose();
       if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
       inputStateRef.current = createTerminalInputState();
@@ -2187,6 +2413,28 @@ export default function XTerminal({
       pasteTextRef.current = () => {};
       resetCredentialAutofill();
 
+      if (!canDistinguishTerminalResponses) {
+        for (const eventName of fallbackUserInputEvents) {
+          containerEl.removeEventListener(
+            eventName,
+            markFallbackUserInput,
+            true,
+          );
+        }
+        containerEl.removeEventListener(
+          "focusin",
+          markFallbackFocusReport,
+          true,
+        );
+        containerEl.removeEventListener(
+          "focusout",
+          markFallbackFocusReport,
+          true,
+        );
+      }
+      unregisterUserInputMarker();
+      userInputDisposable?.dispose();
+      titleDisposable.dispose();
       oscDisposable.dispose();
       remoteColorOscGuardDisposable.dispose();
       clipboardOscDisposable.dispose();
@@ -2215,6 +2463,7 @@ export default function XTerminal({
         frameGateRef.current = null;
       }
       outputDrain.dispose();
+      outputAckLease.dispose();
       if (outputDrainRef.current === outputDrain) {
         outputDrainRef.current = null;
       }
@@ -2226,7 +2475,12 @@ export default function XTerminal({
         latestLifecycleState.terminalTransparencyEnabled !==
           terminalTransparencyEnabled
       ) {
-        preservedReconnectContentRef.current = captureReconnectSnapshot();
+        const reconnectSnapshot = captureReconnectSnapshot();
+        preservedReconnectContentRef.current = reconnectSnapshot;
+        snapshotRestoreController.begin(reconnectSnapshot);
+      }
+      if (!isHibernateRendererCleanup) {
+        resumeDynamicTitlePublication(sessionId);
       }
       terminal.dispose();
       terminalRef.current = null;
@@ -2251,17 +2505,27 @@ export default function XTerminal({
     visible && active,
     terminalInstance,
     sessionId,
+    restoringSnapshotRef,
   );
 
   // isDark is derived from the terminal theme background so built-in rule colors
   // switch automatically when the user changes themes.
   const isDark = hexLuminance(terminalTheme.colors.terminal.background) < 0.5;
+  const keywordHighlighterSuspended = shouldSuspendKeywordHighlighter({
+    visible,
+    hibernated,
+    terminalReady,
+    performanceMode,
+  });
   useKeywordHighlighter(
     terminalInstance,
     terminalSettings,
     sessionId,
     isDark,
-    performanceMode !== "normal" || !visible,
+    {
+      suspended: keywordHighlighterSuspended,
+      releaseCachesAfterDelay: !visible || hibernated,
+    },
   );
 
   const { tooltipState, menuState, closeMenu } = useActionLinks(
@@ -2283,6 +2547,7 @@ export default function XTerminal({
     showGutter,
     showContentPadding,
     workspacePaddingSetting: terminalSettings.show_workspace_padding,
+    snapshotRestoringRef: restoringSnapshotRef,
   });
 
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -2392,7 +2657,7 @@ export default function XTerminal({
         padding: 6,
       }}
     >
-      {showGutter && terminalReady && (
+      {showGutter && terminalReady && !restoringSnapshot && (
         <TerminalGutter
           terminalRef={terminalRef}
           showLineNumbers={showLineNumbers}
@@ -2405,8 +2670,11 @@ export default function XTerminal({
         />
       )}
       <div
-        className="nyaterm-wallpaper-transparent-surface nyaterm-terminal-surface flex-1 min-h-0 min-w-0 relative"
-        style={{ backgroundColor: terminalBackground }}
+        className="nyaterm-wallpaper-transparent-surface nyaterm-terminal-surface flex-1 min-h-0 min-w-0 h-full relative"
+        style={{
+          backgroundColor: terminalBackground,
+          visibility: restoringSnapshot ? "hidden" : "visible",
+        }}
       >
         <TerminalContextMenu
           sessionId={sessionId}

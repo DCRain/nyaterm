@@ -41,8 +41,9 @@ export interface SavedConnectionsContextValue {
   toggleGroup: (id: string) => void;
   handleConnect: (conn: SavedConnection) => void;
   handleConnectOnly: (conn: SavedConnection) => void;
-  handleConnectSelected: () => void;
   handleOpenSftp: (conn: SavedConnection) => void;
+  handleOpenSftpConnection: (conn: SavedConnection) => void;
+  handleConnectSelected: () => void;
   handleOpenS3: (conn: SavedConnection) => void;
   handleOpenFtp: (conn: SavedConnection) => void;
   handleOpenWebDav: (conn: SavedConnection) => void;

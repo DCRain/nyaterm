@@ -1,6 +1,6 @@
 use crate::core::SessionManager;
 use crate::core::monitoring::stats::{
-    RemoteStats, RemoteStatsSampler, SYSINFO_SCRIPT, parse_stats_output,
+    RemoteStats, RemoteStatsSampler, build_stats_script, parse_stats_output,
 };
 use crate::core::remote_exec::{ensure_success, exec_ssh_session_command};
 use crate::error::{AppError, AppResult};
@@ -13,6 +13,15 @@ pub async fn get_remote_stats(
     sampler: tauri::State<'_, Arc<RemoteStatsSampler>>,
     session_id: String,
 ) -> AppResult<RemoteStats> {
+    // Auto-icon detection and the monitor can request the same new session concurrently.
+    // Serializing per session avoids duplicate static/disk probes without blocking other hosts.
+    let lease = sampler.lock_session(&session_id).await;
+    if !lease.is_current() {
+        return Err(AppError::SessionNotFound(format!(
+            "Session '{session_id}' was closed while waiting for remote stats"
+        )));
+    }
+
     let remote_stats_enabled = {
         let sessions = state.sessions.lock().await;
         let session = sessions.get(&session_id).ok_or_else(|| {
@@ -26,17 +35,22 @@ pub async fn get_remote_stats(
         ));
     }
 
+    let probe_plan = sampler.probe_plan(&session_id).await;
+    let script = build_stats_script(probe_plan);
+
     let output = exec_ssh_session_command(
         state.inner(),
         &session_id,
-        SYSINFO_SCRIPT.as_bytes(),
+        script.as_bytes(),
         Duration::from_secs(15),
     )
     .await?;
     let output = ensure_success(output, "Failed to fetch stats")?;
     let parsed = parse_stats_output(&output.stdout)?;
 
-    Ok(sampler.complete_snapshot(&session_id, parsed).await)
+    Ok(sampler
+        .complete_snapshot_with_lease(&session_id, &lease, parsed)
+        .await)
 }
 
 #[tauri::command]
@@ -53,7 +67,7 @@ pub async fn get_terminal_cwd(
     };
 
     let cached = cwd_arc.lock().await;
-    if let Some(cwd) = cached.as_ref() {
+    if let Some(cwd) = cached.operational_path.as_ref() {
         return Ok(cwd.clone());
     }
 
@@ -75,5 +89,5 @@ pub async fn try_get_terminal_cwd(
         session.cwd.clone()
     };
 
-    Ok(cwd_arc.lock().await.clone())
+    Ok(cwd_arc.lock().await.operational_path.clone())
 }

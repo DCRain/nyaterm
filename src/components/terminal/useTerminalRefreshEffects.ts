@@ -17,6 +17,7 @@ interface UseTerminalRefreshEffectsParams {
   showGutter: boolean;
   showContentPadding: boolean;
   workspacePaddingSetting?: boolean;
+  snapshotRestoringRef?: RefObject<boolean>;
 }
 
 export function useTerminalRefreshEffects({
@@ -30,6 +31,7 @@ export function useTerminalRefreshEffects({
   showGutter,
   showContentPadding,
   workspacePaddingSetting,
+  snapshotRestoringRef,
 }: UseTerminalRefreshEffectsParams) {
   useEffect(() => {
     if (terminalReady && fitSchedulerRef.current && terminalRef.current) {
@@ -85,19 +87,36 @@ export function useTerminalRefreshEffects({
 
   useEffect(() => {
     if (active && visible && terminalReady && fitSchedulerRef.current && terminalRef.current) {
+      const terminal = terminalRef.current;
+      const buffer = terminal.buffer.active;
+      const wasAtBottom = buffer.viewportY === buffer.baseY;
       fitSchedulerRef.current.schedule({
         reason: "active",
         force: true,
         refresh: true,
-        clearTextureAtlas: true,
         focus: true,
+        onComplete: (result) => {
+          if (
+            result.applied &&
+            wasAtBottom &&
+            terminalRef.current === terminal
+          ) {
+            terminal.scrollToBottom();
+          }
+        },
       });
     }
   }, [active, fitSchedulerRef, terminalReady, terminalRef, visible]);
 
   useEffect(() => {
     const handleRefresh = () => {
-      if (!visible || !fitSchedulerRef.current || !terminalRef.current) return;
+      if (
+        snapshotRestoringRef?.current ||
+        !visible ||
+        !fitSchedulerRef.current ||
+        !terminalRef.current
+      )
+        return;
 
       fitSchedulerRef.current.schedule({
         reason: "global-refresh",
@@ -111,7 +130,7 @@ export function useTerminalRefreshEffects({
     return () => {
       window.removeEventListener("nyaterm:refresh-terminals", handleRefresh);
     };
-  }, [active, fitSchedulerRef, terminalRef, visible]);
+  }, [active, fitSchedulerRef, snapshotRestoringRef, terminalRef, visible]);
 
   useEffect(() => {
     if (!terminalReady) return;
@@ -129,6 +148,7 @@ export function useTerminalRefreshEffects({
       force = false,
       scaleFactor?: number,
     ) => {
+      if (snapshotRestoringRef?.current) return;
       const nextDevicePixelRatio = window.devicePixelRatio || 1;
       const dprChanged = Math.abs(nextDevicePixelRatio - lastDevicePixelRatio) > 0.001;
       if (dprChanged) {
@@ -157,7 +177,7 @@ export function useTerminalRefreshEffects({
         force: force || isScaleChange,
         refresh: true,
         clearTextureAtlas: isScaleChange,
-        focus: active && visible,
+        focus: reason === "window-focus" ? false : active && visible,
       });
     };
 
@@ -194,7 +214,7 @@ export function useTerminalRefreshEffects({
       .catch(() => {});
     appWindow
       .onFocusChanged(({ payload }) => {
-        if (!disposed && payload) scheduleWindowFit("window-focus");
+        if (!disposed && payload) scheduleWindowFit("window-focus", true);
       })
       .then((unlisten) => {
         unlistenFocused = unlisten;
@@ -217,7 +237,15 @@ export function useTerminalRefreshEffects({
       unlistenFocused?.();
       unlistenScale?.();
     };
-  }, [active, fitSchedulerRef, sessionId, terminalReady, terminalRef, visible]);
+  }, [
+    active,
+    fitSchedulerRef,
+    sessionId,
+    snapshotRestoringRef,
+    terminalReady,
+    terminalRef,
+    visible,
+  ]);
 
   useEffect(() => {
     const handleClear = () => {

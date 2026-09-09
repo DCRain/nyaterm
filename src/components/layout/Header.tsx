@@ -103,7 +103,11 @@ import {
   resetTerminalFontSizeDelta,
 } from "@/lib/terminalFontSize";
 import { openSettings } from "@/lib/windowManager";
-import { getActivePane, getTabDisplayName } from "@/lib/workspaceTabs";
+import {
+  getActivePane,
+  getActiveSessionTabDisplayName,
+} from "@/lib/workspaceTabs";
+import { getDynamicTitle, useDynamicTitles } from "@/lib/dynamicTabTitles";
 import type {
   AppearanceSettings,
   RemoteGpuOverview,
@@ -218,6 +222,10 @@ function HeaderStatusDivider() {
       -
     </span>
   );
+}
+
+export function preventWindowControlMouseFocus(event: React.MouseEvent<HTMLButtonElement>) {
+  event.preventDefault();
 }
 
 function formatPct(value: number | null): string {
@@ -783,6 +791,7 @@ export default function Header({
   );
   const [hardwarePage, setHardwarePage] = useState({ gpu: 0, npu: 0 });
   const { t, i18n } = useTranslation();
+  useDynamicTitles();
   const { handleExport, passwordAlert } = useConfigTransfer();
   const lastMacosMenuSpecRef = useRef("");
   const nativeMenuActionRef = useRef<(actionId: string) => void>(() => {});
@@ -791,7 +800,9 @@ export default function Header({
   const activeConnection = activePane?.connectionId
     ? savedConnections?.find((c) => c.id === activePane.connectionId)
     : undefined;
-  const activeDisplayName = activeTab ? getTabDisplayName(activeTab) : "NyaTerm";
+  const activeDisplayName = activeTab
+    ? getActiveSessionTabDisplayName(activeTab, getDynamicTitle)
+    : "NyaTerm";
   const terminalZoomEnabled = appSettings.interaction.terminal_zoom_enabled;
   const headerStatusMode = normalizeHeaderStatusMode(appSettings.ui.header_status_mode);
   const headerStatusVisible = appSettings.ui.header_status_visible !== false;
@@ -1607,6 +1618,11 @@ export default function Header({
             item.action?.();
           }}
         >
+          {!item.checked && item.icon && (
+            <span className="pointer-events-none absolute left-2 flex size-3.5 items-center justify-center">
+              <DynamicIcon name={item.icon} className="text-[1rem] text-[var(--df-text-muted)]" />
+            </span>
+          )}
           <span className="flex-1">{item.label}</span>
           {item.shortcut && <DropdownMenuShortcut>{item.shortcut}</DropdownMenuShortcut>}
         </DropdownMenuCheckboxItem>
@@ -2097,6 +2113,7 @@ export default function Header({
               variant="ghost"
               className="rounded-none h-10 w-[46px] px-0 text-[var(--df-text-muted)] transition-colors hover:!bg-[color-mix(in_srgb,var(--df-text)_10%,transparent)] hover:!text-[var(--df-text)]"
               aria-label={t("menu.minimize")}
+              onMouseDown={preventWindowControlMouseFocus}
               onClick={handleMinimizeWindow}
             >
               <VscChromeMinimize className="text-base" />
@@ -2107,6 +2124,7 @@ export default function Header({
               variant="ghost"
               className="rounded-none h-10 w-[46px] px-0 text-[var(--df-text-muted)] transition-colors hover:!bg-[color-mix(in_srgb,var(--df-text)_10%,transparent)] hover:!text-[var(--df-text)]"
               aria-label={isMaximized ? t("menu.restore") : t("menu.maximize")}
+              onMouseDown={preventWindowControlMouseFocus}
               onClick={handleToggleMaximizeWindow}
             >
               {isMaximized ? (
@@ -2121,6 +2139,7 @@ export default function Header({
               variant="ghost"
               className="rounded-none h-10 w-[46px] px-0 text-[var(--df-text-muted)] transition-colors hover:!bg-[#e81123] hover:!text-white"
               aria-label={t("common.close")}
+              onMouseDown={preventWindowControlMouseFocus}
               onClick={handleCloseWindow}
             >
               <VscChromeClose className="text-base" />

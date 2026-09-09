@@ -32,9 +32,14 @@ function renderFileExplorer(activePane: FileDocumentPane) {
       activePane={activePane}
       activeConnection={null}
       activeSessionId={null}
+      shellInputEnabled
       activeStatsSessionId={null}
       remoteStatsEnabled={false}
       remoteStats={{} as RemoteStatsState}
+      networkHistoryStore={{
+        getSeries: () => ({ summary: [], interfaces: {} }),
+        subscribe: () => () => {},
+      }}
       gpuMonitorEnabled={false}
       gpuOverviewState={{} as RemoteGpuOverviewState}
       npuMonitorEnabled={false}
@@ -47,6 +52,7 @@ function renderFileExplorer(activePane: FileDocumentPane) {
       onNewConnection={vi.fn()}
       onEditConnection={vi.fn()}
       onConnectConnection={vi.fn()}
+      onOpenSftpConnection={vi.fn()}
       onSessionClick={vi.fn()}
       onSessionReconnect={vi.fn()}
       onSessionDisconnect={vi.fn()}

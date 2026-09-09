@@ -22,6 +22,10 @@ vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async () => vi.fn()),
+}));
+
 vi.mock("@/components/rdp/RdpPaneHost", () => ({
   default: (props: unknown) => {
     rdpPaneHostMock(props);
@@ -168,6 +172,75 @@ describe("PaneWorkspace RDP routing", () => {
     expect((view.container.firstElementChild as HTMLElement).style.display).toBe("none");
     expect(rdpPaneHostMock).toHaveBeenCalledWith(
       expect.objectContaining({ active: false, visible: false }),
+    );
+  });
+
+  it("renders the SFTP-only placeholder without mounting XTerminal", () => {
+    const pane = { ...terminalPane(), sshRuntimeMode: "sftp" as const };
+    const tab = tabWithRoot(pane, pane.id);
+    const view = render(
+      <PaneWorkspace tab={tab} visible onActivatePane={vi.fn()} onUpdateSplitRatio={vi.fn()} />,
+    );
+
+    expect(view.getByTestId("sftp-only-placeholder")).not.toBeNull();
+    expect(xTerminalMock).not.toHaveBeenCalled();
+  });
+
+  it("uses effective SessionInfo mode for Standard-to-SFTP fallback", () => {
+    const pane = terminalPane();
+    const tab = tabWithRoot(pane, pane.id);
+    const view = render(
+      <PaneWorkspace
+        tab={tab}
+        visible
+        sessionInfoById={
+          new Map([[pane.sessionId, { id: pane.sessionId, ssh_runtime_mode: "sftp" } as never]])
+        }
+        onActivatePane={vi.fn()}
+        onUpdateSplitRatio={vi.fn()}
+      />,
+    );
+
+    expect(view.getByTestId("sftp-only-placeholder")).not.toBeNull();
+    expect(xTerminalMock).not.toHaveBeenCalled();
+  });
+
+  it("clears fallback SFTP presentation when a reconnect creates a standard session", () => {
+    const pane = terminalPane();
+    const tab = tabWithRoot(pane, pane.id);
+    const view = render(
+      <PaneWorkspace
+        tab={tab}
+        visible
+        sessionInfoById={
+          new Map([[pane.sessionId, { id: pane.sessionId, ssh_runtime_mode: "sftp" } as never]])
+        }
+        onActivatePane={vi.fn()}
+        onUpdateSplitRatio={vi.fn()}
+      />,
+    );
+
+    const reconnectedPane = { ...pane, sessionId: "ssh-session-2" };
+    view.rerender(
+      <PaneWorkspace
+        tab={tabWithRoot(reconnectedPane, reconnectedPane.id)}
+        visible
+        sessionInfoById={
+          new Map([
+            [
+              reconnectedPane.sessionId,
+              { id: reconnectedPane.sessionId, ssh_runtime_mode: "standard" } as never,
+            ],
+          ])
+        }
+        onActivatePane={vi.fn()}
+        onUpdateSplitRatio={vi.fn()}
+      />,
+    );
+
+    expect(view.queryByTestId("sftp-only-placeholder")).toBeNull();
+    expect(xTerminalMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: reconnectedPane.sessionId }),
     );
   });
 });

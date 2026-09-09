@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MdDelete, MdFlashOn, MdHistory, MdTipsAndUpdates } from "react-icons/md";
 import { Button } from "@/components/ui/button";
@@ -64,6 +64,56 @@ function HighlightedCommand({ text, indices }: { text: string; indices: number[]
         ),
       )}
     </span>
+  );
+}
+
+/** Suggestion text with truncation-aware tooltip. Only shows tooltip when text overflows. */
+function SuggestionText({
+  result,
+  isSelected,
+}: {
+  result: FuzzyResult;
+  isSelected: boolean;
+}) {
+  const textRef = useRef<HTMLSpanElement>(null);
+  const [truncated, setTruncated] = useState(false);
+  const [hovered, setHovered] = useState(false);
+
+  useEffect(() => {
+    const el = textRef.current;
+    if (el) {
+      setTruncated(el.scrollWidth > el.clientWidth);
+    }
+  }, [result.display]);
+
+  if (!truncated) {
+    return (
+      <span ref={textRef} className="min-w-0 flex-1 truncate">
+        <HighlightedCommand text={result.display} indices={result.indices} />
+      </span>
+    );
+  }
+
+  return (
+    <Tooltip open={isSelected || hovered}>
+      <TooltipTrigger asChild>
+        <span
+          ref={textRef}
+          className="min-w-0 flex-1 truncate"
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+        >
+          <HighlightedCommand text={result.display} indices={result.indices} />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent
+        side="top"
+        className="z-[10000] max-w-[600px]"
+        onMouseDown={(e) => e.preventDefault()}
+      >
+        <span className="font-mono text-[0.75rem] break-all">{result.command}</span>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -148,9 +198,10 @@ function CommandSuggestions({
                 color: index === selectedIndex ? "var(--df-accent)" : "var(--df-text-dimmed)",
               }}
             />
-            <span className="min-w-0 flex-1 truncate">
-              <HighlightedCommand text={result.display} indices={result.indices} />
-            </span>
+            <SuggestionText
+              result={result}
+              isSelected={index === selectedIndex}
+            />
             {deleteHistory && (
               <Tooltip>
                 <TooltipTrigger asChild>

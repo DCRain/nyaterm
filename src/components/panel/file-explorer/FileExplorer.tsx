@@ -1,4 +1,4 @@
-import { emit, listen } from "@tauri-apps/api/event";
+﻿import { emit, listen } from "@tauri-apps/api/event";
 import { downloadDir, join, tempDir } from "@tauri-apps/api/path";
 import {
   open as openDialog,
@@ -118,6 +118,7 @@ import {
   buildRemoteUploadPath,
   buildMoveSuccessRefreshPlan,
   buildSessionCacheSnapshot,
+  canTrackTerminalCwd,
   compareFileEntries,
   DEFAULT_FILE_LIST_COLUMN_WIDTHS,
   DEFAULT_FILE_SORT_DIRECTIONS,
@@ -138,6 +139,7 @@ import {
   type InlineRenameState,
   isParentDirectoryEntry,
   isStorageExplorerBackend,
+  isSameExplorerDirectory,
   joinExplorerPath,
   type LoadDirectoryOptions,
   MIN_FILE_LIST_COLUMN_WIDTHS,
@@ -150,6 +152,7 @@ import {
   pushVisitedHistory,
   type RemoteTextFile,
   type ResolvedLocalDropPathEntry,
+  subscribeFileExplorerSessionSnapshots,
   syncExplorerDirectoryToTerminalCwd,
   syncExplorerDirectoryToTerminalCwdChange,
   type TextFileOpenResult,
@@ -196,7 +199,7 @@ interface FileExplorerPaneExtraProps {
   onReceiveEntries?: (source: FileExplorerPaneEndpoint, entries: FileExplorerCopyEntry[]) => void;
   /** Hide terminal path/CD context actions (SFTP workspace). Default true. */
   showTerminalActions?: boolean;
-  /** Dual-pane: Upload (local→remote), Download (remote→local), or Copy (remote↔remote). */
+  /** Dual-pane: Upload (local鈫抮emote), Download (remote鈫抣ocal), or Copy (remote鈫攔emote). */
   peerTransferAction?: "upload" | "download" | "copy";
   /** Open a new SSH terminal and cd into a remote directory. */
   onOpenTerminalHere?: (directoryPath: string) => void;
@@ -636,7 +639,7 @@ function FileExplorer(props: FileExplorerProps) {
               activeSessionType={toFileExplorerSessionType(selectedTarget)}
               activeConnectionId={null}
               activeSessionName={selectedTarget.name}
-              headerMeta={`${selectedTarget.name} · ${
+              headerMeta={`${selectedTarget.name} 路 ${
                 selectedTarget.connected
                   ? t("fileExplorer.connected")
                   : t("fileExplorer.disconnected")
@@ -714,6 +717,7 @@ export function FileExplorerPane({
   activeSessionType,
   activeConnectionId,
   activeSessionName,
+  terminalInputEnabled = true,
   headerMeta,
   headerActions,
   peerEndpoint,
@@ -1132,19 +1136,21 @@ export function FileExplorerPane({
       return;
     }
     setRemoteFileBrowserEnabled(hasLocalSession ? true : null);
-    invoke<SessionInfo[]>("list_sessions")
-      .then((sessions) => {
-        const s = sessions.find((s) => s.id === activeSessionId);
-        const active = s?.injection_active ?? false;
-        setCwdTrackingActive(active);
+    return subscribeFileExplorerSessionSnapshots({
+      listenSessionsChanged: (handler) => listen("sessions-changed", handler),
+      readSessions: () => invoke<SessionInfo[]>("list_sessions"),
+      onSessions: (sessions) => {
+        const session = sessions.find((session) => session.id === activeSessionId);
+        setCwdTrackingActive(canTrackTerminalCwd(session));
         setRemoteFileBrowserEnabled(
-          hasLocalSession ? true : (s?.remote_file_browser_enabled ?? true),
+          hasLocalSession ? true : (session?.remote_file_browser_enabled ?? true),
         );
-      })
-      .catch(() => {
+      },
+      onError: () => {
         setCwdTrackingActive(false);
         setRemoteFileBrowserEnabled(true);
-      });
+      },
+    });
   }, [activeSessionId, explorerBackend, hasLocalSession, hasSshSession]);
 
   useEffect(() => {
@@ -1660,6 +1666,11 @@ export function FileExplorerPane({
       return;
     }
 
+    if (!cwdTrackingActive) {
+      autoSyncCwdMountSyncKeyRef.current = null;
+      return;
+    }
+
     if (!canBrowseFiles || !currentPath) {
       return;
     }
@@ -1692,6 +1703,7 @@ export function FileExplorerPane({
     autoSyncScopeId,
     canBrowseFiles,
     currentPath,
+    cwdTrackingActive,
     explorerBackend,
     loadDirectory,
   ]);
@@ -2198,7 +2210,7 @@ export function FileExplorerPane({
 
   const sendTextToTerminal = useCallback(
     (text: string) => {
-      if (!activeSessionId || !text) return;
+      if (!activeSessionId || !text || !terminalInputEnabled) return;
       const peerSessionIds = getSessionInputPeerIds(
         activeSessionId,
         syncGroups,
@@ -2213,7 +2225,7 @@ export function FileExplorerPane({
       sendInput.catch(() => {});
       emit(`focus-terminal-${activeSessionId}`).catch(() => {});
     },
-    [activeSessionId, broadcastToAll, syncGroups, tabs],
+    [activeSessionId, broadcastToAll, syncGroups, tabs, terminalInputEnabled],
   );
 
   const handleSendCurrentPathToTerminal = () => {
@@ -2468,7 +2480,7 @@ export function FileExplorerPane({
       const normalizedCwd = normalizeExplorerPath(cwd, backend);
       if (
         normalizedCwd &&
-        normalizedCwd !== normalizeExplorerPath(currentPathRef.current, backend)
+        !isSameExplorerDirectory(normalizedCwd, currentPathRef.current, backend)
       ) {
         loadDirectory(normalizedCwd);
       }
@@ -3749,7 +3761,9 @@ export function FileExplorerPane({
                           onAddToFavorites={handleAddEntryToFavorites}
                           onCopyPath={handleCopyPath}
                           showTerminalActions={showTerminalActions}
-                          onSendToTerminal={handleSendToTerminal}
+                          onSendToTerminal={
+                            terminalInputEnabled ? handleSendToTerminal : undefined
+                          }
                           onCdToDirectory={handleCdToDirectory}
                           onOpenTerminalHere={
                             onOpenTerminalHere
@@ -3861,7 +3875,7 @@ export function FileExplorerPane({
               <MdContentCopy className="mr-2 h-4 w-4" />
               {t("fileExplorer.copyDirPath")}
             </ContextMenuItem>
-            {showTerminalActions && (
+            {showTerminalActions && terminalInputEnabled ? (
               <>
                 <ContextMenuItem onClick={handleSendCurrentPathToTerminal}>
                   <LuClipboardPaste className="mr-2 h-4 w-4" />
@@ -3872,7 +3886,7 @@ export function FileExplorerPane({
                   {t("fileExplorer.cdToDirectory")}
                 </ContextMenuItem>
               </>
-            )}
+            ) : null}
             <ContextMenuSeparator />
             <ContextMenuItem onClick={handleCurrentDirProperties}>
               <MdInfo className="mr-2 h-4 w-4" />
@@ -3957,26 +3971,27 @@ export function FileExplorerPane({
                       : t("fileExplorer.cwdTrackingUnavailable")}
                   </TooltipContent>
                 </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="inline-flex">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6 rounded-md text-muted-foreground hover:text-foreground"
-                        onClick={() => {
-                          sendTextToTerminal(currentPath);
-                        }}
-                      >
-                        <LuClipboardPaste className="h-[0.875rem] w-[0.875rem]" />
-                      </Button>
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">{t("fileExplorer.sendToTerminal")}</TooltipContent>
-                </Tooltip>
+                {terminalInputEnabled ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 rounded-md text-muted-foreground hover:text-foreground"
+                          onClick={() => {
+                            sendTextToTerminal(currentPath);
+                          }}
+                        >
+                          <LuClipboardPaste className="h-[0.875rem] w-[0.875rem]" />
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">{t("fileExplorer.sendToTerminal")}</TooltipContent>
+                  </Tooltip>
+                ) : null}
               </>
-            )}
-          </div>
+            )}          </div>
         </div>
       )}
 
