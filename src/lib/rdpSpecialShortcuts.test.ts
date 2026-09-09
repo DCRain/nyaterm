@@ -33,7 +33,8 @@ describe("rdpSpecialShortcuts", () => {
       { id: "custom-1", label: "Custom", combo: "meta+d" },
     ]);
     expect(shortcuts).toHaveLength(DEFAULT_RDP_SPECIAL_SHORTCUTS.length + 1);
-    expect(shortcuts.at(-1)?.label).toBe("Custom");
-    expect(shortcuts.at(-1)?.builtin).toBe(false);
+    const lastShortcut = shortcuts[shortcuts.length - 1];
+    expect(lastShortcut?.label).toBe("Custom");
+    expect(lastShortcut?.builtin).toBe(false);
   });
 });

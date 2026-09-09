@@ -86,7 +86,9 @@ export function hotkeyComboToRdpEvents(combo: string): RdpInputEvent[] {
   pushModifier(parsed.alt, MODIFIER_BINDINGS.alt);
   pushModifier(parsed.meta, MODIFIER_BINDINGS.meta);
 
-  const mainCode = parsed.code || resolveMainKeyCode(combo.split("+").at(-1) ?? "");
+  const comboParts = combo.split("+");
+  const lastComboPart = comboParts[comboParts.length - 1] ?? "";
+  const mainCode = parsed.code || resolveMainKeyCode(lastComboPart);
   const ups: RdpInputEvent[] = [];
   if (mainCode) {
     const down = keyEventFromCode(mainCode, "key-down");
