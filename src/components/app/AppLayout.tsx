@@ -377,22 +377,6 @@ export default function AppLayout({
   const rightEdgeOccupied =
     !terminalFullscreen && ((hasRightActivityItems && rightActivityBarVisible) || rightPanelOpen);
 
-  useEffect(() => {
-    if (!hasLeftActivityItems && mobile.leftOpen) {
-      mobile.setLeftOpen(false);
-    }
-    if (!hasRightActivityItems && mobile.rightOpen) {
-      mobile.setRightOpen(false);
-    }
-  }, [
-    hasLeftActivityItems,
-    hasRightActivityItems,
-    mobile.leftOpen,
-    mobile.rightOpen,
-    mobile.setLeftOpen,
-    mobile.setRightOpen,
-  ]);
-
   return (
     <div
       className="nyaterm-wallpaper-shell font-display relative h-full min-h-0 overflow-hidden"

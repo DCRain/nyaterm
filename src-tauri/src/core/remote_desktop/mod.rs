@@ -85,6 +85,7 @@ mod tests {
                 legacy_agent_forwarding: None,
                 agent_forwarding_config: None,
                 encoding: String::new(),
+                dynamic_tab_title: false,
             })
             .is_err()
         );

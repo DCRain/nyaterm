@@ -827,6 +827,7 @@ fn storage_file_properties(path: &str, meta: &opendal::Metadata, is_dir: bool) -
         name: storage_entry_name(path),
         is_dir,
         is_symlink: false,
+        symlink_target: None,
         size: if is_dir { 0 } else { meta.content_length() },
         permissions: if is_dir {
             "drwxr-xr-x".into()
@@ -847,6 +848,7 @@ fn synthetic_dir_properties(path: &str) -> FileProperties {
         name: storage_entry_name(path),
         is_dir: true,
         is_symlink: false,
+        symlink_target: None,
         size: 0,
         permissions: "drwxr-xr-x".into(),
         owner: String::new(),

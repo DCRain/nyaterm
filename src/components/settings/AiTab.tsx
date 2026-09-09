@@ -914,17 +914,15 @@ export function AiAgentsTab() {
                   updateOpenCode({ default_model: event.target.value || null })
                 }
               />
-              <SettingSelect
-                label={t("ai.permissionMode")}
+              <AiPermissionSelect
                 value={openCode.permission_mode ?? "confirm"}
+                targetLabel="OpenCode"
                 onValueChange={(permission_mode) =>
-                  updateOpenCode({ permission_mode: permission_mode as AIPermissionMode })
+                  updateOpenCode({
+                    permission_mode,
+                  })
                 }
-              >
-                <SelectItem value="observer">{t("ai.permissionObserver")}</SelectItem>
-                <SelectItem value="confirm">{t("ai.permissionConfirm")}</SelectItem>
-                <SelectItem value="auto">{t("ai.permissionAuto")}</SelectItem>
-              </SettingSelect>
+              />
             </SettingFieldGrid>
 
             <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">

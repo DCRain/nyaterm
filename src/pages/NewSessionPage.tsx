@@ -1,4 +1,4 @@
-import { emit } from "@tauri-apps/api/event";
+﻿import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { type ComponentType, useCallback, useEffect, useMemo, useState } from "react";
@@ -316,7 +316,7 @@ export default function NewSessionPage() {
   const [newGroupParentId, setNewGroupParentId] = useState("");
   const [currentTab, setCurrentTab] = useState<ProtocolTab>("ssh");
   const [wizardStep, setWizardStep] = useState<WizardStep>(editId ? "form" : "pick");
-  const [testing, setTesting…);
+  const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{
     ok: boolean;
     code: string;
@@ -1506,7 +1506,7 @@ export default function NewSessionPage() {
   );
 
   const handleTestConnection = async () => {
-    setTesting…);
+    setTesting(true);
     setTestResult(null);
     setError("");
 
@@ -1655,7 +1655,7 @@ export default function NewSessionPage() {
       const message = getErrorMessage(e);
       showResult(false, "genericFail", undefined, message);
     } finally {
-      setTesting…);
+      setTesting(false);
     }
   };
 

@@ -572,6 +572,7 @@ export function FloatingSessionChrome({
             <span
               className="flex shrink-0 items-center gap-1 select-none"
               title={networkAria}
+              role="img"
               aria-label={networkAria}
               onPointerDown={beginDrag}
             >

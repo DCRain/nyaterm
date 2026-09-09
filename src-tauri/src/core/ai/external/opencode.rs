@@ -325,7 +325,7 @@ async fn run_opencode_stream_inner(
         AiPermissionMode::Observer => {
             child.arg("--agent").arg("plan");
         }
-        AiPermissionMode::Auto => {
+        AiPermissionMode::Auto | AiPermissionMode::FullAccess => {
             child.arg("--auto");
         }
         AiPermissionMode::Confirm => {}

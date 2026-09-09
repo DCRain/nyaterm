@@ -533,6 +533,7 @@ pub(crate) fn build_test_ssh_config(
             legacy_agent_forwarding: None,
             agent_forwarding_config: None,
             encoding: String::new(),
+            dynamic_tab_title: false,
         },
         group_id: None,
         description: None,

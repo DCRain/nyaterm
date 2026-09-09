@@ -19,6 +19,11 @@ const labels: NoteTreeMenuLabels = {
   root: "Root",
   expandAll: "Expand all",
   collapseAll: "Collapse all",
+  encrypt: "Encrypt",
+  decrypt: "Decrypt",
+  changePassword: "Change password",
+  encrypted: "Encrypted",
+  lock: "Lock",
 };
 
 const baseNode = {
@@ -97,6 +102,10 @@ function RenameHarness({ node }: { node: NoteTreeNode }) {
         onRename={() => setEditing(true)}
         onMove={vi.fn()}
         onDelete={vi.fn()}
+        onEncrypt={vi.fn()}
+        onDecrypt={vi.fn()}
+        onChangePassword={vi.fn()}
+        onLock={vi.fn()}
         onRefresh={vi.fn()}
       />
     </ContextMenu>

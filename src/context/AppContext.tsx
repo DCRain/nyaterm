@@ -17,7 +17,10 @@ import type {
 } from "@/types/global";
 
 export type PaneConnectingUpdates = Partial<
-  Pick<SessionPane, "name" | "type" | "connectionId" | "view" | "temporaryConfig">
+  Pick<
+    SessionPane,
+    "name" | "type" | "connectionId" | "view" | "temporaryConfig" | "sshRuntimeMode"
+  >
 > & {
   display?: RemoteDesktopSessionPane["display"];
 };

@@ -8,7 +8,7 @@ use std::time::Duration;
 use nyaterm_mcp_protocol::MCP_TOOL_REGISTRY;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{Mutex, oneshot};
@@ -1040,7 +1040,7 @@ mod tests {
         request.permission_mode = AiPermissionMode::FullAccess;
 
         let invocation =
-            build_claude_invocation(&request, &AiSettings::default(), "prompt".to_string());
+            build_claude_invocation(&request, &AiSettings::default(), "prompt".to_string(), false);
 
         assert_eq!(
             arg_value(&invocation.args, "--permission-mode"),
