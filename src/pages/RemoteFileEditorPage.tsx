@@ -447,9 +447,18 @@ export default function RemoteFileEditorPage() {
       state: initialState,
     });
     viewRef.current = view;
-    window.requestAnimationFrame(() => view.focus());
+
+    const resizeObserver = new ResizeObserver(() => {
+      view.requestMeasure?.();
+    });
+    resizeObserver.observe(parent);
+    window.requestAnimationFrame(() => {
+      view.requestMeasure?.();
+      view.focus();
+    });
 
     return () => {
+      resizeObserver.disconnect();
       view.destroy();
       viewRef.current = null;
     };
@@ -466,6 +475,17 @@ export default function RemoteFileEditorPage() {
     editorStatesRef.current[currentTab.id] = state;
     setEditorState(state);
   }, [activeTabId, createEditorState, setEditorState]);
+
+  useEffect(() => {
+    if (!activeTab || activeTab.loading) return;
+    const state = editorStatesRef.current[activeTab.id];
+    if (!state || state.doc.toString() === activeTab.content) return;
+    const nextState = createEditorState(activeTab.content, activeTab.language);
+    editorStatesRef.current[activeTab.id] = nextState;
+    if (activeTabIdRef.current === activeTab.id) {
+      setEditorState(nextState);
+    }
+  }, [activeTab, createEditorState, setEditorState]);
 
   useEffect(() => {
     const currentWindow = getCurrentWindow();
@@ -859,7 +879,7 @@ export default function RemoteFileEditorPage() {
           </div>
         )}
 
-        <div className="relative min-h-0 flex-1">
+        <div className="relative min-h-0 flex-1 nyaterm-solid-surface">
           {activeTab?.loading && (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/80 text-sm text-muted-foreground pointer-events-none">
               {t("common.loading")}

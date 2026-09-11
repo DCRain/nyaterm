@@ -218,7 +218,11 @@ export default function FileDocumentEditor({ pane, active }: FileDocumentEditorP
   }, [pane.file.path, pane.name]);
 
   useEffect(() => {
-    if (active) viewRef.current?.focus();
+    if (!active) return;
+    const view = viewRef.current;
+    if (!view) return;
+    view.requestMeasure?.();
+    view.focus();
   }, [active]);
 
   const saveRef = useRef(save);
