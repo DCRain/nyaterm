@@ -59,8 +59,19 @@ function ContextMenuSubTrigger({
 
 function ContextMenuSubContent({
   className,
+  onPointerUpCapture,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.SubContent>) {
+  const handlePointerUpCapture = (event: React.PointerEvent<HTMLDivElement>) => {
+    // Match ContextMenuContent: ignore non-primary pointerup so nested items stay clickable.
+    if (event.button !== 0 || (isMacOS && event.ctrlKey)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    onPointerUpCapture?.(event);
+  };
+
   return (
     <ContextMenuPrimitive.SubContent
       data-slot="context-menu-sub-content"
@@ -69,6 +80,7 @@ function ContextMenuSubContent({
         className,
       )}
       {...props}
+      onPointerUpCapture={handlePointerUpCapture}
     />
   );
 }

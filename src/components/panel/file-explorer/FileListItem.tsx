@@ -18,6 +18,7 @@ import {
   MdKeyboardReturn,
   MdOpenInNew,
   MdOutlineSubdirectoryArrowRight,
+  MdPlayArrow,
   MdRefresh,
   MdSend,
   MdTerminal,
@@ -26,7 +27,7 @@ import {
 } from "react-icons/md";
 import { getFileIcon } from "@/components/icons";
 import { cn, formatSize } from "@/lib/utils";
-import type { AICustomActionConfig, FileEntry } from "@/types/global";
+import type { AICustomActionConfig, FileEntry, FileExplorerCustomAction } from "@/types/global";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -81,6 +82,8 @@ interface FileListItemProps {
   onCdToDirectory?: (entry: FileEntry) => void;
   /** Open a new SSH terminal at this directory (SFTP remote). */
   onOpenTerminalHere?: (entry: FileEntry) => void;
+  customActions?: FileExplorerCustomAction[];
+  onCustomAction?: (entry: FileEntry, action: FileExplorerCustomAction) => void;
   onProperties: (entry: FileEntry) => void;
   onPathPointerDown?: (entry: FileEntry, event: React.PointerEvent) => void;
   onPathPointerMove?: (entry: FileEntry, event: React.PointerEvent) => void;
@@ -145,6 +148,8 @@ export function FileListItem({
   onSendToTerminal,
   onCdToDirectory,
   onOpenTerminalHere,
+  customActions = [],
+  onCustomAction,
   onProperties,
   onPathPointerDown,
   onPathPointerMove,
@@ -616,6 +621,21 @@ export function FileListItem({
                     {t("fileExplorer.cmCdToDirectory")}
                   </ContextMenuItem>
                 ) : null}
+              </>
+            ) : null}
+            {showTerminalActions && customActions.length > 0 && onCustomAction ? (
+              <>
+                <ContextMenuSeparator />
+                {customActions.map((action) => (
+                  <ContextMenuItem
+                    key={action.id}
+                    // Top-level item (no submenu): same onClick path as "send to terminal".
+                    onClick={() => onCustomAction(entry, action)}
+                  >
+                    <MdPlayArrow className="text-[0.875rem] text-muted-foreground mr-2" />
+                    {action.name}
+                  </ContextMenuItem>
+                ))}
               </>
             ) : null}
             <ContextMenuSeparator />

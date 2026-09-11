@@ -1484,6 +1484,26 @@ export interface TerminalSettings {
   reconnect_restore_cwd: boolean;
 }
 
+export type FileExplorerActionTarget = "file" | "directory";
+
+export interface FileExplorerCustomAction {
+  id: string;
+  name: string;
+  enabled: boolean;
+  /** Match against entry name when target is file. Space-separated patterns OR together, e.g. "*.log *.out". Ignored for directories. */
+  match_pattern: string;
+  target: FileExplorerActionTarget;
+  /** Command template with placeholders such as {path}, {name}, {dir}, {parentdir}, {basename}. */
+  command: string;
+  /** Whether to auto-execute (send Enter) when running the command. */
+  execute: boolean;
+  /**
+   * Max allowed file size in bytes for file-target actions.
+   * `0` or omitted means no limit. Ignored for directories.
+   */
+  max_file_size_bytes?: number;
+}
+
 export interface TransferSettings {
   editor_type: "external" | "internal";
   internal_editor_display: "workspace" | "window";
@@ -1504,6 +1524,7 @@ export interface TransferSettings {
   recording_include_timestamps: boolean;
   recording_auto_start: boolean;
   recording_memory_limit_bytes: number;
+  file_explorer_custom_actions: FileExplorerCustomAction[];
 }
 
 export type DiagnosticsLogLevel = "warn" | "info" | "debug";

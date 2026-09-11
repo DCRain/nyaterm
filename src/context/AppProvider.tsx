@@ -209,6 +209,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     recording_include_timestamps: true,
     recording_auto_start: false,
     recording_memory_limit_bytes: 5 * 1024 * 1024,
+    file_explorer_custom_actions: [],
   },
   diagnostics: {
     level: "info",

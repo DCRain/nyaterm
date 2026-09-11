@@ -4,6 +4,25 @@ use serde::{Deserialize, Serialize};
 const DEFAULT_RECORDING_MEMORY_LIMIT_BYTES: u64 = 5 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileExplorerCustomAction {
+    pub id: String,
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub match_pattern: String,
+    #[serde(default = "default_file_explorer_action_target")]
+    pub target: String,
+    #[serde(default)]
+    pub command: String,
+    #[serde(default = "default_true")]
+    pub execute: bool,
+    /// Max file size in bytes for file-target actions. 0 means unlimited.
+    #[serde(default)]
+    pub max_file_size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransferSettings {
     #[serde(default = "default_editor_type")]
     pub editor_type: String,
@@ -45,6 +64,8 @@ pub struct TransferSettings {
     pub recording_memory_limit_bytes: u64,
     #[serde(default = "default_true")]
     pub zmodem_enabled: bool,
+    #[serde(default)]
+    pub file_explorer_custom_actions: Vec<FileExplorerCustomAction>,
 }
 
 fn default_transfer_threads() -> u32 {
@@ -74,6 +95,9 @@ fn default_buffer_size() -> u32 {
 fn default_recording_memory_limit_bytes() -> u64 {
     DEFAULT_RECORDING_MEMORY_LIMIT_BYTES
 }
+fn default_file_explorer_action_target() -> String {
+    "file".to_string()
+}
 
 impl Default for TransferSettings {
     fn default() -> Self {
@@ -98,6 +122,7 @@ impl Default for TransferSettings {
             recording_auto_start: false,
             recording_memory_limit_bytes: default_recording_memory_limit_bytes(),
             zmodem_enabled: true,
+            file_explorer_custom_actions: Vec::new(),
         }
     }
 }

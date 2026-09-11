@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SelectItem } from "@/components/ui/select";
 import { useApp } from "@/context/AppContext";
+import { FileExplorerCustomActionsEditor } from "./FileExplorerCustomActionsEditor";
 import {
   SettingFieldGrid,
   SettingInput,
@@ -151,11 +152,11 @@ export function TransferTab() {
             desc={t("settings.internalEditorDisplayDesc")}
             value={transfer.internal_editor_display || "workspace"}
             controlClassName="max-w-sm"
-            onValueChange={(v) =>
-              update({ internal_editor_display: v as "workspace" | "window" })
-            }
+            onValueChange={(v) => update({ internal_editor_display: v as "workspace" | "window" })}
           >
-            <SelectItem value="workspace">{t("settings.internalEditorDisplayWorkspace")}</SelectItem>
+            <SelectItem value="workspace">
+              {t("settings.internalEditorDisplayWorkspace")}
+            </SelectItem>
             <SelectItem value="window">{t("settings.internalEditorDisplayWindow")}</SelectItem>
           </SettingSelect>
         )}
@@ -234,6 +235,11 @@ export function TransferTab() {
           />
         </SettingRow>
       </SettingSection>
+
+      <FileExplorerCustomActionsEditor
+        actions={transfer.file_explorer_custom_actions ?? []}
+        onChange={(file_explorer_custom_actions) => update({ file_explorer_custom_actions })}
+      />
     </div>
   );
 }
