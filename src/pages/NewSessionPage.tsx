@@ -703,95 +703,6 @@ export default function NewSessionPage() {
     }
   }, [currentTab, loadSerialPorts]);
 
-  const resetForm = useCallback(() => {
-    setName("");
-    setGroupId("");
-    setNewGroupNamePending("");
-    setDescription("");
-    setOpenOnStartup(false);
-    setHost("");
-    setSshPort(22);
-    setTelnetPort(23);
-    setRdpPort(3389);
-    setVncPort(5900);
-    setUsername(currentTab === "rdp" ? DEFAULT_RDP_USERNAME : "root");
-    setRdpDomain("");
-    setRdpClientMode("external");
-    setRdpExternalDisplayMode("fullscreen");
-    setRdpResolutionPreset("1920x1080");
-    setRdpWidth(DEFAULT_RDP_WIDTH);
-    setRdpHeight(DEFAULT_RDP_HEIGHT);
-    setRdpPreferredClient("");
-    setRdpRedirects(defaultRdpRedirectSettings());
-    setRdpUseNla(true);
-    setRdpCertificatePolicy("prompt");
-    setRdpDisplayMode("fit-window");
-    setRdpDisplayWidth(1920);
-    setRdpDisplayHeight(1080);
-    setRdpClipboardMode("text-only");
-    setRdpReconnectEnabled(true);
-    setRdpReconnectMaxAttempts(5);
-    setAuthType("password");
-    setPasswordId("");
-    setPassword("");
-    setHasPassword(false);
-    setKeyId("");
-    setIconKey("");
-    setIconAutoDetect(true);
-    setProxyId("");
-    setJumpHostId("");
-    setOtpId("");
-    setAutoFillOtp(false);
-    setPostLoginEnabled(false);
-    setPostLoginCommand("");
-    setPostLoginDelayMs(DEFAULT_POST_LOGIN_DELAY_MS);
-    setInitialRemoteDir("");
-    setSshBackspaceMode("del");
-    setX11Forwarding(false);
-    setAuthAgentEndpoint({ type: "auto" });
-    setAgentForwardingConfig({ ...DEFAULT_SSH_AGENT_FORWARDING_CONFIG });
-    setSshAlgorithms({ ...DEFAULT_SSH_ALGORITHMS });
-    setSshProfile("standard");
-    setSshTerminalType("default");
-    setSftpSettings({ ...DEFAULT_SFTP_SETTINGS });
-    setSerialPortName("");
-    setSerialPorts([]);
-    setSerialPortsLoading(false);
-    setSerialPortsError("");
-    setBaudRate("115200");
-    setDataBits("8");
-    setParity("none");
-    setStopBits("1");
-    setShellPath("powershell.exe");
-    setShellArgs("");
-    setWorkingDir("");
-    setDynamicTabTitle(false);
-    setRemoteDynamicTabTitle(false);
-    setSerialBackspaceMode("ctrl_h");
-    setTelnetBackspaceMode("del");
-    setTelnetRawTcpCli(false);
-    setTelnetEnterMode("cr");
-    setTelnetLocalEcho(false);
-    setTelnetLocalLineEdit(false);
-    setTelnetForceCharacterAtATime(false);
-    setTelnetSendNaws(true);
-    setTelnetSendSga(true);
-    setVncScaleMode("fit");
-    setVncSecurityMode("auto");
-    setVncShared(true);
-    setVncViewOnly(false);
-    setVncClipboardEnabled(true);
-    setVncReconnectEnabled(true);
-    setVncReconnectMaxAttempts(5);
-    setEncoding("global");
-    setRecordingUseGlobal(true);
-    setRecordingAutoStart(appSettings.recording.auto_start);
-    setRecordingMode(appSettings.recording.default_mode);
-    setShowIconPicker(false);
-    setError("");
-    setConnecting(false);
-  }, [appSettings.recording.auto_start, appSettings.recording.default_mode, currentTab]);
-
   const serialPortOptions: { unavailable?: boolean; value: string }[] = serialPorts.map((port) => ({
     value: port,
   }));
@@ -1598,11 +1509,9 @@ export default function NewSessionPage() {
           targetWindowLabel: ownerWindowLabel,
         });
       }
-      resetForm();
-      getCurrentWindow().close();
+      await getCurrentWindow().close();
     } catch (e) {
       setError(getErrorMessage(e));
-    } finally {
       setConnecting(false);
     }
   };
