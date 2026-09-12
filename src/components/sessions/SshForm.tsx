@@ -1213,16 +1213,23 @@ export function SshForm({
         </CollapsibleTrigger>
         <CollapsibleContent className="mt-3 space-y-3">
           <Tabs defaultValue="network" className="w-full">
-            <TabsList className="grid h-8 w-full grid-cols-3 pointer-events-auto">
+            <TabsList
+              className={cn(
+                "grid h-8 w-full pointer-events-auto",
+                isSftpOnly ? "grid-cols-2" : "grid-cols-3",
+              )}
+            >
               <TabsTrigger value="network" className="text-xs">
                 {t("dialog.proxySelect")}
               </TabsTrigger>
               <TabsTrigger value="two-factor" className="text-xs">
                 {t("dialog.twoFactorAuth")}
               </TabsTrigger>
-              <TabsTrigger value="agent" className="text-xs">
-                {t("dialog.sshAgent", "SSH Agent")}
-              </TabsTrigger>
+              {!isSftpOnly ? (
+                <TabsTrigger value="agent" className="text-xs">
+                  {t("dialog.sshAgent", "SSH Agent")}
+                </TabsTrigger>
+              ) : null}
             </TabsList>
 
             <TabsContent value="network" className="mt-3 border-0 outline-none">
@@ -1236,6 +1243,7 @@ export function SshForm({
               />
             </TabsContent>
 
+            {!isSftpOnly ? (
             <TabsContent value="agent" className="mt-3 border-0 outline-none">
               <div className="space-y-3 rounded-lg border bg-accent/25 p-3">
                 <div className="flex items-start justify-between gap-3">
@@ -1574,6 +1582,7 @@ export function SshForm({
                 </p>
               </div>
             </TabsContent>
+            ) : null}
 
             <TabsContent value="two-factor" className="mt-3 border-0 outline-none">
               <div className="rounded-lg border bg-accent/25 p-3">
@@ -1622,7 +1631,7 @@ export function SshForm({
             <TabsList
               className={cn(
                 "grid h-8 w-full pointer-events-auto",
-                isSftpOnly ? "grid-cols-3" : "grid-cols-5",
+                isSftpOnly ? "grid-cols-2" : "grid-cols-5",
               )}
             >
               {isSftpOnly ? (
@@ -1634,11 +1643,13 @@ export function SshForm({
                   {t("dialog.commandExecution")}
                 </TabsTrigger>
               )}
-              <TabsTrigger value="terminal" className="text-xs">
-                {t("dialog.encodingSettings")}
-              </TabsTrigger>
+              {!isSftpOnly ? (
+                <TabsTrigger value="terminal" className="text-xs">
+                  {t("dialog.encodingSettings")}
+                </TabsTrigger>
+              ) : null}
               <TabsTrigger value="sftp" className="text-xs">
-                SFTP
+                {t("dialog.sftpTransferSettings", "Transfer")}
               </TabsTrigger>
               {!isSftpOnly ? (
                 <TabsTrigger value="x11" className="text-xs">
@@ -1661,7 +1672,9 @@ export function SshForm({
                   <div className="min-w-0 space-y-0.5">
                     <div className="text-xs font-medium">{t("dialog.initialRemoteDir")}</div>
                     <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
-                      {t("dialog.initialRemoteDirDesc")}
+                      {isSftpOnly
+                        ? t("dialog.initialRemoteDirSftpDesc")
+                        : t("dialog.initialRemoteDirDesc")}
                     </p>
                   </div>
                   <Input
@@ -1867,14 +1880,7 @@ export function SshForm({
                       </span>
                     </div>
                   </div>
-                ) : (
-                  <div className="min-w-0 space-y-0.5">
-                    <div className="text-xs font-medium">{t("dialog.sftpAdvanced")}</div>
-                    <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
-                      {t("dialog.sftpAdvancedDesc")}
-                    </p>
-                  </div>
-                )}
+                ) : null}
 
                 {!isSftpOnly ? (
                   <>
@@ -1941,18 +1947,22 @@ export function SshForm({
                     </div>
                   </>
                 ) : null}
-                <div className="mt-3 max-w-md">
+                <div className={cn("max-w-md", !isSftpOnly && "mt-3")}>
                   <Label className="text-xs font-medium text-foreground/80">
                     {t("dialog.sftpFilenameEncoding")}
                   </Label>
                   <Select
                     disabled={!isSftpOnly && sftpDisabled}
-                    value={sftpSettings.filename_encoding || "terminal"}
+                    value={
+                      isSftpOnly
+                        ? sftpSettings.filename_encoding?.trim() || "UTF-8"
+                        : sftpSettings.filename_encoding || "terminal"
+                    }
                     onValueChange={(filename_encoding) =>
                       setSftpSettings({
                         ...sftpSettings,
                         filename_encoding:
-                          filename_encoding === "terminal" ? "" : filename_encoding,
+                          !isSftpOnly && filename_encoding === "terminal" ? "" : filename_encoding,
                       })
                     }
                   >
@@ -1960,9 +1970,11 @@ export function SshForm({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="terminal">
-                        {t("dialog.sftpFilenameEncodingFollowTerminal")}
-                      </SelectItem>
+                      {!isSftpOnly ? (
+                        <SelectItem value="terminal">
+                          {t("dialog.sftpFilenameEncodingFollowTerminal")}
+                        </SelectItem>
+                      ) : null}
                       <SelectItem value="UTF-8">UTF-8</SelectItem>
                       <SelectItem value="GBK">GBK</SelectItem>
                       <SelectItem value="GB2312">GB2312</SelectItem>
@@ -2058,6 +2070,7 @@ export function SshForm({
               </TabsContent>
             ) : null}
           </Tabs>
+          {!isSftpOnly ? (
           <div className="rounded-lg border bg-accent/25 p-3">
             <div className="space-y-0.5">
               <div className="text-xs font-medium">{t("dialog.sshAlgorithms")}</div>
@@ -2144,6 +2157,7 @@ export function SshForm({
               </div>
             )}
           </div>
+          ) : null}
         </CollapsibleContent>
       </Collapsible>
 

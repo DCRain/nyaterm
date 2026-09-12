@@ -498,15 +498,15 @@ export default function NewSessionPage() {
           setAutoFillOtp(ssh.auth?.auto_fill_otp || false);
           setInitialRemoteDir(ssh.initial_remote_dir || "");
           setAuthAgentEndpoint(ssh.auth_agent_endpoint ?? { type: "auto" });
-          setAgentForwardingConfig(
-            normalizeSshAgentForwardingConfig(ssh.agent_forwarding_config),
-          );
-          setSshAlgorithms(normalizeSshAlgorithms(ssh.ssh_algorithms));
-          setSshProfile(ssh.ssh_profile || "standard");
+          setAgentForwardingConfig(DEFAULT_SSH_AGENT_FORWARDING_CONFIG);
+          setSshAlgorithms(DEFAULT_SSH_ALGORITHMS);
+          setSshProfile("standard");
           setSftpSettings({
             ...normalizeSftpSettings(ssh.sftp),
             enabled: true,
             cwd_follow_mode: "off",
+            filename_encoding:
+              ssh.sftp?.filename_encoding?.trim() || ssh.encoding?.trim() || "UTF-8",
           });
           return;
         }
@@ -1378,7 +1378,8 @@ export default function NewSessionPage() {
             : openOnStartup,
         icon: iconKey || undefined,
         icon_auto_detect: currentTab === "ssh" ? iconAutoDetect : false,
-        encoding: encoding === "global" ? undefined : encoding,
+        encoding:
+          currentTab === "sftp" ? undefined : encoding === "global" ? undefined : encoding,
         recording,
         ...(currentTab === "ssh"
           ? {
@@ -1414,15 +1415,15 @@ export default function NewSessionPage() {
                 const normalized = initialRemoteDir.trim();
                 return normalized || undefined;
               })(),
-              ssh_algorithms: sshAlgorithms,
-              ssh_profile: sshProfile,
               sftp: {
                 ...sftpSettings,
                 enabled: true,
                 cwd_follow_mode: "off" as const,
+                filename_encoding:
+                  sftpSettings.filename_encoding?.trim() ||
+                  (encoding !== "global" ? encoding : "UTF-8"),
               },
               auth_agent_endpoint: authType === "agent" ? authAgentEndpoint : undefined,
-              agent_forwarding_config: agentForwardingConfig,
             }
           : {}),
         ...(currentTab === "telnet"
