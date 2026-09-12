@@ -476,7 +476,10 @@ pub fn update_connection_icon(
 }
 
 fn validate_ssh_algorithm_config(connection: &SavedConnection) -> AppResult<()> {
-    if !matches!(connection.config, config::ConnectionType::Ssh { .. }) {
+    if !matches!(
+        connection.config,
+        config::ConnectionType::Ssh { .. } | config::ConnectionType::Sftp { .. }
+    ) {
         return Ok(());
     }
 
@@ -488,7 +491,10 @@ fn validate_ssh_algorithm_config(connection: &SavedConnection) -> AppResult<()> 
 }
 
 fn validate_sftp_settings_config(connection: &SavedConnection) -> AppResult<()> {
-    if !matches!(connection.config, config::ConnectionType::Ssh { .. }) {
+    if !matches!(
+        connection.config,
+        config::ConnectionType::Ssh { .. } | config::ConnectionType::Sftp { .. }
+    ) {
         return Ok(());
     }
 
@@ -943,11 +949,12 @@ fn validate_proxy_jump_config(
     if !matches!(
         connection.config,
         config::ConnectionType::Ssh { .. }
+            | config::ConnectionType::Sftp { .. }
             | config::ConnectionType::Rdp { .. }
             | config::ConnectionType::Vnc { .. }
     ) {
         return Err(AppError::Config(
-            "ProxyJump is only supported for SSH, RDP, and VNC connections".to_string(),
+            "ProxyJump is only supported for SSH, SFTP, RDP, and VNC connections".to_string(),
         ));
     }
 

@@ -139,7 +139,7 @@ export function shouldPromptConnectionEditOnFailure(
   connection: Pick<SavedConnection, "type"> | null | undefined,
   errorMessage: string,
 ): boolean {
-  if (!connection || connection.type !== "ssh") {
+  if (!connection || (connection.type !== "ssh" && connection.type !== "sftp")) {
     return false;
   }
 

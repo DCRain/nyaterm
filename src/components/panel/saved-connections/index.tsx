@@ -98,6 +98,7 @@ const CONNECTION_TYPE_FILTERS: {
   labelFallback: string;
 }[] = [
   { id: "ssh", labelKey: "savedConnections.filterSsh", labelFallback: "SSH" },
+  { id: "sftp", labelKey: "savedConnections.filterSftp", labelFallback: "SFTP" },
   { id: "local_terminal", labelKey: "savedConnections.filterLocal", labelFallback: "Local" },
   { id: "telnet", labelKey: "savedConnections.filterTelnet", labelFallback: "Telnet" },
   { id: "serial", labelKey: "savedConnections.filterSerial", labelFallback: "Serial" },

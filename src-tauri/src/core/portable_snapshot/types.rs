@@ -46,13 +46,18 @@ pub(crate) fn normalize_backup_sessions_for_platform(
         {
             changed |= config::migrate_legacy_ssh_agent_settings(connection);
         }
-        let config::ConnectionType::Ssh {
-            auth_agent_endpoint,
-            agent_forwarding_config,
-            ..
-        } = &mut connection.config
-        else {
-            continue;
+        let (auth_agent_endpoint, agent_forwarding_config) = match &mut connection.config {
+            config::ConnectionType::Ssh {
+                auth_agent_endpoint,
+                agent_forwarding_config,
+                ..
+            }
+            | config::ConnectionType::Sftp {
+                auth_agent_endpoint,
+                agent_forwarding_config,
+                ..
+            } => (auth_agent_endpoint, agent_forwarding_config),
+            _ => continue,
         };
 
         if let Some(endpoint) = auth_agent_endpoint {
@@ -487,6 +492,14 @@ pub fn strip_device_local_sessions(sessions: &mut config::SessionsConfig) {
                 *legacy_agent_forwarding = None;
                 *agent_forwarding_config = None;
             }
+            config::ConnectionType::Sftp {
+                auth_agent_endpoint,
+                agent_forwarding_config,
+                ..
+            } => {
+                *auth_agent_endpoint = None;
+                *agent_forwarding_config = None;
+            }
             config::ConnectionType::Telnet { .. }
             | config::ConnectionType::Rdp { .. }
             | config::ConnectionType::Vnc { .. }
@@ -563,6 +576,21 @@ pub fn preserve_device_local_sessions(
             ) => {
                 *auth_agent_endpoint = device_auth_agent_endpoint.clone();
                 *legacy_agent_forwarding = *device_legacy_agent_forwarding;
+                *agent_forwarding_config = device_agent_forwarding_config.clone();
+            }
+            (
+                config::ConnectionType::Sftp {
+                    auth_agent_endpoint,
+                    agent_forwarding_config,
+                    ..
+                },
+                config::ConnectionType::Sftp {
+                    auth_agent_endpoint: device_auth_agent_endpoint,
+                    agent_forwarding_config: device_agent_forwarding_config,
+                    ..
+                },
+            ) => {
+                *auth_agent_endpoint = device_auth_agent_endpoint.clone();
                 *agent_forwarding_config = device_agent_forwarding_config.clone();
             }
             _ => {}

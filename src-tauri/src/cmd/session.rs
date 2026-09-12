@@ -644,6 +644,17 @@ fn build_recording_context(
             Some(*port),
             Some(username.clone()),
         ),
+        Some(config::ConnectionType::Sftp {
+            host,
+            port,
+            username,
+            ..
+        }) => (
+            "sftp".to_string(),
+            Some(host.clone()),
+            Some(*port),
+            Some(username.clone()),
+        ),
         Some(config::ConnectionType::Telnet {
             host,
             port,

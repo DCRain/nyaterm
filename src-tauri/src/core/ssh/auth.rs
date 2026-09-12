@@ -593,14 +593,22 @@ fn resolve_saved_ssh_config(
     } else {
         None
     };
-    let post_login = resolve_post_login(conn);
-    let x11_forwarding = resolve_x11_forwarding(conn);
     let (auth_agent_endpoint, agent_forwarding_config) = resolve_agent_settings(conn);
     let x11_display = crate::config::load_app_settings(app)
         .map(|settings| settings.terminal.x11_display)
         .unwrap_or_default();
 
     let encoding = crate::config::resolve_connection_encoding(app, conn);
+    let is_sftp_connection = matches!(
+        &conn.config,
+        crate::config::ConnectionType::Sftp { .. }
+    );
+    // Dedicated SFTP connections never run a shell, so skip post-login / cd injection.
+    let post_login = if is_sftp_connection {
+        None
+    } else {
+        resolve_post_login(conn)
+    };
 
     Ok(SshConfig {
         connection_id,
@@ -611,7 +619,11 @@ fn resolve_saved_ssh_config(
         username,
         auth,
         backspace_mode: resolve_ssh_backspace_mode(conn),
-        x11_forwarding,
+        x11_forwarding: if is_sftp_connection {
+            false
+        } else {
+            resolve_x11_forwarding(conn)
+        },
         x11_display,
         auth_agent_endpoint,
         agent_forwarding_config,
@@ -620,7 +632,11 @@ fn resolve_saved_ssh_config(
         post_login,
         ssh_algorithms: conn.ssh_algorithms.clone(),
         ssh_profile: conn.ssh_profile.clone(),
-        runtime_mode: crate::config::SshRuntimeMode::Standard,
+        runtime_mode: if is_sftp_connection {
+            crate::config::SshRuntimeMode::Sftp
+        } else {
+            crate::config::SshRuntimeMode::Standard
+        },
         terminal_type: crate::config::resolve_ssh_terminal_type(
             &conn.ssh_profile,
             conn.terminal_type.as_ref(),
@@ -638,7 +654,6 @@ fn resolve_saved_ssh_config(
             &conn.config,
             crate::config::ConnectionType::Ssh {
                 dynamic_tab_title: true,
-            initial_remote_dir: None,
                 ..
             }
         ),
@@ -660,6 +675,11 @@ fn resolve_agent_settings(
 ) {
     match &conn.config {
         crate::config::ConnectionType::Ssh {
+            auth_agent_endpoint,
+            agent_forwarding_config,
+            ..
+        }
+        | crate::config::ConnectionType::Sftp {
             auth_agent_endpoint,
             agent_forwarding_config,
             ..
@@ -753,9 +773,15 @@ fn resolve_ssh_target(conn: &crate::config::SavedConnection) -> AppResult<(Strin
             port,
             username,
             ..
+        }
+        | crate::config::ConnectionType::Sftp {
+            host,
+            port,
+            username,
+            ..
         } => Ok((host.clone(), *port, username.clone())),
         _ => Err(AppError::Auth(
-            "Connection is not an SSH connection".to_string(),
+            "Connection is not an SSH or SFTP connection".to_string(),
         )),
     }
 }

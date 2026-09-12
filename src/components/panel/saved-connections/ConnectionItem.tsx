@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { canOpenSavedConnectionWithSftp } from "@/lib/sftpRuntime";
+import { openNewSession } from "@/lib/windowManager";
 import type { SavedConnection } from "@/types/global";
 import { resolveConnectionIcon } from "../../icons";
 import { useSavedConnectionsContext } from "./context";
@@ -766,6 +767,20 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
             {t("savedConnections.openSftp")}
           </ContextMenuItem>
         ) : null}
+        {conn.type === "ssh" ? (
+          <ContextMenuItem
+            onClick={() => {
+              closeAndSuppressDetails();
+              void openNewSession(undefined, false, {
+                fromSshId: conn.id,
+                initialGroupId: conn.group_id || undefined,
+              });
+            }}
+          >
+            <MdFolderOpen className="text-[0.875rem] text-muted-foreground mr-2" />
+            {t("savedConnections.createSftpConnection", "Create SFTP connection")}
+          </ContextMenuItem>
+        ) : null}
         {conn.type === "s3" ? (
           <ContextMenuItem
             onClick={() => {
@@ -828,7 +843,12 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
           <MdContentCopy className="text-[0.875rem] text-muted-foreground mr-2" />
           {t("savedConnections.copy")}
         </ContextMenuItem>
-        {conn.type !== "rdp" && conn.type !== "vnc" && conn.type !== "s3" && conn.type !== "ftp" && conn.type !== "webdav" ? (
+        {conn.type !== "rdp" &&
+        conn.type !== "vnc" &&
+        conn.type !== "s3" &&
+        conn.type !== "ftp" &&
+        conn.type !== "webdav" &&
+        conn.type !== "sftp" ? (
           <ContextMenuItem
             onClick={() => {
               closeAndSuppressDetails();

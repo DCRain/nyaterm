@@ -29,6 +29,7 @@ const CONNECTION_SESSION_TYPES: Record<
   WorkspaceSessionType
 > = {
   ssh: "SSH",
+  sftp: "SSH",
   local_terminal: "Local",
   telnet: "Telnet",
   serial: "Serial",
@@ -132,6 +133,13 @@ export async function createSessionForConnection(
       return invoke<string>("create_rdp_session", {
         connectionId: connection.id,
         createRequestId,
+      });
+    case "sftp":
+      return invoke<string>("create_ssh_session", {
+        connectionId: connection.id,
+        createRequestId,
+        startupCommand: buildStartupCommandPayload(startupCommand),
+        runtimeMode: runtimeModeOverride ?? "sftp",
       });
     default:
       return invoke<string>("create_ssh_session", {

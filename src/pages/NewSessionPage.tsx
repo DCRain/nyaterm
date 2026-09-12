@@ -169,95 +169,125 @@ const isValidSftpShellDetectionTimeout = (value: number) =>
   value <= MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS;
 
 type WizardStep = "pick" | "form";
-  type ProtocolTab = "ssh" | "local" | "telnet" | "serial" | "rdp" | "vnc" | "s3" | "ftp" | "webdav";
+type ProtocolTab =
+  | "ssh"
+  | "sftp"
+  | "local"
+  | "telnet"
+  | "serial"
+  | "rdp"
+  | "vnc"
+  | "s3"
+  | "ftp"
+  | "webdav";
 
-  const PROTOCOL_OPTIONS: Array<{
-    id: ProtocolTab;
-    titleKey: string;
-    titleFallback: string;
-    descKey: string;
-    descFallback: string;
-    icon: ComponentType<{ className?: string }>;
-  }> = [
-    {
-      id: "ssh",
-      titleKey: "dialog.protocolSsh",
-      titleFallback: "SSH",
-      descKey: "dialog.protocolSshDesc",
-      descFallback: "Secure shell sessions with password or key auth",
-      icon: MdTerminal,
-    },
-    {
-      id: "local",
-      titleKey: "dialog.protocolLocal",
-      titleFallback: "Local terminal",
-      descKey: "dialog.protocolLocalDesc",
-      descFallback: "Launch a local shell on this computer",
-      icon: MdMonitor,
-    },
-    {
-      id: "telnet",
-      titleKey: "dialog.protocolTelnet",
-      titleFallback: "Telnet",
-      descKey: "dialog.protocolTelnetDesc",
-      descFallback: "Plain Telnet or raw TCP CLI sessions",
-      icon: TbNetwork,
-    },
-    {
-      id: "serial",
-      titleKey: "dialog.protocolSerial",
-      titleFallback: "Serial",
-      descKey: "dialog.protocolSerialDesc",
-      descFallback: "Connect to a local serial / COM port",
-      icon: TbPlugConnected,
-    },
-    {
-      id: "rdp",
-      titleKey: "dialog.protocolRdp",
-      titleFallback: "RDP",
-      descKey: "dialog.protocolRdpDesc",
-      descFallback: "Connect to a remote Windows desktop inside NyaTerm",
-      icon: TbServer,
-    },
-    {
-      id: "vnc",
-      titleKey: "dialog.protocolVnc",
-      titleFallback: "VNC",
-      descKey: "dialog.protocolVncDesc",
-      descFallback: "Open an external VNC viewer",
-      icon: MdLan,
-    },
-    {
-      id: "s3",
-      titleKey: "dialog.protocolS3",
-      titleFallback: "S3",
-      descKey: "dialog.protocolS3Desc",
-      descFallback: "Browse and transfer files with an S3-compatible bucket",
-      icon: MdCloud,
-    },
-    {
-      id: "ftp",
-      titleKey: "dialog.protocolFtp",
-      titleFallback: "FTP",
-      descKey: "dialog.protocolFtpDesc",
-      descFallback: "Browse and transfer files over FTP or FTPS",
-      icon: MdFolder,
-    },
-    {
-      id: "webdav",
-      titleKey: "dialog.protocolWebDav",
-      titleFallback: "WebDAV",
-      descKey: "dialog.protocolWebDavDesc",
-      descFallback: "Browse and transfer files over WebDAV",
-      icon: MdCloud,
-    },
-  ];
+const PROTOCOL_OPTIONS: Array<{
+  id: ProtocolTab;
+  titleKey: string;
+  titleFallback: string;
+  descKey: string;
+  descFallback: string;
+  icon: ComponentType<{ className?: string }>;
+}> = [
+  {
+    id: "ssh",
+    titleKey: "dialog.protocolSsh",
+    titleFallback: "SSH",
+    descKey: "dialog.protocolSshDesc",
+    descFallback: "Secure shell sessions with password or key auth",
+    icon: MdTerminal,
+  },
+  {
+    id: "sftp",
+    titleKey: "dialog.protocolSftp",
+    titleFallback: "SFTP",
+    descKey: "dialog.protocolSftpDesc",
+    descFallback: "Browse and transfer files over SFTP (no shell)",
+    icon: MdFolder,
+  },
+  {
+    id: "local",
+    titleKey: "dialog.protocolLocal",
+    titleFallback: "Local terminal",
+    descKey: "dialog.protocolLocalDesc",
+    descFallback: "Launch a local shell on this computer",
+    icon: MdMonitor,
+  },
+  {
+    id: "telnet",
+    titleKey: "dialog.protocolTelnet",
+    titleFallback: "Telnet",
+    descKey: "dialog.protocolTelnetDesc",
+    descFallback: "Plain Telnet or raw TCP CLI sessions",
+    icon: TbNetwork,
+  },
+  {
+    id: "serial",
+    titleKey: "dialog.protocolSerial",
+    titleFallback: "Serial",
+    descKey: "dialog.protocolSerialDesc",
+    descFallback: "Connect to a local serial / COM port",
+    icon: TbPlugConnected,
+  },
+  {
+    id: "rdp",
+    titleKey: "dialog.protocolRdp",
+    titleFallback: "RDP",
+    descKey: "dialog.protocolRdpDesc",
+    descFallback: "Connect to a remote Windows desktop inside NyaTerm",
+    icon: TbServer,
+  },
+  {
+    id: "vnc",
+    titleKey: "dialog.protocolVnc",
+    titleFallback: "VNC",
+    descKey: "dialog.protocolVncDesc",
+    descFallback: "Open an external VNC viewer",
+    icon: MdLan,
+  },
+  {
+    id: "s3",
+    titleKey: "dialog.protocolS3",
+    titleFallback: "S3",
+    descKey: "dialog.protocolS3Desc",
+    descFallback: "Browse and transfer files with an S3-compatible bucket",
+    icon: MdCloud,
+  },
+  {
+    id: "ftp",
+    titleKey: "dialog.protocolFtp",
+    titleFallback: "FTP",
+    descKey: "dialog.protocolFtpDesc",
+    descFallback: "Browse and transfer files over FTP or FTPS",
+    icon: MdFolder,
+  },
+  {
+    id: "webdav",
+    titleKey: "dialog.protocolWebDav",
+    titleFallback: "WebDAV",
+    descKey: "dialog.protocolWebDavDesc",
+    descFallback: "Browse and transfer files over WebDAV",
+    icon: MdCloud,
+  },
+];
+
+function sftpConnectionNameFromSsh(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    return "SFTP";
+  }
+  if (/\(SFTP\)\s*$/i.test(trimmed) || /\bSFTP\s*$/i.test(trimmed)) {
+    return trimmed;
+  }
+  return `${trimmed} (SFTP)`;
+}
 
 export default function NewSessionPage() {
   const { t } = useTranslation();
   const { appSettings } = useApp();
   const params = new URLSearchParams(window.location.search);
   const editId = params.get("edit") ?? undefined;
+  const fromSshId = editId ? undefined : (params.get("fromSsh") ?? undefined);
   const autoConnect = params.get("autoConnect") === "1";
   const ownerWindowLabel = params.get("owner") ?? undefined;
   const initialGroupId = editId ? "" : (params.get("groupId") ?? "");
@@ -314,8 +344,10 @@ export default function NewSessionPage() {
   const [showGroupDropdown, setShowGroupDropdown] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupParentId, setNewGroupParentId] = useState("");
-  const [currentTab, setCurrentTab] = useState<ProtocolTab>("ssh");
-  const [wizardStep, setWizardStep] = useState<WizardStep>(editId ? "form" : "pick");
+  const [currentTab, setCurrentTab] = useState<ProtocolTab>(fromSshId ? "sftp" : "ssh");
+  const [wizardStep, setWizardStep] = useState<WizardStep>(
+    editId || fromSshId ? "form" : "pick",
+  );
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{
     ok: boolean;
@@ -430,6 +462,52 @@ export default function NewSessionPage() {
       .then((conns) => {
         setSavedConnections(conns);
         if (!editId) {
+          if (!fromSshId) {
+            return;
+          }
+
+          const ssh = conns.find(
+            (connection) => connection.id === fromSshId && connection.type === "ssh",
+          );
+          if (!ssh) {
+            setError(t("dialog.connectionNotFound"));
+            return;
+          }
+
+          setName(sftpConnectionNameFromSsh(ssh.name));
+          setGroupId(ssh.group_id || initialGroupId || "");
+          setDescription(ssh.description || "");
+          setOpenOnStartup(false);
+          setIconKey(ssh.icon || "");
+          setIconAutoDetect(false);
+          setCurrentTab("sftp");
+          setWizardStep("form");
+          setEncoding(ssh.encoding || "global");
+          setRecordingUseGlobal(true);
+          setHost(ssh.host || "");
+          setSshPort(ssh.port || 22);
+          setUsername(ssh.username || "root");
+          setAuthType((ssh.auth?.mode as SshAuthMode) || "password");
+          setPasswordId(ssh.auth?.password_id || "");
+          setHasPassword(ssh.auth?.has_password || false);
+          setPassword("");
+          setKeyId(ssh.auth?.key_id || "");
+          setProxyId(ssh.network?.proxy_id || "");
+          setJumpHostId(ssh.network?.proxy_jump_id || "");
+          setOtpId(ssh.auth?.otp_id || "");
+          setAutoFillOtp(ssh.auth?.auto_fill_otp || false);
+          setInitialRemoteDir(ssh.initial_remote_dir || "");
+          setAuthAgentEndpoint(ssh.auth_agent_endpoint ?? { type: "auto" });
+          setAgentForwardingConfig(
+            normalizeSshAgentForwardingConfig(ssh.agent_forwarding_config),
+          );
+          setSshAlgorithms(normalizeSshAlgorithms(ssh.ssh_algorithms));
+          setSshProfile(ssh.ssh_profile || "standard");
+          setSftpSettings({
+            ...normalizeSftpSettings(ssh.sftp),
+            enabled: true,
+            cwd_follow_mode: "off",
+          });
           return;
         }
 
@@ -449,6 +527,7 @@ export default function NewSessionPage() {
 
         const tabMap: Record<string, ProtocolTab> = {
           ssh: "ssh",
+          sftp: "sftp",
           local_terminal: "local",
           telnet: "telnet",
           serial: "serial",
@@ -467,7 +546,7 @@ export default function NewSessionPage() {
         if (found.type !== "ssh") setRemoteDynamicTabTitle(false);
         if (found.type !== "local_terminal") setDynamicTabTitle(false);
 
-        if (found.type === "ssh") {
+        if (found.type === "ssh" || found.type === "sftp") {
           setHost(found.host || "");
           setSshPort(found.port || 22);
           setUsername(found.username || "root");
@@ -479,21 +558,23 @@ export default function NewSessionPage() {
           setJumpHostId(found.network?.proxy_jump_id || "");
           setOtpId(found.auth?.otp_id || "");
           setAutoFillOtp(found.auth?.auto_fill_otp || false);
-          setPostLoginEnabled(found.post_login?.enabled ?? false);
-          setPostLoginCommand(found.post_login?.command ?? "");
-          setPostLoginDelayMs(found.post_login?.delay_ms ?? DEFAULT_POST_LOGIN_DELAY_MS);
           setInitialRemoteDir(found.initial_remote_dir || "");
-          setSshBackspaceMode(found.backspace_mode || "del");
-          setX11Forwarding(found.x11_forwarding ?? false);
           setAuthAgentEndpoint(found.auth_agent_endpoint ?? { type: "auto" });
           setAgentForwardingConfig(
             normalizeSshAgentForwardingConfig(found.agent_forwarding_config),
           );
           setSshAlgorithms(normalizeSshAlgorithms(found.ssh_algorithms));
           setSshProfile(found.ssh_profile || "standard");
-          setSshTerminalType(found.terminal_type || "default");
           setSftpSettings(normalizeSftpSettings(found.sftp));
-          setRemoteDynamicTabTitle(found.dynamic_tab_title ?? false);
+          if (found.type === "ssh") {
+            setPostLoginEnabled(found.post_login?.enabled ?? false);
+            setPostLoginCommand(found.post_login?.command ?? "");
+            setPostLoginDelayMs(found.post_login?.delay_ms ?? DEFAULT_POST_LOGIN_DELAY_MS);
+            setSshBackspaceMode(found.backspace_mode || "del");
+            setX11Forwarding(found.x11_forwarding ?? false);
+            setSshTerminalType(found.terminal_type || "default");
+            setRemoteDynamicTabTitle(found.dynamic_tab_title ?? false);
+          }
         } else if (found.type === "telnet") {
           setHost(found.host || "");
           setTelnetPort(found.port || 23);
@@ -591,7 +672,14 @@ export default function NewSessionPage() {
     invoke<ConnectionCustomIcon[]>("get_connection_custom_icons")
       .then(setCustomIcons)
       .catch((e) => setError(getErrorMessage(e)));
-  }, [appSettings.recording.auto_start, appSettings.recording.default_mode, editId, t]);
+  }, [
+    appSettings.recording.auto_start,
+    appSettings.recording.default_mode,
+    editId,
+    fromSshId,
+    initialGroupId,
+    t,
+  ]);
 
   const loadSerialPorts = useCallback(async () => {
     setSerialPortsLoading(true);
@@ -910,7 +998,7 @@ export default function NewSessionPage() {
   }, [agentForwardingConfig.sources.external_agent_endpoints, t]);
 
   const getValidationError = useCallback(() => {
-    if (currentTab === "ssh") {
+    if (currentTab === "ssh" || currentTab === "sftp") {
       if (!host.trim()) {
         return t("dialog.hostRequired");
       }
@@ -923,22 +1011,24 @@ export default function NewSessionPage() {
       if (authAgentEndpointError) {
         return authAgentEndpointError;
       }
-      if (postLoginEnabled && !postLoginCommand.trim()) {
-        return t("dialog.postLoginCommandRequired");
-      }
-      if (!isValidPostLoginDelay(postLoginDelayMs)) {
-        return t("dialog.postLoginDelayInvalid", {
-          min: MIN_POST_LOGIN_DELAY_MS,
-          max: MAX_POST_LOGIN_DELAY_MS,
-          defaultValue: "Delay must be between {{min}} and {{max}} ms",
-        });
-      }
-      if (!isValidSftpShellDetectionTimeout(sftpSettings.shell_detection_timeout_ms)) {
-        return t("dialog.sftpShellDetectionTimeoutInvalid", {
-          min: MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS,
-          max: MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS,
-          defaultValue: "Shell detection timeout must be between {{min}} and {{max}} ms",
-        });
+      if (currentTab === "ssh") {
+        if (postLoginEnabled && !postLoginCommand.trim()) {
+          return t("dialog.postLoginCommandRequired");
+        }
+        if (!isValidPostLoginDelay(postLoginDelayMs)) {
+          return t("dialog.postLoginDelayInvalid", {
+            min: MIN_POST_LOGIN_DELAY_MS,
+            max: MAX_POST_LOGIN_DELAY_MS,
+            defaultValue: "Delay must be between {{min}} and {{max}} ms",
+          });
+        }
+        if (!isValidSftpShellDetectionTimeout(sftpSettings.shell_detection_timeout_ms)) {
+          return t("dialog.sftpShellDetectionTimeoutInvalid", {
+            min: MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS,
+            max: MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS,
+            defaultValue: "Shell detection timeout must be between {{min}} and {{max}} ms",
+          });
+        }
       }
       if (agentForwardingEndpointError) {
         return agentForwardingEndpointError;
@@ -1143,23 +1233,28 @@ export default function NewSessionPage() {
       const typeTag =
         currentTab === "ssh"
           ? "ssh"
-          : currentTab === "local"
-            ? "local_terminal"
-            : currentTab === "telnet"
-              ? "telnet"
-              : currentTab === "rdp"
-                ? "rdp"
-                : currentTab === "vnc"
-                  ? "vnc"
-                  : currentTab === "s3"
-                    ? "s3"
-                    : currentTab === "ftp"
-                      ? "ftp"
-                      : currentTab === "webdav"
-                        ? "webdav"
-                    : "serial";
+          : currentTab === "sftp"
+            ? "sftp"
+            : currentTab === "local"
+              ? "local_terminal"
+              : currentTab === "telnet"
+                ? "telnet"
+                : currentTab === "rdp"
+                  ? "rdp"
+                  : currentTab === "vnc"
+                    ? "vnc"
+                    : currentTab === "s3"
+                      ? "s3"
+                      : currentTab === "ftp"
+                        ? "ftp"
+                        : currentTab === "webdav"
+                          ? "webdav"
+                          : "serial";
       const network =
-        currentTab === "ssh" || currentTab === "rdp" || currentTab === "vnc"
+        currentTab === "ssh" ||
+        currentTab === "sftp" ||
+        currentTab === "rdp" ||
+        currentTab === "vnc"
           ? (() => {
               const nextNetwork: NonNullable<SavedConnection["network"]> = {};
               if (proxyId) {
@@ -1173,6 +1268,7 @@ export default function NewSessionPage() {
           : undefined;
       const auth =
         currentTab === "ssh" ||
+        currentTab === "sftp" ||
         currentTab === "telnet" ||
         currentTab === "rdp" ||
         currentTab === "vnc"
@@ -1193,11 +1289,15 @@ export default function NewSessionPage() {
                 mode: resolvedAuthMode,
                 password_id: resolvedAuthMode === "password" ? passwordId || "" : "",
                 key_id:
-                  currentTab === "ssh" && resolvedAuthMode === "key"
+                  (currentTab === "ssh" || currentTab === "sftp") && resolvedAuthMode === "key"
                     ? keyId || undefined
                     : undefined,
-                otp_id: currentTab === "ssh" ? otpId || undefined : undefined,
-                auto_fill_otp: currentTab === "ssh" && otpId ? autoFillOtp : undefined,
+                otp_id:
+                  currentTab === "ssh" || currentTab === "sftp" ? otpId || undefined : undefined,
+                auto_fill_otp:
+                  (currentTab === "ssh" || currentTab === "sftp") && otpId
+                    ? autoFillOtp
+                    : undefined,
               };
 
               if (resolvedAuthMode !== "password" || passwordId) {
@@ -1245,7 +1345,13 @@ export default function NewSessionPage() {
         initialData && initialGroupKey === finalGroupKey
           ? (initialData.sort_order ?? nextSortOrder)
           : nextSortOrder;
-      const supportsRecording = currentTab !== "rdp" && currentTab !== "vnc";
+      const supportsRecording =
+        currentTab !== "rdp" &&
+        currentTab !== "vnc" &&
+        currentTab !== "sftp" &&
+        currentTab !== "s3" &&
+        currentTab !== "ftp" &&
+        currentTab !== "webdav";
       const recording =
         supportsRecording && !recordingUseGlobal
           ? {
@@ -1262,7 +1368,12 @@ export default function NewSessionPage() {
         description: normalizedDescription || undefined,
         sort_order: sortOrder,
         open_on_startup:
-          currentTab === "rdp" || currentTab === "vnc" || currentTab === "s3" || currentTab === "ftp" || currentTab === "webdav"
+          currentTab === "rdp" ||
+          currentTab === "vnc" ||
+          currentTab === "s3" ||
+          currentTab === "ftp" ||
+          currentTab === "webdav" ||
+          currentTab === "sftp"
             ? false
             : openOnStartup,
         icon: iconKey || undefined,
@@ -1290,6 +1401,28 @@ export default function NewSessionPage() {
               auth_agent_endpoint: authType === "agent" ? authAgentEndpoint : undefined,
               agent_forwarding_config: agentForwardingConfig,
               dynamic_tab_title: remoteDynamicTabTitle,
+            }
+          : {}),
+        ...(currentTab === "sftp"
+          ? {
+              host: normalizedHost,
+              port: sshPort,
+              username: normalizedUsername,
+              auth,
+              network,
+              initial_remote_dir: (() => {
+                const normalized = initialRemoteDir.trim();
+                return normalized || undefined;
+              })(),
+              ssh_algorithms: sshAlgorithms,
+              ssh_profile: sshProfile,
+              sftp: {
+                ...sftpSettings,
+                enabled: true,
+                cwd_follow_mode: "off" as const,
+              },
+              auth_agent_endpoint: authType === "agent" ? authAgentEndpoint : undefined,
+              agent_forwarding_config: agentForwardingConfig,
             }
           : {}),
         ...(currentTab === "telnet"
@@ -1533,7 +1666,7 @@ export default function NewSessionPage() {
     };
 
     try {
-      if (currentTab === "ssh") {
+      if (currentTab === "ssh" || currentTab === "sftp") {
         if (!host.trim()) {
           showResult(false, "host_required");
           return;
@@ -1563,13 +1696,17 @@ export default function NewSessionPage() {
       const protocol =
         currentTab === "local"
           ? "local_terminal"
-          : currentTab === "ssh" ||
-              currentTab === "telnet" ||
-              currentTab === "rdp" ||
-              currentTab === "vnc" ||
-              currentTab === "serial"
-            ? currentTab
-            : currentTab;
+          : currentTab === "sftp"
+            ? "ssh"
+            : currentTab === "ssh" ||
+                currentTab === "telnet" ||
+                currentTab === "rdp" ||
+                currentTab === "vnc" ||
+                currentTab === "serial"
+              ? currentTab
+              : currentTab;
+
+      const isSshLike = currentTab === "ssh" || currentTab === "sftp";
 
       const result = await invoke<{
         ok: boolean;
@@ -1586,7 +1723,7 @@ export default function NewSessionPage() {
           protocol,
           host: host.trim() || undefined,
           port:
-            currentTab === "ssh"
+            isSshLike
               ? sshPort
               : currentTab === "telnet"
                 ? telnetPort
@@ -1601,22 +1738,20 @@ export default function NewSessionPage() {
           dataBits: Number(dataBits) || undefined,
           parity,
           stopBits,
-          username: currentTab === "ssh" ? username.trim() || undefined : undefined,
-          authMode: currentTab === "ssh" ? authType : undefined,
+          username: isSshLike ? username.trim() || undefined : undefined,
+          authMode: isSshLike ? authType : undefined,
           password:
-            currentTab === "ssh" && authType === "password" && password.trim()
-              ? password
-              : undefined,
+            isSshLike && authType === "password" && password.trim() ? password : undefined,
           passwordId:
-            currentTab === "ssh" && authType === "password" && passwordId ? passwordId : undefined,
-          keyId: currentTab === "ssh" && authType === "key" ? keyId || undefined : undefined,
-          otpId: currentTab === "ssh" ? otpId || undefined : undefined,
-          autoFillOtp: currentTab === "ssh" ? Boolean(otpId && autoFillOtp) : undefined,
-          proxyId: currentTab === "ssh" ? proxyId || undefined : undefined,
-          jumpHostId: currentTab === "ssh" ? jumpHostId || undefined : undefined,
+            isSshLike && authType === "password" && passwordId ? passwordId : undefined,
+          keyId: isSshLike && authType === "key" ? keyId || undefined : undefined,
+          otpId: isSshLike ? otpId || undefined : undefined,
+          autoFillOtp: isSshLike ? Boolean(otpId && autoFillOtp) : undefined,
+          proxyId: isSshLike ? proxyId || undefined : undefined,
+          jumpHostId: isSshLike ? jumpHostId || undefined : undefined,
           connectionId: editId || undefined,
           useStoredPassword:
-            currentTab === "ssh" &&
+            isSshLike &&
             authType === "password" &&
             !password.trim() &&
             !passwordId &&
@@ -2123,6 +2258,82 @@ export default function NewSessionPage() {
                 passwordSecretsUnlocked={passwordSecretsUnlocked}
                 onUnlockPasswordSecrets={() => setPasswordSecretsUnlocked(true)}
                 onLockPasswordSecrets={() => setPasswordSecretsUnlocked(false)}
+                formMode="ssh"
+              />
+            </TabsContent>
+
+            <TabsContent value="sftp" className="space-y-3 m-0 border-0 outline-none w-full">
+              <SshForm
+                host={host}
+                setHost={setHost}
+                port={sshPort}
+                setPort={setSshPort}
+                username={username}
+                setUsername={setUsername}
+                authType={authType}
+                setAuthType={(value) => setAuthType(value)}
+                passwordId={passwordId}
+                setPasswordId={setPasswordId}
+                password={password}
+                setPassword={setPassword}
+                hasPassword={hasPassword}
+                setHasPassword={setHasPassword}
+                keyId={keyId}
+                setKeyId={setKeyId}
+                proxyId={proxyId}
+                setProxyId={setProxyId}
+                proxies={proxies}
+                jumpHostId={jumpHostId}
+                setJumpHostId={setJumpHostId}
+                jumpHostOptions={jumpHostOptions}
+                otpId={otpId}
+                setOtpId={setOtpId}
+                autoFillOtp={autoFillOtp}
+                setAutoFillOtp={setAutoFillOtp}
+                otpEntries={otpEntries}
+                postLoginEnabled={postLoginEnabled}
+                setPostLoginEnabled={setPostLoginEnabled}
+                postLoginCommand={postLoginCommand}
+                setPostLoginCommand={setPostLoginCommand}
+                postLoginDelayMs={postLoginDelayMs}
+                setPostLoginDelayMs={setPostLoginDelayMs}
+                minPostLoginDelayMs={MIN_POST_LOGIN_DELAY_MS}
+                maxPostLoginDelayMs={MAX_POST_LOGIN_DELAY_MS}
+                initialRemoteDir={initialRemoteDir}
+                setInitialRemoteDir={setInitialRemoteDir}
+                backspaceMode={sshBackspaceMode}
+                setBackspaceMode={setSshBackspaceMode}
+                x11Forwarding={x11Forwarding}
+                setX11Forwarding={setX11Forwarding}
+                authAgentEndpoint={authAgentEndpoint}
+                setAuthAgentEndpoint={setAuthAgentEndpoint}
+                authAgentEndpointError={authAgentEndpointError}
+                agentForwardingConfig={agentForwardingConfig}
+                setAgentForwardingConfig={setAgentForwardingConfig}
+                agentForwardingEndpointError={agentForwardingEndpointError}
+                sshAlgorithms={sshAlgorithms}
+                setSshAlgorithms={setSshAlgorithms}
+                sshProfile={sshProfile}
+                setSshProfile={setSshProfile}
+                sshTerminalType={sshTerminalType}
+                setSshTerminalType={setSshTerminalType}
+                sftpSettings={sftpSettings}
+                setSftpSettings={setSftpSettings}
+                remoteDynamicTabTitle={remoteDynamicTabTitle}
+                setRemoteDynamicTabTitle={setRemoteDynamicTabTitle}
+                recordingUseGlobal={recordingUseGlobal}
+                setRecordingUseGlobal={setRecordingUseGlobal}
+                recordingAutoStart={recordingAutoStart}
+                setRecordingAutoStart={setRecordingAutoStart}
+                recordingMode={recordingMode}
+                setRecordingMode={setRecordingMode}
+                connectionId={initialData?.id || editId}
+                encoding={encoding}
+                setEncoding={setEncoding}
+                passwordSecretsUnlocked={passwordSecretsUnlocked}
+                onUnlockPasswordSecrets={() => setPasswordSecretsUnlocked(true)}
+                onLockPasswordSecrets={() => setPasswordSecretsUnlocked(false)}
+                formMode="sftp"
               />
             </TabsContent>
 
@@ -2387,7 +2598,12 @@ export default function NewSessionPage() {
                   onChange={(e) => setDescription(e.target.value)}
                 />
               </div>
-              {currentTab !== "rdp" && currentTab !== "vnc" ? (
+              {currentTab !== "rdp" &&
+              currentTab !== "vnc" &&
+              currentTab !== "s3" &&
+              currentTab !== "ftp" &&
+              currentTab !== "webdav" &&
+              currentTab !== "sftp" ? (
                 <div className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
                   <div className="min-w-0">
                     <div className="text-xs font-medium">{t("connection.openOnStartup")}</div>

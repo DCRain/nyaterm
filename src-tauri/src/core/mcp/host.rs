@@ -1633,7 +1633,8 @@ fn terminal_connection_type(value: &ConnectionType) -> Option<&'static str> {
         ConnectionType::LocalTerminal { .. } => Some("local_terminal"),
         ConnectionType::Telnet { .. } => Some("telnet"),
         ConnectionType::Serial { .. } => Some("serial"),
-        ConnectionType::Rdp { .. }
+        ConnectionType::Sftp { .. }
+        | ConnectionType::Rdp { .. }
         | ConnectionType::Vnc { .. }
         | ConnectionType::S3 { .. }
         | ConnectionType::Ftp { .. }

@@ -451,6 +451,7 @@ pub(super) fn rebuild_all_connection_indexes_in_txn(txn: &redb::WriteTransaction
 fn connection_protocol(config: &crate::config::ConnectionType) -> &'static str {
     match config {
         crate::config::ConnectionType::Ssh { .. } => "ssh",
+        crate::config::ConnectionType::Sftp { .. } => "sftp",
         crate::config::ConnectionType::LocalTerminal { .. } => "local_terminal",
         crate::config::ConnectionType::Telnet { .. } => "telnet",
         crate::config::ConnectionType::Serial { .. } => "serial",

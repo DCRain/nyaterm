@@ -182,13 +182,18 @@ pub fn ssh_agent_endpoint_key(endpoint: &SshAgentEndpoint) -> String {
 
 /// Validates SSH Agent fields at the connection save boundary.
 pub fn validate_ssh_agent_settings(connection: &ConnectionType) -> AppResult<()> {
-    let ConnectionType::Ssh {
-        auth_agent_endpoint,
-        agent_forwarding_config,
-        ..
-    } = connection
-    else {
-        return Ok(());
+    let (auth_agent_endpoint, agent_forwarding_config) = match connection {
+        ConnectionType::Ssh {
+            auth_agent_endpoint,
+            agent_forwarding_config,
+            ..
+        }
+        | ConnectionType::Sftp {
+            auth_agent_endpoint,
+            agent_forwarding_config,
+            ..
+        } => (auth_agent_endpoint, agent_forwarding_config),
+        _ => return Ok(()),
     };
 
     if let Some(endpoint) = auth_agent_endpoint {
@@ -585,6 +590,28 @@ pub enum ConnectionType {
         dynamic_tab_title: bool,
         /// Optional remote directory to `cd` into after the SSH shell is ready.
         /// Synthesized ahead of any explicit `post_login` command.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        initial_remote_dir: Option<String>,
+    },
+    /// SFTP-only saved connection: SSH transport without a shell PTY.
+    /// `initial_remote_dir` drives the file explorer start path (not shell `cd`).
+    Sftp {
+        host: String,
+        #[serde(default = "default_ssh_port")]
+        port: u16,
+        #[serde(default = "default_ssh_user")]
+        username: String,
+        #[serde(
+            default,
+            alias = "agent_endpoint",
+            skip_serializing_if = "Option::is_none"
+        )]
+        auth_agent_endpoint: Option<SshAgentEndpoint>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_forwarding_config: Option<SshAgentForwardingConfig>,
+        #[serde(default)]
+        encoding: String,
+        /// Optional remote directory used as the SFTP file browser start path.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         initial_remote_dir: Option<String>,
     },
@@ -1420,7 +1447,8 @@ pub fn save_sessions(app: &AppHandle, config: &SessionsConfig) -> AppResult<()> 
             ConnectionType::Ssh { .. } => {
                 migrate_legacy_ssh_agent_settings(conn);
             }
-            ConnectionType::Rdp { .. }
+            ConnectionType::Sftp { .. }
+            | ConnectionType::Rdp { .. }
             | ConnectionType::Vnc { .. }
             | ConnectionType::S3 { .. }
             | ConnectionType::Ftp { .. }
@@ -1526,6 +1554,7 @@ fn migrate_connection_proxies_to_standalone(
 pub fn resolve_connection_encoding(app: &AppHandle, conn: &SavedConnection) -> String {
     let per_conn = match &conn.config {
         ConnectionType::Ssh { encoding, .. }
+        | ConnectionType::Sftp { encoding, .. }
         | ConnectionType::LocalTerminal { encoding, .. }
         | ConnectionType::Telnet { encoding, .. }
         | ConnectionType::Serial { encoding, .. } => encoding.as_str(),
@@ -2523,6 +2552,36 @@ mod tests {
         .expect("connection without initial_remote_dir");
         let serialized = serde_json::to_value(without_dir).expect("serialize");
         assert!(serialized.get("initial_remote_dir").is_none());
+    }
+
+    #[test]
+    fn sftp_connection_round_trips_with_initial_remote_dir() {
+        let conn: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "sftp-1",
+            "name": "SFTP Box",
+            "type": "sftp",
+            "host": "files.example.com",
+            "port": 22,
+            "username": "deploy",
+            "initial_remote_dir": "/var/www"
+        }))
+        .expect("sftp connection");
+        assert!(matches!(
+            &conn.config,
+            ConnectionType::Sftp {
+                host,
+                port: 22,
+                username,
+                initial_remote_dir: Some(path),
+                ..
+            } if host == "files.example.com" && username == "deploy" && path == "/var/www"
+        ));
+        let serialized = serde_json::to_value(conn).expect("serialize sftp");
+        assert_eq!(serialized.get("type"), Some(&serde_json::json!("sftp")));
+        assert_eq!(
+            serialized.get("initial_remote_dir"),
+            Some(&serde_json::json!("/var/www"))
+        );
     }
 
     #[test]

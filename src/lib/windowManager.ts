@@ -824,6 +824,8 @@ export interface NewSessionTarget {
   sourceTabId?: string;
   sourcePaneId?: string;
   initialGroupId?: string;
+  /** Prefill a new SFTP connection from an existing SSH connection id. */
+  fromSshId?: string;
 }
 
 export function openNewSession(editId?: string, autoConnect?: boolean, target?: NewSessionTarget) {
@@ -853,6 +855,9 @@ export function openNewSessionWithTarget(
   }
   if (!editId && target?.initialGroupId) {
     url += `&groupId=${encodeURIComponent(target.initialGroupId)}`;
+  }
+  if (!editId && target?.fromSshId) {
+    url += `&fromSsh=${encodeURIComponent(target.fromSshId)}`;
   }
   return openChildWindow({
     label: scopedModalLabel("new-session"),

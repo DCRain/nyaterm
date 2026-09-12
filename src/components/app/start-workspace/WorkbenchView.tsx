@@ -256,7 +256,7 @@ function formatRecentConnectionMeta(
   connection: SavedConnection,
   labels: { localMachine: string; notApplicable: string },
 ): string {
-  if (connection.type === "ssh") {
+  if (connection.type === "ssh" || connection.type === "sftp") {
     const host = connection.host?.trim() || labels.notApplicable;
     const user = connection.username?.trim();
     const port =

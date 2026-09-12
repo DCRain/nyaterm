@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SavedConnection } from "@/types/global";
+import { getConnectionSessionType } from "./appSessionFactory";
 import { canOpenSavedConnectionWithSftp, openSavedConnectionWithSftp } from "./sftpRuntime";
 
 describe("canOpenSavedConnectionWithSftp", () => {
@@ -22,8 +23,9 @@ describe("canOpenSavedConnectionWithSftp", () => {
     ).toBe(false);
   });
 
-  it("hides the action for non-SSH connections", () => {
+  it("hides the action for non-SSH connections including dedicated SFTP", () => {
     expect(canOpenSavedConnectionWithSftp(connection("telnet"))).toBe(false);
+    expect(canOpenSavedConnectionWithSftp(connection("sftp"))).toBe(false);
   });
 
   it("opens only the connection supplied by the context-menu action", () => {
@@ -42,6 +44,13 @@ describe("canOpenSavedConnectionWithSftp", () => {
 
     expect(openSavedConnectionWithSftp(connection("telnet"), onOpen)).toBe(false);
     expect(onOpen).not.toHaveBeenCalled();
+  });
+});
+
+describe("getConnectionSessionType", () => {
+  it("maps sftp saved connections to SSH session panes", () => {
+    expect(getConnectionSessionType({ type: "sftp" })).toBe("SSH");
+    expect(getConnectionSessionType({ type: "ssh" })).toBe("SSH");
   });
 });
 

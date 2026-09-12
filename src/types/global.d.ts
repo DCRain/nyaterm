@@ -78,6 +78,7 @@ export type PaneSplitDirection = "horizontal" | "vertical";
 /** Connection type discriminator matching Rust ConnectionType. */
 export type ConnectionTypeTag =
   | "ssh"
+  | "sftp"
   | "local_terminal"
   | "telnet"
   | "serial"
@@ -548,11 +549,14 @@ export interface SavedConnection {
   terminal_type?: SshTerminalType;
   sftp?: SftpSettings;
   asset?: AssetMetadata;
-  /** SSH-specific fields (present when type === "ssh"). */
+  /** SSH / SFTP / Telnet / RDP / VNC / FTP host fields (when applicable). */
   host?: string;
   port?: number;
   username?: string;
-  /** SSH-only: remote directory to `cd` into after the shell is ready. */
+  /**
+   * SSH: remote directory to `cd` into after the shell is ready.
+   * SFTP: file explorer start path (no shell `cd`).
+   */
   initial_remote_dir?: string;
   /** Local terminal fields (present when type === "local_terminal"). */
   shell_path?: string;

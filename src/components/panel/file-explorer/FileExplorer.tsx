@@ -194,6 +194,8 @@ interface FileExplorerPaneExtraProps {
   ) => void;
   /** Force local/remote backend regardless of session type (dual-pane SFTP). */
   forceBackend?: FileExplorerBackendKind;
+  /** Prefer this remote path on first mount (e.g. connection initial_remote_dir). */
+  preferredInitialPath?: string;
   /** Dropped onto this pane from a peer explorer drag (this pane is the target). */
   onReceiveEntries?: (source: FileExplorerPaneEndpoint, entries: FileExplorerCopyEntry[]) => void;
   /** Hide terminal path/CD context actions (SFTP workspace). Default true. */
@@ -682,6 +684,7 @@ export function FileExplorerPane({
   sendTargetOptions = [],
   onSendEntriesToTarget,
   forceBackend,
+  preferredInitialPath,
   onReceiveEntries,
   showTerminalActions = true,
   peerTransferAction,
@@ -1564,6 +1567,14 @@ export function FileExplorerPane({
         if (cancelled || loaded) return;
       }
 
+      const preferred = normalizeExplorerPath(preferredInitialPath ?? "", backend);
+      if (preferred && (backend === "remote" || backend === "local")) {
+        homeDirRef.current = preferred;
+        setHomeDir(preferred);
+        const loaded = await loadDirectory(preferred);
+        if (cancelled || loaded) return;
+      }
+
       try {
         const home = normalizeExplorerPath(
           backend === "s3" || backend === "ftp" || backend === "webdav"
@@ -1593,7 +1604,7 @@ export function FileExplorerPane({
     return () => {
       cancelled = true;
     };
-  }, [activeSessionId, canBrowseFiles, loadDirectory, resetExternalDropHover]);
+  }, [activeSessionId, canBrowseFiles, loadDirectory, preferredInitialPath, resetExternalDropHover]);
 
   useEffect(() => {
     if (!activeSessionId) {

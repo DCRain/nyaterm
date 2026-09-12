@@ -55,7 +55,12 @@ interface DualPaneFileWorkspaceProps {
 }
 
 function isBrowsableSavedConnection(connection: SavedConnection) {
-  if (connection.type === "ftp" || connection.type === "s3" || connection.type === "webdav") {
+  if (
+    connection.type === "ftp" ||
+    connection.type === "s3" ||
+    connection.type === "webdav" ||
+    connection.type === "sftp"
+  ) {
     return true;
   }
   return connection.type === "ssh" && connection.sftp?.enabled !== false;
@@ -70,7 +75,7 @@ function storageSessionId(connection: SavedConnection) {
 function connectionBackend(
   connection: SavedConnection,
 ): Exclude<FileExplorerBackendKind, "local"> | null {
-  if (connection.type === "ssh") return "remote";
+  if (connection.type === "ssh" || connection.type === "sftp") return "remote";
   if (connection.type === "ftp") return "ftp";
   if (connection.type === "s3") return "s3";
   if (connection.type === "webdav") return "webdav";
@@ -78,7 +83,7 @@ function connectionBackend(
 }
 
 function connectionSessionType(connection: SavedConnection): WorkspaceSessionType | null {
-  if (connection.type === "ssh") return "SSH";
+  if (connection.type === "ssh" || connection.type === "sftp") return "SSH";
   if (connection.type === "ftp") return "FTP";
   if (connection.type === "s3") return "S3";
   if (connection.type === "webdav") return "WebDAV";
@@ -86,7 +91,7 @@ function connectionSessionType(connection: SavedConnection): WorkspaceSessionTyp
 }
 
 function typeLabelKey(type: SavedConnection["type"]) {
-  if (type === "ssh") return "fileExplorer.leftSourceSftp";
+  if (type === "ssh" || type === "sftp") return "fileExplorer.leftSourceSftp";
   if (type === "ftp") return "fileExplorer.leftSourceFtp";
   if (type === "s3") return "fileExplorer.leftSourceS3";
   if (type === "webdav") return "fileExplorer.leftSourceWebDav";
@@ -209,7 +214,7 @@ export default function DualPaneFileWorkspace({
         await closeOwnedSession();
         setLeftEndpoint(null);
 
-        if (connection.type === "ssh") {
+        if (connection.type === "ssh" || connection.type === "sftp") {
           const reused = await findReusableSshSession(connection.id);
           let nextSessionId = reused;
           let ownsSession = false;
@@ -217,6 +222,7 @@ export default function DualPaneFileWorkspace({
             nextSessionId = await invoke<string>("create_ssh_session", {
               connectionId: connection.id,
               createRequestId: crypto.randomUUID(),
+              runtimeMode: connection.type === "sftp" ? "sftp" : undefined,
             });
             ownsSession = true;
             ownedSessionRef.current = nextSessionId;
@@ -272,6 +278,16 @@ export default function DualPaneFileWorkspace({
     leftSource.kind === "local" ? t("fileExplorer.leftSourceLocal") : leftSource.connection.name;
   const leftPeerAction = leftIsLocal ? "upload" : "copy";
   const rightPeerAction = leftIsLocal ? "download" : "copy";
+  const rightConnection = useMemo(
+    () => (connectionId ? (savedConnections.find((item) => item.id === connectionId) ?? null) : null),
+    [connectionId, savedConnections],
+  );
+  const rightPreferredInitialPath =
+    rightBackend === "remote" ? rightConnection?.initial_remote_dir?.trim() || undefined : undefined;
+  const leftPreferredInitialPath =
+    leftSource.kind === "connection" && leftSource.backend === "remote"
+      ? leftSource.connection.initial_remote_dir?.trim() || undefined
+      : undefined;
 
   const leftHeader = (
     <DropdownMenu>
@@ -398,6 +414,7 @@ export default function DualPaneFileWorkspace({
               activeConnectionId={leftConnectionId}
               activeSessionName={leftLabel}
               forceBackend={leftBackend}
+              preferredInitialPath={leftPreferredInitialPath}
               headerMeta={leftHeader}
               showTerminalActions={false}
               peerTransferAction={leftPeerAction}
@@ -440,6 +457,7 @@ export default function DualPaneFileWorkspace({
             activeConnectionId={connectionId}
             activeSessionName={pane.name}
             forceBackend={rightBackend}
+            preferredInitialPath={rightPreferredInitialPath}
             headerMeta={rightHeader}
             showTerminalActions={false}
             peerTransferAction={rightPeerAction}

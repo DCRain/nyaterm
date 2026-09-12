@@ -1301,6 +1301,89 @@ function App() {
     [addPendingTab, invoke, recordRecentConnection, setActiveTabId, t, updateUi],
   );
 
+  const openSftpWorkspace = useCallback(
+    async (connection: SavedConnection) => {
+      if (connection.type !== "ssh" && connection.type !== "sftp") {
+        toast.error(t("savedConnections.openSftpSshOnly"));
+        return;
+      }
+      if (connection.type === "ssh" && connection.sftp?.enabled === false) {
+        toast.error(t("savedConnections.openSftpDisabled"));
+        return;
+      }
+
+      const tabName = t("sftpWorkspace.tabTitle", { name: connection.name });
+      const pending = beginPendingSession(
+        tabName,
+        "SSH",
+        connection.id,
+        { view: "sftp" },
+        { sshRuntimeMode: "sftp" },
+      );
+      const { tabId, paneId, createRequestId } = pending;
+
+      try {
+        const sessionId = await createSessionForConnection(
+          connection,
+          createRequestId,
+          undefined,
+          "sftp",
+        );
+        if (paneId ? !hasPane(tabId, paneId) : !hasTab(tabId)) {
+          await closeStaleCreatedSession(sessionId);
+          return;
+        }
+        if (paneId) {
+          updatePaneSession(tabId, paneId, sessionId);
+        } else {
+          updateTabSession(tabId, sessionId);
+        }
+        recordRecentConnection(connection.id);
+        updateUi({ saved_connections_last_opened_connection_id: connection.id });
+        updateAutoIconForSessionStart(connection.id, sessionId);
+      } catch (error) {
+        if (
+          isSessionCreationCancelled(error) ||
+          (paneId ? !hasPane(tabId, paneId) : !hasTab(tabId))
+        ) {
+          return;
+        }
+        const errorMessage = getErrorMessage(error);
+        logger.error({
+          domain: "session.lifecycle",
+          event: "sftp_workspace.open_failed",
+          message: "Open SFTP workspace failed",
+          ids: { connection_id: connection.id },
+          error,
+        });
+        if (paneId) {
+          markPaneConnectionFailed(tabId, paneId, errorMessage);
+        } else {
+          markTabConnectionFailed(tabId, errorMessage);
+        }
+        maybePromptConnectionEdit(connection.id, errorMessage, {
+          sourceTabId: tabId,
+          sourcePaneId: paneId,
+        });
+        toast.error(t("savedConnections.connectionFailed", { error: errorMessage }));
+      }
+    },
+    [
+      beginPendingSession,
+      hasPane,
+      hasTab,
+      markPaneConnectionFailed,
+      markTabConnectionFailed,
+      maybePromptConnectionEdit,
+      recordRecentConnection,
+      t,
+      updateAutoIconForSessionStart,
+      updatePaneSession,
+      updateTabSession,
+      updateUi,
+    ],
+  );
+
   const connectSavedConnection = useCallback(
     async (
       connection: SavedConnection,
@@ -1324,6 +1407,11 @@ function App() {
 
       if (connection.type === "webdav") {
         openWebDavWorkspace(connection);
+        return;
+      }
+
+      if (connection.type === "sftp") {
+        void openSftpWorkspace(connection);
         return;
       }
 
@@ -1434,78 +1522,7 @@ function App() {
       openS3Workspace,
       openFtpWorkspace,
       openWebDavWorkspace,
-      recordRecentConnection,
-      t,
-      updateAutoIconForSessionStart,
-      updatePaneSession,
-      updateTabSession,
-      updateUi,
-    ],
-  );
-
-  const openSftpWorkspace = useCallback(
-    async (connection: SavedConnection) => {
-      if (connection.type !== "ssh") {
-        toast.error(t("savedConnections.openSftpSshOnly"));
-        return;
-      }
-      if (connection.sftp?.enabled === false) {
-        toast.error(t("savedConnections.openSftpDisabled"));
-        return;
-      }
-
-      const tabName = t("sftpWorkspace.tabTitle", { name: connection.name });
-      const pending = beginPendingSession(tabName, "SSH", connection.id, { view: "sftp" });
-      const { tabId, paneId, createRequestId } = pending;
-
-      try {
-        const sessionId = await createSessionForConnection(connection, createRequestId);
-        if (paneId ? !hasPane(tabId, paneId) : !hasTab(tabId)) {
-          await closeStaleCreatedSession(sessionId);
-          return;
-        }
-        if (paneId) {
-          updatePaneSession(tabId, paneId, sessionId);
-        } else {
-          updateTabSession(tabId, sessionId);
-        }
-        recordRecentConnection(connection.id);
-        updateUi({ saved_connections_last_opened_connection_id: connection.id });
-        updateAutoIconForSessionStart(connection.id, sessionId);
-      } catch (error) {
-        if (
-          isSessionCreationCancelled(error) ||
-          (paneId ? !hasPane(tabId, paneId) : !hasTab(tabId))
-        ) {
-          return;
-        }
-        const errorMessage = getErrorMessage(error);
-        logger.error({
-          domain: "session.lifecycle",
-          event: "sftp_workspace.open_failed",
-          message: "Open SFTP workspace failed",
-          ids: { connection_id: connection.id },
-          error,
-        });
-        if (paneId) {
-          markPaneConnectionFailed(tabId, paneId, errorMessage);
-        } else {
-          markTabConnectionFailed(tabId, errorMessage);
-        }
-        maybePromptConnectionEdit(connection.id, errorMessage, {
-          sourceTabId: tabId,
-          sourcePaneId: paneId,
-        });
-        toast.error(t("savedConnections.connectionFailed", { error: errorMessage }));
-      }
-    },
-    [
-      beginPendingSession,
-      hasPane,
-      hasTab,
-      markPaneConnectionFailed,
-      markTabConnectionFailed,
-      maybePromptConnectionEdit,
+      openSftpWorkspace,
       recordRecentConnection,
       t,
       updateAutoIconForSessionStart,
@@ -1518,7 +1535,7 @@ function App() {
   const openSshTerminalAtRemotePath = useCallback(
     async (connectionId: string, path: string) => {
       const connection = savedConnections.find((item) => item.id === connectionId);
-      if (!connection || connection.type !== "ssh") {
+      if (!connection || (connection.type !== "ssh" && connection.type !== "sftp")) {
         toast.error(t("savedConnections.openSftpSshOnly"));
         return;
       }
@@ -1538,6 +1555,7 @@ function App() {
           connection,
           createRequestId,
           startupCommand,
+          connection.type === "sftp" ? "standard" : undefined,
         );
         if (!hasTab(tabId)) {
           await closeStaleCreatedSession(sessionId);
