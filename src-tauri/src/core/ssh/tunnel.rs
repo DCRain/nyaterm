@@ -7,12 +7,14 @@ use crate::observability::{StructuredLog, StructuredLogLevel, log_event, log_rat
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
+
+const TUNNEL_RECONNECT_MAX_ATTEMPTS: u32 = 5;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -45,6 +47,8 @@ struct TunnelRuntimeEntry {
     task_handle: Option<JoinHandle<()>>,
     ssh_handle: Option<SshHandle>,
     connection_id: Option<String>,
+    /// Cancels an in-flight auto-reconnect loop when set to `true`.
+    reconnect_cancel: Option<watch::Sender<bool>>,
 }
 
 impl TunnelRuntimeEntry {
@@ -58,6 +62,13 @@ impl TunnelRuntimeEntry {
             task_handle: None,
             ssh_handle: None,
             connection_id,
+            reconnect_cancel: None,
+        }
+    }
+
+    fn cancel_reconnect(&mut self) {
+        if let Some(tx) = self.reconnect_cancel.take() {
+            let _ = tx.send(true);
         }
     }
 
@@ -387,6 +398,7 @@ impl TunnelManager {
             let entry = runtime
                 .entry(tunnel_id.to_string())
                 .or_insert_with(|| TunnelRuntimeEntry::new(None));
+            entry.cancel_reconnect();
             entry.generation = entry.generation.saturating_add(1);
             let shutdown_tx = entry.shutdown_tx.take();
             entry.task_handle = None;
@@ -415,11 +427,12 @@ impl TunnelManager {
     pub async fn delete_runtime_state(&self, app: &AppHandle, tunnel_id: &str) {
         let (shutdown_tx, state) = {
             let mut runtime = self.runtime.lock().await;
-            let shutdown_tx = runtime
-                .remove(tunnel_id)
-                .and_then(|mut entry| entry.shutdown_tx.take());
+            let shutdown_tx = runtime.remove(tunnel_id).map(|mut entry| {
+                entry.cancel_reconnect();
+                entry.shutdown_tx.take()
+            });
             (
-                shutdown_tx,
+                shutdown_tx.flatten(),
                 TunnelRuntimeState {
                     tunnel_id: tunnel_id.to_string(),
                     status: TunnelRuntimeStatus::Stopped,
@@ -447,6 +460,7 @@ impl TunnelManager {
             TunnelRuntimeStatus::Reconnecting,
             None,
             false,
+            false,
         )
         .await;
     }
@@ -456,16 +470,22 @@ impl TunnelManager {
         app: &AppHandle,
         tunnels: &[TunnelConfig],
         connection_id: &str,
+        force: bool,
     ) {
-        self.mark_enabled_tunnels_for_connection(
-            app,
-            tunnels,
-            connection_id,
-            TunnelRuntimeStatus::Disconnected,
-            Some("SSH session disconnected".to_string()),
-            true,
-        )
-        .await;
+        let updated_ids = self
+            .mark_enabled_tunnels_for_connection(
+                app,
+                tunnels,
+                connection_id,
+                TunnelRuntimeStatus::Disconnected,
+                Some("SSH session disconnected".to_string()),
+                true,
+                force,
+            )
+            .await;
+        for tunnel_id in updated_ids {
+            self.schedule_reconnect_if_needed(app, &tunnel_id).await;
+        }
     }
 
     async fn begin_starting(
@@ -541,7 +561,7 @@ impl TunnelManager {
         generation: u64,
         exit: TunnelTaskExit,
     ) {
-        let state = {
+        let (state, should_reconnect) = {
             let mut runtime = self.runtime.lock().await;
             let Some(entry) = runtime.get_mut(tunnel_id) else {
                 return;
@@ -553,30 +573,40 @@ impl TunnelManager {
             entry.shutdown_tx = None;
             entry.task_handle = None;
             entry.ssh_handle = None;
-            match exit {
+            let should_reconnect = match &exit {
                 TunnelTaskExit::Stopped => {
                     if entry.status == TunnelRuntimeStatus::Stopped {
                         return;
                     }
                     entry.status = TunnelRuntimeStatus::Stopped;
                     entry.error = None;
+                    false
                 }
                 TunnelTaskExit::Disconnected(message) => {
+                    // Session reconnect owns this tunnel; do not overwrite or self-reconnect.
                     if entry.status == TunnelRuntimeStatus::Reconnecting {
                         return;
                     }
                     entry.status = TunnelRuntimeStatus::Disconnected;
-                    entry.error = Some(message);
+                    entry.error = Some(message.clone());
+                    true
                 }
                 TunnelTaskExit::Error(message) => {
+                    if entry.status == TunnelRuntimeStatus::Reconnecting {
+                        return;
+                    }
                     entry.status = TunnelRuntimeStatus::Error;
-                    entry.error = Some(message);
+                    entry.error = Some(message.clone());
+                    true
                 }
-            }
+            };
             entry.updated_at = Some(now_ms());
-            entry.state(tunnel_id)
+            (entry.state(tunnel_id), should_reconnect)
         };
         emit_runtime_state(app, &state);
+        if should_reconnect {
+            self.schedule_reconnect_if_needed(app, tunnel_id).await;
+        }
     }
 
     async fn set_generation_status(
@@ -609,6 +639,7 @@ impl TunnelManager {
         emit_runtime_state(app, &state);
     }
 
+    /// Returns tunnel ids whose runtime status was actually updated.
     async fn mark_enabled_tunnels_for_connection(
         &self,
         app: &AppHandle,
@@ -617,8 +648,10 @@ impl TunnelManager {
         status: TunnelRuntimeStatus,
         error: Option<String>,
         stop_task: bool,
-    ) {
+        force: bool,
+    ) -> Vec<String> {
         let mut states = Vec::new();
+        let mut updated_ids = Vec::new();
         let mut shutdowns = Vec::new();
         {
             let mut runtime = self.runtime.lock().await;
@@ -628,7 +661,8 @@ impl TunnelManager {
                 let entry = runtime
                     .entry(tunnel.id.clone())
                     .or_insert_with(|| TunnelRuntimeEntry::new(tunnel.connection_id.clone()));
-                if entry.status == TunnelRuntimeStatus::Reconnecting
+                if !force
+                    && entry.status == TunnelRuntimeStatus::Reconnecting
                     && status == TunnelRuntimeStatus::Disconnected
                 {
                     continue;
@@ -644,6 +678,7 @@ impl TunnelManager {
                 entry.status = status;
                 entry.error = error.clone();
                 entry.updated_at = Some(now_ms());
+                updated_ids.push(tunnel.id.clone());
                 states.push(entry.state(&tunnel.id));
             }
         }
@@ -653,6 +688,179 @@ impl TunnelManager {
         for state in states {
             emit_runtime_state(app, &state);
         }
+        updated_ids
+    }
+
+    /// Persist `is_open=false` after reconnect attempts are exhausted, then notify the UI.
+    async fn persist_tunnel_closed(
+        &self,
+        app: &AppHandle,
+        tunnel_id: &str,
+        error: Option<String>,
+    ) {
+        {
+            let mut runtime = self.runtime.lock().await;
+            if let Some(entry) = runtime.get_mut(tunnel_id) {
+                entry.cancel_reconnect();
+                entry.generation = entry.generation.saturating_add(1);
+                if let Some(tx) = entry.shutdown_tx.take() {
+                    let _ = tx.send(());
+                }
+                entry.task_handle = None;
+                entry.ssh_handle = None;
+                entry.status = if error.is_some() {
+                    TunnelRuntimeStatus::Error
+                } else {
+                    TunnelRuntimeStatus::Stopped
+                };
+                entry.error = error;
+                entry.updated_at = Some(now_ms());
+                emit_runtime_state(app, &entry.state(tunnel_id));
+            }
+        }
+
+        if let Ok(mut tunnels) = config::load_tunnels(app) {
+            let mut changed = false;
+            if let Some(tunnel) = tunnels.iter_mut().find(|t| t.id == tunnel_id) {
+                if tunnel.is_open {
+                    tunnel.is_open = false;
+                    changed = true;
+                }
+            }
+            if changed {
+                let _ = config::save_tunnels(app, &tunnels);
+                let _ = app.emit("tunnel-saved", ());
+                let app_for_sync = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    crate::core::cloud_sync::notify_config_changed(&app_for_sync).await;
+                });
+            }
+        }
+    }
+
+    /// Start a background reconnect loop when the tunnel is still intended to be open.
+    pub async fn schedule_reconnect_if_needed(&self, app: &AppHandle, tunnel_id: &str) {
+        let Ok(tunnels) = config::load_tunnels(app) else {
+            return;
+        };
+        let Some(tunnel) = tunnels.iter().find(|t| t.id == tunnel_id) else {
+            return;
+        };
+        if !should_schedule_reconnect(tunnel.is_open) {
+            return;
+        }
+        if self.is_open(tunnel_id).await {
+            return;
+        }
+
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        {
+            let mut runtime = self.runtime.lock().await;
+            let entry = runtime
+                .entry(tunnel_id.to_string())
+                .or_insert_with(|| TunnelRuntimeEntry::new(tunnel.connection_id.clone()));
+            entry.cancel_reconnect();
+            entry.reconnect_cancel = Some(cancel_tx);
+            entry.status = TunnelRuntimeStatus::Reconnecting;
+            entry.error = None;
+            entry.updated_at = Some(now_ms());
+            emit_runtime_state(app, &entry.state(tunnel_id));
+        }
+
+        let manager = self.clone();
+        let app = app.clone();
+        let tunnel_id = tunnel_id.to_string();
+        tokio::spawn(async move {
+            let mut attempt = 0_u32;
+            let mut cancel_rx = cancel_rx;
+            loop {
+                if *cancel_rx.borrow() {
+                    return;
+                }
+                if attempt >= TUNNEL_RECONNECT_MAX_ATTEMPTS {
+                    manager
+                        .persist_tunnel_closed(
+                            &app,
+                            &tunnel_id,
+                            Some(format!(
+                                "Tunnel reconnect failed after {TUNNEL_RECONNECT_MAX_ATTEMPTS} attempts"
+                            )),
+                        )
+                        .await;
+                    return;
+                }
+                attempt += 1;
+                let delay = tunnel_reconnect_delay(attempt);
+                let sleep = tokio::time::sleep(delay);
+                tokio::pin!(sleep);
+                tokio::select! {
+                    _ = &mut sleep => {}
+                    changed = cancel_rx.changed() => {
+                        if changed.is_err() || *cancel_rx.borrow() {
+                            return;
+                        }
+                    }
+                }
+                if *cancel_rx.borrow() {
+                    return;
+                }
+
+                let Ok(tunnels) = config::load_tunnels(&app) else {
+                    continue;
+                };
+                let Some(tunnel) = tunnels.iter().find(|t| t.id == tunnel_id).cloned() else {
+                    return;
+                };
+                if !tunnel.is_open {
+                    return;
+                }
+                if manager.is_open(&tunnel_id).await {
+                    return;
+                }
+
+                match manager.open(&tunnel, &app).await {
+                    Ok(()) => return,
+                    Err(error) => {
+                        let message = format!(
+                            "Reconnect attempt {attempt}/{TUNNEL_RECONNECT_MAX_ATTEMPTS} failed: {}",
+                            user_facing_tunnel_error(&error)
+                        );
+                        let state = {
+                            let mut runtime = manager.runtime.lock().await;
+                            runtime.get_mut(&tunnel_id).map(|entry| {
+                                if entry.status == TunnelRuntimeStatus::Reconnecting
+                                    || entry.status == TunnelRuntimeStatus::Error
+                                    || entry.status == TunnelRuntimeStatus::Disconnected
+                                {
+                                    entry.status = TunnelRuntimeStatus::Reconnecting;
+                                    entry.error = Some(message.clone());
+                                    entry.updated_at = Some(now_ms());
+                                    Some(entry.state(&tunnel_id))
+                                } else {
+                                    None
+                                }
+                            })
+                        };
+                        if let Some(Some(state)) = state {
+                            emit_runtime_state(&app, &state);
+                        }
+                        log_event(StructuredLog {
+                            level: StructuredLogLevel::Warn,
+                            domain: "session.lifecycle".to_string(),
+                            event: "tunnel.reconnect_failed".to_string(),
+                            message: "Tunnel reconnect attempt failed".to_string(),
+                            ids: Some(serde_json::json!({ "tunnel_id": tunnel_id.clone() })),
+                            data: Some(serde_json::json!({
+                                "attempt": attempt,
+                                "max_attempts": TUNNEL_RECONNECT_MAX_ATTEMPTS,
+                            })),
+                            error: Some(serde_json::json!({ "message": message })),
+                            client_timestamp: None,
+                        });
+                    }
+                }
+            }
+        });
     }
 
     async fn run_local_tunnel(
@@ -992,8 +1200,44 @@ impl TunnelManager {
             Err(_) => return,
         };
 
-        self.mark_connection_disconnected(app, &tunnels, connection_id)
+        // force=false: keep Reconnecting during terminal-session reconnect.
+        self.mark_connection_disconnected(app, &tunnels, connection_id, false)
             .await;
+    }
+
+    /// Re-open tunnels that were left enabled when the app last quit.
+    pub async fn restore_open_tunnels(&self, app: &AppHandle) {
+        let tunnels = match config::load_tunnels(app) {
+            Ok(t) => t,
+            Err(error) => {
+                tracing::warn!("Failed to load tunnels for startup restore: {error}");
+                return;
+            }
+        };
+
+        for tunnel in tunnels.into_iter().filter(|tunnel| tunnel.is_open) {
+            if self.is_open(&tunnel.id).await {
+                continue;
+            }
+            if let Err(error) = self.open(&tunnel, app).await {
+                log_event(StructuredLog {
+                    level: StructuredLogLevel::Warn,
+                    domain: "session.lifecycle".to_string(),
+                    event: "tunnel.restore_open_failed".to_string(),
+                    message: "Failed to restore open tunnel on startup".to_string(),
+                    ids: Some(serde_json::json!({
+                        "tunnel_id": tunnel.id.clone(),
+                        "connection_id": tunnel.connection_id.clone(),
+                    })),
+                    data: Some(serde_json::json!({
+                        "tunnel_type": tunnel.tunnel_type.clone(),
+                    })),
+                    error: Some(serde_json::json!({ "message": error.to_string() })),
+                    client_timestamp: None,
+                });
+                self.schedule_reconnect_if_needed(app, &tunnel.id).await;
+            }
+        }
     }
 }
 
@@ -1038,9 +1282,28 @@ fn user_facing_tunnel_error(error: &AppError) -> String {
     error.to_string()
 }
 
+fn tunnel_reconnect_delay(attempt: u32) -> Duration {
+    Duration::from_secs(match attempt {
+        0 | 1 => 1,
+        2 => 2,
+        3 => 4,
+        4 => 8,
+        5 => 15,
+        _ => 30,
+    })
+}
+
+fn should_schedule_reconnect(is_open: bool) -> bool {
+    is_open
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{TunnelRuntimeEntry, TunnelRuntimeStatus};
+    use super::{
+        TunnelRuntimeEntry, TunnelRuntimeStatus, should_schedule_reconnect, tunnel_reconnect_delay,
+        TUNNEL_RECONNECT_MAX_ATTEMPTS,
+    };
+    use std::time::Duration;
 
     #[test]
     fn stopped_starting_running_transition_is_representable() {
@@ -1095,5 +1358,34 @@ mod tests {
         let stale_generation = 1;
 
         assert_ne!(entry.generation, stale_generation);
+    }
+
+    #[test]
+    fn tunnel_reconnect_delay_is_bounded() {
+        assert_eq!(tunnel_reconnect_delay(1), Duration::from_secs(1));
+        assert_eq!(tunnel_reconnect_delay(2), Duration::from_secs(2));
+        assert_eq!(tunnel_reconnect_delay(5), Duration::from_secs(15));
+        assert_eq!(tunnel_reconnect_delay(100), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn should_schedule_reconnect_only_when_open() {
+        assert!(should_schedule_reconnect(true));
+        assert!(!should_schedule_reconnect(false));
+    }
+
+    #[test]
+    fn reconnect_max_attempts_is_positive() {
+        assert!(TUNNEL_RECONNECT_MAX_ATTEMPTS > 0);
+    }
+
+    #[test]
+    fn cancel_reconnect_clears_sender() {
+        let mut entry = TunnelRuntimeEntry::new(None);
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        entry.reconnect_cancel = Some(tx);
+        entry.cancel_reconnect();
+        assert!(entry.reconnect_cancel.is_none());
+        assert!(*rx.borrow());
     }
 }

@@ -150,6 +150,12 @@ pub fn run() {
                 tracing::error!("Failed to initialize External MCP bridge: {error}");
                 manager.record_startup_error(&error);
             }
+            // Restore tunnels left open across app restarts (is_open=true).
+            let tunnel_mgr = tunnel_manager.clone();
+            let app_for_tunnels = a.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tunnel_mgr.restore_open_tunnels(&app_for_tunnels).await;
+            });
             Ok(())
         })
         .on_window_event(app::on_window_event)

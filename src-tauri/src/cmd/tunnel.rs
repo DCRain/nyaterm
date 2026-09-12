@@ -188,8 +188,9 @@ pub async fn mark_tunnels_disconnected_for_connection(
     connection_id: String,
 ) -> AppResult<()> {
     let tunnels = config::load_tunnels(&app)?;
+    // force=true: session reconnect failed — leave Reconnecting and allow self-heal.
     tunnel_mgr
-        .mark_connection_disconnected(&app, &tunnels, &connection_id)
+        .mark_connection_disconnected(&app, &tunnels, &connection_id, true)
         .await;
     Ok(())
 }
