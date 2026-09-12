@@ -121,8 +121,11 @@ export function installXTerminalSelectionController({
     if (e.button === 1) e.preventDefault();
   };
 
-  const handleWindowsMiddleMouseDownCapture = (e: MouseEvent) => {
-    if (e.button !== 1) return;
+  const handleWindowsMouseDownCapture = (e: MouseEvent) => {
+    const shouldBlockRightClickPaste =
+      e.button === 2 &&
+      terminalAppSettingsRef.current.interaction.terminal_right_click_action === "paste";
+    if (e.button !== 1 && !shouldBlockRightClickPaste) return;
     handleTerminalMouseDown(e);
     terminal.focus();
     e.stopPropagation();
@@ -289,7 +292,7 @@ export function installXTerminalSelectionController({
     document.addEventListener("mousemove", handleMacReleasedMouseMove, true);
   }
   if (isWindows) {
-    containerEl.addEventListener("mousedown", handleWindowsMiddleMouseDownCapture, true);
+    containerEl.addEventListener("mousedown", handleWindowsMouseDownCapture, true);
     terminal.textarea?.addEventListener("focus", handleTerminalFocus);
     terminal.textarea?.addEventListener("blur", handleTerminalBlur);
     window.addEventListener("keydown", handleSyntheticWinVPaste, true);
@@ -315,7 +318,7 @@ export function installXTerminalSelectionController({
         );
       }
       if (isWindows) {
-        containerEl.removeEventListener("mousedown", handleWindowsMiddleMouseDownCapture, true);
+        containerEl.removeEventListener("mousedown", handleWindowsMouseDownCapture, true);
         terminal.textarea?.removeEventListener("focus", handleTerminalFocus);
         terminal.textarea?.removeEventListener("blur", handleTerminalBlur);
         window.removeEventListener("keydown", handleSyntheticWinVPaste, true);

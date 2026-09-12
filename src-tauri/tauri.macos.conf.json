@@ -1,12 +1,13 @@
 {
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "label": "main",
         "title": "NyaTerm",
         "width": 1280,
         "height": 800,
-        "transparent": false,
+        "transparent": true,
         "visible": false,
         "decorations": true,
         "titleBarStyle": "Overlay",

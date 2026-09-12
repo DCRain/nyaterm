@@ -67,6 +67,7 @@ function PasswordEditor({
       />
       <div className="relative">
         <Input
+          data-custom-password-reveal
           type={showPassword ? "text" : "password"}
           placeholder={
             passwordLoading

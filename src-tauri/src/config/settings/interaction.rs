@@ -12,6 +12,7 @@ pub struct InteractionSettings {
     pub duplicate_session_command_delay_ms: u64,
     pub word_separators: String,
     pub alt_as_meta: bool,
+    pub mouse_events_require_alt: bool,
     pub ime_compatibility: bool,
     pub default_encoding: String,
     pub tab_double_click_action: String,
@@ -32,6 +33,7 @@ struct InteractionSettingsWire {
     duplicate_session_command_delay_ms: Option<u64>,
     word_separators: Option<String>,
     alt_as_meta: Option<bool>,
+    mouse_events_require_alt: Option<bool>,
     ime_compatibility: Option<bool>,
     mac_ime_compatibility: Option<bool>,
     default_encoding: Option<String>,
@@ -110,6 +112,7 @@ impl Default for InteractionSettings {
             duplicate_session_command_delay_ms: default_duplicate_session_command_delay_ms(),
             word_separators: default_word_separators(),
             alt_as_meta: false,
+            mouse_events_require_alt: false,
             ime_compatibility: false,
             default_encoding: default_encoding(),
             tab_double_click_action: default_tab_double_click_action(),
@@ -151,6 +154,9 @@ impl<'de> Deserialize<'de> for InteractionSettings {
                 .unwrap_or(defaults.duplicate_session_command_delay_ms),
             word_separators: wire.word_separators.unwrap_or(defaults.word_separators),
             alt_as_meta: wire.alt_as_meta.unwrap_or(defaults.alt_as_meta),
+            mouse_events_require_alt: wire
+                .mouse_events_require_alt
+                .unwrap_or(defaults.mouse_events_require_alt),
             ime_compatibility: wire
                 .ime_compatibility
                 .or(wire.mac_ime_compatibility)
@@ -183,6 +189,7 @@ mod tests {
         assert_eq!(settings.terminal_right_click_action, "menu");
         assert!(!settings.allow_osc52_clipboard_write);
         assert!(!settings.alt_as_meta);
+        assert!(!settings.mouse_events_require_alt);
         assert!(!settings.ime_compatibility);
         assert!(settings.terminal_zoom_enabled);
     }

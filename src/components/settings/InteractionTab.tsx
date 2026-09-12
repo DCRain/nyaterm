@@ -102,6 +102,16 @@ export function InteractionTab() {
             </TabsList>
           </Tabs>
         </SettingRow>
+
+        <SettingRow
+          label={t("settings.mouseEventsRequireAlt")}
+          desc={t("settings.mouseEventsRequireAltDesc")}
+        >
+          <SettingSwitch
+            checked={interaction.mouse_events_require_alt}
+            onChange={(v) => updateInteraction({ mouse_events_require_alt: v })}
+          />
+        </SettingRow>
       </SettingSection>
 
       <SettingSection

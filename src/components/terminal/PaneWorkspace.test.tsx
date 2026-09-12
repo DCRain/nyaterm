@@ -56,7 +56,6 @@ describe("PaneWorkspace RDP routing", () => {
 
   it("routes RDP leaves to RdpPaneHost with active and visible state", () => {
     const onActivatePane = vi.fn();
-    const onDisconnectedCloseRequested = vi.fn();
     const onConnectionError = vi.fn();
     const tab = tabWithRoot(rdpPane(), "rdp-pane");
 
@@ -66,7 +65,6 @@ describe("PaneWorkspace RDP routing", () => {
         visible
         onActivatePane={onActivatePane}
         onUpdateSplitRatio={vi.fn()}
-        onDisconnectedCloseRequested={onDisconnectedCloseRequested}
         onConnectionError={onConnectionError}
       />,
     );
@@ -85,12 +83,10 @@ describe("PaneWorkspace RDP routing", () => {
     expect(onActivatePane).toHaveBeenCalledWith("rdp-pane");
 
     const rdpProps = rdpPaneHostMock.mock.lastCall?.[0] as {
-      onDisconnectedCloseRequested: () => void;
       onConnectionError: (sessionId: string, error: string) => void;
     };
-    rdpProps.onDisconnectedCloseRequested();
+    expect(rdpProps).not.toHaveProperty("onDisconnectedCloseRequested");
     rdpProps.onConnectionError("rdp-session", "RDP failed");
-    expect(onDisconnectedCloseRequested).toHaveBeenCalledWith("tab-1", "rdp-pane");
     expect(onConnectionError).toHaveBeenCalledWith(
       "tab-1",
       "rdp-pane",

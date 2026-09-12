@@ -22,6 +22,8 @@ pub(super) const SFTP_MAX_SESSION_POOL_SIZE: usize = 4;
 pub(super) const SFTP_LARGE_FILE_CONCURRENCY: usize = 2;
 pub(super) const SFTP_HANDLE_RESERVE: usize = 8;
 pub(super) const SFTP_DIRECTORY_STALL_TIMEOUT: Duration = Duration::from_secs(60);
+pub(super) const SFTP_SESSION_SETUP_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) const SFTP_DIRECTORY_LIST_MAX_RETRIES: usize = 1;
 pub(super) const SFTP_CHANNEL_OPEN_RETRY_DELAYS: [Duration; 3] = [
     Duration::from_millis(50),
     Duration::from_millis(150),
@@ -81,6 +83,23 @@ pub(super) fn is_retryable_sftp_channel_open_error(error: &russh::Error) -> bool
             ChannelOpenFailure::ConnectFailed | ChannelOpenFailure::ResourceShortage
         )
     )
+}
+
+pub(super) fn should_retry_sftp_directory_list(error: &AppError, retries_used: usize) -> bool {
+    if retries_used >= SFTP_DIRECTORY_LIST_MAX_RETRIES {
+        return false;
+    }
+
+    match error {
+        AppError::Sftp(
+            SftpError::IO(_) | SftpError::Timeout | SftpError::UnexpectedBehavior(_),
+        ) => true,
+        AppError::Sftp(SftpError::Status(status)) => matches!(
+            status.status_code,
+            StatusCode::NoConnection | StatusCode::ConnectionLost
+        ),
+        _ => false,
+    }
 }
 
 #[allow(dead_code)]

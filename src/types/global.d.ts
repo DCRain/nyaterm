@@ -1263,7 +1263,7 @@ export interface GeneralSettings {
 
 export type BackgroundImageFit = "cover" | "contain" | "stretch" | "tile";
 
-/** Internal native transparency marker. Windows 11 only; other platforms no-op. */
+/** Internal native transparency marker. Supported on Windows and macOS; other platforms no-op. */
 export type WindowTransparency = "none" | "transparent";
 
 export interface TerminalThemeColors {
@@ -1909,6 +1909,7 @@ export interface InteractionSettings {
   duplicate_session_command_delay_ms: number;
   word_separators: string;
   alt_as_meta: boolean;
+  mouse_events_require_alt: boolean;
   ime_compatibility: boolean;
   default_encoding: string;
   tab_double_click_action: import("@/lib/interactionSettings").TabMouseAction;
@@ -2115,6 +2116,7 @@ export interface SshConfigEntry {
   port: number;
   user: string;
   identityFile?: string | null;
+  identityFiles?: string[];
   proxyJump?: string | null;
   hops: SshConfigHop[];
   hostKeyAlias?: string | null;

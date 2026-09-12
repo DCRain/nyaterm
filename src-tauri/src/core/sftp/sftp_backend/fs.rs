@@ -32,8 +32,6 @@ impl RemoteFs for SftpBackend {
     }
 
     async fn list_dir_ref(&self, path: &RemotePathRef) -> AppResult<Vec<FileEntry>> {
-        let sftp = self.open_sftp().await?;
-
         let path_bytes = normalize_remote_dir_path_bytes(&self.remote_path_bytes(path));
         if path.raw_path().is_some() {
             self.path_cache
@@ -41,7 +39,31 @@ impl RemoteFs for SftpBackend {
                 .await
                 .insert(path.display_path().to_string(), path_bytes.clone());
         }
-        let dir = sftp.read_dir_bytes(path_bytes.clone()).await?;
+        let mut retries_used = 0;
+        let (sftp, dir) = loop {
+            let sftp = match self.open_sftp().await {
+                Ok(sftp) => sftp,
+                Err(error) if should_retry_sftp_directory_list(&error, retries_used) => {
+                    retries_used += 1;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+
+            match sftp.read_dir_bytes(path_bytes.clone()).await {
+                Ok(dir) => break (sftp, dir),
+                Err(error) => {
+                    let error = AppError::Sftp(error);
+                    let should_retry = should_retry_sftp_directory_list(&error, retries_used);
+                    let _ = sftp.close().await;
+                    if should_retry {
+                        retries_used += 1;
+                        continue;
+                    }
+                    return Err(error);
+                }
+            }
+        };
 
         let mut pending = Vec::new();
         let mut uid_set = HashSet::new();
@@ -965,6 +987,22 @@ impl RemoteFs for SftpBackend {
 
         match result {
             Ok(summary) => {
+                let first_failure = summary.first_failure.as_ref();
+                let failure_detail =
+                    first_failure.map(|failure| format!("{}: {}", failure.path, failure.error));
+                if summary.total_files > 0 && summary.failure_count == summary.total_files {
+                    let error = AppError::Channel(format!(
+                        "All {} files failed to upload; first failure: {}",
+                        summary.failure_count,
+                        failure_detail.as_deref().unwrap_or("unknown error")
+                    ));
+                    let _ = app.emit(
+                        "transfer-event",
+                        &directory_controller.build_event("error", 0, Some(error.to_string())),
+                    );
+                    unregister_transfer(&directory_controller.id());
+                    return Err(error);
+                }
                 log_transfer_performance(
                     "upload",
                     "directory",
@@ -977,9 +1015,16 @@ impl RemoteFs for SftpBackend {
                 );
                 directory_controller.update_progress(summary.bytes, summary.bytes);
                 directory_controller.update_item_progress(summary.completed, summary.total_files);
+                let warning = (summary.failure_count > 0).then(|| {
+                    format!(
+                        "Skipped {} failed file(s); first failure: {}",
+                        summary.failure_count,
+                        failure_detail.as_deref().unwrap_or("unknown error")
+                    )
+                });
                 let _ = app.emit(
                     "transfer-event",
-                    &directory_controller.build_event("completed", 0, None),
+                    &directory_controller.build_event("completed", 0, warning),
                 );
                 unregister_transfer(&directory_controller.id());
                 Ok(())

@@ -408,10 +408,26 @@ fn storage_timeout_layer() -> TimeoutLayer {
 }
 
 pub(super) async fn ensure_remote_layout(remote: &CloudRemote, base_root: &str) -> AppResult<()> {
-    remote
-        .create_dir(&remote_path(base_root, super::remote::SYNC_SNAPSHOTS_DIR))
-        .await?;
+    for path in remote_layout_paths(remote, base_root) {
+        remote.create_dir(&path).await?;
+    }
     Ok(())
+}
+
+fn remote_layout_paths(remote: &CloudRemote, base_root: &str) -> Vec<String> {
+    let snapshots_dir = remote_path(base_root, super::remote::SYNC_SNAPSHOTS_DIR);
+    let is_webdav = matches!(
+        remote,
+        CloudRemote::OpenDal(operator) if operator.info().scheme() == "webdav"
+    );
+    if !is_webdav {
+        return vec![snapshots_dir];
+    }
+
+    snapshots_dir
+        .match_indices('/')
+        .map(|(index, _)| snapshots_dir[..=index].to_string())
+        .collect()
 }
 
 pub(super) fn map_storage_error(error: opendal::Error) -> AppError {
@@ -960,6 +976,59 @@ fn is_github_gist_update_conflict(error: &AppError) -> bool {
 mod tests {
     use super::*;
     use opendal::Error;
+
+    fn webdav_remote() -> CloudRemote {
+        let mut settings = CloudSyncSettings::default();
+        settings.provider = "webdav".to_string();
+        settings.webdav.endpoint = "https://dav.example.com".to_string();
+        build_remote(&settings).expect("build WebDAV remote")
+    }
+
+    #[test]
+    fn remote_layout_paths_expand_only_for_webdav() {
+        let webdav = webdav_remote();
+        assert_eq!(
+            remote_layout_paths(&webdav, "nyaterm"),
+            vec![
+                "nyaterm/".to_string(),
+                "nyaterm/sync/".to_string(),
+                "nyaterm/sync/snapshots/".to_string(),
+            ]
+        );
+
+        let memory = CloudRemote::Memory(MemoryRemote::default());
+        assert_eq!(
+            remote_layout_paths(&memory, "nyaterm"),
+            vec!["nyaterm/sync/snapshots/".to_string()]
+        );
+    }
+
+    #[test]
+    fn webdav_remote_layout_paths_support_empty_and_nested_roots() {
+        let webdav = webdav_remote();
+
+        assert_eq!(
+            remote_layout_paths(&webdav, ""),
+            vec!["sync/".to_string(), "sync/snapshots/".to_string()]
+        );
+        assert_eq!(
+            remote_layout_paths(&webdav, "/nyaterm/"),
+            vec![
+                "nyaterm/".to_string(),
+                "nyaterm/sync/".to_string(),
+                "nyaterm/sync/snapshots/".to_string(),
+            ]
+        );
+        assert_eq!(
+            remote_layout_paths(&webdav, "team/nyaterm"),
+            vec![
+                "team/".to_string(),
+                "team/nyaterm/".to_string(),
+                "team/nyaterm/sync/".to_string(),
+                "team/nyaterm/sync/snapshots/".to_string(),
+            ]
+        );
+    }
 
     #[test]
     fn webdav_401_error_reports_generic_auth_hint() {

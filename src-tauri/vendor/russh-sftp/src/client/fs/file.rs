@@ -1,5 +1,6 @@
 use std::{
     collections::VecDeque,
+    fmt,
     future::{self, Future},
     io::{self, SeekFrom},
     pin::Pin,
@@ -25,6 +26,33 @@ type StateFn<T> = Option<Pin<Box<dyn Future<Output = io::Result<T>> + Send + Syn
 const READ_OVERHEAD_LENGTH: u32 = 9;
 // write packet overhead excluding handle: type(1) + id(4) + handle_len(4) + offset(8) + data_len(4)
 const WRITE_OVERHEAD_LENGTH: u32 = 21;
+
+#[derive(Debug)]
+struct SftpIoError {
+    message: String,
+    source: Error,
+}
+
+impl fmt::Display for SftpIoError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SftpIoError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+fn io_error_with_sftp_source(kind: io::ErrorKind, message: String, source: Error) -> io::Error {
+    io::Error::new(kind, SftpIoError { message, source })
+}
+
+fn sftp_error_to_io(error: Error) -> io::Error {
+    let message = error.to_string();
+    io_error_with_sftp_source(io::ErrorKind::Other, message, error)
+}
 
 struct FileState {
     f_read: StateFn<Option<Vec<u8>>>,
@@ -128,13 +156,25 @@ impl File {
 fn check_write_result(result: SftpResult<Packet>) -> io::Result<()> {
     match result {
         Ok(Packet::Status(s)) if s.status_code == StatusCode::Ok => Ok(()),
-        Ok(Packet::Status(s)) => Err(io::Error::other(s.error_message)),
-        Ok(_) => Err(io::Error::other("unexpected response packet")),
-        Err(Error::Timeout) => Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            "SFTP write acknowledgement timed out",
+        Ok(Packet::Status(s)) => {
+            let message = s.error_message.clone();
+            Err(io_error_with_sftp_source(
+                io::ErrorKind::Other,
+                message,
+                Error::Status(s),
+            ))
+        }
+        Ok(_) => Err(io_error_with_sftp_source(
+            io::ErrorKind::Other,
+            "unexpected response packet".to_string(),
+            Error::UnexpectedPacket,
         )),
-        Err(e) => Err(io::Error::other(e.to_string())),
+        Err(Error::Timeout) => Err(io_error_with_sftp_source(
+            io::ErrorKind::TimedOut,
+            "SFTP write acknowledgement timed out".to_string(),
+            Error::Timeout,
+        )),
+        Err(e) => Err(sftp_error_to_io(e)),
     }
 }
 
@@ -322,7 +362,7 @@ impl AsyncWrite for File {
                 self.state.write_acks.push_back(rx);
                 Poll::Ready(Ok(len))
             }
-            Err(e) => Poll::Ready(Err(io::Error::other(e.to_string()))),
+            Err(e) => Poll::Ready(Err(sftp_error_to_io(e))),
         }
     }
 
@@ -344,7 +384,7 @@ impl AsyncWrite for File {
                         .fsync(file_handle)
                         .await
                         .map(|_| ())
-                        .map_err(|e| io::Error::other(e.to_string()))
+                        .map_err(sftp_error_to_io)
                 }))
             }
         })
@@ -374,10 +414,7 @@ impl AsyncWrite for File {
                 let file_handle = self.handle.clone();
 
                 self.state.f_shutdown.get_or_insert(Box::pin(async move {
-                    session
-                        .close(file_handle)
-                        .await
-                        .map_err(|e| io::Error::other(e.to_string()))?;
+                    session.close(file_handle).await.map_err(sftp_error_to_io)?;
                     Ok(())
                 }))
             }
@@ -399,8 +436,20 @@ mod tests {
     use super::*;
     use crate::client::{Config, RawSftpSession};
     use crate::protocol::{FileAttributes, Handle, OpenFlags, Packet, StatusCode, Version};
+    use std::error::Error as StdError;
     use std::time::Duration;
     use tokio::io::{AsyncWriteExt, DuplexStream};
+
+    fn sftp_error_source(error: &io::Error) -> Option<&Error> {
+        let mut source = error.source();
+        while let Some(current) = source {
+            if let Some(error) = current.downcast_ref::<Error>() {
+                return Some(error);
+            }
+            source = current.source();
+        }
+        None
+    }
 
     async fn read_client_packet(server: &mut DuplexStream) -> Packet {
         let mut bytes = crate::utils::read_packet(server, u32::MAX)
@@ -486,6 +535,71 @@ mod tests {
 
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
         assert_eq!(error.to_string(), "SFTP write acknowledgement timed out");
+        assert!(matches!(sftp_error_source(&error), Some(Error::Timeout)));
+    }
+
+    #[test]
+    fn write_status_preserves_message_kind_and_sftp_source() {
+        let error = check_write_result(Ok(Packet::status(
+            1,
+            StatusCode::PermissionDenied,
+            "write denied",
+            "en-US",
+        )))
+        .expect_err("non-OK write status should fail");
+
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        assert_eq!(error.to_string(), "write denied");
+        assert!(matches!(
+            sftp_error_source(&error),
+            Some(Error::Status(status)) if status.status_code == StatusCode::PermissionDenied
+        ));
+    }
+
+    #[tokio::test]
+    async fn shutdown_status_preserves_message_kind_and_sftp_source() {
+        let (client, mut server) = tokio::io::duplex(4096);
+        let session = Arc::new(RawSftpSession::new_with_config(
+            client,
+            Config {
+                request_timeout_secs: 10,
+                ..Config::default()
+            },
+        ));
+        initialize_session(&session, &mut server).await;
+        let handle = open_test_handle(&session, &mut server).await;
+        let mut file = File::new(session, handle.clone(), test_features());
+
+        let client = file.shutdown();
+        let server = async {
+            let close_id = match read_client_packet(&mut server).await {
+                Packet::Close(close) => {
+                    assert_eq!(close.handle, handle);
+                    close.id
+                }
+                packet => panic!("expected close packet, got {packet:?}"),
+            };
+            write_server_packet(
+                &mut server,
+                Packet::status(
+                    close_id,
+                    StatusCode::PermissionDenied,
+                    "close denied",
+                    "en-US",
+                ),
+            )
+            .await;
+        };
+
+        let (result, _) = tokio::join!(client, server);
+        let error = result.expect_err("non-OK close status should fail");
+
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        assert_eq!(error.to_string(), "Permission denied: close denied");
+        assert!(matches!(
+            sftp_error_source(&error),
+            Some(Error::Status(status)) if status.status_code == StatusCode::PermissionDenied
+        ));
     }
 
     #[tokio::test]

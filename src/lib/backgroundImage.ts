@@ -2,7 +2,7 @@ import type { CSSProperties } from "react";
 import type { AppearanceSettings, BackgroundImageFit } from "@/types/global";
 import { invoke } from "./invoke";
 import { logger } from "./logger";
-import { isWindows } from "./platform";
+import { isMacOS, isWindows } from "./platform";
 import type { TerminalColors, ThemeColors } from "./themes";
 
 export const BACKGROUND_IMAGE_FITS = ["cover", "contain", "stretch", "tile"] as const;
@@ -54,7 +54,7 @@ export function windowTransparencyModeForOpacity(opacity: number): "none" | "tra
 export function isWindowTransparencyEnabled(
   appearance: Pick<AppearanceSettings, "window_transparency" | "window_transparency_tint">,
 ) {
-  return isWindows && getWindowTransparencyOpacity(appearance) < 1;
+  return (isWindows || isMacOS) && getWindowTransparencyOpacity(appearance) < 1;
 }
 
 function quoteCssUrl(url: string) {

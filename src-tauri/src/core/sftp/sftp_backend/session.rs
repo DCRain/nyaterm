@@ -70,38 +70,46 @@ impl SftpBackend {
     ) -> AppResult<ManagedSftpSession> {
         for attempt in 0..=SFTP_CHANNEL_OPEN_RETRY_DELAYS.len() {
             let permit = ssh_handle.acquire_sftp_channel_permit().await?;
-            let channel_result = {
-                let handle_mtx = ssh_handle.target_handle();
-                let handle = handle_mtx.lock().await;
-                handle.channel_open_session().await
-            };
+            let setup_result = tokio::time::timeout(SFTP_SESSION_SETUP_TIMEOUT, async {
+                let channel_result = {
+                    let handle_mtx = ssh_handle.target_handle();
+                    let handle = handle_mtx.lock().await;
+                    handle.channel_open_session().await
+                };
+                let channel = match channel_result {
+                    Ok(channel) => channel,
+                    Err(error) => return Ok(Err(error)),
+                };
 
-            let channel = match channel_result {
-                Ok(channel) => channel,
+                channel.request_subsystem(true, "sftp").await.map_err(|e| {
+                    AppError::Channel(format!("Failed to start SFTP subsystem: {}", e))
+                })?;
+
+                let sftp =
+                    SftpSession::new_with_config(channel.into_stream(), config.clone()).await?;
+                AppResult::Ok(Ok(ManagedSftpSession::new(sftp, permit)))
+            })
+            .await
+            .map_err(|_| {
+                AppError::Channel("SFTP session setup timed out after 10 seconds".to_string())
+            })??;
+
+            match setup_result {
+                Ok(session) => return Ok(session),
                 Err(error)
                     if attempt < SFTP_CHANNEL_OPEN_RETRY_DELAYS.len()
                         && is_retryable_sftp_channel_open_error(&error) =>
                 {
-                    drop(permit);
                     tokio::time::sleep(SFTP_CHANNEL_OPEN_RETRY_DELAYS[attempt]).await;
                     continue;
                 }
                 Err(error) => {
-                    drop(permit);
                     return Err(AppError::Channel(format!(
                         "Failed to open SFTP channel: {}",
                         error
                     )));
                 }
-            };
-
-            channel
-                .request_subsystem(true, "sftp")
-                .await
-                .map_err(|e| AppError::Channel(format!("Failed to start SFTP subsystem: {}", e)))?;
-
-            let sftp = SftpSession::new_with_config(channel.into_stream(), config).await?;
-            return Ok(ManagedSftpSession::new(sftp, permit));
+            }
         }
 
         unreachable!("SFTP channel open retry loop always returns or continues");

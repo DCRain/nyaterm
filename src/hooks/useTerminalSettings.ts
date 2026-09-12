@@ -290,8 +290,15 @@ export function useTerminalSettings(
     if (terminalRef.current) {
       terminalRef.current.options.wordSeparator = interaction.word_separators;
       terminalRef.current.options.macOptionIsMeta = interaction.alt_as_meta;
+      terminalRef.current.options.mouseEventsRequireAlt =
+        interaction.mouse_events_require_alt;
     }
-  }, [interaction.word_separators, interaction.alt_as_meta, terminalRef]);
+  }, [
+    interaction.word_separators,
+    interaction.alt_as_meta,
+    interaction.mouse_events_require_alt,
+    terminalRef,
+  ]);
 
   useEffect(() => {
     const terminal = terminalInstance ?? terminalRef.current;

@@ -167,4 +167,49 @@ describe("terminal surface background variables", () => {
     expect(terminalColors.foreground).toBe("#abcdef");
     expect(terminalColors.red).toBe("#ff0000");
   });
+
+  it("enables transparent window surfaces on macOS below full opacity", async () => {
+    setNavigator(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
+      "MacIntel",
+    );
+    const { buildSurfaceCssVariables, buildTerminalThemeColors, isWindowTransparencyEnabled } =
+      await importBackgroundImage();
+    const transparentWindow = appearance({
+      window_transparency: "transparent",
+      window_transparency_tint: 0.6,
+    });
+
+    const cssVars = buildSurfaceCssVariables(themeColors, transparentWindow);
+    const terminalColors = buildTerminalThemeColors(themeColors.terminal, transparentWindow);
+
+    expect(isWindowTransparencyEnabled(transparentWindow)).toBe(true);
+    expect(
+      isWindowTransparencyEnabled(
+        appearance({ window_transparency: "none", window_transparency_tint: 1 }),
+      ),
+    ).toBe(false);
+    expect(cssVars["--df-bg-terminal"]).toBe("rgba(13, 17, 23, 0.6)");
+    expect(cssVars["--df-terminal-surface-bg"]).toBe("transparent");
+    expect(terminalColors.background).toBe("rgba(0, 0, 0, 0)");
+  });
+
+  it("does not enable native window transparency on Linux", async () => {
+    const { buildSurfaceCssVariables, buildTerminalThemeColors, isWindowTransparencyEnabled } =
+      await importBackgroundImage();
+    const transparentWindow = appearance({
+      window_transparency: "transparent",
+      window_transparency_tint: 0.6,
+    });
+
+    const cssVars = buildSurfaceCssVariables(themeColors, transparentWindow);
+    const terminalColors = buildTerminalThemeColors(themeColors.terminal, transparentWindow);
+
+    expect(isWindowTransparencyEnabled(transparentWindow)).toBe(false);
+    expect(cssVars["--df-bg-terminal"]).toBe(themeColors.bgTerminal);
+    expect(cssVars["--df-terminal-surface-bg"]).toBe(
+      "var(--df-terminal-bg, var(--df-bg-terminal))",
+    );
+    expect(terminalColors.background).toBe(themeColors.terminal.background);
+  });
 });

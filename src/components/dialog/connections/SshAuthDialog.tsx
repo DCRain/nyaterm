@@ -603,6 +603,7 @@ function SecretInput({
       <div className="relative mt-1">
         <Input
           ref={inputRef}
+          data-custom-password-reveal
           type={showValue ? "text" : "password"}
           value={value}
           onChange={(event) => onChange(event.target.value)}

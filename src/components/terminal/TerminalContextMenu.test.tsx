@@ -79,6 +79,28 @@ describe("TerminalContextMenu right-click behavior", () => {
     expect(document.querySelector('[data-slot="context-menu-content"]')).toBeNull();
   });
 
+  it("pastes once for each consecutive context-menu event in paste mode", async () => {
+    rightClickAction = "paste";
+    const onPasteClipboard = vi.fn().mockResolvedValue(undefined);
+    const clearSelection = vi.fn();
+    const focus = vi.fn();
+    const { getByTestId } = renderTerminalContextMenu({
+      onPasteClipboard,
+      clearSelection,
+      focus,
+    });
+
+    fireEvent.contextMenu(getByTestId("terminal-child"));
+    fireEvent.contextMenu(getByTestId("terminal-child"));
+
+    await waitFor(() => {
+      expect(onPasteClipboard).toHaveBeenCalledTimes(2);
+      expect(clearSelection).toHaveBeenCalledTimes(2);
+      expect(focus).toHaveBeenCalledTimes(2);
+    });
+    expect(document.querySelector('[data-slot="context-menu-content"]')).toBeNull();
+  });
+
   it("opens the application context menu without pasting in menu mode", async () => {
     const onPasteClipboard = vi.fn();
     const { getByTestId } = renderTerminalContextMenu({ onPasteClipboard });

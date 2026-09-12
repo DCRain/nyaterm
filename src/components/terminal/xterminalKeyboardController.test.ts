@@ -1,10 +1,15 @@
 import type { Terminal } from "@xterm/xterm";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TerminalAppSettings } from "@/context/AppContext";
+import { writeClipboardText } from "@/lib/clipboard";
 import { createTerminalInputState } from "@/lib/terminalInputTracker";
 import type { SessionType } from "@/types/global";
 import type { XTerminalImeKeyboardRoute } from "./xterminalIme";
 import { installXTerminalKeyboardController } from "./xterminalKeyboardController";
+
+vi.mock("@/lib/clipboard", () => ({
+  writeClipboardText: vi.fn(() => Promise.resolve()),
+}));
 
 function backspaceEvent(keyCode: number, isComposing = false): KeyboardEvent {
   const event = new KeyboardEvent("keydown", {
@@ -20,7 +25,12 @@ function backspaceEvent(keyCode: number, isComposing = false): KeyboardEvent {
   return event;
 }
 
-function createHarness(imeRoute: XTerminalImeKeyboardRoute, sessionType: SessionType = "Local") {
+function createHarness(
+  imeRoute: XTerminalImeKeyboardRoute,
+  sessionType: SessionType = "Local",
+  keybindings: Record<string, string> = {},
+  options: { isMacOS?: boolean } = {},
+) {
   const keyHandlerRef: {
     current: ((event: KeyboardEvent) => boolean) | null;
   } = { current: null };
@@ -32,6 +42,7 @@ function createHarness(imeRoute: XTerminalImeKeyboardRoute, sessionType: Session
     hasSelection: vi.fn(() => false),
   } as unknown as Terminal;
   const routeKeyboardEvent = vi.fn(() => imeRoute);
+  const pasteClipboard = vi.fn(async () => {});
   const sendRawInput = vi.fn(async () => {});
   const syncSuggestionsWithInputState = vi.fn();
   const inputStateRef = {
@@ -44,9 +55,10 @@ function createHarness(imeRoute: XTerminalImeKeyboardRoute, sessionType: Session
 
   installXTerminalKeyboardController({
     terminal,
+    isMacOS: options.isMacOS ?? false,
     imeTracker: { routeKeyboardEvent },
     terminalAppSettingsRef: {
-      current: { keybindings: {} } as TerminalAppSettings,
+      current: { keybindings } as TerminalAppSettings,
     },
     sessionTypeRef: { current: sessionType },
     inputStateRef,
@@ -55,7 +67,7 @@ function createHarness(imeRoute: XTerminalImeKeyboardRoute, sessionType: Session
     showSuggestionsRef: { current: false },
     suggestionsRef: { current: [] },
     doFindRef: { current: vi.fn() },
-    pasteClipboard: vi.fn(async () => {}),
+    pasteClipboard,
     pasteText: vi.fn(),
     sendRawInput,
     triggerSearch: vi.fn(),
@@ -82,11 +94,17 @@ function createHarness(imeRoute: XTerminalImeKeyboardRoute, sessionType: Session
   return {
     inputStateRef,
     keyHandler,
+    pasteClipboard,
     routeKeyboardEvent,
     sendRawInput,
     syncSuggestionsWithInputState,
+    terminal,
   };
 }
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 describe("installXTerminalKeyboardController IME Backspace routing", () => {
   it("leaves IME Backspace native without preventing default", () => {
@@ -130,5 +148,128 @@ describe("installXTerminalKeyboardController IME Backspace routing", () => {
     expect(harness.keyHandler(event)).toBe(true);
     expect(harness.routeKeyboardEvent).not.toHaveBeenCalled();
     expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("honors a custom copy shortcut while terminal text is selected", () => {
+    const harness = createHarness("application", "SSH", {
+      "terminal.copy": "ctrl+c",
+    });
+    vi.mocked(harness.terminal.hasSelection).mockReturnValue(true);
+    vi.mocked(harness.terminal.getSelection).mockReturnValue("selected output");
+    const event = new KeyboardEvent("keydown", {
+      key: "c",
+      code: "KeyC",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    expect(harness.keyHandler(event)).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    expect(writeClipboardText).toHaveBeenCalledWith("selected output");
+    expect(harness.sendRawInput).not.toHaveBeenCalled();
+  });
+
+  it("passes a custom Ctrl+C through to the shell when there is no selection", () => {
+    const harness = createHarness("application", "SSH", {
+      "terminal.copy": "ctrl+c",
+    });
+    const event = new KeyboardEvent("keydown", {
+      key: "c",
+      code: "KeyC",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    expect(harness.keyHandler(event)).toBe(true);
+    expect(event.defaultPrevented).toBe(false);
+    expect(writeClipboardText).not.toHaveBeenCalled();
+  });
+
+  it("honors a custom paste shortcut while terminal text is selected", () => {
+    const harness = createHarness("application", "SSH", {
+      "terminal.paste": "ctrl+v",
+    });
+    vi.mocked(harness.terminal.hasSelection).mockReturnValue(true);
+    const event = new KeyboardEvent("keydown", {
+      key: "v",
+      code: "KeyV",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    expect(harness.keyHandler(event)).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    expect(harness.pasteClipboard).toHaveBeenCalledOnce();
+    expect(harness.sendRawInput).not.toHaveBeenCalled();
+  });
+
+  it("keeps the default Ctrl+Shift+C copy shortcut available", () => {
+    const harness = createHarness("application", "SSH");
+    vi.mocked(harness.terminal.hasSelection).mockReturnValue(true);
+    vi.mocked(harness.terminal.getSelection).mockReturnValue("selected output");
+    const event = new KeyboardEvent("keydown", {
+      key: "C",
+      code: "KeyC",
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    expect(harness.keyHandler(event)).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    expect(writeClipboardText).toHaveBeenCalledWith("selected output");
+  });
+
+  it("copies a selection for plain Cmd+C on macOS", () => {
+    const harness = createHarness("application", "SSH", {}, { isMacOS: true });
+    vi.mocked(harness.terminal.hasSelection).mockReturnValue(true);
+    vi.mocked(harness.terminal.getSelection).mockReturnValue("selected output");
+    const event = new KeyboardEvent("keydown", {
+      key: "c",
+      code: "KeyC",
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    expect(harness.keyHandler(event)).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    expect(writeClipboardText).toHaveBeenCalledWith("selected output");
+  });
+
+  it("lets plain Cmd+C fall through on macOS when there is no selection", () => {
+    const harness = createHarness("application", "SSH", {}, { isMacOS: true });
+    const event = new KeyboardEvent("keydown", {
+      key: "c",
+      code: "KeyC",
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    expect(harness.keyHandler(event)).toBe(true);
+    expect(event.defaultPrevented).toBe(false);
+    expect(writeClipboardText).not.toHaveBeenCalled();
+  });
+
+  it("does not intercept Meta+C outside macOS", () => {
+    const harness = createHarness("application", "SSH");
+    vi.mocked(harness.terminal.hasSelection).mockReturnValue(true);
+    vi.mocked(harness.terminal.getSelection).mockReturnValue("selected output");
+    const event = new KeyboardEvent("keydown", {
+      key: "c",
+      code: "KeyC",
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    expect(harness.keyHandler(event)).toBe(true);
+    expect(event.defaultPrevented).toBe(false);
+    expect(writeClipboardText).not.toHaveBeenCalled();
   });
 });

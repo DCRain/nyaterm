@@ -47,6 +47,7 @@ import {
   isWindowTransparencyEnabled,
   loadBackgroundImageDataUrl,
 } from "@/lib/backgroundImage";
+import { isWindows } from "@/lib/platform";
 import type { SendCommandPanelDraft } from "@/lib/sendCommandPanelEvents";
 import { matchesKeyEvent } from "@/lib/shortcutRegistry";
 import {
@@ -335,7 +336,9 @@ export default function AppLayout({
   );
   const windowTransparencyEnabled = isWindowTransparencyEnabled(effectiveAppearance);
   const windowTransparencyBlur =
-    windowTransparencyEnabled && Boolean(effectiveAppearance.window_transparency_blur);
+    windowTransparencyEnabled &&
+    isWindows &&
+    Boolean(effectiveAppearance.window_transparency_blur);
   useWindowTransparencyDom(theme.colors, effectiveAppearance);
   const shellStyle = useMemo(
     () => ({

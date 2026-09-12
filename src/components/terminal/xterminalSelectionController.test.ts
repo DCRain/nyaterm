@@ -1,13 +1,18 @@
 import type { Terminal } from "@xterm/xterm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TerminalAppSettings } from "@/context/AppContext";
+import type { TerminalRightClickAction } from "@/lib/interactionSettings";
 import type { TerminalInputState } from "@/lib/terminalInputTracker";
 import { installXTerminalSelectionController } from "./xterminalSelectionController";
 
 function createHarness(
-  options: { isMacOS?: boolean; isWindows?: boolean } = {},
+  options: {
+    isMacOS?: boolean;
+    isWindows?: boolean;
+    rightClickAction?: TerminalRightClickAction;
+  } = {},
 ) {
-  const { isMacOS = false, isWindows = true } = options;
+  const { isMacOS = false, isWindows = true, rightClickAction = "menu" } = options;
   const containerEl = document.createElement("div");
   const xtermTarget = document.createElement("div");
   const textarea = document.createElement("textarea");
@@ -35,7 +40,10 @@ function createHarness(
     activeRef: { current: true },
     visibleRef: { current: true },
     terminalAppSettingsRef: {
-      current: { keybindings: {} } as TerminalAppSettings,
+      current: {
+        interaction: { terminal_right_click_action: rightClickAction },
+        keybindings: {},
+      } as TerminalAppSettings,
     },
     pendingSearchSelectionRef: { current: false },
     searchSelectionTextRef: { current: null },
@@ -139,14 +147,58 @@ describe("installXTerminalSelectionController", () => {
     expect(afterDispose.defaultPrevented).toBe(false);
   });
 
-  it("keeps non-Windows middle mousedown and Windows primary mousedown visible to xterm", () => {
-    const nonWindows = createHarness({ isWindows: false });
+  it("blocks Windows right mousedown in paste mode without cancelling contextmenu", () => {
+    const {
+      clearSearchSelectionState,
+      controller,
+      removeLinkPopup,
+      terminal,
+      textarea,
+      xtermTarget,
+    } = createHarness({ rightClickAction: "paste" });
+    const xtermMouseDown = vi.fn();
+    xtermTarget.addEventListener("mousedown", xtermMouseDown);
+
+    const mouseDown = dispatchMouse(xtermTarget, "mousedown", 2);
+
+    expect(mouseDown.defaultPrevented).toBe(false);
+    expect(xtermMouseDown).not.toHaveBeenCalled();
+    expect(terminal.focus).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(textarea);
+    expect(removeLinkPopup).toHaveBeenCalledOnce();
+    expect(clearSearchSelectionState).toHaveBeenCalledOnce();
+    controller.dispose();
+  });
+
+  it.each([
+    "none",
+    "menu",
+  ] as const)("keeps Windows right mousedown visible to xterm in %s mode", (rightClickAction) => {
+    const { controller, terminal, xtermTarget } = createHarness({
+      rightClickAction,
+    });
+    const xtermMouseDown = vi.fn();
+    xtermTarget.addEventListener("mousedown", xtermMouseDown);
+
+    dispatchMouse(xtermTarget, "mousedown", 2);
+
+    expect(xtermMouseDown).toHaveBeenCalledOnce();
+    expect(terminal.focus).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
+  it("keeps non-Windows middle and paste-mode right mousedown plus Windows primary mousedown visible to xterm", () => {
+    const nonWindows = createHarness({
+      isWindows: false,
+      rightClickAction: "paste",
+    });
     const nonWindowsMouseDown = vi.fn();
     nonWindows.xtermTarget.addEventListener("mousedown", nonWindowsMouseDown);
 
     dispatchMouse(nonWindows.xtermTarget, "mousedown", 1);
+    dispatchMouse(nonWindows.xtermTarget, "mousedown", 2);
 
-    expect(nonWindowsMouseDown).toHaveBeenCalledOnce();
+    expect(nonWindowsMouseDown).toHaveBeenCalledTimes(2);
     nonWindows.controller.dispose();
 
     const windows = createHarness();

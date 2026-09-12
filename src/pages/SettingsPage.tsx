@@ -476,6 +476,7 @@ export default function SettingsPage() {
           committedSettings,
           isDirty,
           isSaving,
+          updateCommittedAppSettings: app.updateAppSettings,
         }}
       >
         <AppContext.Provider value={nestedAppContextValue}>

@@ -2621,6 +2621,8 @@
     "minimumContrastRatio_3": "약간 강화",
     "minimumContrastRatio_4_5": "권장: WCAG AA",
     "minimumContrastRatio_7": "고대비: WCAG AAA",
+    "mouseEventsRequireAlt": "Alt를 눌러 마우스 이벤트 전송",
+    "mouseEventsRequireAltDesc": "vim, tmux, htop 등 애플리케이션이 마우스 리포팅을 활성화하면 일반 클릭과 드래그는 로컬 텍스트 선택에 사용되고, Alt를 누른 상태에서만 마우스 이벤트가 애플리케이션으로 전송됩니다.",
     "never": "안 함",
     "noCustomEngines": "정의된 사용자 지정 검색 엔진이 없습니다.",
     "noEngines": "정의된 사용자 지정 검색 엔진이 없습니다.",
@@ -3309,6 +3311,7 @@
     "searchOnline": "웹 검색",
     "searchRegex": "정규식",
     "searchWholeWord": "단어 단위",
+    "searchWrapAround": "순환 검색",
     "selectAll": "모두 선택",
     "translate": "번역"
   },

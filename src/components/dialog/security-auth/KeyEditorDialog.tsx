@@ -259,6 +259,7 @@ export function KeyEditorDialog({
             )}
             <div className="relative">
               <Input
+                data-custom-password-reveal
                 type={editShowPassphrase ? "text" : "password"}
                 placeholder={passphraseLoading ? t("common.loading") : t("settings.passphrase")}
                 className="h-8 pr-8 text-xs"

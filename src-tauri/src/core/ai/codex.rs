@@ -180,7 +180,7 @@ impl CodexAppServerManager {
         }
 
         *self.state.write().await = CodexRuntimeState::Starting;
-        let executable = codex_executable(path.as_deref());
+        let executable = resolve_codex_executable(path).await?;
         let mut command = Command::new(&executable);
         hide_window(&mut command);
         let mut child = command
@@ -854,6 +854,7 @@ async fn run_codex_stream_inner(
                     default_id,
                     request.permission_mode.clone(),
                     owner,
+                    codex_terminal_presentation_max_lines(&settings),
                 )
                 .await
             {
@@ -1017,6 +1018,19 @@ fn codex_executable(path: Option<&str>) -> String {
         .to_string()
 }
 
+async fn resolve_codex_executable(path: Option<String>) -> AppResult<String> {
+    let status = CodexAppServerManager::detect_cli(path).await;
+    if !status.installed {
+        return Err(AppError::Config(status.error.unwrap_or_else(|| {
+            "Codex CLI was not detected in PATH or common install locations".to_string()
+        })));
+    }
+
+    status
+        .path
+        .ok_or_else(|| AppError::Config("Codex CLI detection returned no executable path".into()))
+}
+
 async fn discover_codex_candidates(path: Option<&str>) -> Vec<CodexCliCandidate> {
     let mut candidates = Vec::new();
     let mut seen = HashSet::new();
@@ -1084,6 +1098,12 @@ fn add_common_codex_candidates(
             let npm = Path::new(&appdata).join("npm");
             for name in ["codex.cmd", "codex.exe", "codex"] {
                 add_existing_codex_candidate(candidates, seen, npm.join(name), "common");
+            }
+        }
+        if let Ok(nvm_symlink) = env::var("NVM_SYMLINK") {
+            let nodejs = Path::new(&nvm_symlink);
+            for name in ["codex.cmd", "codex.exe", "codex"] {
+                add_existing_codex_candidate(candidates, seen, nodejs.join(name), "common");
             }
         }
         if let Ok(local_appdata) = env::var("LOCALAPPDATA") {
@@ -1248,6 +1268,10 @@ fn resolve_codex_model_name(settings: &AiSettings, request: &AiChatRequest) -> O
                 .filter(|model| !model.is_empty())
         })
         .map(ToOwned::to_owned)
+}
+
+fn codex_terminal_presentation_max_lines(settings: &AiSettings) -> Option<u16> {
+    (!settings.agent_background_execution_enabled).then_some(settings.terminal_output_lines)
 }
 
 #[cfg(test)]
@@ -1516,6 +1540,20 @@ pub async fn manager_from_app(app: &AppHandle) -> AppResult<Arc<CodexAppServerMa
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn resolves_windows_cmd_launcher_before_starting_app_server() {
+        let path = std::env::temp_dir().join(format!("nyaterm-codex-{}.cmd", uuid()));
+        std::fs::write(&path, "@echo off\r\necho codex-test\r\n").unwrap();
+
+        let resolved = resolve_codex_executable(Some(path.to_string_lossy().into_owned()))
+            .await
+            .unwrap();
+
+        assert_eq!(resolved, path.to_string_lossy());
+        let _ = std::fs::remove_file(path);
+    }
+
     #[test]
     fn sanitizes_codex_auth_material_from_logs() {
         let line =
@@ -1531,6 +1569,19 @@ mod tests {
         assert!(sanitized.contains("refresh_token=[redacted]"));
         assert!(sanitized.contains("id_token=[redacted]"));
         assert!(sanitized.contains("code=[redacted]&state=ok"));
+    }
+
+    #[test]
+    fn terminal_presentation_uses_configured_lines_only_for_foreground_execution() {
+        let mut settings = AiSettings {
+            terminal_output_lines: 23,
+            ..AiSettings::default()
+        };
+
+        assert_eq!(codex_terminal_presentation_max_lines(&settings), Some(23));
+
+        settings.agent_background_execution_enabled = true;
+        assert_eq!(codex_terminal_presentation_max_lines(&settings), None);
     }
 
     #[test]

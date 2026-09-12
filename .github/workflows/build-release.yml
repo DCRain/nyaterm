@@ -552,6 +552,12 @@ jobs:
                 } else if (arch === 'aarch64') {
                   keys.push('linux-aarch64');
                 }
+              } else if (lower.endsWith('.deb.sig')) {
+                if (arch === 'x86_64') {
+                  keys.push('linux-x86_64-deb');
+                } else if (arch === 'aarch64') {
+                  keys.push('linux-aarch64-deb');
+                }
               } else if (lower.endsWith('_portable.zip.sig')) {
                 if (arch === 'x86_64') {
                   keys.push('windows-x86_64-portable');
@@ -639,7 +645,9 @@ jobs:
               return;
             }
 
-            const requiredWindowsPlatforms = [
+            const requiredSignedPlatforms = [
+              'linux-x86_64-deb',
+              'linux-aarch64-deb',
               'windows-x86_64',
               'windows-aarch64',
               'windows-x86_64-nsis',
@@ -650,13 +658,11 @@ jobs:
               'windows-aarch64-portable',
             ];
 
-            for (const platform of requiredWindowsPlatforms) {
+            for (const platform of requiredSignedPlatforms) {
               const item = platforms[platform];
 
               if (!item?.url || !item?.signature) {
-                throw new Error(
-                  `latest.json is missing signed Windows target: ${platform}`
-                );
+                throw new Error(`latest.json is missing signed updater target: ${platform}`);
               }
             }
 
@@ -908,8 +914,10 @@ jobs:
             throw new Error('latest.json does not contain platforms');
           }
 
-          function verifySignedWindowsTargets(source) {
-            const requiredWindowsPlatforms = [
+          function verifySignedUpdaterTargets(source) {
+            const requiredSignedPlatforms = [
+              'linux-x86_64-deb',
+              'linux-aarch64-deb',
               'windows-x86_64',
               'windows-aarch64',
               'windows-x86_64-nsis',
@@ -920,18 +928,16 @@ jobs:
               'windows-aarch64-portable',
             ];
 
-            for (const platform of requiredWindowsPlatforms) {
+            for (const platform of requiredSignedPlatforms) {
               const item = manifest.platforms?.[platform];
 
               if (!item?.url || !item?.signature) {
-                throw new Error(
-                  `${source} is missing signed Windows target: ${platform}`
-                );
+                throw new Error(`${source} is missing signed updater target: ${platform}`);
               }
             }
           }
 
-          verifySignedWindowsTargets('latest.json');
+          verifySignedUpdaterTargets('latest.json');
 
           for (const [platform, item] of Object.entries(manifest.platforms)) {
             if (!item.url) {
@@ -950,7 +956,7 @@ jobs:
             item.url = `${baseUrl}/releases/${tag}/${encodeURIComponent(filename)}`;
           }
 
-          verifySignedWindowsTargets('r2-latest.json');
+          verifySignedUpdaterTargets('r2-latest.json');
 
           fs.writeFileSync(outputPath, JSON.stringify(manifest, null, 2) + '\n');
 
@@ -1048,7 +1054,9 @@ jobs:
               process.stdin.on('data', chunk => input += chunk);
               process.stdin.on('end', () => {
                 const json = JSON.parse(input);
-                const requiredWindowsPlatforms = [
+                const requiredSignedPlatforms = [
+                  'linux-x86_64-deb',
+                  'linux-aarch64-deb',
                   'windows-x86_64',
                   'windows-aarch64',
                   'windows-x86_64-nsis',
@@ -1058,19 +1066,19 @@ jobs:
                   'windows-x86_64-portable',
                   'windows-aarch64-portable',
                 ];
-                const windowsUrlPrefix = process.env.DOWNLOAD_BASE_URL +
+                const updaterUrlPrefix = process.env.DOWNLOAD_BASE_URL +
                   '/releases/' + process.env.GITHUB_REF_NAME + '/';
 
-                for (const platform of requiredWindowsPlatforms) {
+                for (const platform of requiredSignedPlatforms) {
                   const item = json.platforms?.[platform];
                   if (!item?.url || !item?.signature) {
                     throw new Error(
-                      source + ' is missing a signed Windows target: ' + platform
+                      source + ' is missing a signed updater target: ' + platform
                     );
                   }
-                  if (!item.url.startsWith(windowsUrlPrefix)) {
+                  if (!item.url.startsWith(updaterUrlPrefix)) {
                     throw new Error(
-                      source + ' Windows target does not use the versioned R2 URL: ' + platform
+                      source + ' updater target does not use the versioned R2 URL: ' + platform
                     );
                   }
                 }

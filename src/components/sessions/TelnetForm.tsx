@@ -328,6 +328,7 @@ export function TelnetForm({
                 </Label>
                 <div className="relative mt-1">
                   <Input
+                    data-custom-password-reveal
                     type={showDirectPassword ? "text" : "password"}
                     className="text-xs h-8 pr-16"
                     placeholder={

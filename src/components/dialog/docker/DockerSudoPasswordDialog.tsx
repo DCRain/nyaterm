@@ -111,6 +111,7 @@ export default function DockerSudoPasswordDialog({
           <div className="relative">
             <Input
               ref={inputRef}
+              data-custom-password-reveal
               type={showPassword ? "text" : "password"}
               value={password}
               onChange={(event) => setPassword(event.target.value)}

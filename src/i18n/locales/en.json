@@ -2622,6 +2622,8 @@
     "minimumContrastRatio_3": "Light boost",
     "minimumContrastRatio_4_5": "Recommended: WCAG AA",
     "minimumContrastRatio_7": "High contrast: WCAG AAA",
+    "mouseEventsRequireAlt": "Mouse Events Require Alt",
+    "mouseEventsRequireAltDesc": "When an application (e.g. vim, tmux, htop) enables mouse reporting, normal click and drag select text locally; hold Alt to send mouse events to the application.",
     "never": "Never",
     "noCustomEngines": "No custom search engines defined.",
     "noEngines": "No custom search engines defined.",
@@ -3321,6 +3323,7 @@
     "searchOnline": "Search Web",
     "searchRegex": "Regular expression",
     "searchWholeWord": "Whole word",
+    "searchWrapAround": "Wrap around",
     "selectAll": "Select All",
     "translate": "Translate"
   },

@@ -111,6 +111,30 @@ describe("start workspace asset view", () => {
     expect(screen.queryByText("Ascend Edge")).toBeNull();
   });
 
+  it("combines filters with OR within a dimension and AND across dimensions", async () => {
+    const user = userEvent.setup();
+    renderAssetView();
+
+    await user.click(screen.getByRole("button", { name: "Linux" }));
+    await user.click(screen.getByRole("button", { name: "Windows" }));
+
+    expect(screen.getByText("GPU Lab")).not.toBeNull();
+    expect(screen.getByText("Windows VM")).not.toBeNull();
+    expect(screen.getByText("Ascend Edge")).not.toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "GPU" }));
+
+    expect(screen.getByText("GPU Lab")).not.toBeNull();
+    expect(screen.queryByText("Windows VM")).toBeNull();
+    expect(screen.queryByText("Ascend Edge")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "NPU" }));
+
+    expect(screen.getByText("GPU Lab")).not.toBeNull();
+    expect(screen.queryByText("Windows VM")).toBeNull();
+    expect(screen.getByText("Ascend Edge")).not.toBeNull();
+  });
+
   it("shows ancestor breadcrumbs after selecting a group", async () => {
     const user = userEvent.setup();
     renderAssetView();

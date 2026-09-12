@@ -56,6 +56,7 @@ const terminalSettings = {
 const interaction = {
   word_separators: " ()[]{}'\"",
   alt_as_meta: false,
+  mouse_events_require_alt: false,
   ime_compatibility: false,
 } as AppSettings["interaction"];
 

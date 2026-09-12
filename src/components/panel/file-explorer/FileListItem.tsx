@@ -38,6 +38,7 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "../../ui/context-menu";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "../../ui/hover-card";
 
 interface FileListItemProps {
   entry: FileEntry;
@@ -174,9 +175,6 @@ export function FileListItem({
   const permissions = isParentDirectoryEntry ? "" : entry.permissions || "-";
   const owner = isParentDirectoryEntry ? "" : entry.owner || "-";
   const group = isParentDirectoryEntry ? "" : entry.group || "-";
-  const itemTitle = isParentDirectoryEntry
-    ? t("fileExplorer.goUp")
-    : `${permissions} ${fileSize} ${modifiedTime} ${owner}:${group}`;
   const isRenaming = !!inlineRename;
   const isFile = !entry.is_dir;
   const showOpenInternal = isFile && editorType === "external";
@@ -337,7 +335,7 @@ export function FileListItem({
             }
             onContextMenuSelect(entry, e);
           }}
-          title={itemTitle}
+          title={isParentDirectoryEntry ? t("fileExplorer.goUp") : undefined}
         >
           <div className="flex min-w-0 items-center gap-2 px-2">
             <entryIcon.icon
@@ -385,9 +383,43 @@ export function FileListItem({
               />
             ) : (
               <>
-                <span className="min-w-0 flex-1 truncate text-xs" onClick={handleNameClick}>
-                  {entry.name}
-                </span>
+                {isParentDirectoryEntry ? (
+                  <span className="min-w-0 flex-1 truncate text-xs" onClick={handleNameClick}>
+                    {entry.name}
+                  </span>
+                ) : (
+                  <HoverCard openDelay={450} closeDelay={100}>
+                    <HoverCardTrigger asChild>
+                      <span
+                        className="min-w-0 flex-1 truncate text-xs"
+                        onClick={handleNameClick}
+                      >
+                        {entry.name}
+                      </span>
+                    </HoverCardTrigger>
+                    <HoverCardContent
+                      side="top"
+                      align="start"
+                      className="w-80 max-w-[calc(100vw-2rem)] p-3"
+                    >
+                      <div className="mb-2 break-all text-sm font-medium leading-snug">
+                        {entry.name}
+                      </div>
+                      <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-xs">
+                        <span className="text-muted-foreground">{t("fileExplorer.mtime")}</span>
+                        <span className="min-w-0 break-words font-mono">{modifiedTime}</span>
+                        <span className="text-muted-foreground">{t("fileExplorer.size")}</span>
+                        <span className="min-w-0 break-words">{fileSize}</span>
+                        <span className="text-muted-foreground">{t("fileExplorer.permissions")}</span>
+                        <span className="min-w-0 break-all font-mono">{permissions}</span>
+                        <span className="text-muted-foreground">{t("fileExplorer.owner")}</span>
+                        <span className="min-w-0 break-all">{owner}</span>
+                        <span className="text-muted-foreground">{t("fileExplorer.group")}</span>
+                        <span className="min-w-0 break-all">{group}</span>
+                      </div>
+                    </HoverCardContent>
+                  </HoverCard>
+                )}
                 {showPeerSendAction &&
                   !peerTransferAction &&
                   !isParentDirectoryEntry &&

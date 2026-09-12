@@ -2616,6 +2616,8 @@
     "minimumContrastRatio_3": "輕微增強",
     "minimumContrastRatio_4_5": "推薦：WCAG AA",
     "minimumContrastRatio_7": "高對比：WCAG AAA",
+    "mouseEventsRequireAlt": "按住 Alt 傳送滑鼠事件",
+    "mouseEventsRequireAltDesc": "當終端應用程式（如 vim、tmux、htop）啟用滑鼠回報時，一般點擊和拖曳用於本地選取文字；按住 Alt 才會將滑鼠事件傳送給應用程式。",
     "never": "從未",
     "noCustomEngines": "未定義自訂搜尋引擎。",
     "noEngines": "未定義自訂搜尋引擎。",
@@ -3315,6 +3317,7 @@
     "searchOnline": "線上搜尋",
     "searchRegex": "正規表示式",
     "searchWholeWord": "整詞符合",
+    "searchWrapAround": "循環搜尋",
     "selectAll": "全選",
     "translate": "翻譯"
   },

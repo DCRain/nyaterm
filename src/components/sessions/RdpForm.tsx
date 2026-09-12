@@ -491,6 +491,7 @@ export function RdpForm({
               <div className="relative mt-1">
                 <Input
                   className="h-8 pr-16 text-xs"
+                  data-custom-password-reveal
                   type={showPassword ? "text" : "password"}
                   value={password}
                   placeholder={

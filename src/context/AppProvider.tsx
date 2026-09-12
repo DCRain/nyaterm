@@ -170,6 +170,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     duplicate_session_command_delay_ms: 1000,
     word_separators: " ()[]{}\"':=,;|&<>",
     alt_as_meta: false,
+    mouse_events_require_alt: false,
     ime_compatibility: false,
     default_encoding: "UTF-8",
     tab_double_click_action: DEFAULT_TAB_DOUBLE_CLICK_ACTION,

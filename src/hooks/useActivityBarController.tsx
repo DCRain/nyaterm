@@ -36,6 +36,7 @@ import {
   toggleActivityBarItemVisibility,
   type PanelOpenMode,
 } from "@/lib/appWorkspace";
+import { focusTerminalSession } from "@/lib/appSessionFactory";
 import { openSettings } from "@/lib/windowManager";
 import type { ActivityBarLayout, ActivityBarZone, UiConfig } from "@/types/global";
 
@@ -253,6 +254,7 @@ function normalizeActivityBarState(uiConfig: UiConfig): Partial<UiConfig> | null
 
 interface UseActivityBarControllerOptions {
   uiConfig: UiConfig;
+  activeSessionId: string | null;
   recordingSessions: Set<string>;
   multiPanelOpen: boolean;
   panelOpenMode: PanelOpenMode;
@@ -269,6 +271,7 @@ interface UseActivityBarControllerOptions {
 
 export function useActivityBarController({
   uiConfig,
+  activeSessionId,
   recordingSessions,
   multiPanelOpen,
   panelOpenMode,
@@ -386,7 +389,9 @@ export function useActivityBarController({
   const handleItemSelect = useCallback(
     (id: string) => {
       if (id === "settings") {
-        openSettings();
+        const terminalSessionId = activeSessionId;
+        const restoreTerminalFocus = () => focusTerminalSession(terminalSessionId);
+        void openSettings().then(restoreTerminalFocus, restoreTerminalFocus);
         return;
       }
       if (id === "lock") {
@@ -424,6 +429,7 @@ export function useActivityBarController({
       }
     },
     [
+      activeSessionId,
       layout,
       multiPanelOpen,
       onFloatingPanelSelect,

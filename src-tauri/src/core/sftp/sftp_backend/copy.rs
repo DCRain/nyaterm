@@ -1111,6 +1111,8 @@ impl SftpBackend {
                 total_files,
                 bytes: bytes_written,
                 small_file_concurrency: 1,
+                failure_count: 0,
+                first_failure: None,
             })
         }
         .await;
@@ -1279,6 +1281,8 @@ impl SftpBackend {
                 total_files,
                 bytes: bytes_written,
                 small_file_concurrency: 1,
+                failure_count: 0,
+                first_failure: None,
             })
         }
         .await;

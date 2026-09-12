@@ -14,9 +14,6 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import ExternalFileDropOverlay from "@/components/ExternalFileDropOverlay";
-import { FloatingSessionChrome } from "@/components/remote-desktop/FloatingSessionChrome";
-import type { RemoteDesktopNetworkStatus } from "@/components/remote-desktop/FloatingSessionChrome";
-import { RdpShortcutPopover } from "@/components/remote-desktop/RdpShortcutPopover";
 import {
   createRemoteDesktopRenderer,
   type RemoteDesktopRenderer,
@@ -42,11 +39,6 @@ import {
   getRemoteDesktopContentRect,
   mapClientEventToRemoteDesktopPixel,
 } from "@/lib/remoteDesktopViewport";
-import {
-  isTerminalWindowFullscreenActive,
-  TERMINAL_FULLSCREEN_CHANGED_EVENT,
-  toggleTerminalWindowFullscreen,
-} from "@/lib/terminalFullscreen";
 import type { RdpSessionPane, RemoteDesktopScaleMode } from "@/types/global";
 
 type RdpSessionState =
@@ -64,13 +56,6 @@ interface RdpStatePayload {
   state: RdpSessionState;
   message?: string | null;
   errorKind?: string | null;
-}
-
-interface RdpNetworkPayload {
-  sessionId: string;
-  latencyMs?: number | null;
-  fps: number;
-  quality: RemoteDesktopNetworkStatus["quality"];
 }
 
 type RdpPointerPayload =
@@ -99,7 +84,6 @@ interface RdpPaneHostProps {
   pane: RdpSessionPane;
   active: boolean;
   visible: boolean;
-  onDisconnectedCloseRequested?: () => void;
   onConnectionError?: (sessionId: string, error: string) => void;
 }
 
@@ -156,13 +140,7 @@ function statusLabel(state: RdpSessionState, message?: string | null) {
   }
 }
 
-function RdpPaneHost({
-  pane,
-  active,
-  visible,
-  onDisconnectedCloseRequested,
-  onConnectionError,
-}: RdpPaneHostProps) {
+function RdpPaneHost({ pane, active, visible, onConnectionError }: RdpPaneHostProps) {
   const { t } = useTranslation();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -183,8 +161,6 @@ function RdpPaneHost({
   const dynamicResizeDisabledRef = useRef(false);
   const [state, setState] = useState<RdpSessionState>(pane.connectError ? "failed" : "connecting");
   const [message, setMessage] = useState<string | null>(pane.connectError ?? null);
-  const [networkStatus, setNetworkStatus] = useState<RemoteDesktopNetworkStatus | null>(null);
-  const [isFullscreen, setIsFullscreen] = useState(false);
   const [desktopSize, setDesktopSize] = useState({
     width: pane.display?.remoteWidth ?? 1920,
     height: pane.display?.remoteHeight ?? 1080,
@@ -285,9 +261,6 @@ function RdpPaneHost({
     const unlisten = listen<RdpStatePayload>(`rdp-state-${pane.sessionId}`, (event) => {
       setState(event.payload.state);
       setMessage(event.payload.message ?? null);
-      if (event.payload.state !== "active") {
-        setNetworkStatus(null);
-      }
       if (
         shouldDisableDynamicResizeAfterState({
           state: event.payload.state,
@@ -305,23 +278,6 @@ function RdpPaneHost({
       void unlisten.then((dispose) => dispose());
     };
   }, [onConnectionError, pane.sessionId]);
-
-  useEffect(() => {
-    if (state !== "active") {
-      setNetworkStatus(null);
-      return;
-    }
-    const unlisten = listen<RdpNetworkPayload>(`rdp-network-${pane.sessionId}`, (event) => {
-      setNetworkStatus({
-        latencyMs: event.payload.latencyMs ?? null,
-        fps: event.payload.fps,
-        quality: event.payload.quality,
-      });
-    });
-    return () => {
-      void unlisten.then((dispose) => dispose());
-    };
-  }, [pane.sessionId, state]);
 
   const applyCursorPosition = useCallback(() => {
     cursorRafRef.current = null;
@@ -452,32 +408,6 @@ function RdpPaneHost({
   }, [active, pane.display?.scaleMode, pane.sessionId, state, visible]);
 
   useEffect(() => {
-    const syncFullscreen = (event?: Event) => {
-      if (event) {
-        const detail = (event as CustomEvent<{ active?: boolean }>).detail;
-        setIsFullscreen(Boolean(detail?.active));
-        return;
-      }
-      setIsFullscreen(isTerminalWindowFullscreenActive());
-    };
-    window.addEventListener(TERMINAL_FULLSCREEN_CHANGED_EVENT, syncFullscreen);
-    syncFullscreen();
-    return () => {
-      window.removeEventListener(TERMINAL_FULLSCREEN_CHANGED_EVENT, syncFullscreen);
-    };
-  }, []);
-
-  const toggleFullscreen = useCallback(() => {
-    void toggleTerminalWindowFullscreen()
-      .then(() => {
-        window.setTimeout(() => {
-          window.dispatchEvent(new CustomEvent("nyaterm:refresh-terminals"));
-        }, 50);
-      })
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
     if (!active || !visible) releaseAllKeys();
   }, [active, releaseAllKeys, visible]);
 
@@ -496,9 +426,31 @@ function RdpPaneHost({
     };
   }, [cancelPrintableKeyFallbacks, releaseAllKeys]);
 
+  useEffect(() => {
+    if (!active || !visible || pane.connecting || pane.connectError || state !== "active") {
+      void invoke("rdp_set_keyboard_capture", { sessionId: null }).catch(() => {});
+      return;
+    }
+
+    const container = containerRef.current;
+    if (container?.contains(document.activeElement)) {
+      void invoke("rdp_set_keyboard_capture", { sessionId: pane.sessionId }).catch(() => {});
+    }
+
+    return () => {
+      void invoke("rdp_set_keyboard_capture", { sessionId: null }).catch(() => {});
+    };
+  }, [active, pane.connectError, pane.connecting, pane.sessionId, state, visible]);
+
+  const handleFocus = useCallback(() => {
+    if (!active || !visible || pane.connecting || pane.connectError || state !== "active") return;
+    void invoke("rdp_set_keyboard_capture", { sessionId: pane.sessionId }).catch(() => {});
+  }, [active, pane.connectError, pane.connecting, pane.sessionId, state, visible]);
+
   const handleBlur = useCallback(
     (event: ReactFocusEvent<HTMLElement>) => {
       if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+      void invoke("rdp_set_keyboard_capture", { sessionId: null }).catch(() => {});
       releaseAllKeys();
     },
     [releaseAllKeys],
@@ -506,8 +458,6 @@ function RdpPaneHost({
 
   const handleKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLElement>) => {
-      if (event.repeat) return;
-      if (pressedKeysRef.current.has(event.code)) return;
       if (!shouldUsePhysicalRdpKey(event.nativeEvent)) return;
       const inputEvent = buildRdpKeyEvent(event.nativeEvent, "key-down");
       if (!inputEvent) return;
@@ -586,22 +536,14 @@ function RdpPaneHost({
     [flushMouseMove, pane.display?.scaleMode],
   );
 
-  const fitWindow = pane.display?.scaleMode === "fit";
-  const scaleStyle = useMemo(() => {
-    if (fitWindow) {
-      // Fill the pane edge-to-edge; remote desktop is resized to the container.
-      return { width: "100%", height: "100%" };
-    }
-    return {
-      aspectRatio: `${desktopSize.width} / ${desktopSize.height}`,
-      maxWidth: "100%",
-      maxHeight: "100%",
-    };
-  }, [desktopSize.height, desktopSize.width, fitWindow]);
-
-  const sendShortcut = (events: RdpInputEvent[]) => {
-    void sendInputBatch(events);
-  };
+  const scaleStyle = useMemo(
+    () => ({
+      width: "100%",
+      height: "100%",
+      objectFit: "contain" as const,
+    }),
+    [],
+  );
 
   const fileDropEnabled =
     visible &&
@@ -619,10 +561,11 @@ function RdpPaneHost({
   return (
     <div
       ref={containerRef}
-      className="relative flex h-full w-full min-h-0 min-w-0 items-center justify-center overflow-hidden bg-black outline-none"
+      className="group relative flex h-full w-full min-h-0 min-w-0 items-center justify-center overflow-hidden bg-black outline-none"
       data-rdp-input-root="true"
       data-remote-desktop-input-root="true"
       tabIndex={active ? 0 : -1}
+      onFocus={handleFocus}
       onKeyDownCapture={handlePhysicalKeyDownCapture}
       onKeyUpCapture={handlePhysicalKeyUpCapture}
       onKeyDown={handleRdpKeyDown}
@@ -676,7 +619,7 @@ function RdpPaneHost({
       />
       <canvas
         ref={canvasRef}
-        className={fitWindow ? "block h-full w-full" : "block object-contain"}
+        className="block object-contain"
         style={scaleStyle}
         onPointerMove={queueMouseMove}
         onPointerDown={(event) => {
@@ -711,21 +654,6 @@ function RdpPaneHost({
         ref={cursorRef}
         aria-hidden="true"
         className="pointer-events-none absolute left-0 top-0 z-10 hidden"
-      />
-
-      <FloatingSessionChrome
-        sessionId={pane.sessionId}
-        title={pane.name}
-        subtitle={`${desktopSize.width}x${desktopSize.height}`}
-        networkStatus={networkStatus}
-        boundsRef={containerRef}
-        enabled={state === "active"}
-        active={active}
-        onReconnect={() => void invoke("rdp_reconnect", { sessionId: pane.sessionId })}
-        onClose={() => onDisconnectedCloseRequested?.()}
-        onToggleFullscreen={() => void toggleFullscreen()}
-        isFullscreen={isFullscreen}
-        shortcutPopover={<RdpShortcutPopover onSendShortcut={sendShortcut} />}
       />
 
       {isExternalDropActive && (

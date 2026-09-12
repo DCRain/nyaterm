@@ -2621,6 +2621,8 @@
     "minimumContrastRatio_3": "轻微增强",
     "minimumContrastRatio_4_5": "推荐：WCAG AA",
     "minimumContrastRatio_7": "高对比：WCAG AAA",
+    "mouseEventsRequireAlt": "按住 Alt 发送鼠标事件",
+    "mouseEventsRequireAltDesc": "当终端应用（如 vim、tmux、htop）开启鼠标上报时，普通点击和拖动用于本地选择文本；按住 Alt 才会将鼠标事件发送给应用。",
     "never": "从未",
     "noCustomEngines": "未定义自定义搜索引擎。",
     "noEngines": "未定义自定义搜索引擎。",
@@ -3320,6 +3322,7 @@
     "searchOnline": "在线搜索",
     "searchRegex": "正则表达式",
     "searchWholeWord": "整词匹配",
+    "searchWrapAround": "循环搜索",
     "selectAll": "全选",
     "translate": "翻译"
   },

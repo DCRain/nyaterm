@@ -33,12 +33,40 @@ pub(super) struct LocalDirectoryInventory {
     pub(super) max_open_handles: Option<u64>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(super) struct DirectoryTransferSummary {
     pub(super) completed: u64,
     pub(super) total_files: u64,
     pub(super) bytes: u64,
     pub(super) small_file_concurrency: usize,
+    pub(super) failure_count: u64,
+    pub(super) first_failure: Option<DirectoryTransferFailure>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct DirectoryTransferFailure {
+    pub(super) path: String,
+    pub(super) error: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct UploadDirectoryFailures {
+    pub(super) count: u64,
+    pub(super) first: Option<DirectoryTransferFailure>,
+}
+
+#[derive(Debug)]
+pub(super) enum UploadDirectoryFileError {
+    Recoverable(AppError),
+    Fatal(AppError),
+}
+
+pub(super) type UploadDirectoryFileResult<T> = Result<T, UploadDirectoryFileError>;
+
+impl From<AppError> for UploadDirectoryFileError {
+    fn from(error: AppError) -> Self {
+        Self::Fatal(error)
+    }
 }
 
 #[allow(dead_code)]
@@ -477,6 +505,8 @@ impl SftpBackend {
                 total_files: 0,
                 bytes: 0,
                 small_file_concurrency: concurrency.small_file_concurrency,
+                failure_count: 0,
+                first_failure: None,
             });
         }
 
@@ -518,6 +548,8 @@ impl SftpBackend {
                 total_files: 0,
                 bytes: 0,
                 small_file_concurrency: concurrency.small_file_concurrency,
+                failure_count: 0,
+                first_failure: None,
             });
         }
 
@@ -808,7 +840,101 @@ pub(super) async fn run_download_directory_workers(
             total_files,
             bytes: completed_bytes.load(Ordering::SeqCst),
             small_file_concurrency: concurrency.small_file_concurrency,
+            failure_count: 0,
+            first_failure: None,
         })
+    }
+}
+
+pub(super) fn finish_upload_directory_file(
+    result: UploadDirectoryFileResult<u64>,
+    path: String,
+    failures: &StdMutex<UploadDirectoryFailures>,
+    completed_count: &AtomicU64,
+) -> AppResult<u64> {
+    match result {
+        Ok(_) => {}
+        Err(UploadDirectoryFileError::Fatal(error)) => return Err(error),
+        Err(UploadDirectoryFileError::Recoverable(error @ AppError::Cancelled(_))) => {
+            return Err(error);
+        }
+        Err(UploadDirectoryFileError::Recoverable(error)) => {
+            let mut failures = failures.lock().unwrap();
+            failures.count = failures.count.saturating_add(1);
+            if failures.first.is_none() {
+                failures.first = Some(DirectoryTransferFailure {
+                    path,
+                    error: error.to_string(),
+                });
+            }
+        }
+    }
+
+    Ok(completed_count.fetch_add(1, Ordering::SeqCst) + 1)
+}
+
+pub(super) fn is_recoverable_upload_sftp_error(error: &SftpError) -> bool {
+    matches!(
+        error,
+        SftpError::Status(status)
+            if matches!(
+                status.status_code,
+                StatusCode::NoSuchFile | StatusCode::PermissionDenied | StatusCode::Failure
+            )
+    )
+}
+
+fn classify_upload_sftp_error(error: SftpError, message: String) -> UploadDirectoryFileError {
+    let app_error = AppError::Channel(message);
+    if is_recoverable_upload_sftp_error(&error) {
+        UploadDirectoryFileError::Recoverable(app_error)
+    } else {
+        UploadDirectoryFileError::Fatal(app_error)
+    }
+}
+
+fn sftp_error_source(error: &std::io::Error) -> Option<&SftpError> {
+    let mut source = error
+        .get_ref()
+        .map(|source| source as &(dyn std::error::Error + 'static));
+    while let Some(current) = source {
+        if let Some(error) = current.downcast_ref::<SftpError>() {
+            return Some(error);
+        }
+        source = current.source();
+    }
+    None
+}
+
+pub(super) fn classify_upload_sftp_io_error(
+    error: std::io::Error,
+    message: String,
+) -> UploadDirectoryFileError {
+    let recoverable = sftp_error_source(&error).is_some_and(is_recoverable_upload_sftp_error);
+    let app_error = AppError::Channel(message);
+    if recoverable {
+        UploadDirectoryFileError::Recoverable(app_error)
+    } else {
+        UploadDirectoryFileError::Fatal(app_error)
+    }
+}
+
+async fn wait_for_directory_upload_io<T, F, M>(
+    controller: &Arc<TransferController>,
+    future: F,
+    error_message: M,
+) -> UploadDirectoryFileResult<T>
+where
+    F: Future<Output = std::io::Result<T>>,
+    M: FnOnce(&std::io::Error) -> String,
+{
+    match wait_for_sftp_upload_io(controller, None, future, AppError::Io).await {
+        Ok(value) => Ok(value),
+        Err(AppError::Io(error)) => {
+            let message = error_message(&error);
+            Err(classify_upload_sftp_io_error(error, message))
+        }
+        Err(error) => Err(UploadDirectoryFileError::Fatal(error)),
     }
 }
 
@@ -827,6 +953,7 @@ pub(super) async fn run_upload_directory_workers(
     let queue = Arc::new(StdMutex::new(VecDeque::from(inventory.files)));
     let completed_count = Arc::new(AtomicU64::new(0));
     let completed_bytes = Arc::new(AtomicU64::new(0));
+    let failures = Arc::new(StdMutex::new(UploadDirectoryFailures::default()));
     let large_lane = Arc::new(Semaphore::new(concurrency.large_file_concurrency));
     let mut join_set = tokio::task::JoinSet::new();
 
@@ -837,6 +964,7 @@ pub(super) async fn run_upload_directory_workers(
         let directory_controller = directory_controller.clone();
         let completed_count = completed_count.clone();
         let completed_bytes = completed_bytes.clone();
+        let failures = failures.clone();
         let large_lane = large_lane.clone();
         let transfer_settings = transfer_settings.clone();
         join_set.spawn(async move {
@@ -857,7 +985,8 @@ pub(super) async fn run_upload_directory_workers(
                     None
                 };
                 let session = pool.session_for(worker_index);
-                let _bytes = upload_directory_file_with_session(
+                let failure_path = file.remote_path.clone();
+                let result = upload_directory_file_with_session(
                     &app,
                     session,
                     file,
@@ -867,8 +996,13 @@ pub(super) async fn run_upload_directory_workers(
                     total_size,
                     request_kib,
                 )
-                .await?;
-                let completed = completed_count.fetch_add(1, Ordering::SeqCst) + 1;
+                .await;
+                let completed = finish_upload_directory_file(
+                    result,
+                    failure_path,
+                    &failures,
+                    &completed_count,
+                )?;
                 directory_controller.update_item_progress(completed, total_files);
                 let bytes_done = completed_bytes.load(Ordering::SeqCst);
                 directory_controller.update_progress(bytes_done, total_size);
@@ -928,11 +1062,14 @@ pub(super) async fn run_upload_directory_workers(
     if let Some(error) = first_err {
         Err(error)
     } else {
+        let failures = failures.lock().unwrap().clone();
         Ok(DirectoryTransferSummary {
             completed: completed_count.load(Ordering::SeqCst),
             total_files,
             bytes: completed_bytes.load(Ordering::SeqCst),
             small_file_concurrency: concurrency.small_file_concurrency,
+            failure_count: failures.count,
+            first_failure: failures.first,
         })
     }
 }
@@ -1042,21 +1179,19 @@ pub(super) async fn upload_directory_file_with_session(
     completed_bytes: &Arc<AtomicU64>,
     total_size: u64,
     request_kib: usize,
-) -> AppResult<u64> {
+) -> UploadDirectoryFileResult<u64> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     wait_for_transfer_ready(directory_controller).await?;
     let mut local_file = tokio::fs::File::open(&file.local_path).await.map_err(|e| {
-        AppError::Channel(format!(
+        UploadDirectoryFileError::Recoverable(AppError::Channel(format!(
             "Failed to open local file {}: {}",
             file.local_path, e
-        ))
+        )))
     })?;
     let mut remote_file = sftp.create(&file.remote_path).await.map_err(|e| {
-        AppError::Channel(format!(
-            "Failed to create remote file {}: {}",
-            file.remote_path, e
-        ))
+        let message = format!("Failed to create remote file {}: {}", file.remote_path, e);
+        classify_upload_sftp_error(e, message)
     })?;
 
     let mut buf = vec![0u8; sftp_payload_size(request_kib)];
@@ -1065,19 +1200,18 @@ pub(super) async fn upload_directory_file_with_session(
     loop {
         wait_for_transfer_ready(directory_controller).await?;
         let read = local_file.read(&mut buf).await.map_err(|e| {
-            AppError::Channel(format!(
+            UploadDirectoryFileError::Recoverable(AppError::Channel(format!(
                 "Failed to read local file {}: {}",
                 file.local_path, e
-            ))
+            )))
         })?;
         if read == 0 {
             break;
         }
-        wait_for_sftp_upload_io(
+        wait_for_directory_upload_io(
             directory_controller,
-            None,
             remote_file.write_all(&buf[..read]),
-            |e| AppError::Channel(format!("SFTP write failed for {}: {}", file.remote_path, e)),
+            |e| format!("SFTP write failed for {}: {}", file.remote_path, e),
         )
         .await?;
         bytes_transferred = bytes_transferred.saturating_add(read as u64);
@@ -1096,8 +1230,8 @@ pub(super) async fn upload_directory_file_with_session(
             );
         }
     }
-    wait_for_sftp_upload_io(directory_controller, None, remote_file.shutdown(), |e| {
-        AppError::Channel(format!("SFTP flush failed for {}: {}", file.remote_path, e))
+    wait_for_directory_upload_io(directory_controller, remote_file.shutdown(), |e| {
+        format!("SFTP flush failed for {}: {}", file.remote_path, e)
     })
     .await?;
 

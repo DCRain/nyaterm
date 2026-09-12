@@ -444,6 +444,12 @@ export function TransferProvider({ children }: { children: ReactNode }) {
             toast.dismiss(folderToastId);
             uploadFolderToastIdsRef.current.delete(p.id);
           }
+          if (kind === "directory" && p.error_msg) {
+            toast.warning(t("fileTransfer.uploadFolderCompleted"), {
+              description: p.error_msg,
+            });
+            return;
+          }
           toast.success(
             kind === "directory"
               ? t("fileTransfer.uploadFolderCompleted")

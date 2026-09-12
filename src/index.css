@@ -331,6 +331,12 @@ textarea,
   border-radius: 0;
 }
 
+/* Edge/WebView2 adds a native reveal button to password inputs. Hide it only
+   when NyaTerm renders its own password visibility control. */
+input[data-custom-password-reveal]::-ms-reveal {
+  display: none;
+}
+
 .nyaterm-wallpaper-shell[data-wallpaper-enabled="true"] .xterm,
 .nyaterm-wallpaper-shell[data-wallpaper-enabled="true"] .xterm .xterm-viewport,
 .nyaterm-wallpaper-shell[data-wallpaper-enabled="true"] .xterm .xterm-screen,
