@@ -1,14 +1,25 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SavedConnection } from "@/types/global";
+import type { SavedAccount, SavedConnection } from "@/types/global";
 import NewSessionPage from "./NewSessionPage";
 
-const { closeMock, emitMock, invokeMock, rdpFormMock, serialFormMock, translateMock } = vi.hoisted(() => ({
+const {
+  closeMock,
+  emitMock,
+  invokeMock,
+  rdpFormMock,
+  serialFormMock,
+  sshFormMock,
+  telnetFormMock,
+  translateMock,
+} = vi.hoisted(() => ({
   closeMock: vi.fn(),
   emitMock: vi.fn(),
   invokeMock: vi.fn(),
   rdpFormMock: vi.fn(),
   serialFormMock: vi.fn(),
+  sshFormMock: vi.fn(),
+  telnetFormMock: vi.fn(),
   translateMock: (key: string, fallback?: unknown) =>
     typeof fallback === "string" ? fallback : key,
 }));
@@ -50,8 +61,65 @@ vi.mock("@/components/sessions/SerialForm", () => ({
     );
   },
 }));
-vi.mock("@/components/sessions/SshForm", () => ({ SshForm: () => null }));
-vi.mock("@/components/sessions/TelnetForm", () => ({ TelnetForm: () => null }));
+vi.mock("@/components/sessions/SshForm", () => ({
+  SshForm: (props: Record<string, unknown>) => {
+    sshFormMock(props);
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => {
+            (props.setAccountId as (value: string) => void)("account-1");
+            (props.setPasswordSource as (value: string) => void)("account");
+            (props.setPassword as (value: string) => void)("");
+            (props.setHasPassword as (value: boolean) => void)(false);
+          }}
+        >
+          choose-account
+        </button>
+        <button type="button" onClick={() => (props.setAccountId as (value: string) => void)("")}>
+          choose-manual
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            (props.setPasswordSource as (value: string) => void)("direct");
+            (props.setPassword as (value: string) => void)("");
+            (props.setHasPassword as (value: boolean) => void)(false);
+          }}
+        >
+          choose-empty-direct-password
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            (props.setAuthType as (value: string) => void)("key");
+            (props.setKeyId as (value: string) => void)("key-1");
+          }}
+        >
+          choose-key
+        </button>
+      </>
+    );
+  },
+}));
+vi.mock("@/components/sessions/TelnetForm", () => ({
+  TelnetForm: (props: Record<string, unknown>) => {
+    telnetFormMock(props);
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          (props.setPasswordSource as (value: string) => void)("direct");
+          (props.setPassword as (value: string) => void)("");
+          (props.setHasPassword as (value: boolean) => void)(false);
+        }}
+      >
+        choose-empty-telnet-password
+      </button>
+    );
+  },
+}));
 vi.mock("@/components/sessions/VncForm", () => ({ VncForm: () => null }));
 vi.mock("@/components/sessions/RdpForm", () => ({
   RdpForm: (props: Record<string, unknown>) => {
@@ -72,6 +140,47 @@ const jumpHost: SavedConnection = {
   host: "jump.example.com",
   port: 22,
   username: "jump-user",
+};
+
+const account: SavedAccount = {
+  id: "account-1",
+  name: "Production",
+  username: "admin",
+  has_password: true,
+};
+
+const sshConnection: SavedConnection = {
+  id: "ssh-1",
+  name: "SSH server",
+  type: "ssh",
+  host: "ssh.example.com",
+  port: 22,
+  username: "root",
+  auth: { mode: "password", account_id: account.id },
+};
+
+const manualSshConnection: SavedConnection = {
+  ...sshConnection,
+  id: "ssh-manual",
+  name: "Manual SSH server",
+  auth: { mode: "password", has_password: true },
+};
+
+const legacySshConnection: SavedConnection = {
+  ...sshConnection,
+  id: "ssh-legacy",
+  name: "Legacy SSH server",
+  auth: { mode: "password", password_id: account.id },
+};
+
+const telnetConnection: SavedConnection = {
+  id: "telnet-1",
+  name: "Telnet server",
+  type: "telnet",
+  host: "telnet.example.com",
+  port: 23,
+  username: "fallback",
+  auth: { mode: "password", account_id: account.id },
 };
 
 const rdpConnection: SavedConnection = {
@@ -128,8 +237,18 @@ describe("NewSessionPage", () => {
         case "get_otp_entries":
         case "get_connection_custom_icons":
           return Promise.resolve([]);
+        case "get_saved_passwords":
+          return Promise.resolve([account]);
         case "get_saved_connections":
-          return Promise.resolve([rdpConnection, serialConnection, jumpHost]);
+          return Promise.resolve([
+            rdpConnection,
+            serialConnection,
+            jumpHost,
+            sshConnection,
+            manualSshConnection,
+            legacySshConnection,
+            telnetConnection,
+          ]);
         case "list_serial_ports":
           return Promise.resolve(["COM3"]);
         case "save_connection":
@@ -140,6 +259,8 @@ describe("NewSessionPage", () => {
     });
     rdpFormMock.mockReset();
     serialFormMock.mockReset();
+    sshFormMock.mockReset();
+    telnetFormMock.mockReset();
   });
 
   it("restores an RDP jump host and keeps it when saving without changes", async () => {
@@ -205,6 +326,163 @@ describe("NewSessionPage", () => {
           connection: expect.objectContaining({
             type: "serial",
             modem_upload_protocol: "xmodem",
+          }),
+        }),
+      );
+    });
+  });
+
+  it("saves an account reference without copying its username", async () => {
+    window.history.replaceState({}, "", `/?edit=${manualSshConnection.id}`);
+    render(<NewSessionPage />);
+
+    await waitFor(() => expect(sshFormMock).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "choose-account" }));
+    fireEvent.click(screen.getByRole("button", { name: "dialog.save" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "save_connection",
+        expect.objectContaining({
+          connection: expect.objectContaining({
+            type: "ssh",
+            username: "root",
+            auth: expect.objectContaining({
+              account_id: account.id,
+              password_source: "account",
+              password_id: "",
+              password: "",
+            }),
+          }),
+        }),
+      );
+    });
+  });
+
+  it("keeps the account username but disables its password for an empty direct password", async () => {
+    window.history.replaceState({}, "", `/?edit=${sshConnection.id}`);
+    render(<NewSessionPage />);
+
+    await waitFor(() => {
+      expect(sshFormMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ accountId: account.id, passwordSource: "account" }),
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "choose-empty-direct-password" }));
+    fireEvent.click(screen.getByRole("button", { name: "dialog.save" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "save_connection",
+        expect.objectContaining({
+          connection: expect.objectContaining({
+            username: "root",
+            auth: expect.objectContaining({
+              account_id: account.id,
+              password_source: "connection",
+              password: "",
+            }),
+          }),
+        }),
+      );
+    });
+  });
+
+  it("keeps a Telnet account reference while saving an empty direct password", async () => {
+    window.history.replaceState({}, "", `/?edit=${telnetConnection.id}`);
+    render(<NewSessionPage />);
+
+    await waitFor(() => {
+      expect(telnetFormMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ accountId: account.id, passwordSource: "account" }),
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "choose-empty-telnet-password" }));
+    fireEvent.click(screen.getByRole("button", { name: "dialog.save" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "save_connection",
+        expect.objectContaining({
+          connection: expect.objectContaining({
+            type: "telnet",
+            username: "fallback",
+            auth: expect.objectContaining({
+              account_id: account.id,
+              password_source: "connection",
+              password: "",
+            }),
+          }),
+        }),
+      );
+    });
+  });
+
+  it("clears only the account reference when switching to Manual", async () => {
+    window.history.replaceState({}, "", `/?edit=${sshConnection.id}`);
+    render(<NewSessionPage />);
+
+    await waitFor(() => {
+      expect(sshFormMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ accountId: account.id, username: "root" }),
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "choose-manual" }));
+    fireEvent.click(screen.getByRole("button", { name: "dialog.save" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "save_connection",
+        expect.objectContaining({
+          connection: expect.objectContaining({
+            username: "root",
+            auth: expect.objectContaining({ account_id: "" }),
+          }),
+        }),
+      );
+    });
+  });
+
+  it("upgrades a legacy password_id reference when saving", async () => {
+    window.history.replaceState({}, "", `/?edit=${legacySshConnection.id}`);
+    render(<NewSessionPage />);
+
+    await waitFor(() => {
+      expect(sshFormMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ accountId: account.id }),
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "dialog.save" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "save_connection",
+        expect.objectContaining({
+          connection: expect.objectContaining({
+            auth: expect.objectContaining({
+              account_id: account.id,
+              password_id: "",
+            }),
+          }),
+        }),
+      );
+    });
+  });
+
+  it("keeps the account reference when changing SSH authentication to key", async () => {
+    window.history.replaceState({}, "", `/?edit=${sshConnection.id}`);
+    render(<NewSessionPage />);
+
+    await waitFor(() => expect(sshFormMock).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "choose-key" }));
+    fireEvent.click(screen.getByRole("button", { name: "dialog.save" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "save_connection",
+        expect.objectContaining({
+          connection: expect.objectContaining({
+            auth: expect.objectContaining({ mode: "key", account_id: account.id }),
           }),
         }),
       );
