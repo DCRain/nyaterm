@@ -705,6 +705,7 @@
     "rdpFileDropUnsupported": "拖入檔案需要剪貼簿模式為「文字與檔案」",
     "rdpFileOfferFailed": "無法將檔案傳送到遠端工作階段",
     "rdpFileOfferQueued": "已向遠端剪貼簿提供 {{count}} 個檔案",
+    "rdpTransferFiles": "傳輸檔案到遠端",
     "rdpFullscreen": "全螢幕",
     "rdpHeight": "高度",
     "rdpKeyboardFullscreen": "僅全螢幕時套用到遠端",

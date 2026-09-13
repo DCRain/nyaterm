@@ -201,6 +201,8 @@ mod tests {
             sort_order: 0,
             created_at_ms: 0,
             updated_at_ms: 0,
+            encrypted: false,
+            encryption: None,
         }
     }
 
@@ -214,6 +216,8 @@ mod tests {
             revision: 7,
             created_at_ms: 0,
             updated_at_ms: 0,
+            encrypted: false,
+            encryption: None,
         }
     }
 

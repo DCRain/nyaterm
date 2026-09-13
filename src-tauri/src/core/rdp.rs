@@ -65,7 +65,8 @@ use x509_cert::der::Decode as _;
 const MAX_FRAME_QUEUE: usize = 2;
 const MAX_CLIPBOARD_TEXT_BYTES: usize = 16 * 1024 * 1024;
 const CLIPBOARD_POLL_INTERVAL: Duration = Duration::from_millis(750);
-const REMOTE_PASTE_AFTER_OFFER_DELAY: Duration = Duration::from_millis(450);
+const REMOTE_PASTE_AFTER_OFFER_DELAY: Duration = Duration::from_millis(600);
+const LOCAL_FILE_OFFER_TEXT_SUPPRESS: Duration = Duration::from_secs(5);
 const CLIPBOARD_OPEN_RETRIES: u32 = 12;
 const CLIPBOARD_OPEN_RETRY_DELAY: Duration = Duration::from_millis(50);
 const CLIPBOARD_TIMEOUT: Duration = Duration::from_millis(1000);
@@ -1445,6 +1446,10 @@ struct RdpClipboardBridge {
     next_stream_id: AtomicU32,
     remote_download: std::sync::Mutex<Option<RemoteFileDownload>>,
     remote_files_clipboard_until: std::sync::Mutex<Option<std::time::Instant>>,
+    /// Suppress local→remote text clipboard sync after offering files, so the OS
+    /// clipboard watcher (and file-dialog CF_HDROP echoes) cannot replace the file
+    /// format list before Ctrl+V / manual paste runs.
+    local_file_offer_until: std::sync::Mutex<Option<std::time::Instant>>,
     last_remote_clipboard_basenames: std::sync::Mutex<Vec<String>>,
     local_upload: std::sync::Mutex<Option<LocalUploadProgress>>,
 }
@@ -1511,6 +1516,7 @@ impl RdpClipboardBridge {
             next_stream_id: AtomicU32::new(1),
             remote_download: std::sync::Mutex::new(None),
             remote_files_clipboard_until: std::sync::Mutex::new(None),
+            local_file_offer_until: std::sync::Mutex::new(None),
             last_remote_clipboard_basenames: std::sync::Mutex::new(Vec::new()),
             local_upload: std::sync::Mutex::new(None),
         }
@@ -1535,6 +1541,7 @@ impl RdpClipboardBridge {
             next_stream_id: AtomicU32::new(1),
             remote_download: std::sync::Mutex::new(None),
             remote_files_clipboard_until: std::sync::Mutex::new(None),
+            local_file_offer_until: std::sync::Mutex::new(None),
             last_remote_clipboard_basenames: std::sync::Mutex::new(Vec::new()),
             local_upload: std::sync::Mutex::new(None),
         }
@@ -1617,6 +1624,19 @@ impl RdpClipboardBridge {
 
     fn extend_remote_files_clipboard_protection(&self, duration: std::time::Duration) {
         if let Ok(mut guard) = self.remote_files_clipboard_until.lock() {
+            *guard = Some(std::time::Instant::now() + duration);
+        }
+    }
+
+    fn local_file_offer_protected(&self) -> bool {
+        let Ok(guard) = self.local_file_offer_until.lock() else {
+            return false;
+        };
+        guard.is_some_and(|until| std::time::Instant::now() < until)
+    }
+
+    fn extend_local_file_offer_protection(&self, duration: std::time::Duration) {
+        if let Ok(mut guard) = self.local_file_offer_until.lock() {
             *guard = Some(std::time::Instant::now() + duration);
         }
     }
@@ -1869,8 +1889,13 @@ impl RdpClipboardBridge {
             *guard = offered.clone();
         }
         self.start_local_upload_progress(&offered);
-        self.auto_paste_after_offer
-            .store(auto_paste, Ordering::SeqCst);
+        // Only arm auto-paste; never clear a pending auto-paste when the OS clipboard
+        // watcher re-offers the same drop with auto_paste=false (common after the
+        // native file picker writes CF_HDROP).
+        if auto_paste {
+            self.auto_paste_after_offer.store(true, Ordering::SeqCst);
+        }
+        self.extend_local_file_offer_protection(LOCAL_FILE_OFFER_TEXT_SUPPRESS);
         // Hash the caller-supplied paths so CF_HDROP polling does not re-offer the same drop.
         self.mark_local_files_hash(&paths);
         self.with_proxy(|proxy| {
@@ -1889,6 +1914,13 @@ impl RdpClipboardBridge {
         let bridge = self.clone();
         std::thread::spawn(move || {
             while !bridge.shutdown.load(Ordering::SeqCst) {
+                // After an intentional local file offer (toolbar / drop), keep the remote
+                // CLIPRDR file format list stable until auto-paste / manual paste can run.
+                if bridge.local_file_offer_protected() {
+                    std::thread::sleep(CLIPBOARD_POLL_INTERVAL);
+                    continue;
+                }
+
                 if let Some(text) = read_clipboard_text_blocking() {
                     if clipboard_text_within_limit(&text) {
                         let hash = stable_text_hash(&text);
@@ -3737,6 +3769,22 @@ mod tests {
         let current = bridge.last_text_hash.lock().unwrap();
         assert_eq!(*current, Some(stable_text_hash("same")));
         assert_ne!(*current, Some(stable_text_hash("different")));
+    }
+
+    #[test]
+    fn local_file_offer_auto_paste_survives_false_rearm_and_sets_text_suppress() {
+        let bridge = RdpClipboardBridge::new_for_test("s".to_string());
+        bridge.auto_paste_after_offer.store(true, Ordering::SeqCst);
+
+        // Watcher re-offers use auto_paste=false; that must not clear a pending paste.
+        let auto_paste = false;
+        if auto_paste {
+            bridge.auto_paste_after_offer.store(true, Ordering::SeqCst);
+        }
+        assert!(bridge.auto_paste_after_offer.load(Ordering::SeqCst));
+
+        bridge.extend_local_file_offer_protection(LOCAL_FILE_OFFER_TEXT_SUPPRESS);
+        assert!(bridge.local_file_offer_protected());
     }
 
     #[test]

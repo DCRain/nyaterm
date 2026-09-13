@@ -51,6 +51,7 @@ export interface FloatingSessionChromeProps {
   onReconnect: () => void;
   onClose: () => void;
   shortcutPopover?: ReactNode;
+  extraActions?: ReactNode;
   extraCollapsedIcon?: ReactNode;
   className?: string;
 }
@@ -170,6 +171,7 @@ export function FloatingSessionChrome({
   onReconnect,
   onClose,
   shortcutPopover,
+  extraActions,
   extraCollapsedIcon,
   className,
 }: FloatingSessionChromeProps) {
@@ -585,6 +587,7 @@ export function FloatingSessionChrome({
             </span>
           ) : null}
           {shortcutPopover}
+          {extraActions}
           <Button
             variant="ghost"
             size="icon-xs"

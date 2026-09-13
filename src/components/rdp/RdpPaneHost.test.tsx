@@ -3,10 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RdpSessionPane } from "@/types/global";
 import RdpPaneHost from "./RdpPaneHost";
 
-const { invokeMock, listenMock, listeners } = vi.hoisted(() => ({
+const { invokeMock, listenMock, listeners, openFileDialogMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
   listenMock: vi.fn(),
   listeners: new Map<string, (event: { payload: unknown }) => void>(),
+  openFileDialogMock: vi.fn(),
 }));
 
 vi.mock("@/lib/invoke", () => ({
@@ -31,6 +32,10 @@ vi.mock("@tauri-apps/api/webview", () => ({
   getCurrentWebview: () => ({
     onDragDropEvent: () => Promise.resolve(() => {}),
   }),
+}));
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: openFileDialogMock,
 }));
 
 vi.mock("@/context/TransferContext", () => ({
@@ -62,6 +67,8 @@ describe("RdpPaneHost", () => {
     invokeMock.mockResolvedValue(undefined);
     listenMock.mockReset();
     listeners.clear();
+    openFileDialogMock.mockReset();
+    openFileDialogMock.mockResolvedValue(null);
     listenMock.mockImplementation(
       (eventName: string, handler: (event: { payload: unknown }) => void) => {
         listeners.set(eventName, handler);
@@ -203,6 +210,133 @@ describe("RdpPaneHost", () => {
     fireEvent.click(screen.getByRole("button", { name: "dialog.remoteDesktopChromeClose" }));
     expect(invokeMock).toHaveBeenCalledWith("rdp_reconnect", { sessionId: "rdp-session" });
     expect(onDisconnectedCloseRequested).toHaveBeenCalledOnce();
+  });
+
+  it("offers selected local files through the floating chrome transfer button", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    openFileDialogMock.mockResolvedValue(["C:\\tmp\\a.txt", "C:\\tmp\\b.txt"]);
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "resolve_local_drop_paths") {
+        return [
+          { path: "C:\\tmp\\a.txt", isDirectory: false },
+          { path: "C:\\tmp\\b.txt", isDirectory: false },
+        ];
+      }
+      if (command === "rdp_offer_local_files") {
+        return 2;
+      }
+      return undefined;
+    });
+
+    render(
+      <RdpPaneHost
+        pane={rdpPane({
+          display: {
+            remoteWidth: 1920,
+            remoteHeight: 1080,
+            scaleMode: "fit",
+            clipboardMode: "text-and-files",
+          },
+        })}
+        active
+        visible
+      />,
+    );
+
+    await waitFor(() => expect(listeners.has("rdp-state-rdp-session")).toBe(true));
+    act(() => {
+      listeners.get("rdp-state-rdp-session")?.({
+        payload: { sessionId: "rdp-session", state: "active" },
+      });
+    });
+
+    const transferButton = await screen.findByRole("button", {
+      name: "dialog.rdpTransferFiles",
+    });
+    fireEvent.click(transferButton);
+
+    await waitFor(() => {
+      expect(openFileDialogMock).toHaveBeenCalledWith({ multiple: true, directory: false });
+      expect(invokeMock).toHaveBeenCalledWith("rdp_offer_local_files", {
+        sessionId: "rdp-session",
+        paths: ["C:\\tmp\\a.txt", "C:\\tmp\\b.txt"],
+        autoPaste: false,
+      });
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800);
+    });
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("rdp_input_batch", {
+        sessionId: "rdp-session",
+        events: [
+          { type: "mouse-move", x: 960, y: 540 },
+          {
+            type: "mouse-button",
+            button: "left",
+            pressed: true,
+            x: 960,
+            y: 540,
+          },
+          {
+            type: "mouse-button",
+            button: "left",
+            pressed: false,
+            x: 960,
+            y: 540,
+          },
+        ],
+      });
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
+    });
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("rdp_input_batch", {
+        sessionId: "rdp-session",
+        events: [
+          { type: "key-down", scanCode: 0x1d, extended: false, repeat: false },
+          { type: "key-down", scanCode: 0x2f, extended: false, repeat: false },
+          { type: "key-up", scanCode: 0x2f, extended: false, repeat: false },
+          { type: "key-up", scanCode: 0x1d, extended: false, repeat: false },
+        ],
+      });
+    });
+
+    vi.useRealTimers();
+  });
+
+  it("hides the transfer button when clipboard mode is not text-and-files", async () => {
+    render(
+      <RdpPaneHost
+        pane={rdpPane({
+          display: {
+            remoteWidth: 1920,
+            remoteHeight: 1080,
+            scaleMode: "fit",
+            clipboardMode: "text-only",
+          },
+        })}
+        active
+        visible
+      />,
+    );
+
+    await waitFor(() => expect(listeners.has("rdp-state-rdp-session")).toBe(true));
+    act(() => {
+      listeners.get("rdp-state-rdp-session")?.({
+        payload: { sessionId: "rdp-session", state: "active" },
+      });
+    });
+
+    await waitFor(() => {
+      expect(document.querySelector('[data-floating-session-chrome="true"]')).not.toBeNull();
+    });
+    expect(screen.queryByRole("button", { name: "dialog.rdpTransferFiles" })).toBeNull();
   });
 });
 

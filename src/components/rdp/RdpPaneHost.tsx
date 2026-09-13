@@ -1,6 +1,7 @@
 import { Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ShieldAlert } from "lucide-react";
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+import { ShieldAlert, Upload } from "lucide-react";
 import {
   memo,
   type FocusEvent as ReactFocusEvent,
@@ -21,6 +22,7 @@ import {
   createRemoteDesktopRenderer,
   type RemoteDesktopRenderer,
 } from "@/components/remote-desktop/renderer";
+import { Button } from "@/components/ui/button";
 import { useRdpFileDrop } from "@/hooks/useRdpFileDrop";
 import { invoke } from "@/lib/invoke";
 import { decodeRdpFramePatch } from "@/lib/rdpFrame";
@@ -628,11 +630,68 @@ function RdpPaneHost({
     !pane.connectError &&
     pane.display?.clipboardMode === "text-and-files";
 
-  const { isExternalDropActive } = useRdpFileDrop({
+  const { isExternalDropActive, offerLocalPaths } = useRdpFileDrop({
     sessionId: pane.sessionId,
     enabled: fileDropEnabled,
     containerRef,
   });
+
+  const handleTransferFiles = useCallback(async () => {
+    const selected = await openFileDialog({ multiple: true, directory: false });
+    if (!selected) return;
+    const paths = Array.isArray(selected) ? selected : [selected];
+    if (paths.length === 0) return;
+
+    // Offer files without backend auto-paste: the native dialog steals focus, and paste
+    // only reliably lands after we put focus/keyboard capture back on the RDP surface.
+    const offered = await offerLocalPaths(paths, { autoPaste: false });
+    if (!offered) return;
+
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => {
+        containerRef.current?.focus({ preventScroll: true });
+        imeRef.current?.focus({ preventScroll: true });
+        void invoke("rdp_set_keyboard_capture", { sessionId: pane.sessionId })
+          .catch(() => {})
+          .finally(() => {
+            // Give CLIPRDR time to advertise the file list on the remote side.
+            window.setTimeout(resolve, 700);
+          });
+      });
+    });
+
+    // Click the remote desktop so Ctrl+V has a paste target even if the user never
+    // clicked the content area after connecting.
+    const focusX = Math.max(1, Math.floor(desktopSize.width / 2));
+    const focusY = Math.max(1, Math.floor(desktopSize.height / 2));
+    await sendInputBatch([
+      { type: "mouse-move", x: focusX, y: focusY },
+      {
+        type: "mouse-button",
+        button: "left",
+        pressed: true,
+        x: focusX,
+        y: focusY,
+      },
+      {
+        type: "mouse-button",
+        button: "left",
+        pressed: false,
+        x: focusX,
+        y: focusY,
+      },
+    ]);
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 120);
+    });
+
+    await sendInputBatch([
+      { type: "key-down", scanCode: 0x1d, extended: false, repeat: false },
+      { type: "key-down", scanCode: 0x2f, extended: false, repeat: false },
+      { type: "key-up", scanCode: 0x2f, extended: false, repeat: false },
+      { type: "key-up", scanCode: 0x1d, extended: false, repeat: false },
+    ]);
+  }, [desktopSize.height, desktopSize.width, offerLocalPaths, pane.sessionId, sendInputBatch]);
 
   return (
     <div
@@ -745,6 +804,21 @@ function RdpPaneHost({
         onToggleFullscreen={() => void toggleFullscreen()}
         isFullscreen={isFullscreen}
         shortcutPopover={<RdpShortcutPopover onSendShortcut={sendShortcut} />}
+        extraActions={
+          fileDropEnabled ? (
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className="h-6 w-6 shrink-0 text-white"
+              title={t("dialog.rdpTransferFiles")}
+              aria-label={t("dialog.rdpTransferFiles")}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={() => void handleTransferFiles()}
+            >
+              <Upload className="h-3.5 w-3.5" />
+            </Button>
+          ) : null
+        }
       />
 
       {isExternalDropActive && (

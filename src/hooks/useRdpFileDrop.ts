@@ -74,8 +74,9 @@ export function useRdpFileDrop({ sessionId, enabled, containerRef }: UseRdpFileD
     });
   }, []);
 
-  const processDropPaths = useCallback(
-    async (dropPaths: string[]) => {
+  const offerLocalPaths = useCallback(
+    async (dropPaths: string[], options?: { autoPaste?: boolean }) => {
+      const autoPaste = options?.autoPaste ?? true;
       try {
         const resolved = await resolveLocalDropPaths(dropPaths);
         const paths = resolved.map((entry) => entry.path).filter((path) => !!path);
@@ -88,15 +89,16 @@ export function useRdpFileDrop({ sessionId, enabled, containerRef }: UseRdpFileD
             data: { path_count: dropPaths.length },
           });
           toast.error(t("dialog.rdpFileOfferFailed"));
-          return;
+          return false;
         }
 
         const count = await invoke<number>("rdp_offer_local_files", {
           sessionId,
           paths,
-          autoPaste: true,
+          autoPaste,
         });
         toast.success(t("dialog.rdpFileOfferQueued", { count }));
+        return true;
       } catch (error) {
         logger.error({
           domain: "ui.error",
@@ -107,6 +109,7 @@ export function useRdpFileDrop({ sessionId, enabled, containerRef }: UseRdpFileD
           error,
         });
         toast.error(t("dialog.rdpFileOfferFailed"));
+        return false;
       }
     },
     [resolveLocalDropPaths, sessionId, t],
@@ -364,7 +367,7 @@ export function useRdpFileDrop({ sessionId, enabled, containerRef }: UseRdpFileD
         return;
       }
 
-      void processDropPaths(payload.paths);
+      void offerLocalPaths(payload.paths);
     });
 
     return () => {
@@ -372,7 +375,7 @@ export function useRdpFileDrop({ sessionId, enabled, containerRef }: UseRdpFileD
       resetExternalDropHover();
       void unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [containerRef, processDropPaths, resetExternalDropHover]);
+  }, [containerRef, offerLocalPaths, resetExternalDropHover]);
 
   useEffect(() => {
     const bridge = getExternalFileDropBridge();
@@ -413,7 +416,7 @@ export function useRdpFileDrop({ sessionId, enabled, containerRef }: UseRdpFileD
         return;
       }
 
-      void processDropPaths(payload.paths);
+      void offerLocalPaths(payload.paths);
     });
 
     return () => {
@@ -422,7 +425,7 @@ export function useRdpFileDrop({ sessionId, enabled, containerRef }: UseRdpFileD
       window.removeEventListener("blur", handleWindowBlur);
       void unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [containerRef, processDropPaths, resetExternalDropHover]);
+  }, [containerRef, offerLocalPaths, resetExternalDropHover]);
 
-  return { isExternalDropActive };
+  return { isExternalDropActive, offerLocalPaths };
 }

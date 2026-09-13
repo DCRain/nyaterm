@@ -705,6 +705,7 @@
     "rdpFileDropUnsupported": "拖入文件需要剪贴板模式为“文本和文件”",
     "rdpFileOfferFailed": "无法将文件发送到远程会话",
     "rdpFileOfferQueued": "已向远程剪贴板提供 {{count}} 个文件",
+    "rdpTransferFiles": "传输文件到远程",
     "rdpFullscreen": "全屏",
     "rdpHeight": "高度",
     "rdpKeyboardFullscreen": "仅全屏时应用到远程",

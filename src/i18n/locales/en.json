@@ -706,6 +706,7 @@
     "rdpFileDropUnsupported": "File drop requires clipboard mode “Text and files”",
     "rdpFileOfferFailed": "Could not send files to the remote session",
     "rdpFileOfferQueued": "Offered {{count}} file(s) to the remote clipboard",
+    "rdpTransferFiles": "Transfer files to remote",
     "rdpFullscreen": "Fullscreen",
     "rdpHeight": "Height",
     "rdpKeyboardFullscreen": "Only when fullscreen",
