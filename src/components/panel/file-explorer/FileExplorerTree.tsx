@@ -94,6 +94,7 @@ export default function FileExplorerTree({
   });
   const [focusedPath, setFocusedPath] = useState<string | null>(null);
   const rowRefs = useRef(new Map<string, HTMLDivElement>());
+  const pendingFocusKeyRef = useRef<string | null>(null);
   const previousRowCountRef = useRef(rows.length);
   const handledRevealRequestRef = useRef<number | null>(null);
   const focusedKey = useMemo(() => {
@@ -164,6 +165,10 @@ export default function FileExplorerTree({
               itemRef={(element) => {
                 if (element) {
                   rowRefs.current.set(rowKey, element);
+                  if (pendingFocusKeyRef.current === rowKey) {
+                    pendingFocusKeyRef.current = null;
+                    element.focus();
+                  }
                 } else {
                   rowRefs.current.delete(rowKey);
                 }
@@ -214,9 +219,14 @@ export default function FileExplorerTree({
                   const nextRow = rows[nextIndex];
                   if (nextRow) {
                     const nextKey = treePathKey(nextRow.path, backend);
+                    pendingFocusKeyRef.current = nextKey;
                     setFocusedPath(nextRow.path);
                     rowVirtualizer.scrollToIndex(nextIndex, { align: "auto" });
-                    rowRefs.current.get(nextKey)?.focus();
+                    const mountedRow = rowRefs.current.get(nextKey);
+                    if (mountedRow) {
+                      pendingFocusKeyRef.current = null;
+                      mountedRow.focus();
+                    }
                   }
                   return;
                 }
