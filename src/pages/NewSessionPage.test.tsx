@@ -210,4 +210,37 @@ describe("NewSessionPage", () => {
       );
     });
   });
+
+  it("saves an edited connection when Enter is pressed in a single-line input", async () => {
+    render(<NewSessionPage />);
+
+    const nameInput = await screen.findByDisplayValue(rdpConnection.name);
+    invokeMock.mockClear();
+
+    fireEvent.keyDown(nameInput, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "save_connection",
+        expect.objectContaining({
+          connection: expect.objectContaining({ id: rdpConnection.id }),
+        }),
+      );
+      expect(closeMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("does not save from a textarea or while Enter is composing text", async () => {
+    render(<NewSessionPage />);
+
+    const nameInput = await screen.findByDisplayValue(rdpConnection.name);
+    const description = screen.getByPlaceholderText("dialog.descriptionPlaceholder");
+    invokeMock.mockClear();
+
+    fireEvent.keyDown(description, { key: "Enter" });
+    fireEvent.keyDown(nameInput, { key: "Enter", isComposing: true });
+
+    expect(invokeMock).not.toHaveBeenCalledWith("save_connection", expect.anything());
+    expect(closeMock).not.toHaveBeenCalled();
+  });
 });
