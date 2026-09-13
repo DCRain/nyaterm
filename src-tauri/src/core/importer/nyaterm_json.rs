@@ -32,6 +32,7 @@ fn prepare_nyaterm_json_import(file: NyatermJsonImportFile) -> AppResult<Prepare
         passwords.push(config::SavedPassword {
             id,
             name: required_string(entry.name, "password name", "passwords")?,
+            username: String::new(),
             password: Some(encrypt_import_secret(&entry.password)?),
             has_password: false,
         });
@@ -254,6 +255,7 @@ fn prepare_json_ssh_auth(
     let Some(auth) = auth else {
         return Ok(ConnectionAuth {
             mode: "none".to_string(),
+            account_id: None,
             password_id: None,
             password: None,
             key_id: None,
@@ -272,6 +274,7 @@ fn prepare_json_ssh_auth(
             }
             Ok(ConnectionAuth {
                 mode: "none".to_string(),
+                account_id: None,
                 password_id: None,
                 password: None,
                 key_id: None,
@@ -307,7 +310,8 @@ fn prepare_json_ssh_auth(
 
             Ok(ConnectionAuth {
                 mode: "password".to_string(),
-                password_id,
+                account_id: password_id,
+                password_id: None,
                 password,
                 key_id: None,
                 otp_id: None,
@@ -329,6 +333,7 @@ fn prepare_json_ssh_auth(
 
             Ok(ConnectionAuth {
                 mode: "key".to_string(),
+                account_id: None,
                 password_id: None,
                 password: None,
                 key_id: Some(key_id),
@@ -348,6 +353,7 @@ fn prepare_json_ssh_auth(
             }
             Ok(ConnectionAuth {
                 mode: "agent".to_string(),
+                account_id: None,
                 password_id: None,
                 password: None,
                 key_id: None,

@@ -915,7 +915,11 @@ fn default_vnc_reconnect_attempts() -> u32 {
 pub struct ConnectionAuth {
     #[serde(default = "default_auth_mode")]
     pub mode: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+    /// Legacy saved-password reference. New SSH and Telnet configurations use
+    /// `account_id`; RDP and VNC continue to use this field for password-only UX.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password_id: Option<String>,
     /// Inline password: AES-encrypted on disk, plaintext from frontend during save.
     #[serde(default)]

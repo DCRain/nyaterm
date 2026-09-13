@@ -984,6 +984,7 @@ fn prepare_termius_passwords(
                         .or_else(|| normalize_optional_string(host.address.clone()))
                         .unwrap_or_else(|| "Termius host".to_string())
                 ),
+                username: normalize_optional_string(host.username.clone()).unwrap_or_default(),
                 password: Some(encrypt_import_secret(&password)?),
                 has_password: false,
             });
@@ -1005,6 +1006,7 @@ fn prepare_termius_passwords(
                         .or_else(|| normalize_optional_string(identity.username.clone()))
                         .unwrap_or_else(|| "Termius identity".to_string())
                 ),
+                username: normalize_optional_string(identity.username.clone()).unwrap_or_default(),
                 password: Some(encrypt_import_secret(&password)?),
                 has_password: false,
             });
@@ -1102,6 +1104,7 @@ fn prepare_termius_auth(
     {
         return ConnectionAuth {
             mode: "key".to_string(),
+            account_id: None,
             password_id: None,
             password: None,
             key_id: Some(key_id.clone()),
@@ -1120,7 +1123,8 @@ fn prepare_termius_auth(
 
     ConnectionAuth {
         mode: "password".to_string(),
-        password_id,
+        account_id: password_id,
+        password_id: None,
         password: None,
         key_id: None,
         otp_id: None,

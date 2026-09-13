@@ -621,6 +621,7 @@ fn entry_to_saved_connection(
         icon_auto_detect: None,
         auth: Some(ConnectionAuth {
             mode: if uses_key { "key" } else { "agent" }.to_string(),
+            account_id: None,
             password_id: None,
             password: None,
             key_id,

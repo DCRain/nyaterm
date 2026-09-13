@@ -156,6 +156,7 @@ fn prepare_electerm_bookmark(
         icon: None,
         auth: Some(ConnectionAuth {
             mode: auth_mode.to_string(),
+            account_id: None,
             password_id: None,
             password: None,
             key_id: None,

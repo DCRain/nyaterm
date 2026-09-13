@@ -43,6 +43,7 @@ import type {
   RdpClipboardMode,
   RdpDisplayMode,
   RecordingMode,
+  SavedAccount,
   SavedConnection,
   SftpSettings,
   SshAgentEndpoint,
@@ -163,6 +164,7 @@ export default function NewSessionPage() {
   const [username, setUsername] = useState("root");
   const [rdpDomain, setRdpDomain] = useState("");
   const [authType, setAuthType] = useState<SshAuthMode>("password");
+  const [accountId, setAccountId] = useState("");
   const [passwordId, setPasswordId] = useState("");
   const [password, setPassword] = useState("");
   const [hasPassword, setHasPassword] = useState(false);
@@ -175,6 +177,7 @@ export default function NewSessionPage() {
   const [error, setError] = useState("");
   const [groups, setGroups] = useState<Group[]>([]);
   const [savedConnections, setSavedConnections] = useState<SavedConnection[]>([]);
+  const [savedAccounts, setSavedAccounts] = useState<SavedAccount[]>([]);
   const [customIcons, setCustomIcons] = useState<ConnectionCustomIcon[]>([]);
   const [showGroupDropdown, setShowGroupDropdown] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
@@ -267,6 +270,9 @@ export default function NewSessionPage() {
     invoke<OtpEntry[]>("get_otp_entries")
       .then(setOtpEntries)
       .catch((e) => setError(getErrorMessage(e)));
+    invoke<SavedAccount[]>("get_saved_passwords")
+      .then(setSavedAccounts)
+      .catch((e) => setError(getErrorMessage(e)));
     invoke<SavedConnection[]>("get_saved_connections")
       .then((conns) => {
         setSavedConnections(conns);
@@ -308,7 +314,8 @@ export default function NewSessionPage() {
           setSshPort(found.port || 22);
           setUsername(found.username || "root");
           setAuthType((found.auth?.mode as SshAuthMode) || "password");
-          setPasswordId(found.auth?.password_id || "");
+          setAccountId(found.auth?.account_id || found.auth?.password_id || "");
+          setPasswordId("");
           setHasPassword(found.auth?.has_password || false);
           setKeyId(found.auth?.key_id || "");
           setProxyId(found.network?.proxy_id || "");
@@ -334,7 +341,8 @@ export default function NewSessionPage() {
           setTelnetPort(found.port || 23);
           setUsername(found.username || "");
           setAuthType((found.auth?.mode === "none" ? "none" : "password") as SshAuthMode);
-          setPasswordId(found.auth?.password_id || "");
+          setAccountId(found.auth?.account_id || found.auth?.password_id || "");
+          setPasswordId("");
           setHasPassword(found.auth?.has_password || false);
           setTelnetBackspaceMode(found.backspace_mode || "del");
           setTelnetRawTcpCli(found.raw_tcp_cli ?? false);
@@ -431,6 +439,7 @@ export default function NewSessionPage() {
     setUsername(currentTab === "rdp" ? DEFAULT_RDP_USERNAME : "root");
     setRdpDomain("");
     setAuthType("password");
+    setAccountId("");
     setPasswordId("");
     setPassword("");
     setHasPassword(false);
@@ -720,7 +729,8 @@ export default function NewSessionPage() {
       if (!isValidPort(sshPort)) {
         return t("dialog.portInvalid", "Port must be between 1 and 65535");
       }
-      if (!username.trim()) {
+      const accountUsername = savedAccounts.find((account) => account.id === accountId)?.username;
+      if (!(accountUsername?.trim() || username.trim())) {
         return t("dialog.usernameRequired", "Username is required");
       }
       if (authAgentEndpointError) {
@@ -817,6 +827,7 @@ export default function NewSessionPage() {
     baudRate,
     agentForwardingEndpointError,
     authAgentEndpointError,
+    accountId,
     currentTab,
     host,
     postLoginCommand,
@@ -833,6 +844,7 @@ export default function NewSessionPage() {
     telnetPort,
     t,
     username,
+    savedAccounts,
     vncPort,
     vncSecurityMode,
     password,
@@ -930,13 +942,27 @@ export default function NewSessionPage() {
                         : "none";
               const nextAuth: NonNullable<SavedConnection["auth"]> = {
                 mode: resolvedAuthMode,
-                password_id: resolvedAuthMode === "password" ? passwordId || "" : "",
+                account_id:
+                  currentTab === "ssh" || currentTab === "telnet" ? accountId || "" : undefined,
+                password_id:
+                  currentTab === "rdp" || currentTab === "vnc"
+                    ? resolvedAuthMode === "password"
+                      ? passwordId || ""
+                      : ""
+                    : "",
                 key_id: currentTab === "ssh" && resolvedAuthMode === "key" ? keyId : undefined,
                 otp_id: currentTab === "ssh" ? otpId || undefined : undefined,
                 auto_fill_otp: currentTab === "ssh" && otpId ? autoFillOtp : undefined,
               };
 
-              if (resolvedAuthMode !== "password" || passwordId) {
+              if (
+                resolvedAuthMode !== "password" ||
+                ((currentTab === "rdp" || currentTab === "vnc") && passwordId) ||
+                ((currentTab === "ssh" || currentTab === "telnet") &&
+                  accountId &&
+                  !password &&
+                  !hasPassword)
+              ) {
                 nextAuth.password = "";
               } else if (password) {
                 nextAuth.password = password;
@@ -1475,10 +1501,12 @@ export default function NewSessionPage() {
               setPort={setSshPort}
               username={username}
               setUsername={setUsername}
+              accountId={accountId}
+              setAccountId={setAccountId}
+              accounts={savedAccounts}
+              onAccountsChanged={setSavedAccounts}
               authType={authType}
               setAuthType={(value) => setAuthType(value)}
-              passwordId={passwordId}
-              setPasswordId={setPasswordId}
               password={password}
               setPassword={setPassword}
               hasPassword={hasPassword}
@@ -1568,10 +1596,12 @@ export default function NewSessionPage() {
               setPort={setTelnetPort}
               username={username}
               setUsername={setUsername}
+              accountId={accountId}
+              setAccountId={setAccountId}
+              accounts={savedAccounts}
+              onAccountsChanged={setSavedAccounts}
               authType={authType === "none" ? "none" : "password"}
               setAuthType={(value) => setAuthType(value)}
-              passwordId={passwordId}
-              setPasswordId={setPasswordId}
               password={password}
               setPassword={setPassword}
               hasPassword={hasPassword}

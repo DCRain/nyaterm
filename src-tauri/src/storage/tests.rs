@@ -53,6 +53,7 @@ fn sample_connection(id: &str, group_id: Option<&str>, sort_order: i32) -> Saved
         icon_auto_detect: None,
         auth: Some(ConnectionAuth {
             mode: "password".to_string(),
+            account_id: None,
             password_id: None,
             password: Some(format!("cipher-{id}")),
             key_id: None,

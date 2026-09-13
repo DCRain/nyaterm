@@ -585,8 +585,10 @@ mod tests {
             .as_ref()
             .expect("saved password auth");
         assert_eq!(saved_password_auth.mode, "password");
-        assert!(saved_password_auth.password_id.is_some());
+        assert!(saved_password_auth.account_id.is_some());
+        assert!(saved_password_auth.password_id.is_none());
         assert!(saved_password_auth.password.is_none());
+        assert!(prepared.passwords[0].username.is_empty());
 
         let key_auth = prepared.connections[2].auth.as_ref().expect("key auth");
         assert_eq!(key_auth.mode, "key");
@@ -986,6 +988,12 @@ mod tests {
 
         let password_auth = prepared.connections[1].auth.as_ref().expect("password auth");
         assert_eq!(password_auth.mode, "password");
-        assert!(password_auth.password_id.is_some());
+        assert!(password_auth.account_id.is_some());
+        assert!(password_auth.password_id.is_none());
+        assert!(prepared.passwords.iter().any(|entry| entry.username == "root"));
+        assert!(prepared
+            .passwords
+            .iter()
+            .any(|entry| entry.username == "deploy"));
     }
 }

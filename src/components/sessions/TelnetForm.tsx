@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MdChevronRight, MdClose, MdSettings } from "react-icons/md";
 import { PasswordManagementTab } from "@/components/panel/security-auth/PasswordManagementTab";
+import { AccountSelector } from "@/components/sessions/AccountSelector";
 import { ConnectionRecordingSettings } from "@/components/sessions/ConnectionRecordingSettings";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -28,12 +29,12 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { invoke } from "@/lib/invoke";
 import { cn } from "@/lib/utils";
-import type { RecordingMode, SavedPassword } from "@/types/global";
+import type { RecordingMode, SavedAccount } from "@/types/global";
 
 const MASKED_PASSWORD_PLACEHOLDER = "••••••••";
 type TelnetEnterMode = "crlf" | "cr" | "lf";
 type TelnetAuthMode = "none" | "password";
-type PasswordSource = "direct" | "saved";
+type PasswordSource = "direct" | "account";
 
 interface TelnetFormProps {
   host: string;
@@ -42,10 +43,12 @@ interface TelnetFormProps {
   setPort: (v: number) => void;
   username: string;
   setUsername: (v: string) => void;
+  accountId: string;
+  setAccountId: (v: string) => void;
+  accounts: SavedAccount[];
+  onAccountsChanged: (accounts: SavedAccount[]) => void;
   authType: TelnetAuthMode;
   setAuthType: (v: TelnetAuthMode) => void;
-  passwordId: string;
-  setPasswordId: (v: string) => void;
   password: string;
   setPassword: (v: string) => void;
   hasPassword: boolean;
@@ -91,10 +94,12 @@ export function TelnetForm({
   setPort,
   username,
   setUsername,
+  accountId,
+  setAccountId,
+  accounts,
+  onAccountsChanged,
   authType,
   setAuthType,
-  passwordId,
-  setPasswordId,
   password,
   setPassword,
   hasPassword,
@@ -130,50 +135,48 @@ export function TelnetForm({
 }: TelnetFormProps) {
   const { t } = useTranslation();
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [savedPasswords, setSavedPasswords] = useState<SavedPassword[]>([]);
   const [showPasswordManagement, setShowPasswordManagement] = useState(false);
   const [showDirectPassword, setShowDirectPassword] = useState(false);
   const [directPasswordLoading, setDirectPasswordLoading] = useState(false);
   const [passwordSource, setPasswordSource] = useState<PasswordSource>(
-    passwordId ? "saved" : "direct",
+    password || hasPassword ? "direct" : accountId ? "account" : "direct",
   );
 
-  const loadPasswords = useCallback(async () => {
+  const loadAccounts = useCallback(async () => {
     try {
-      const passwords = await invoke<SavedPassword[]>("get_saved_passwords");
-      setSavedPasswords(passwords);
-      if (passwordId && !passwords.some((p) => p.id === passwordId)) {
-        setPasswordId("");
-      }
+      onAccountsChanged(await invoke<SavedAccount[]>("get_saved_passwords"));
     } catch {
       /* ignore */
     }
-  }, [passwordId, setPasswordId]);
+  }, [onAccountsChanged]);
 
   useEffect(() => {
-    if (passwordId) {
-      setPasswordSource("saved");
+    if (password || hasPassword) {
+      setPasswordSource("direct");
+    } else if (accountId) {
+      setPasswordSource("account");
     } else {
       setPasswordSource("direct");
     }
-  }, [passwordId]);
+  }, [accountId, hasPassword, password]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     getCurrentWindow()
       .onFocusChanged((event) => {
-        if (event.payload) void loadPasswords();
+        if (event.payload) void loadAccounts();
       })
       .then((fn) => {
         unlisten = fn;
       });
-    void loadPasswords();
+    void loadAccounts();
     return () => {
       unlisten?.();
     };
-  }, [loadPasswords]);
+  }, [loadAccounts]);
 
-  const selectedPasswordName = savedPasswords.find((p) => p.id === passwordId)?.name;
+  const selectedAccount = accounts.find((account) => account.id === accountId);
+  const accountProvidesUsername = Boolean(selectedAccount?.username.trim());
 
   const toggleDirectPasswordVisibility = async () => {
     if (showDirectPassword) {
@@ -254,13 +257,36 @@ export function TelnetForm({
         </div>
       </div>
 
+      <AccountSelector
+        accounts={accounts}
+        value={accountId}
+        onChange={(nextAccountId) => {
+          setAccountId(nextAccountId);
+          if (nextAccountId && authType === "password") {
+            setPasswordSource("account");
+            setPassword("");
+            setHasPassword(false);
+          } else if (!nextAccountId && passwordSource === "account") {
+            setPasswordSource("direct");
+          }
+        }}
+      />
+
       <div>
         <Label className="text-xs font-medium text-foreground/80">{t("dialog.username")}</Label>
         <Input
           className="mt-1 text-xs h-8"
-          value={username}
+          value={accountProvidesUsername ? selectedAccount?.username : username}
           onChange={(e) => setUsername(e.target.value)}
+          readOnly={accountProvidesUsername}
         />
+        {accountId ? (
+          <p className="mt-1 text-[0.6875rem] text-muted-foreground">
+            {accountProvidesUsername
+              ? t("dialog.usernameProvidedByAccount")
+              : t("dialog.accountUsernameFallbackDescription")}
+          </p>
+        ) : null}
       </div>
 
       <div>
@@ -273,7 +299,6 @@ export function TelnetForm({
             const next = value as TelnetAuthMode;
             setAuthType(next);
             if (next === "none") {
-              setPasswordId("");
               setPassword("");
               setHasPassword(false);
             }
@@ -304,9 +329,7 @@ export function TelnetForm({
               onValueChange={(value) => {
                 const next = value as PasswordSource;
                 setPasswordSource(next);
-                if (next === "direct") {
-                  setPasswordId("");
-                } else {
+                if (next === "account") {
                   setPassword("");
                   setHasPassword(false);
                 }
@@ -314,11 +337,13 @@ export function TelnetForm({
               className="mt-1 w-full"
             >
               <TabsList className="grid h-8 w-full grid-cols-2 pointer-events-auto">
+                {accountId ? (
+                  <TabsTrigger value="account" className="text-xs">
+                    {t("dialog.accountPassword")}
+                  </TabsTrigger>
+                ) : null}
                 <TabsTrigger value="direct" className="text-xs">
                   {t("dialog.directPassword")}
-                </TabsTrigger>
-                <TabsTrigger value="saved" className="text-xs">
-                  {t("dialog.savedPassword")}
                 </TabsTrigger>
               </TabsList>
 
@@ -339,7 +364,6 @@ export function TelnetForm({
                     value={password}
                     onChange={(e) => {
                       setPassword(e.target.value);
-                      setPasswordId("");
                       if (e.target.value) setHasPassword(false);
                     }}
                     disabled={directPasswordLoading}
@@ -380,44 +404,26 @@ export function TelnetForm({
                 </div>
               </TabsContent>
 
-              <TabsContent value="saved" className="mt-3 border-0 outline-none">
-                <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-                  <div className="min-w-0">
-                    <Label className="text-xs font-medium text-foreground/80">
-                      {t("dialog.savedPassword")}
-                    </Label>
-                    <Select
-                      value={passwordId || "__none__"}
-                      onValueChange={(value) => {
-                        setPasswordId(value === "__none__" ? "" : value);
-                        setPassword("");
-                        setHasPassword(false);
-                      }}
-                    >
-                      <SelectTrigger className="mt-1 h-8 text-xs font-normal">
-                        <SelectValue placeholder={t("dialog.selectPassword")}>
-                          {selectedPasswordName || t("dialog.none")}
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__none__">{t("dialog.none")}</SelectItem>
-                        {savedPasswords.map((entry) => (
-                          <SelectItem key={entry.id} value={entry.id}>
-                            {entry.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+              <TabsContent value="account" className="mt-3 border-0 outline-none">
+                <div className="flex items-center justify-between gap-3 rounded-md border border-dashed bg-accent/25 px-3 py-2">
+                  <div className="min-w-0 text-[0.6875rem] leading-relaxed text-muted-foreground">
+                    {selectedAccount
+                      ? selectedAccount.has_password
+                        ? t("dialog.accountPasswordDescription", { name: selectedAccount.name })
+                        : t("dialog.accountPasswordMissingTelnetDescription", {
+                            name: selectedAccount.name,
+                          })
+                      : t("dialog.missingAccountDescription")}
                   </div>
                   <Button
                     type="button"
-                    variant="outline"
+                    variant="ghost"
                     size="sm"
-                    className="mt-6 h-8 gap-1.5 text-xs"
+                    className="h-7 shrink-0 gap-1 px-2 text-xs"
                     onClick={() => setShowPasswordManagement(true)}
                   >
                     <MdSettings className="text-sm" />
-                    {t("dialog.managePasswords")}
+                    {t("dialog.manageAccounts")}
                   </Button>
                 </div>
               </TabsContent>
@@ -593,7 +599,7 @@ export function TelnetForm({
         open={showPasswordManagement}
         onOpenChange={(open) => {
           setShowPasswordManagement(open);
-          if (!open) void loadPasswords();
+          if (!open) void loadAccounts();
         }}
       >
         <DialogContent
