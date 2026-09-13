@@ -63,7 +63,9 @@ pub use note::{
 pub use otp::{OtpConfig, OtpEntry, load_otp_entries, load_otp_entry_by_id, save_otp_entries};
 #[allow(unused_imports)]
 pub use password::{
-    PasswordsConfig, SavedPassword, load_password_by_id, load_passwords, save_passwords,
+    PasswordsConfig, SavedPassword, decrypt_account_password, effective_account_id,
+    load_password_by_id, load_passwords, load_saved_account, resolve_account_username,
+    save_passwords,
 };
 #[allow(unused_imports)]
 pub use proxy::{

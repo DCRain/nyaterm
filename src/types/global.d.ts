@@ -336,15 +336,20 @@ export interface SshKey {
   passphrase?: string;
 }
 
-/** Managed password entry stored in local app storage. */
-export interface SavedPassword {
+/** Managed account entry stored in local app storage. */
+export interface SavedAccount {
   id: string;
   name: string;
+  username: string;
   /** True when encrypted password data exists in local storage. */
   has_password?: boolean;
   /** Plaintext password (only sent when creating/updating). */
   password?: string;
 }
+
+/** Legacy password-only name retained for RDP/VNC compatibility. */
+export type SavedPassword = SavedAccount;
+export type AccountPasswordSource = "ask" | "direct" | "account";
 
 /** Terminal credential entry used for prompt-based autofill. */
 export interface SavedCredential {
@@ -366,6 +371,11 @@ export interface SavedCredential {
 /** Auth block for SSH connections. */
 export interface ConnectionAuth {
   mode: string;
+  /** Saved account reference used by SSH and Telnet. */
+  account_id?: string;
+  /** Password material source for SSH and Telnet; absent legacy values use the account. */
+  password_source?: "account" | "connection";
+  /** Legacy saved-password reference; do not use for new SSH/Telnet configurations. */
   password_id?: string;
   /** Inline password (plaintext when saving, absent when loading). */
   password?: string;
