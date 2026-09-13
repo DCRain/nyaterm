@@ -261,12 +261,25 @@ impl RemoteFs for SftpBackend {
     async fn mkdir(&self, path: &str, mode: Option<String>) -> AppResult<()> {
         let sftp = self.open_sftp().await?;
         let path_bytes = self.encode_path_for_sftp(path);
-        sftp.create_dir_bytes(path_bytes.clone()).await?;
-        if let Some(ref m) = mode {
-            apply_remote_mode_after_create_bytes(&sftp, path, path_bytes, m, "directory").await?;
+
+        if let Err(error) = sftp.create_dir_bytes(path_bytes.clone()).await {
+            let path_exists = sftp.metadata_bytes(path_bytes).await.is_ok();
+            let _ = sftp.close().await;
+            if path_exists {
+                return Err(AppError::Channel(format!(
+                    "Remote path already exists: {path}"
+                )));
+            }
+            return Err(error.into());
         }
+
+        let result: AppResult<()> = if let Some(ref m) = mode {
+            apply_remote_mode_after_create_bytes(&sftp, path, path_bytes, m, "directory").await
+        } else {
+            Ok(())
+        };
         let _ = sftp.close().await;
-        Ok(())
+        result
     }
 
     async fn remove_file(&self, path: &str) -> AppResult<()> {

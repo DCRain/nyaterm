@@ -798,6 +798,8 @@ export type RestorableTerminalWindowNode =
       second: RestorableTerminalWindowNode;
     };
 
+export type FileExplorerViewMode = "list" | "tree";
+
 export interface UiConfig {
   open_tabs: RestorableTab[];
   terminal_window_layout: RestorableTerminalWindowNode | null;
@@ -847,6 +849,7 @@ export interface UiConfig {
   asset_sort_direction?: "asc" | "desc" | null;
   recent_connection_ids: string[];
   transfer_height: number;
+  file_explorer_view_mode: FileExplorerViewMode;
   file_explorer_show_hidden_files: boolean;
   file_explorer_auto_sync_cwd_connection_ids: string[];
   file_explorer_favorite_dirs_by_connection_id: Record<string, string[]>;

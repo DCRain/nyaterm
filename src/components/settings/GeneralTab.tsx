@@ -66,6 +66,18 @@ export function GeneralTab() {
             </SelectItem>
           ))}
         </SettingSelect>
+
+        <SettingSelect
+          label={t("settings.fileExplorerView")}
+          desc={t("settings.fileExplorerViewDesc")}
+          value={appSettings.ui.file_explorer_view_mode === "tree" ? "tree" : "list"}
+          onValueChange={(value) =>
+            updateUi({ file_explorer_view_mode: value as "list" | "tree" })
+          }
+        >
+          <SelectItem value="list">{t("settings.fileExplorerViewList")}</SelectItem>
+          <SelectItem value="tree">{t("settings.fileExplorerViewTree")}</SelectItem>
+        </SettingSelect>
       </SettingSection>
 
       <SettingSection contentClassName="space-y-4">

@@ -7,6 +7,7 @@ import {
   MdDelete,
   MdDownload,
   MdDriveFolderUpload,
+  MdMyLocation,
   MdNoteAdd,
   MdRefresh,
   MdSearch,
@@ -52,6 +53,7 @@ function ToolbarDivider() {
 }
 
 interface FileExplorerToolbarProps {
+  isTreeView: boolean;
   selectedCount: number;
   isFileSearchActive: boolean;
   isFileSearchExpanded: boolean;
@@ -67,6 +69,9 @@ interface FileExplorerToolbarProps {
   onDeleteSelected: () => void;
   onGoUp: () => void;
   onRefresh: () => void;
+  onLocatePath: () => void;
+  locateLabel: string;
+  canLocatePath: boolean;
   onToggleHiddenFiles: () => void;
   onExpandSearch: () => void;
   onSearchQueryChange: (query: string) => void;
@@ -74,6 +79,7 @@ interface FileExplorerToolbarProps {
 }
 
 export function FileExplorerToolbar({
+  isTreeView,
   selectedCount,
   isFileSearchActive,
   isFileSearchExpanded,
@@ -89,6 +95,9 @@ export function FileExplorerToolbar({
   onDeleteSelected,
   onGoUp,
   onRefresh,
+  onLocatePath,
+  locateLabel,
+  canLocatePath,
   onToggleHiddenFiles,
   onExpandSearch,
   onSearchQueryChange,
@@ -177,15 +186,17 @@ export function FileExplorerToolbar({
 
       <ToolbarDivider />
 
-      <ToolbarIconButton
-        label={t("fileExplorer.goUp")}
-        variant="ghost"
-        size="icon"
-        className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
-        onClick={onGoUp}
-      >
-        <MdArrowUpward className="h-4 w-4" />
-      </ToolbarIconButton>
+      {!isTreeView && (
+        <ToolbarIconButton
+          label={t("fileExplorer.goUp")}
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
+          onClick={onGoUp}
+        >
+          <MdArrowUpward className="h-4 w-4" />
+        </ToolbarIconButton>
+      )}
       <ToolbarIconButton
         label={t("fileExplorer.refresh")}
         variant="ghost"
@@ -196,21 +207,43 @@ export function FileExplorerToolbar({
         <MdRefresh className="h-4 w-4" />
       </ToolbarIconButton>
 
+      {isTreeView && (
+        <>
+          <ToolbarDivider />
+          <ToolbarIconButton
+            label={
+              canLocatePath
+                ? locateLabel
+                : t("fileExplorer.cwdTrackingUnavailable")
+            }
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground disabled:opacity-40"
+            onClick={onLocatePath}
+            disabled={!canLocatePath}
+          >
+            <MdMyLocation className="h-4 w-4" />
+          </ToolbarIconButton>
+        </>
+      )}
+
       <ToolbarDivider />
 
       <div className="ml-auto flex shrink-0 items-center gap-0.5">
-        <ToolbarIconButton
-          label={t("fileExplorer.search")}
-          variant="ghost"
-          size="icon"
-          className={cn(
-            "h-7 w-7 rounded-md hover:text-foreground",
-            isFileSearchActive ? "bg-primary/10 text-primary" : "text-muted-foreground",
-          )}
-          onClick={onExpandSearch}
-        >
-          <MdSearch className="h-4 w-4 translate-y-px" />
-        </ToolbarIconButton>
+        {!isTreeView && (
+          <ToolbarIconButton
+            label={t("fileExplorer.search")}
+            variant="ghost"
+            size="icon"
+            className={cn(
+              "h-7 w-7 rounded-md hover:text-foreground",
+              isFileSearchActive ? "bg-primary/10 text-primary" : "text-muted-foreground",
+            )}
+            onClick={onExpandSearch}
+          >
+            <MdSearch className="h-4 w-4 translate-y-px" />
+          </ToolbarIconButton>
+        )}
         <ToolbarIconButton
           label={
             showHiddenFiles ? t("fileExplorer.hideHiddenFiles") : t("fileExplorer.showHiddenFiles")
@@ -231,7 +264,7 @@ export function FileExplorerToolbar({
         </ToolbarIconButton>
       </div>
 
-      {isFileSearchExpanded && (
+      {!isTreeView && isFileSearchExpanded && (
         <div
           className="nyaterm-wallpaper-control-surface absolute inset-x-1.5 top-1 bottom-1 z-20 flex items-center gap-1 rounded-md border px-1.5 shadow-sm"
           style={{
