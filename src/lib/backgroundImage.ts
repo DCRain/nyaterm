@@ -238,12 +238,20 @@ export function buildTerminalThemeColors(
   terminalColors: TerminalColors,
   appearance: AppearanceSettings,
 ): TerminalColors {
+  const { foregroundIntense, ...baseColors } = terminalColors;
+  const resolvedColors: TerminalColors = appearance.bold_default_foreground_highlight
+    ? {
+        ...baseColors,
+        foregroundIntense: foregroundIntense ?? terminalColors.foreground,
+      }
+    : baseColors;
+
   if (!isTerminalTransparencyEnabled(appearance)) {
-    return terminalColors;
+    return resolvedColors;
   }
 
   return {
-    ...terminalColors,
+    ...resolvedColors,
     background: "rgba(0, 0, 0, 0)",
   };
 }

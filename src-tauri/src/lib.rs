@@ -44,6 +44,7 @@ pub fn run() {
     // are in the graph (FTP uses ring; ironrdp/sspi may pull aws-lc-rs). RDP
     // CredSSP then panics on ClientConfig::builder(). Install ring first.
     let _ = rustls::crypto::ring::default_provider().install_default();
+    platform::prepare_appimage_wayland_backend();
     portable_updater::schedule_cleanup_from_environment();
     let runtime = runtime::resolve().expect("failed to resolve runtime paths");
     runtime::prepare_webview_environment(&runtime);
@@ -216,6 +217,7 @@ pub fn run() {
             cmd::log::append_frontend_logs,
             cmd::log::export_diagnostics,
             cmd::note::list_note_tree,
+            cmd::note::export_notes,
             cmd::note::get_note,
             cmd::note::unlock_note,
             cmd::note::verify_folder_password,

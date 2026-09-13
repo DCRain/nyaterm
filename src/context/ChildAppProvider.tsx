@@ -67,6 +67,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     font_size: DEFAULT_TERMINAL_FONT_SIZE,
     font_weight: 400,
     font_weight_bold: 700,
+    bold_default_foreground_highlight: false,
     background_opacity: 1.0,
     background_image_path: null,
     background_image_fit: "cover",

@@ -13,6 +13,12 @@ export interface FolderEncryptionMeta {
   verifier?: string | null;
 }
 
+export interface NoteExportResult {
+  outputPath: string;
+  folderCount: number;
+  noteCount: number;
+}
+
 export interface NoteFolder {
   id: string;
   parent_id: string | null;
