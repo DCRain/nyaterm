@@ -380,6 +380,9 @@ fn resolve_telnet_connection_password(
     if auth.password.is_some() {
         return crate::utils::crypto::decrypt_optional(&auth.password);
     }
+    if auth.password_source.as_deref() == Some("connection") {
+        return Ok(None);
+    }
     config::decrypt_account_password(account)
 }
 
@@ -855,6 +858,29 @@ mod tests {
             .expect("password resolution");
 
         assert_eq!(resolved.as_deref(), Some("saved-secret"));
+    }
+
+    #[test]
+    fn telnet_connection_password_source_disables_account_password_fallback() {
+        crate::utils::crypto::set_master_password(None);
+        let auth = ConnectionAuth {
+            mode: "password".to_string(),
+            account_id: Some("account-1".to_string()),
+            password_source: Some("connection".to_string()),
+            ..ConnectionAuth::default()
+        };
+        let account = config::SavedPassword {
+            id: "account-1".to_string(),
+            name: "Account".to_string(),
+            username: "admin".to_string(),
+            password: Some(crate::utils::crypto::encrypt("saved-secret").expect("encrypt")),
+            has_password: false,
+        };
+
+        let resolved = resolve_telnet_connection_password(Some(&auth), Some(&account))
+            .expect("password resolution");
+
+        assert_eq!(resolved, None);
     }
 }
 

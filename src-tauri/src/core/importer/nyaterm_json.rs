@@ -256,6 +256,7 @@ fn prepare_json_ssh_auth(
         return Ok(ConnectionAuth {
             mode: "none".to_string(),
             account_id: None,
+            password_source: None,
             password_id: None,
             password: None,
             key_id: None,
@@ -275,6 +276,7 @@ fn prepare_json_ssh_auth(
             Ok(ConnectionAuth {
                 mode: "none".to_string(),
                 account_id: None,
+                password_source: None,
                 password_id: None,
                 password: None,
                 key_id: None,
@@ -311,6 +313,7 @@ fn prepare_json_ssh_auth(
             Ok(ConnectionAuth {
                 mode: "password".to_string(),
                 account_id: password_id,
+                password_source: Some("account".to_string()),
                 password_id: None,
                 password,
                 key_id: None,
@@ -334,6 +337,7 @@ fn prepare_json_ssh_auth(
             Ok(ConnectionAuth {
                 mode: "key".to_string(),
                 account_id: None,
+                password_source: None,
                 password_id: None,
                 password: None,
                 key_id: Some(key_id),
@@ -354,6 +358,7 @@ fn prepare_json_ssh_auth(
             Ok(ConnectionAuth {
                 mode: "agent".to_string(),
                 account_id: None,
+                password_source: None,
                 password_id: None,
                 password: None,
                 key_id: None,

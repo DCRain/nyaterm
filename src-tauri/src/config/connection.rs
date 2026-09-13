@@ -917,6 +917,10 @@ pub struct ConnectionAuth {
     pub mode: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_id: Option<String>,
+    /// Password material source for SSH and Telnet. `connection` disables
+    /// saved-account password fallback while retaining the account username.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password_source: Option<String>,
     /// Legacy saved-password reference. New SSH and Telnet configurations use
     /// `account_id`; RDP and VNC continue to use this field for password-only UX.
     #[serde(default, skip_serializing_if = "Option::is_none")]

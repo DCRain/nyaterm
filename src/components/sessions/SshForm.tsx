@@ -72,6 +72,7 @@ import {
 } from "@/lib/sshAgent";
 import { cn } from "@/lib/utils";
 import type {
+  AccountPasswordSource,
   AlgorithmOption,
   OtpEntry,
   ProxyConfig,
@@ -96,7 +97,6 @@ const DEFAULT_SFTP_SHELL_DETECTION_TIMEOUT_MS = 3000;
 const MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS = 100;
 const MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS = 60_000;
 export type SshAuthMode = "none" | "password" | "key" | "agent";
-type PasswordSource = "ask" | "direct" | "account";
 type SshTerminalTypeSelection = SshTerminalType | "default";
 
 function isSupportedSshAgentEndpoint(type: SshAgentEndpoint["type"]): boolean {
@@ -121,6 +121,8 @@ interface SshFormProps {
   setAccountId: (v: string) => void;
   accounts: SavedAccount[];
   onAccountsChanged: (accounts: SavedAccount[]) => void;
+  passwordSource: AccountPasswordSource;
+  setPasswordSource: (v: AccountPasswordSource) => void;
   authType: SshAuthMode;
   setAuthType: (v: SshAuthMode) => void;
   password: string;
@@ -454,6 +456,8 @@ export function SshForm({
   setAccountId,
   accounts,
   onAccountsChanged,
+  passwordSource,
+  setPasswordSource,
   authType,
   setAuthType,
   password,
@@ -535,10 +539,6 @@ export function SshForm({
   const [supportedAlgorithms, setSupportedAlgorithms] = useState<SupportedSshAlgorithms | null>(
     null,
   );
-  const [passwordSource, setPasswordSource] = useState<PasswordSource>(
-    password || hasPassword ? "direct" : accountId ? "account" : "ask",
-  );
-
   const loadSshKeys = useCallback(async () => {
     try {
       const keys = await invoke<SshKey[]>("get_ssh_keys");
@@ -612,16 +612,6 @@ export function SshForm({
       setAgentIdentityLoading(false);
     }
   }, [loadAgentIdentities, showAgentIdentityPicker]);
-
-  useEffect(() => {
-    if (password || hasPassword) {
-      setPasswordSource("direct");
-    } else if (accountId) {
-      setPasswordSource("account");
-    } else {
-      setPasswordSource("ask");
-    }
-  }, [accountId, hasPassword, password]);
 
   useEffect(() => {
     let unlisten: () => void;
@@ -825,7 +815,7 @@ export function SshForm({
         value={accountId}
         onChange={(nextAccountId) => {
           setAccountId(nextAccountId);
-          if (nextAccountId && authType === "password") {
+          if (nextAccountId) {
             setPasswordSource("account");
             setPassword("");
             setHasPassword(false);
@@ -901,7 +891,7 @@ export function SshForm({
             <Tabs
               value={passwordSource}
               onValueChange={(value) => {
-                const nextSource = value as PasswordSource;
+                const nextSource = value as AccountPasswordSource;
                 setPasswordSource(nextSource);
                 if (nextSource !== "direct") {
                   setPassword("");

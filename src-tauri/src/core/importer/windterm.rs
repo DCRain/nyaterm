@@ -305,6 +305,7 @@ fn prepare_windterm_auth(
         return Ok(ConnectionAuth {
             mode: "password".to_string(),
             account_id: None,
+            password_source: None,
             password_id: None,
             password: Some(encrypt_import_secret(password)?),
             key_id: None,
@@ -318,6 +319,7 @@ fn prepare_windterm_auth(
         return Ok(ConnectionAuth {
             mode: "key".to_string(),
             account_id: None,
+            password_source: None,
             password_id: None,
             password: None,
             key_id: Some(key_id),
@@ -330,6 +332,7 @@ fn prepare_windterm_auth(
     Ok(ConnectionAuth {
         mode: "none".to_string(),
         account_id: None,
+        password_source: None,
         password_id: None,
         password: None,
         key_id: None,

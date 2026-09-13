@@ -29,12 +29,11 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { invoke } from "@/lib/invoke";
 import { cn } from "@/lib/utils";
-import type { RecordingMode, SavedAccount } from "@/types/global";
+import type { AccountPasswordSource, RecordingMode, SavedAccount } from "@/types/global";
 
 const MASKED_PASSWORD_PLACEHOLDER = "••••••••";
 type TelnetEnterMode = "crlf" | "cr" | "lf";
 type TelnetAuthMode = "none" | "password";
-type PasswordSource = "direct" | "account";
 
 interface TelnetFormProps {
   host: string;
@@ -47,6 +46,8 @@ interface TelnetFormProps {
   setAccountId: (v: string) => void;
   accounts: SavedAccount[];
   onAccountsChanged: (accounts: SavedAccount[]) => void;
+  passwordSource: AccountPasswordSource;
+  setPasswordSource: (v: AccountPasswordSource) => void;
   authType: TelnetAuthMode;
   setAuthType: (v: TelnetAuthMode) => void;
   password: string;
@@ -98,6 +99,8 @@ export function TelnetForm({
   setAccountId,
   accounts,
   onAccountsChanged,
+  passwordSource,
+  setPasswordSource,
   authType,
   setAuthType,
   password,
@@ -138,10 +141,6 @@ export function TelnetForm({
   const [showPasswordManagement, setShowPasswordManagement] = useState(false);
   const [showDirectPassword, setShowDirectPassword] = useState(false);
   const [directPasswordLoading, setDirectPasswordLoading] = useState(false);
-  const [passwordSource, setPasswordSource] = useState<PasswordSource>(
-    password || hasPassword ? "direct" : accountId ? "account" : "direct",
-  );
-
   const loadAccounts = useCallback(async () => {
     try {
       onAccountsChanged(await invoke<SavedAccount[]>("get_saved_passwords"));
@@ -149,16 +148,6 @@ export function TelnetForm({
       /* ignore */
     }
   }, [onAccountsChanged]);
-
-  useEffect(() => {
-    if (password || hasPassword) {
-      setPasswordSource("direct");
-    } else if (accountId) {
-      setPasswordSource("account");
-    } else {
-      setPasswordSource("direct");
-    }
-  }, [accountId, hasPassword, password]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -262,7 +251,7 @@ export function TelnetForm({
         value={accountId}
         onChange={(nextAccountId) => {
           setAccountId(nextAccountId);
-          if (nextAccountId && authType === "password") {
+          if (nextAccountId) {
             setPasswordSource("account");
             setPassword("");
             setHasPassword(false);
@@ -327,7 +316,7 @@ export function TelnetForm({
             <Tabs
               value={passwordSource}
               onValueChange={(value) => {
-                const next = value as PasswordSource;
+                const next = value as AccountPasswordSource;
                 setPasswordSource(next);
                 if (next === "account") {
                   setPassword("");

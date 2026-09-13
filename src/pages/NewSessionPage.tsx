@@ -35,6 +35,7 @@ import { invoke } from "@/lib/invoke";
 import { isValidSerialBaudRate, MAX_SERIAL_BAUD_RATE, MIN_SERIAL_BAUD_RATE } from "@/lib/serial";
 import { validateSshAgentForwardingEndpoints } from "@/lib/sshAgent";
 import type {
+  AccountPasswordSource,
   ConnectionCustomIcon,
   Group,
   OtpEntry,
@@ -80,6 +81,19 @@ const DEFAULT_SSH_AGENT_FORWARDING_CONFIG: SshAgentForwardingConfig = {
   sources: { external_agent: false, external_agent_endpoints: [], stored_keys: true },
   policy: { mode: "allowlist", fingerprints: [] },
 };
+
+function resolveInitialPasswordSource(
+  connection: SavedConnection,
+  protocol: "ssh" | "telnet",
+): AccountPasswordSource {
+  const auth = connection.auth;
+  if (auth?.password_source === "connection") {
+    return auth.has_password ? "direct" : protocol === "ssh" ? "ask" : "direct";
+  }
+  if (auth?.has_password) return "direct";
+  if (auth?.account_id || auth?.password_id) return "account";
+  return protocol === "ssh" ? "ask" : "direct";
+}
 type SshTerminalTypeSelection = SshTerminalType | "default";
 
 function normalizeSshAlgorithms(
@@ -165,6 +179,7 @@ export default function NewSessionPage() {
   const [rdpDomain, setRdpDomain] = useState("");
   const [authType, setAuthType] = useState<SshAuthMode>("password");
   const [accountId, setAccountId] = useState("");
+  const [passwordSource, setPasswordSource] = useState<AccountPasswordSource>("ask");
   const [passwordId, setPasswordId] = useState("");
   const [password, setPassword] = useState("");
   const [hasPassword, setHasPassword] = useState(false);
@@ -315,6 +330,7 @@ export default function NewSessionPage() {
           setUsername(found.username || "root");
           setAuthType((found.auth?.mode as SshAuthMode) || "password");
           setAccountId(found.auth?.account_id || found.auth?.password_id || "");
+          setPasswordSource(resolveInitialPasswordSource(found, "ssh"));
           setPasswordId("");
           setHasPassword(found.auth?.has_password || false);
           setKeyId(found.auth?.key_id || "");
@@ -342,6 +358,7 @@ export default function NewSessionPage() {
           setUsername(found.username || "");
           setAuthType((found.auth?.mode === "none" ? "none" : "password") as SshAuthMode);
           setAccountId(found.auth?.account_id || found.auth?.password_id || "");
+          setPasswordSource(resolveInitialPasswordSource(found, "telnet"));
           setPasswordId("");
           setHasPassword(found.auth?.has_password || false);
           setTelnetBackspaceMode(found.backspace_mode || "del");
@@ -440,6 +457,7 @@ export default function NewSessionPage() {
     setRdpDomain("");
     setAuthType("password");
     setAccountId("");
+    setPasswordSource(currentTab === "telnet" ? "direct" : "ask");
     setPasswordId("");
     setPassword("");
     setHasPassword(false);
@@ -508,6 +526,9 @@ export default function NewSessionPage() {
 
   const handleTabChange = useCallback((value: string) => {
     setCurrentTab(value);
+    if (value === "telnet") {
+      setPasswordSource((current) => (current === "ask" ? "direct" : current));
+    }
     if (value === "rdp") {
       setUsername((current) =>
         !current.trim() || current === "root" ? DEFAULT_RDP_USERNAME : current,
@@ -944,6 +965,12 @@ export default function NewSessionPage() {
                 mode: resolvedAuthMode,
                 account_id:
                   currentTab === "ssh" || currentTab === "telnet" ? accountId || "" : undefined,
+                password_source:
+                  currentTab === "ssh" || currentTab === "telnet"
+                    ? passwordSource === "account"
+                      ? "account"
+                      : "connection"
+                    : undefined,
                 password_id:
                   currentTab === "rdp" || currentTab === "vnc"
                     ? resolvedAuthMode === "password"
@@ -955,14 +982,17 @@ export default function NewSessionPage() {
                 auto_fill_otp: currentTab === "ssh" && otpId ? autoFillOtp : undefined,
               };
 
-              if (
-                resolvedAuthMode !== "password" ||
-                ((currentTab === "rdp" || currentTab === "vnc") && passwordId) ||
-                ((currentTab === "ssh" || currentTab === "telnet") &&
-                  accountId &&
-                  !password &&
-                  !hasPassword)
-              ) {
+              if (resolvedAuthMode !== "password") {
+                nextAuth.password = "";
+              } else if (currentTab === "ssh" || currentTab === "telnet") {
+                if (passwordSource === "account") {
+                  nextAuth.password = "";
+                } else if (password) {
+                  nextAuth.password = password;
+                } else if (!hasPassword) {
+                  nextAuth.password = "";
+                }
+              } else if (passwordId) {
                 nextAuth.password = "";
               } else if (password) {
                 nextAuth.password = password;
@@ -1505,6 +1535,8 @@ export default function NewSessionPage() {
               setAccountId={setAccountId}
               accounts={savedAccounts}
               onAccountsChanged={setSavedAccounts}
+              passwordSource={passwordSource}
+              setPasswordSource={setPasswordSource}
               authType={authType}
               setAuthType={(value) => setAuthType(value)}
               password={password}
@@ -1600,6 +1632,8 @@ export default function NewSessionPage() {
               setAccountId={setAccountId}
               accounts={savedAccounts}
               onAccountsChanged={setSavedAccounts}
+              passwordSource={passwordSource}
+              setPasswordSource={setPasswordSource}
               authType={authType === "none" ? "none" : "password"}
               setAuthType={(value) => setAuthType(value)}
               password={password}

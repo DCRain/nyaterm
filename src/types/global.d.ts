@@ -349,6 +349,7 @@ export interface SavedAccount {
 
 /** Legacy password-only name retained for RDP/VNC compatibility. */
 export type SavedPassword = SavedAccount;
+export type AccountPasswordSource = "ask" | "direct" | "account";
 
 /** Terminal credential entry used for prompt-based autofill. */
 export interface SavedCredential {
@@ -372,6 +373,8 @@ export interface ConnectionAuth {
   mode: string;
   /** Saved account reference used by SSH and Telnet. */
   account_id?: string;
+  /** Password material source for SSH and Telnet; absent legacy values use the account. */
+  password_source?: "account" | "connection";
   /** Legacy saved-password reference; do not use for new SSH/Telnet configurations. */
   password_id?: string;
   /** Inline password (plaintext when saving, absent when loading). */

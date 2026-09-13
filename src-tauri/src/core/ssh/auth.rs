@@ -632,6 +632,10 @@ fn resolve_password_material(
             .map_err(|e| AppError::Auth(format!("Failed to decrypt inline password: {e}")));
     }
 
+    if conn_auth.password_source.as_deref() == Some("connection") {
+        return Ok(None);
+    }
+
     crate::config::decrypt_account_password(account)
 }
 
@@ -2098,6 +2102,7 @@ fn persist_runtime_password(
             {
                 let auth = conn.auth.get_or_insert_with(Default::default);
                 auth.mode = "password".to_string();
+                auth.password_source = Some("connection".to_string());
                 auth.password = Some(crate::utils::crypto::encrypt(&secret.value)?);
                 auth.password_id = None;
                 auth.has_password = false;
@@ -2147,6 +2152,7 @@ fn persist_runtime_password(
 fn apply_runtime_account_reference(auth: &mut crate::config::ConnectionAuth, account_id: String) {
     auth.mode = "password".to_string();
     auth.account_id = Some(account_id);
+    auth.password_source = Some("account".to_string());
     auth.password_id = None;
     auth.password = None;
     auth.has_password = false;
@@ -3261,6 +3267,23 @@ mod tests {
     }
 
     #[test]
+    fn ssh_connection_password_source_disables_account_password_fallback() {
+        crate::utils::crypto::set_master_password(None);
+        let auth = ConnectionAuth {
+            mode: "password".to_string(),
+            account_id: Some("account-1".to_string()),
+            password_source: Some("connection".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            resolve_password_material(&auth, Some(&test_account("admin", Some("secret"))))
+                .expect("connection password source"),
+            None
+        );
+    }
+
+    #[test]
     fn runtime_password_save_writes_account_id_and_clears_legacy_material() {
         let mut auth = ConnectionAuth {
             mode: "password".to_string(),
@@ -3273,6 +3296,7 @@ mod tests {
         apply_runtime_account_reference(&mut auth, "account-1".to_string());
 
         assert_eq!(auth.account_id.as_deref(), Some("account-1"));
+        assert_eq!(auth.password_source.as_deref(), Some("account"));
         assert!(auth.password_id.is_none());
         assert!(auth.password.is_none());
         assert!(!auth.has_password);

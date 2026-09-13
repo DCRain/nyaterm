@@ -232,6 +232,18 @@ pub fn save_connection(
             _ => {}
         }
 
+        // password_source: Some("") means legacy/default behavior, None means preserve existing
+        match auth.password_source.as_deref() {
+            Some("") => auth.password_source = None,
+            None => {
+                auth.password_source = existing
+                    .as_ref()
+                    .and_then(|entry| entry.auth.as_ref())
+                    .and_then(|entry| entry.password_source.clone());
+            }
+            _ => {}
+        }
+
         // password_id: Some("") means explicitly cleared, None means preserve existing
         match auth.password_id.as_deref() {
             Some("") => auth.password_id = None,
@@ -1450,6 +1462,7 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
         target.auth = Some(ConnectionAuth {
             mode: "key".to_string(),
             account_id: None,
+            password_source: None,
             password_id: Some("password-id".to_string()),
             password: Some("encrypted".to_string()),
             has_password: true,
