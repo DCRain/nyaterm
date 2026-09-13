@@ -1179,7 +1179,27 @@ export default function NewSessionPage() {
   };
 
   return (
-    <div className="h-full min-h-0 flex flex-col overflow-hidden bg-background text-foreground">
+    <div
+      className="h-full min-h-0 flex flex-col overflow-hidden bg-background text-foreground"
+      onKeyDown={(event) => {
+        if (
+          !editId ||
+          saveDisabled ||
+          event.defaultPrevented ||
+          event.nativeEvent.isComposing ||
+          event.key === "Process" ||
+          event.key !== "Enter"
+        ) {
+          return;
+        }
+
+        if (!(event.target instanceof HTMLInputElement)) return;
+        if (!event.currentTarget.contains(event.target)) return;
+
+        event.preventDefault();
+        void handleSave();
+      }}
+    >
       <ChildWindowHeader
         title={t(editId ? "dialog.editConnection" : "dialog.newConnection")}
         onClose={handleClose}
