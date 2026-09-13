@@ -530,8 +530,14 @@ fn build_claude_invocation(
     if let Some(model) = request
         .model_name
         .as_deref()
-        .or(settings.claude_code.default_model.as_deref())
         .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            settings
+                .claude_code
+                .default_model
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+        })
     {
         args.push("--model".to_string());
         args.push(model.to_string());
