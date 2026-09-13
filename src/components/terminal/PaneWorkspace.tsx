@@ -493,6 +493,9 @@ function PaneNodeView({
             pane={node}
             active={isActive}
             visible={visible}
+            onDisconnectedCloseRequested={() =>
+              void onDisconnectedCloseRequested?.(tab.id, node.id)
+            }
             onConnectionError={(sessionId, error) =>
               onConnectionError?.(tab.id, node.id, sessionId, error)
             }

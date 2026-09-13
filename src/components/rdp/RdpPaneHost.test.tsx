@@ -27,6 +27,35 @@ vi.mock("@tauri-apps/api/core", () => ({
   },
 }));
 
+vi.mock("@tauri-apps/api/webview", () => ({
+  getCurrentWebview: () => ({
+    onDragDropEvent: () => Promise.resolve(() => {}),
+  }),
+}));
+
+vi.mock("@/context/TransferContext", () => ({
+  useTransfer: () => ({
+    upsertExternalTransferProgress: vi.fn(),
+    completeExternalTransfer: vi.fn(),
+    failExternalTransfer: vi.fn(),
+  }),
+}));
+
+vi.mock("@/context/AppContext", () => ({
+  useApp: () => ({
+    appSettings: {
+      rdp: {
+        special_shortcuts: [],
+      },
+    },
+    updateAppSettings: vi.fn(),
+  }),
+}));
+
+vi.mock("@/components/remote-desktop/RdpShortcutPopover", () => ({
+  RdpShortcutPopover: () => <div data-testid="rdp-shortcut-popover" />,
+}));
+
 describe("RdpPaneHost", () => {
   beforeEach(() => {
     invokeMock.mockReset();
@@ -143,12 +172,37 @@ describe("RdpPaneHost", () => {
     });
   });
 
-  it("does not render the RDP hover information bar", () => {
-    render(<RdpPaneHost pane={rdpPane()} active visible />);
+  it("renders floating session chrome after the session becomes active", async () => {
+    const onDisconnectedCloseRequested = vi.fn();
+    render(
+      <RdpPaneHost
+        pane={rdpPane()}
+        active
+        visible
+        onDisconnectedCloseRequested={onDisconnectedCloseRequested}
+      />,
+    );
 
-    expect(screen.queryByText("Windows Desktop")).toBeNull();
-    expect(screen.queryByText("1920x1080")).toBeNull();
-    expect(screen.queryAllByRole("button")).toHaveLength(0);
+    expect(document.querySelector('[data-floating-session-chrome="true"]')).toBeNull();
+
+    await waitFor(() => expect(listeners.has("rdp-state-rdp-session")).toBe(true));
+    act(() => {
+      listeners.get("rdp-state-rdp-session")?.({
+        payload: { sessionId: "rdp-session", state: "active" },
+      });
+    });
+
+    await waitFor(() => {
+      expect(document.querySelector('[data-floating-session-chrome="true"]')).not.toBeNull();
+    });
+    expect(screen.getByText("Windows Desktop")).not.toBeNull();
+    expect(screen.getByText("1920x1080")).not.toBeNull();
+    expect(screen.getByTestId("rdp-shortcut-popover")).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "dialog.rdpReconnect" }));
+    fireEvent.click(screen.getByRole("button", { name: "dialog.remoteDesktopChromeClose" }));
+    expect(invokeMock).toHaveBeenCalledWith("rdp_reconnect", { sessionId: "rdp-session" });
+    expect(onDisconnectedCloseRequested).toHaveBeenCalledOnce();
   });
 });
 

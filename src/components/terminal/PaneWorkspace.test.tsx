@@ -19,6 +19,7 @@ vi.mock("@/context/AppContext", () => ({
 }));
 
 vi.mock("react-i18next", () => ({
+  initReactI18next: { type: "3rdParty", init: vi.fn() },
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
@@ -57,6 +58,7 @@ describe("PaneWorkspace RDP routing", () => {
   it("routes RDP leaves to RdpPaneHost with active and visible state", () => {
     const onActivatePane = vi.fn();
     const onConnectionError = vi.fn();
+    const onDisconnectedCloseRequested = vi.fn();
     const tab = tabWithRoot(rdpPane(), "rdp-pane");
 
     const view = render(
@@ -66,6 +68,7 @@ describe("PaneWorkspace RDP routing", () => {
         onActivatePane={onActivatePane}
         onUpdateSplitRatio={vi.fn()}
         onConnectionError={onConnectionError}
+        onDisconnectedCloseRequested={onDisconnectedCloseRequested}
       />,
     );
 
@@ -84,8 +87,11 @@ describe("PaneWorkspace RDP routing", () => {
 
     const rdpProps = rdpPaneHostMock.mock.lastCall?.[0] as {
       onConnectionError: (sessionId: string, error: string) => void;
+      onDisconnectedCloseRequested: () => void;
     };
-    expect(rdpProps).not.toHaveProperty("onDisconnectedCloseRequested");
+    expect(rdpProps.onDisconnectedCloseRequested).toEqual(expect.any(Function));
+    rdpProps.onDisconnectedCloseRequested();
+    expect(onDisconnectedCloseRequested).toHaveBeenCalledWith("tab-1", "rdp-pane");
     rdpProps.onConnectionError("rdp-session", "RDP failed");
     expect(onConnectionError).toHaveBeenCalledWith(
       "tab-1",
