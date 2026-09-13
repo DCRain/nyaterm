@@ -46,6 +46,21 @@ describe("file explorer tree path helpers", () => {
     ]);
   });
 
+  it("uses the POSIX filesystem root for local absolute paths", () => {
+    expect(getTreeRootPath("/Users/nya/project", "/Users/nya", "local")).toBe(
+      "/",
+    );
+    expect(getTreeRootPath("/home/nya/project", "/home/nya", "local")).toBe(
+      "/",
+    );
+    expect(buildTreePathChain("/", "/home/nya/project", "local")).toEqual([
+      "/",
+      "/home",
+      "/home/nya",
+      "/home/nya/project",
+    ]);
+  });
+
   it("uses the local filesystem drive root and case-insensitive keys", () => {
     expect(getTreeRootPath("C:\\Users\\nya\\project", "C:\\Users\\nya", "local")).toBe(
       "C:\\",

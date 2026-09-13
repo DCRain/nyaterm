@@ -112,6 +112,9 @@ export function createTreeEntry(
 }
 
 function localRootPath(path: string) {
+  if (path.startsWith("/") && !isWindowsStylePath(path)) {
+    return "/";
+  }
   const normalized = path.replace(/\//g, "\\");
   if (/^[a-zA-Z]:/.test(normalized)) {
     return `${normalized.slice(0, 2)}\\`;

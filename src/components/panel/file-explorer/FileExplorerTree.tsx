@@ -5,6 +5,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import FileExplorerTreeItem from "./FileExplorerTreeItem";
@@ -91,8 +92,23 @@ export default function FileExplorerTree({
     getItemKey: (index) => rows[index]?.path ?? index,
     overscan: 8,
   });
+  const [focusedPath, setFocusedPath] = useState<string | null>(null);
+  const rowRefs = useRef(new Map<string, HTMLDivElement>());
   const previousRowCountRef = useRef(rows.length);
   const handledRevealRequestRef = useRef<number | null>(null);
+  const focusedKey = useMemo(() => {
+    if (focusedPath) {
+      const key = treePathKey(focusedPath, backend);
+      if (rows.some((row) => treePathKey(row.path, backend) === key)) {
+        return key;
+      }
+    }
+    const selectedRow = rows.find((row) =>
+      selectedPaths.has(treePathKey(row.path, backend)),
+    );
+    const fallbackRow = selectedRow ?? rows[0];
+    return fallbackRow ? treePathKey(fallbackRow.path, backend) : null;
+  }, [backend, focusedPath, rows, selectedPaths]);
 
   useEffect(() => {
     if (previousRowCountRef.current === rows.length) return;
@@ -130,7 +146,8 @@ export default function FileExplorerTree({
       {rowVirtualizer.getVirtualItems().map((virtualRow) => {
         const row = rows[virtualRow.index];
         if (!row) return null;
-        const selected = selectedPaths.has(treePathKey(row.path, backend));
+        const rowKey = treePathKey(row.path, backend);
+        const selected = selectedPaths.has(rowKey);
         return (
           <div
             key={virtualRow.key}
@@ -143,7 +160,16 @@ export default function FileExplorerTree({
             <FileExplorerTreeItem
               row={row}
               selected={selected}
+              tabIndex={focusedKey === rowKey ? 0 : -1}
+              itemRef={(element) => {
+                if (element) {
+                  rowRefs.current.set(rowKey, element);
+                } else {
+                  rowRefs.current.delete(rowKey);
+                }
+              }}
               onClick={(event) => onRowClick(row, event)}
+              onFocus={() => setFocusedPath(row.path)}
               onDoubleClick={() => {
                 if (row.entry.is_dir) {
                   if (!row.isRoot) onActivateDirectory(row);
@@ -179,6 +205,21 @@ export default function FileExplorerTree({
                   return;
                 }
                 onRowKeyDown(event, row);
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                  const offset = event.key === "ArrowDown" ? 1 : -1;
+                  const nextIndex = Math.max(
+                    0,
+                    Math.min(rows.length - 1, virtualRow.index + offset),
+                  );
+                  const nextRow = rows[nextIndex];
+                  if (nextRow) {
+                    const nextKey = treePathKey(nextRow.path, backend);
+                    setFocusedPath(nextRow.path);
+                    rowVirtualizer.scrollToIndex(nextIndex, { align: "auto" });
+                    rowRefs.current.get(nextKey)?.focus();
+                  }
+                  return;
+                }
                 if (event.key === "Enter" && !row.entry.is_dir) {
                   event.preventDefault();
                   event.stopPropagation();

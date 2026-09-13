@@ -1874,7 +1874,6 @@ function FileExplorerPane({
 
   useEffect(() => {
     if (!isTreeView) return;
-    setFileSearchQuery("");
     setIsFileSearchExpanded(false);
     setIsEditingPath(false);
   }, [isTreeView]);
@@ -2306,6 +2305,12 @@ function FileExplorerPane({
       ),
     }));
   }, [updateUi]);
+
+  const handleToggleViewMode = useCallback(() => {
+    updateUi({
+      file_explorer_view_mode: isTreeView ? "list" : "tree",
+    });
+  }, [isTreeView, updateUi]);
 
   const handleListKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const target = event.target;
@@ -3805,6 +3810,7 @@ function FileExplorerPane({
               : t("fileExplorer.locateTerminalPath")
           }
           canLocatePath={!!activeFilePath || cwdTrackingActive}
+          onToggleViewMode={handleToggleViewMode}
           onToggleHiddenFiles={handleToggleHiddenFiles}
           onExpandSearch={() => setIsFileSearchExpanded(true)}
           onSearchQueryChange={setFileSearchQuery}

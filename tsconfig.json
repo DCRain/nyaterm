@@ -22,11 +22,7 @@
 
     /* Path aliases */
     "paths": {
-      "@/*": ["./src/*"],
-      "react": ["./node_modules/@types/react/index.d.ts"],
-      "react/*": ["./node_modules/@types/react/*"],
-      "react-dom": ["./node_modules/@types/react-dom/index.d.ts"],
-      "react-dom/*": ["./node_modules/@types/react-dom/*"]
+      "@/*": ["./src/*"]
     }
   },
   "include": ["src"],

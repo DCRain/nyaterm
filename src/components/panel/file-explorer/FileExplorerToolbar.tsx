@@ -1,6 +1,7 @@
 import type { ComponentProps, RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  MdAccountTree,
   MdArrowUpward,
   MdClose,
   MdCreateNewFolder,
@@ -12,6 +13,7 @@ import {
   MdRefresh,
   MdSearch,
   MdUpload,
+  MdViewList,
   MdVisibility,
   MdVisibilityOff,
 } from "react-icons/md";
@@ -72,6 +74,7 @@ interface FileExplorerToolbarProps {
   onLocatePath: () => void;
   locateLabel: string;
   canLocatePath: boolean;
+  onToggleViewMode: () => void;
   onToggleHiddenFiles: () => void;
   onExpandSearch: () => void;
   onSearchQueryChange: (query: string) => void;
@@ -98,6 +101,7 @@ export function FileExplorerToolbar({
   onLocatePath,
   locateLabel,
   canLocatePath,
+  onToggleViewMode,
   onToggleHiddenFiles,
   onExpandSearch,
   onSearchQueryChange,
@@ -230,6 +234,19 @@ export function FileExplorerToolbar({
       <ToolbarDivider />
 
       <div className="ml-auto flex shrink-0 items-center gap-0.5">
+        <ToolbarIconButton
+          label={
+            isTreeView
+              ? t("fileExplorer.switchToListView")
+              : t("fileExplorer.switchToTreeView")
+          }
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
+          onClick={onToggleViewMode}
+        >
+          {isTreeView ? <MdViewList className="h-4 w-4" /> : <MdAccountTree className="h-4 w-4" />}
+        </ToolbarIconButton>
         {!isTreeView && (
           <ToolbarIconButton
             label={t("fileExplorer.search")}

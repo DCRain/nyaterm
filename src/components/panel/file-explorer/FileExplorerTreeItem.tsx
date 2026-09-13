@@ -1,6 +1,7 @@
 import {
   type KeyboardEvent,
   type MouseEvent,
+  type Ref,
   useEffect,
   useRef,
 } from "react";
@@ -12,8 +13,11 @@ import type { FileExplorerTreeRow } from "./fileExplorerTreeModel";
 interface FileExplorerTreeItemProps {
   row: FileExplorerTreeRow;
   selected: boolean;
+  tabIndex: 0 | -1;
+  itemRef?: Ref<HTMLDivElement>;
   onClick: (event: MouseEvent<HTMLDivElement>) => void;
   onDoubleClick: () => void;
+  onFocus: () => void;
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
   onToggle: () => void;
   onRetry: () => void;
@@ -35,8 +39,11 @@ interface FileExplorerTreeItemProps {
 export default function FileExplorerTreeItem({
   row,
   selected,
+  tabIndex,
+  itemRef,
   onClick,
   onDoubleClick,
+  onFocus,
   onKeyDown,
   onToggle,
   onRetry,
@@ -75,6 +82,7 @@ export default function FileExplorerTreeItem({
 
   return (
     <div
+      ref={itemRef}
       data-file-tree-path={row.path}
       className={cn(
         "group flex h-7 min-w-0 cursor-default items-center gap-1 rounded px-1 text-xs outline-none transition-colors",
@@ -87,7 +95,8 @@ export default function FileExplorerTreeItem({
       aria-level={row.depth + 1}
       aria-selected={selected}
       aria-expanded={isDirectory && canToggle ? row.isExpanded : undefined}
-      tabIndex={0}
+      tabIndex={tabIndex}
+      onFocus={onFocus}
       onClick={(event) => {
         event.currentTarget.focus();
         onClick(event);
