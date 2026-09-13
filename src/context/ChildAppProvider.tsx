@@ -219,6 +219,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     asset_sort_direction: null,
     recent_connection_ids: [],
     transfer_height: 180,
+    file_explorer_view_mode: "list",
     file_explorer_show_hidden_files: true,
     file_explorer_auto_sync_cwd_connection_ids: [],
     file_explorer_favorite_dirs_by_connection_id: {},
