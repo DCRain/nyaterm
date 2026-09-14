@@ -27,6 +27,7 @@ import {
 } from "./xterminalKeyboardInput";
 
 const BACKSPACE_INPUT = "\x7f";
+const CTRL_U_INPUT = "\x15";
 
 interface MutableRef<T> {
   current: T;
@@ -561,6 +562,25 @@ export function installXTerminalKeyboardController({
           e,
         )
       ) {
+        return false;
+      }
+    }
+
+    if (
+      e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey &&
+      !e.shiftKey &&
+      e.code === "KeyU" &&
+      e.keyCode === 229
+    ) {
+      const imeRoute = imeTracker.routeKeyboardEvent(e);
+      if (imeRoute === "native-ime") {
+        return false;
+      }
+      if (imeRoute === "xterm") {
+        e.preventDefault();
+        inputFromKeyboardController(CTRL_U_INPUT);
         return false;
       }
     }
