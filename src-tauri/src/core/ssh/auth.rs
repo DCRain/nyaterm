@@ -482,12 +482,17 @@ pub(crate) fn build_test_ssh_config(
         .password_id
         .filter(|value| !value.is_empty());
 
+    let mut account_id = None;
+    let mut password_source = None;
+
     if input.use_stored_password && password.is_none() && password_id.is_none() {
         if let Some(connection_id) = input.connection_id.as_deref() {
             if let Ok(existing) = crate::config::load_connection_by_id(app, connection_id) {
                 if let Some(auth) = existing.auth.as_ref() {
                     password = auth.password.clone();
                     password_id = auth.password_id.clone().filter(|id| !id.is_empty());
+                    account_id = auth.account_id.clone().filter(|id| !id.is_empty());
+                    password_source = auth.password_source.clone().filter(|id| !id.is_empty());
                 }
             }
         }
@@ -495,6 +500,8 @@ pub(crate) fn build_test_ssh_config(
 
     let auth = crate::config::ConnectionAuth {
         mode: input.auth_mode,
+        account_id,
+        password_source,
         password_id,
         password,
         key_id: input.key_id.filter(|id| !id.is_empty()),
@@ -505,7 +512,11 @@ pub(crate) fn build_test_ssh_config(
 
     if auth.mode == "password"
         && auth.password.is_none()
-        && auth.password_id.as_deref().unwrap_or("").is_empty()
+        && crate::config::effective_account_id(
+            auth.account_id.as_deref(),
+            auth.password_id.as_deref(),
+        )
+        .is_none()
     {
         return Err(AppError::Auth(
             "credentials_required: password is required for connection test".to_string(),

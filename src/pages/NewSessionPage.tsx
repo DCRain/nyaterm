@@ -2188,10 +2188,14 @@ export default function NewSessionPage() {
                 setPort={setSshPort}
                 username={username}
                 setUsername={setUsername}
+                accountId={accountId}
+                setAccountId={setAccountId}
+                accounts={savedAccounts}
+                onAccountsChanged={setSavedAccounts}
+                passwordSource={passwordSource}
+                setPasswordSource={setPasswordSource}
                 authType={authType}
                 setAuthType={(value) => setAuthType(value)}
-                passwordId={passwordId}
-                setPasswordId={setPasswordId}
                 password={password}
                 setPassword={setPassword}
                 hasPassword={hasPassword}
@@ -2263,10 +2267,14 @@ export default function NewSessionPage() {
                 setPort={setSshPort}
                 username={username}
                 setUsername={setUsername}
+                accountId={accountId}
+                setAccountId={setAccountId}
+                accounts={savedAccounts}
+                onAccountsChanged={setSavedAccounts}
+                passwordSource={passwordSource}
+                setPasswordSource={setPasswordSource}
                 authType={authType}
                 setAuthType={(value) => setAuthType(value)}
-                passwordId={passwordId}
-                setPasswordId={setPasswordId}
                 password={password}
                 setPassword={setPassword}
                 hasPassword={hasPassword}
@@ -2359,10 +2367,14 @@ export default function NewSessionPage() {
                 setPort={setTelnetPort}
                 username={username}
                 setUsername={setUsername}
+                accountId={accountId}
+                setAccountId={setAccountId}
+                accounts={savedAccounts}
+                onAccountsChanged={setSavedAccounts}
+                passwordSource={passwordSource}
+                setPasswordSource={setPasswordSource}
                 authType={authType === "none" ? "none" : "password"}
                 setAuthType={(value) => setAuthType(value)}
-                passwordId={passwordId}
-                setPasswordId={setPasswordId}
                 password={password}
                 setPassword={setPassword}
                 hasPassword={hasPassword}

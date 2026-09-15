@@ -785,12 +785,6 @@ export function FileExplorerPane({
   const [propertiesDialogData, setPropertiesDialogData] = useState<PropertiesDialogData | null>(
     null,
   );
-  const [newItemDialogData, setNewItemDialogData] =
-    useState<NewItemDialogData | null>(null);
-  const [newSymlinkDialogData, setNewSymlinkDialogData] =
-    useState<NewSymlinkDialogData | null>(null);
-  const [propertiesDialogData, setPropertiesDialogData] =
-    useState<PropertiesDialogData | null>(null);
   const [treeContextRow, setTreeContextRow] =
     useState<FileExplorerTreeRow | null>(null);
   const [treeRevealRequest, setTreeRevealRequest] = useState<{
@@ -859,13 +853,6 @@ export function FileExplorerPane({
     window.requestAnimationFrame(() => pathInputRef.current?.select());
   }, []);
 
-  const invalidateDirectoryChildrenCache = useCallback((path: string) => {
-    clearDirectoryChildrenCacheForPath(
-      activeSessionIdRef.current,
-      explorerBackendRef.current,
-      path,
-    );
-  }, []);
   const autoSyncConnectionIds =
     appSettings.ui.file_explorer_auto_sync_cwd_connection_ids ?? [];
   const autoSyncScopeId =
@@ -1963,11 +1950,10 @@ export function FileExplorerPane({
         return;
       }
 
-      if (parentDir === visibleDir) {
-        const entryName = payload.file_name?.trim() || getLocalPathName(pathForBackend, "");
-        if (entryName) {
-          pendingSelectAfterTransferRef.current.add(entryName);
-        }
+      const entryName =
+        payload.file_name?.trim() || getLocalPathName(payload.remote_path, "");
+      if (entryName) {
+        pendingSelectAfterTransferRef.current.add(entryName);
       }
 
       if (refreshUploadCompletionTimerRef.current) {
@@ -1977,7 +1963,11 @@ export function FileExplorerPane({
         refreshUploadCompletionTimerRef.current = null;
         const selectEntryNames = Array.from(pendingSelectAfterTransferRef.current);
         pendingSelectAfterTransferRef.current.clear();
-        clearDirectoryChildrenCacheForPath(activeSessionIdRef.current, backend, visibleDir);
+        clearDirectoryChildrenCacheForPath(
+          activeSessionIdRef.current,
+          "remote",
+          visibleDir,
+        );
         void refreshCurrentDirectory(
           selectEntryNames.length > 0 ? { selectEntryNames } : undefined,
         );
@@ -2506,7 +2496,7 @@ export function FileExplorerPane({
     try {
       await openFilePreview({
         sessionId: activeSessionId,
-        backend: explorerBackendRef.current,
+        backend: explorerBackend === "local" ? "local" : "remote",
         path: resolvedPath,
         name: entry.name,
         size: entry.size,
@@ -3128,7 +3118,11 @@ export function FileExplorerPane({
     sendCdCommandToTerminal(directoryPath);
   };
 
-  const buildDeleteItems = (entries: FileEntry[]): DeleteDialogItem[] => {
+  const buildDeleteItems = (
+    entries: FileEntry[],
+    basePath = currentPath,
+    pathResolver?: (entry: FileEntry) => string,
+  ): DeleteDialogItem[] => {
     return entries.map((entry) => ({
       path: pathResolver?.(entry) || getEntryFullPath(entry, basePath),
       name: entry.name,
