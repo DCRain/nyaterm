@@ -53,6 +53,8 @@ function createHarness(
     getSelection: vi.fn(() => ""),
     hasSelection: vi.fn(() => false),
     input: vi.fn(),
+    buffer: { active: { baseY: 0, viewportY: 0 } },
+    scrollToBottom: vi.fn(),
   } as unknown as Terminal;
   const routeKeyboardEvent = vi.fn(() => imeRoute);
   const pasteClipboard = vi.fn(async () => {});
@@ -318,5 +320,39 @@ describe("installXTerminalKeyboardController Ctrl+U IME compatibility", () => {
     expect(event.defaultPrevented).toBe(false);
     expect(harness.routeKeyboardEvent).not.toHaveBeenCalled();
     expect(harness.terminal.input).not.toHaveBeenCalled();
+  });
+
+  it("keeps native IME ownership when masked Ctrl+U has a terminal selection", () => {
+    const harness = createHarness("native-ime");
+    vi.mocked(harness.terminal.hasSelection).mockReturnValue(true);
+    const event = ctrlUEvent(229, "u");
+
+    expect(harness.keyHandler(event)).toBe(false);
+    expect(event.defaultPrevented).toBe(false);
+    expect(harness.routeKeyboardEvent).toHaveBeenCalledOnce();
+    expect(harness.routeKeyboardEvent).toHaveBeenCalledWith(event);
+    expect(harness.terminal.input).not.toHaveBeenCalled();
+  });
+
+  it("preserves terminal selection when recovering masked Ctrl+U", () => {
+    const harness = createHarness("xterm");
+    vi.mocked(harness.terminal.hasSelection).mockReturnValue(true);
+    const event = ctrlUEvent(229);
+
+    expect(harness.keyHandler(event)).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    expect(harness.routeKeyboardEvent).toHaveBeenCalledOnce();
+    expect(harness.terminal.input).toHaveBeenCalledOnce();
+    expect(harness.terminal.input).toHaveBeenCalledWith("\x15", false);
+  });
+
+  it("does not double-send masked Ctrl+U when IME exposes key u with a selection", () => {
+    const harness = createHarness("xterm");
+    vi.mocked(harness.terminal.hasSelection).mockReturnValue(true);
+    const event = ctrlUEvent(229, "u");
+
+    expect(harness.keyHandler(event)).toBe(false);
+    expect(harness.terminal.input).toHaveBeenCalledOnce();
+    expect(harness.terminal.input).toHaveBeenCalledWith("\x15", false);
   });
 });
