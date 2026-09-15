@@ -27,6 +27,7 @@ import {
 } from "./xterminalKeyboardInput";
 
 const BACKSPACE_INPUT = "\x7f";
+const CTRL_U_INPUT = "\x15";
 
 interface MutableRef<T> {
   current: T;
@@ -338,6 +339,22 @@ export function installXTerminalKeyboardController({
     }
 
     const directInputData = getDirectInputDataFromKeyEvent(e);
+    const isImeMaskedCtrlU =
+      e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey &&
+      !e.shiftKey &&
+      e.code === "KeyU" &&
+      e.keyCode === 229;
+    let recoverImeMaskedCtrlU = false;
+    if (isImeMaskedCtrlU) {
+      const imeRoute = imeTracker.routeKeyboardEvent(e);
+      if (imeRoute === "native-ime") {
+        return false;
+      }
+      recoverImeMaskedCtrlU = imeRoute === "xterm";
+    }
+
     if (directInputData) {
       if (clearSearchSelectionBeforeInput()) {
         return true;
@@ -363,6 +380,11 @@ export function installXTerminalKeyboardController({
           terminal.scrollToBottom();
         }
       };
+      if (recoverImeMaskedCtrlU) {
+        e.preventDefault();
+        inputPreservingSelection(CTRL_U_INPUT);
+        return false;
+      }
       if (directInputData) {
         e.preventDefault();
         inputPreservingSelection(directInputData);
@@ -563,6 +585,12 @@ export function installXTerminalKeyboardController({
       ) {
         return false;
       }
+    }
+
+    if (recoverImeMaskedCtrlU) {
+      e.preventDefault();
+      inputFromKeyboardController(CTRL_U_INPUT);
+      return false;
     }
 
     const ctrlPrintableInput = getCtrlPrintableCsiuInput(e);

@@ -25,6 +25,18 @@ function backspaceEvent(keyCode: number, isComposing = false): KeyboardEvent {
   return event;
 }
 
+function ctrlUEvent(keyCode: number, key = "Process"): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    key,
+    code: "KeyU",
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  Object.defineProperty(event, "keyCode", { value: keyCode });
+  return event;
+}
+
 function createHarness(
   imeRoute: XTerminalImeKeyboardRoute,
   sessionType: SessionType = "Local",
@@ -40,6 +52,9 @@ function createHarness(
     }),
     getSelection: vi.fn(() => ""),
     hasSelection: vi.fn(() => false),
+    input: vi.fn(),
+    buffer: { active: { baseY: 0, viewportY: 0 } },
+    scrollToBottom: vi.fn(),
   } as unknown as Terminal;
   const routeKeyboardEvent = vi.fn(() => imeRoute);
   const pasteClipboard = vi.fn(async () => {});
@@ -271,5 +286,73 @@ describe("installXTerminalKeyboardController IME Backspace routing", () => {
     expect(harness.keyHandler(event)).toBe(true);
     expect(event.defaultPrevented).toBe(false);
     expect(writeClipboardText).not.toHaveBeenCalled();
+  });
+});
+
+describe("installXTerminalKeyboardController Ctrl+U IME compatibility", () => {
+  it("recovers idle keyCode 229 Ctrl+U through xterm input", () => {
+    const harness = createHarness("xterm");
+    const event = ctrlUEvent(229);
+
+    expect(harness.keyHandler(event)).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    expect(harness.routeKeyboardEvent).toHaveBeenCalledOnce();
+    expect(harness.routeKeyboardEvent).toHaveBeenCalledWith(event);
+    expect(harness.terminal.input).toHaveBeenCalledOnce();
+    expect(harness.terminal.input).toHaveBeenCalledWith("\x15", true);
+  });
+
+  it("does not inject Ctrl+U while native IME owns the event", () => {
+    const harness = createHarness("native-ime");
+    const event = ctrlUEvent(229);
+
+    expect(harness.keyHandler(event)).toBe(false);
+    expect(event.defaultPrevented).toBe(false);
+    expect(harness.routeKeyboardEvent).toHaveBeenCalledOnce();
+    expect(harness.terminal.input).not.toHaveBeenCalled();
+  });
+
+  it("delegates ordinary Ctrl+U to xterm without manual injection", () => {
+    const harness = createHarness("application");
+    const event = ctrlUEvent(85, "u");
+
+    expect(harness.keyHandler(event)).toBe(true);
+    expect(event.defaultPrevented).toBe(false);
+    expect(harness.routeKeyboardEvent).not.toHaveBeenCalled();
+    expect(harness.terminal.input).not.toHaveBeenCalled();
+  });
+
+  it("keeps native IME ownership when masked Ctrl+U has a terminal selection", () => {
+    const harness = createHarness("native-ime");
+    vi.mocked(harness.terminal.hasSelection).mockReturnValue(true);
+    const event = ctrlUEvent(229, "u");
+
+    expect(harness.keyHandler(event)).toBe(false);
+    expect(event.defaultPrevented).toBe(false);
+    expect(harness.routeKeyboardEvent).toHaveBeenCalledOnce();
+    expect(harness.routeKeyboardEvent).toHaveBeenCalledWith(event);
+    expect(harness.terminal.input).not.toHaveBeenCalled();
+  });
+
+  it("preserves terminal selection when recovering masked Ctrl+U", () => {
+    const harness = createHarness("xterm");
+    vi.mocked(harness.terminal.hasSelection).mockReturnValue(true);
+    const event = ctrlUEvent(229);
+
+    expect(harness.keyHandler(event)).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    expect(harness.routeKeyboardEvent).toHaveBeenCalledOnce();
+    expect(harness.terminal.input).toHaveBeenCalledOnce();
+    expect(harness.terminal.input).toHaveBeenCalledWith("\x15", false);
+  });
+
+  it("does not double-send masked Ctrl+U when IME exposes key u with a selection", () => {
+    const harness = createHarness("xterm");
+    vi.mocked(harness.terminal.hasSelection).mockReturnValue(true);
+    const event = ctrlUEvent(229, "u");
+
+    expect(harness.keyHandler(event)).toBe(false);
+    expect(harness.terminal.input).toHaveBeenCalledOnce();
+    expect(harness.terminal.input).toHaveBeenCalledWith("\x15", false);
   });
 });
