@@ -1,4 +1,8 @@
-import type { FileEntry, SessionInfo } from "@/types/global";
+import type {
+  FileEntry,
+  FileExplorerViewMode,
+  SessionInfo,
+} from "@/types/global";
 
 export interface ResolvedLocalDropPathEntry {
   path: string;
@@ -40,6 +44,7 @@ export type LoadDirectoryOptions = {
   selectEntryName?: string;
   /** Select multiple entries after load (e.g. transfer destinations). */
   selectEntryNames?: string[];
+  entries?: FileEntry[];
   rawPathToken?: string;
   /** Skip loading spinner and keep list scroll (same-directory refresh). */
   silent?: boolean;
@@ -49,6 +54,10 @@ export type FileExplorerBackendKind = "remote" | "local" | "s3" | "ftp" | "webda
 
 export function isPosixExplorerBackend(backend: FileExplorerBackendKind): boolean {
   return backend === "remote" || backend === "s3" || backend === "ftp" || backend === "webdav";
+}
+
+export function normalizeFileExplorerViewMode(value: unknown): FileExplorerViewMode {
+  return value === "tree" ? "tree" : "list";
 }
 
 export function canTrackTerminalCwd(
@@ -141,6 +150,7 @@ export type ChildrenMenuState =
 export type InlineRenameState = {
   entryName: string;
   oldPath: string;
+  parentPath: string;
   oldRawPathToken?: string;
   initialName: string;
   value: string;

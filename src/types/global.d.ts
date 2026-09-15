@@ -359,15 +359,20 @@ export interface SshKey {
   passphrase?: string;
 }
 
-/** Managed password entry stored in local app storage. */
-export interface SavedPassword {
+/** Managed account entry stored in local app storage. */
+export interface SavedAccount {
   id: string;
   name: string;
+  username: string;
   /** True when encrypted password data exists in local storage. */
   has_password?: boolean;
   /** Plaintext password (only sent when creating/updating). */
   password?: string;
 }
+
+/** Legacy password-only name retained for RDP/VNC compatibility. */
+export type SavedPassword = SavedAccount;
+export type AccountPasswordSource = "ask" | "direct" | "account";
 
 /** Terminal credential entry used for prompt-based autofill. */
 export interface SavedCredential {
@@ -389,6 +394,11 @@ export interface SavedCredential {
 /** Auth block for SSH connections. */
 export interface ConnectionAuth {
   mode: string;
+  /** Saved account reference used by SSH and Telnet. */
+  account_id?: string;
+  /** Password material source for SSH and Telnet; absent legacy values use the account. */
+  password_source?: "account" | "connection";
+  /** Legacy saved-password reference; do not use for new SSH/Telnet configurations. */
   password_id?: string;
   /** Inline password (plaintext when saving, absent when loading). */
   password?: string;
@@ -572,6 +582,7 @@ export interface SavedConnection {
   data_bits?: number;
   parity?: string;
   stop_bits?: string;
+  modem_upload_protocol?: "xmodem" | "ymodem" | "zmodem";
   /** Backspace key mode for SSH/Telnet/Serial connections ("ctrl_h" or "del"). */
   backspace_mode?: string;
   /** Telnet-only: bypass Telnet option negotiation for embedded/raw TCP CLIs. */
@@ -883,6 +894,8 @@ export type RestorableTerminalWindowNode =
       second: RestorableTerminalWindowNode;
     };
 
+export type FileExplorerViewMode = "list" | "tree";
+
 export interface UiConfig {
   open_tabs: RestorableTab[];
   terminal_window_layout: RestorableTerminalWindowNode | null;
@@ -939,6 +952,7 @@ export interface UiConfig {
   asset_sort_direction?: "asc" | "desc" | null;
   recent_connection_ids: string[];
   transfer_height: number;
+  file_explorer_view_mode: FileExplorerViewMode;
   file_explorer_show_hidden_files: boolean;
   file_explorer_auto_sync_cwd_connection_ids: string[];
   file_explorer_favorite_dirs_by_connection_id: Record<string, string[]>;

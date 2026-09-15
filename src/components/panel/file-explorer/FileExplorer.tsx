@@ -94,7 +94,10 @@ import { getSessionInputPeerIds } from "@/lib/syncInputGroups";
 import { cn, formatSize, shellQuote } from "@/lib/utils";
 import type { FileWindowTarget } from "@/lib/windowManager";
 import { openAutoUpload, openFilePreview, openRemoteFileEditor } from "@/lib/windowManager";
-import { findOpenFileDocument } from "@/lib/workspaceTabs";
+import {
+  findOpenFileDocument,
+  findSessionPaneById,
+} from "@/lib/workspaceTabs";
 import type {
   AICustomActionConfig,
   FileEntry,
@@ -112,10 +115,13 @@ import {
   FileExplorerPathBar,
 } from "./FileExplorerPathBar";
 import { FileExplorerToolbar } from "./FileExplorerToolbar";
+import FileExplorerEntryContextMenu from "./FileExplorerEntryContextMenu";
+import FileExplorerTree from "./FileExplorerTree";
 import { FileListItem } from "./FileListItem";
 import {
   buildMoveSuccessRefreshPlan,
   buildRemoteUploadPath,
+  buildMoveTargetPath,
   buildSessionCacheSnapshot,
   canTrackTerminalCwd,
   compareFileEntries,
@@ -146,6 +152,8 @@ import {
   matchesFileSearch,
   normalizeDirectoryPath,
   normalizeExplorerPath,
+  normalizeFileExplorerViewMode,
+  pathStartsWithDirectory,
   PARENT_DIRECTORY_ENTRY,
   PARENT_DIRECTORY_ENTRY_NAME,
   pushVisitedHistory,
@@ -157,6 +165,13 @@ import {
   type TextFileOpenResult,
 } from "./model";
 import { useExternalFileDrop } from "./useExternalFileDrop";
+import {
+  clearFileExplorerTreeSessionCache,
+  getTreeRootPath,
+  type FileExplorerTreeEntry,
+  type FileExplorerTreeRow,
+} from "./fileExplorerTreeModel";
+import { useFileExplorerTree } from "./useFileExplorerTree";
 
 const MemoizedFileExplorer = memo(FileExplorer);
 
@@ -696,6 +711,7 @@ export function FileExplorerPane({
     updateUi,
     savedConnections,
     tabs,
+    activeTabId,
     setActivePane,
     openFileDocument,
     syncGroups,
@@ -769,6 +785,18 @@ export function FileExplorerPane({
   const [propertiesDialogData, setPropertiesDialogData] = useState<PropertiesDialogData | null>(
     null,
   );
+  const [newItemDialogData, setNewItemDialogData] =
+    useState<NewItemDialogData | null>(null);
+  const [newSymlinkDialogData, setNewSymlinkDialogData] =
+    useState<NewSymlinkDialogData | null>(null);
+  const [propertiesDialogData, setPropertiesDialogData] =
+    useState<PropertiesDialogData | null>(null);
+  const [treeContextRow, setTreeContextRow] =
+    useState<FileExplorerTreeRow | null>(null);
+  const [treeRevealRequest, setTreeRevealRequest] = useState<{
+    id: number;
+    path: string;
+  } | null>(null);
   const [cwdTrackingActive, setCwdTrackingActive] = useState(false);
   const [visitedHistory, setVisitedHistory] = useState<string[]>([]);
   const alwaysUploadFilesRef = useRef<Set<string>>(new Set());
@@ -779,6 +807,7 @@ export function FileExplorerPane({
   const explorerBackendRef = useRef<FileExplorerBackendKind>(explorerBackend);
   const currentPathRef = useRef("");
   const currentPathRawTokenRef = useRef<string | undefined>(undefined);
+  const directoryLoadGenerationRef = useRef(0);
   const homeDirRef = useRef("");
   const listContainerRef = useRef<HTMLDivElement | null>(null);
   const explorerRootRef = useRef<HTMLElement | null>(null);
@@ -837,12 +866,12 @@ export function FileExplorerPane({
       path,
     );
   }, []);
-  const autoSyncConnectionIds = appSettings.ui.file_explorer_auto_sync_cwd_connection_ids ?? [];
-  const autoSyncScopeId = explorerBackend === "local" ? "local" : (activeConnectionId ?? null);
-  const autoSyncCwd =
-    !isStorageExplorerBackend(explorerBackend) &&
-    !!autoSyncScopeId &&
-    autoSyncConnectionIds.includes(autoSyncScopeId);
+  const autoSyncConnectionIds =
+    appSettings.ui.file_explorer_auto_sync_cwd_connection_ids ?? [];
+  const autoSyncScopeId =
+    explorerBackend === "local"
+      ? "local"
+      : activeConnectionId ?? (hasLocalSession ? "local" : null);
   const favoriteDirectoriesByConnection =
     appSettings.ui.file_explorer_favorite_dirs_by_connection_id ?? {};
   const favoriteScopeId = explorerBackend === "local" ? "local" : (activeConnectionId ?? null);
@@ -854,6 +883,28 @@ export function FileExplorerPane({
   );
   const supportsHiddenFilesToggle = explorerBackend !== "s3" && explorerBackend !== "webdav";
   const showHiddenFiles = supportsHiddenFilesToggle ? showHiddenFilesPreference : true;
+  const fileExplorerViewMode = normalizeFileExplorerViewMode(
+    appSettings.ui.file_explorer_view_mode,
+  );
+  const isTreeView = fileExplorerViewMode === "tree";
+  const autoSyncCwd =
+    !isTreeView &&
+    !isStorageExplorerBackend(explorerBackend) &&
+    !!autoSyncScopeId &&
+    autoSyncConnectionIds.includes(autoSyncScopeId);
+  const treeRevealRequestIdRef = useRef(0);
+  const requestTreeReveal = useCallback(
+    (path: string) => {
+      const normalizedPath = normalizeExplorerPath(path, explorerBackend);
+      if (!normalizedPath) return;
+      treeRevealRequestIdRef.current += 1;
+      setTreeRevealRequest({
+        id: treeRevealRequestIdRef.current,
+        path: normalizedPath,
+      });
+    },
+    [explorerBackend],
+  );
   const listScrollResetKey = `${activeSessionId ?? ""}:${currentPath}`;
   const listFilterResetKey = `${fileSearchQuery}:${fileSortMode.column}:${fileSortMode.direction}`;
   const activeConnection = useMemo(
@@ -873,6 +924,23 @@ export function FileExplorerPane({
       }),
     [activeConnection, activeSessionName, explorerBackend, t],
   );
+  const activeFilePath = useMemo(() => {
+    const activeTab = activeTabId
+      ? tabs.find((tab) => tab.id === activeTabId)
+      : null;
+    const activePane = activeTab
+      ? findSessionPaneById(activeTab.root, activeTab.activePaneId)
+      : null;
+    if (
+      !activePane ||
+      activePane.paneKind !== "file" ||
+      activePane.sessionId !== activeSessionId ||
+      activePane.file.backend !== explorerBackend
+    ) {
+      return null;
+    }
+    return activePane.file.path;
+  }, [activeSessionId, activeTabId, explorerBackend, tabs]);
 
   useEffect(() => {
     if (!onDirectoryStateChange) return;
@@ -888,6 +956,12 @@ export function FileExplorerPane({
   }, [activeSessionId, canBrowseFiles, currentPath, explorerBackend, onDirectoryStateChange]);
 
   useEffect(() => {
+    if (isTreeView) {
+      setListScrollTop(0);
+      setListViewportHeight(0);
+      return;
+    }
+
     const container = listContainerRef.current;
     if (!container) {
       setListScrollTop(0);
@@ -929,9 +1003,10 @@ export function FileExplorerPane({
         window.cancelAnimationFrame(scrollFrame);
       }
     };
-  }, []);
+  }, [isTreeView]);
 
   useEffect(() => {
+    if (isTreeView) return;
     if (!listScrollResetKey && !listContainerRef.current) {
       setListScrollTop(0);
       return;
@@ -943,9 +1018,10 @@ export function FileExplorerPane({
       container.scrollLeft = 0;
     }
     setListScrollTop(0);
-  }, [listScrollResetKey]);
+  }, [isTreeView, listScrollResetKey]);
 
   useEffect(() => {
+    if (isTreeView) return;
     if (!listFilterResetKey && !listContainerRef.current) {
       setListScrollTop(0);
       return;
@@ -957,7 +1033,7 @@ export function FileExplorerPane({
       container.scrollLeft = 0;
     }
     setListScrollTop(0);
-  }, [listFilterResetKey]);
+  }, [isTreeView, listFilterResetKey]);
 
   useLayoutEffect(() => {
     const preserved = pendingPreserveScrollRef.current;
@@ -989,14 +1065,20 @@ export function FileExplorerPane({
     return () => window.cancelAnimationFrame(frame);
   }, [isFileSearchExpanded]);
 
-  const resolveUploadTarget = useCallback(() => {
-    if (!activeSessionId || !canUseRemoteTransfer) return null;
+  const resolveUploadTarget = useCallback(
+    (directoryPath = currentPathRef.current) => {
+      if (!activeSessionId || !canUseRemoteTransfer) return null;
 
-    return {
-      sessionId: activeSessionId,
-      remoteDir: normalizeDirectoryPath(currentPathRef.current) || homeDirRef.current || "/",
-    };
-  }, [activeSessionId, canUseRemoteTransfer]);
+      return {
+        sessionId: activeSessionId,
+        remoteDir:
+          normalizeDirectoryPath(directoryPath) ||
+          homeDirRef.current ||
+          "/",
+      };
+    },
+    [activeSessionId, canUseRemoteTransfer],
+  );
 
   useEffect(() => {
     return () => {
@@ -1056,8 +1138,9 @@ export function FileExplorerPane({
         for (const cacheKey of [...cache.keys()]) {
           const sessionId = getSessionIdFromFileExplorerSessionCacheKey(cacheKey);
           if (!liveIds.has(sessionId)) {
-            cache.delete(cacheKey);
-            prunedSessionIds.add(sessionId);
+            cache.delete(sessionId);
+            clearDirectoryChildrenCacheForSession(sessionId);
+            clearFileExplorerTreeSessionCache(sessionId);
           }
         }
         for (const sessionId of prunedSessionIds) {
@@ -1184,6 +1267,7 @@ export function FileExplorerPane({
       const backend = explorerBackendRef.current;
       const normalizedPath = normalizeExplorerPath(path, backend);
       if (!normalizedPath) return false;
+      const requestGeneration = ++directoryLoadGenerationRef.current;
       const historyMode = options?.history ?? "push";
       const pathUnchanged =
         normalizeExplorerPath(currentPathRef.current, backend) === normalizedPath;
@@ -1209,7 +1293,8 @@ export function FileExplorerPane({
 
       try {
         const entries =
-          backend === "local"
+          options?.entries ??
+          (backend === "local"
             ? await invoke<FileEntry[]>("list_local_dir", {
                 sessionId: activeSessionId,
                 path: normalizedPath,
@@ -1236,7 +1321,13 @@ export function FileExplorerPane({
                       sessionId: activeSessionId,
                       path: normalizedPath,
                       rawPathToken,
-                    });
+                    }));
+
+        if (requestGeneration !== directoryLoadGenerationRef.current) {
+          // A newer navigation owns the explorer state. Treat this request as
+          // superseded so startup fallbacks cannot navigate back to /home.
+          return true;
+        }
 
         const pathChanged = !pathUnchanged;
         if (historyMode === "push") {
@@ -1307,6 +1398,9 @@ export function FileExplorerPane({
         return true;
       } catch (e) {
         pendingPreserveScrollRef.current = null;
+        if (requestGeneration !== directoryLoadGenerationRef.current) {
+          return true;
+        }
         if (options?.silent) {
           return false;
         }
@@ -1321,7 +1415,7 @@ export function FileExplorerPane({
         }
         return false;
       } finally {
-        if (!silentRefresh) {
+        if (requestGeneration === directoryLoadGenerationRef.current) {
           setDirectoryLoading(false);
         }
       }
@@ -1341,6 +1435,49 @@ export function FileExplorerPane({
         history: "preserve",
         silent: true,
         ...options,
+      });
+    },
+    [loadDirectory],
+  );
+
+  // Tree expansion uses the existing one-directory commands so the remote
+  // SFTP/SCP fallback remains unchanged. It deliberately does not call the
+  // current-directory loader, which would mutate navigation history.
+  const treeRootPath = getTreeRootPath(
+    currentPath || homeDir,
+    homeDir,
+    explorerBackend,
+  );
+  const treeInitialRootEntries =
+    treeRootPath &&
+    currentPath &&
+    isSameExplorerDirectory(currentPath, treeRootPath, explorerBackend)
+      ? files
+      : null;
+  const loadTreeDirectoryEntries = useCallback(
+    async (path: string, rawPathToken?: string) => {
+      if (!activeSessionId || !canBrowseFiles || !isTreeView) return [];
+      const backend = explorerBackendRef.current;
+      const normalizedPath = normalizeExplorerPath(path, backend);
+      if (!normalizedPath) return [];
+      return backend === "local"
+        ? invoke<FileEntry[]>("list_local_dir", {
+            sessionId: activeSessionId,
+            path: normalizedPath,
+          })
+        : invoke<FileEntry[]>("list_remote_dir", {
+            sessionId: activeSessionId,
+            path: normalizedPath,
+            rawPathToken,
+          });
+    },
+    [activeSessionId, canBrowseFiles, isTreeView],
+  );
+  const handleTreeDirectorySelected = useCallback(
+    (target: FileExplorerTreeEntry, entries: FileEntry[]) => {
+      void loadDirectory(target.path, {
+        rawPathToken: target.rawPathToken,
+        entries,
       });
     },
     [loadDirectory],
@@ -1405,6 +1542,116 @@ export function FileExplorerPane({
       window.removeEventListener("keydown", handleRefreshShortcut, true);
     };
   }, [appSettings.keybindings, canBrowseFiles, handleManualRefresh]);
+  const treeState = useFileExplorerTree({
+    sessionId: activeSessionId ?? "",
+    enabled: canBrowseFiles && isTreeView,
+    backend: explorerBackend,
+    rootPath: treeRootPath,
+    rootRawPathToken:
+      treeInitialRootEntries !== null
+        ? currentPathRawTokenRef.current
+        : undefined,
+    homeDir,
+    currentPath,
+    showHiddenFiles,
+    initialRootEntries: treeInitialRootEntries,
+    loadDirectory: loadTreeDirectoryEntries,
+    onDirectorySelected: handleTreeDirectorySelected,
+  });
+  useEffect(() => {
+    if (!isTreeView || !currentPath) return;
+    requestTreeReveal(currentPath);
+  }, [currentPath, isTreeView, requestTreeReveal]);
+
+  const selectedTreeRows = treeState.selectedRows.filter((row) => !row.isRoot);
+  const getTreeOperationDirectoryPath = () => {
+    if (selectedTreeRows.length === 1) {
+      const row = selectedTreeRows[0];
+      return row.entry.is_dir ? row.path : row.parentPath;
+    }
+    return currentPathRef.current || homeDirRef.current;
+  };
+  const invalidateTreeDirectories = treeState.invalidateDirectories;
+  const clearTreeSelection = treeState.clearSelection;
+  const refreshAllTree = treeState.refreshAll;
+
+  const handleLocatePath = useCallback(async () => {
+    if (!isTreeView || !activeSessionId || !canBrowseFiles) return;
+    try {
+      const normalizedActiveFilePath = normalizeExplorerPath(
+        activeFilePath ?? "",
+        explorerBackend,
+      );
+      if (normalizedActiveFilePath) {
+        requestTreeReveal(normalizedActiveFilePath);
+        await treeState.revealPath(normalizedActiveFilePath, {
+          targetType: "file",
+        });
+        return;
+      }
+
+      const cwd = await invoke<string | null>("try_get_terminal_cwd", {
+        sessionId: activeSessionId,
+      });
+      const normalizedCwd = normalizeExplorerPath(cwd ?? "", explorerBackend);
+      if (!normalizedCwd) {
+        toast.error(t("fileExplorer.targetCwdUnavailable"));
+        return;
+      }
+      const loaded = await loadDirectory(normalizedCwd, {
+        history: "preserve",
+      });
+      if (!loaded) return;
+      requestTreeReveal(normalizedCwd);
+      void treeState.revealPath(normalizedCwd).catch(() => {});
+    } catch (error) {
+      toast.error(`${t("fileExplorer.syncFailed")}: ${getErrorMessage(error)}`);
+    }
+  }, [
+    activeFilePath,
+    activeSessionId,
+    canBrowseFiles,
+    explorerBackend,
+    isTreeView,
+    loadDirectory,
+    requestTreeReveal,
+    t,
+    treeState.revealPath,
+  ]);
+
+  const refreshExplorerDirectories = useCallback(
+    async (paths: string[]) => {
+      const backend = explorerBackendRef.current;
+      const normalizedPaths = [
+        ...new Set(
+          paths
+            .map((path) => normalizeExplorerPath(path, backend))
+            .filter((path): path is string => !!path),
+        ),
+      ];
+      if (normalizedPaths.length === 0) return false;
+
+      for (const path of normalizedPaths) {
+        clearDirectoryChildrenCacheForPath(
+          activeSessionIdRef.current,
+          backend,
+          path,
+        );
+      }
+      if (isTreeView) {
+        invalidateTreeDirectories(normalizedPaths);
+      }
+
+      const current = currentPathRef.current;
+      const currentNeedsRefresh = normalizedPaths.some((path) =>
+        isSameExplorerDirectory(path, current, backend),
+      );
+      if (!currentNeedsRefresh) return true;
+      return loadDirectory(current, { history: "preserve" });
+    },
+    [isTreeView, invalidateTreeDirectories, loadDirectory],
+  );
+
 
   const uploadLocalEntriesToTarget = useCallback(
     (
@@ -1497,6 +1744,11 @@ export function FileExplorerPane({
     const prevId = prevSessionIdRef.current;
     const backend = explorerBackendRef.current;
 
+    if (prevId !== activeSessionId) {
+      currentPathRawTokenRef.current = undefined;
+      directoryLoadGenerationRef.current += 1;
+    }
+
     if (prevId && prevId !== activeSessionId) {
       const snapshot = buildSessionCacheSnapshot(
         filesRef.current,
@@ -1514,6 +1766,7 @@ export function FileExplorerPane({
     prevSessionIdRef.current = activeSessionId;
 
     if (!canBrowseFiles || !activeSessionId) {
+      directoryLoadGenerationRef.current += 1;
       setFiles([]);
       setCurrentPath("");
       setHomeDir("");
@@ -1695,22 +1948,18 @@ export function FileExplorerPane({
         return;
       }
 
-      const backend = explorerBackendRef.current;
-      const visibleDir = normalizeExplorerPath(currentPathRef.current, backend);
-      if (!visibleDir) return;
-
-      const pathForBackend = backend === "local" ? payload.local_path : payload.remote_path;
-      if (!pathForBackend) return;
-
-      const relevantDirection =
-        backend === "local"
-          ? payload.direction === "download" || payload.direction === "copy"
-          : payload.direction === "upload" || payload.direction === "copy";
-      if (!relevantDirection) return;
-
-      const parentDir = getExplorerParentDirectory(pathForBackend, backend);
-      const normalizedPath = normalizeExplorerPath(pathForBackend, backend);
-      if (parentDir !== visibleDir && normalizedPath !== visibleDir) {
+      const visibleDir = normalizeExplorerPath(
+        currentPathRef.current,
+        "remote",
+      );
+      const uploadedParent = getExplorerParentDirectory(
+        payload.remote_path,
+        "remote",
+      );
+      if (isTreeView) {
+        invalidateTreeDirectories([uploadedParent]);
+      }
+      if (!visibleDir || uploadedParent !== visibleDir) {
         return;
       }
 
@@ -1742,7 +1991,7 @@ export function FileExplorerPane({
         refreshUploadCompletionTimerRef.current = null;
       }
     };
-  }, [refreshCurrentDirectory]);
+  }, [isTreeView, invalidateTreeDirectories, refreshCurrentDirectory]);
 
   const visibleFiles = useMemo(
     () => (showHiddenFiles ? files : files.filter((entry) => !entry.name.startsWith("."))),
@@ -1782,13 +2031,20 @@ export function FileExplorerPane({
   }, [activeSessionId, currentPath]);
 
   useEffect(() => {
+    if (isTreeView) return;
     setInlineRenameState((prev) => {
       if (!prev || filteredSortedFiles.some((entry) => entry.name === prev.entryName)) {
         return prev;
       }
       return null;
     });
-  }, [filteredSortedFiles]);
+  }, [filteredSortedFiles, isTreeView]);
+
+  useEffect(() => {
+    if (!isTreeView) return;
+    setIsFileSearchExpanded(false);
+    setIsEditingPath(false);
+  }, [isTreeView]);
 
   const isFileSearchActive = fileSearchQuery.trim().length > 0;
   const fileListGridTemplate = useMemo(
@@ -2081,44 +2337,47 @@ export function FileExplorerPane({
     }
   };
 
-  const handleNewFile = () => {
+  const handleNewFile = (directoryPath = currentPath) => {
     if (!activeSessionId) return;
     setNewItemDialogData({
       sessionId: activeSessionId,
       connectionId: activeConnectionId ?? undefined,
       backend: explorerBackend,
-      currentDirPath: currentPath,
+      currentDirPath: directoryPath,
       type: "file",
     });
   };
 
-  const handleNewFolder = () => {
+  const handleNewFolder = (directoryPath = currentPath) => {
     if (!activeSessionId) return;
     setNewItemDialogData({
       sessionId: activeSessionId,
       connectionId: activeConnectionId ?? undefined,
       backend: explorerBackend,
-      currentDirPath: currentPath,
+      currentDirPath: directoryPath,
       type: "folder",
     });
   };
 
-  const handleNewSymlink = () => {
+  const handleNewSymlink = (directoryPath = currentPath) => {
     if (!activeSessionId) return;
     setNewSymlinkDialogData({
       sessionId: activeSessionId,
-      currentDirPath: currentPath,
+      currentDirPath: directoryPath,
     });
   };
 
-  const handleCurrentDirProperties = () => {
-    if (!activeSessionId || !currentPath) return;
-    const name = getLocalPathName(currentPath, currentPath);
+  const handleCurrentDirProperties = (
+    directoryPath = currentPath,
+    rawPathToken = currentPathRawTokenRef.current,
+  ) => {
+    if (!activeSessionId || !directoryPath) return;
+    const name = getLocalPathName(directoryPath, directoryPath);
     setPropertiesDialogData({
       sessionId: activeSessionId,
       backend: explorerBackend,
-      fullPath: currentPath,
-      rawPathToken: currentPathRawTokenRef.current,
+      fullPath: directoryPath,
+      rawPathToken,
       name,
       is_dir: true,
     });
@@ -2191,10 +2450,28 @@ export function FileExplorerPane({
     }),
     [selectedRealFiles, visibleFiles],
   );
+  const treeFooterStats = useMemo(() => {
+    const treeRows = treeState.rows.filter((row) => !row.isRoot);
+    const selectedFileSize = selectedTreeRows.reduce(
+      (sum, row) => (row.entry.is_dir ? sum : sum + row.entry.size),
+      0,
+    );
+    const totalFileSize = treeRows.reduce(
+      (sum, row) => (row.entry.is_dir ? sum : sum + row.entry.size),
+      0,
+    );
+    return {
+      selectedFileSize,
+      selectedItemCount: selectedTreeRows.length,
+      totalFileSize,
+      totalItemCount: treeRows.length,
+    };
+  }, [selectedTreeRows, treeState.rows]);
+  const activeFooterStats = isTreeView ? treeFooterStats : footerStats;
   const footerSizeText =
-    footerStats.selectedItemCount > 0 && footerStats.selectedFileSize > 0
-      ? `${formatSize(footerStats.selectedFileSize)}/${formatSize(footerStats.totalFileSize)}`
-      : formatSize(footerStats.totalFileSize);
+    activeFooterStats.selectedItemCount > 0 && activeFooterStats.selectedFileSize > 0
+      ? `${formatSize(activeFooterStats.selectedFileSize)}/${formatSize(activeFooterStats.totalFileSize)}`
+      : formatSize(activeFooterStats.totalFileSize);
   const fileAiActions = useMemo(
     () =>
       appSettings.ai.enabled
@@ -2215,7 +2492,7 @@ export function FileExplorerPane({
     openDeleteDialog(selectedRealFiles);
   };
 
-  const handlePreview = async (entry: FileEntry) => {
+  const handlePreview = async (entry: FileEntry, fullPath?: string) => {
     if (
       !activeSessionId ||
       entry.is_dir ||
@@ -2224,11 +2501,13 @@ export function FileExplorerPane({
       explorerBackend === "webdav"
     )
       return;
+    const resolvedPath =
+      fullPath || joinExplorerPath(currentPath, entry.name, explorerBackend);
     try {
       await openFilePreview({
         sessionId: activeSessionId,
-        backend: explorerBackend,
-        path: getEntryFullPath(entry),
+        backend: explorerBackendRef.current,
+        path: resolvedPath,
         name: entry.name,
         size: entry.size,
         mtime: entry.mtime,
@@ -2243,6 +2522,12 @@ export function FileExplorerPane({
     setShowHiddenFilesPreference((value) => !value);
   }, []);
 
+  const handleToggleViewMode = useCallback(() => {
+    updateUi({
+      file_explorer_view_mode: isTreeView ? "list" : "tree",
+    });
+  }, [isTreeView, updateUi]);
+
   const handleListKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const target = event.target;
     if (
@@ -2255,11 +2540,33 @@ export function FileExplorerPane({
       return;
     }
 
-    if (event.key === "Escape" && !inlineRenameState && selectedFilesRef.current.size > 0) {
-      event.preventDefault();
-      event.stopPropagation();
-      setSelectedFiles(new Set());
-      lastSelectedRef.current = null;
+    if (isTreeView) {
+      if (
+        target instanceof HTMLElement &&
+        target.closest("[data-file-tree-path]")
+      ) {
+        return;
+      }
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        !event.altKey &&
+        !event.shiftKey &&
+        event.key.toLowerCase() === "a"
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        treeState.selectAll();
+      } else if (
+        event.key === "Delete" &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.shiftKey
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        handleTreeDelete(selectedTreeRows);
+      }
       return;
     }
 
@@ -2366,16 +2673,22 @@ export function FileExplorerPane({
     void loadDirectory(parentPath, { selectEntryName: exitedName });
   };
 
-  const handlePanelMouseDownCapture = useCallback((event: ReactMouseEvent<HTMLElement>) => {
-    if (event.button === 3 || event.button === 4) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
-  }, []);
+  const handlePanelMouseDownCapture = useCallback(
+    (event: ReactMouseEvent<HTMLElement>) => {
+      if (
+        !isTreeView &&
+        (event.button === 3 || event.button === 4)
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    },
+    [isTreeView],
+  );
 
   const handlePanelMouseUpCapture = useCallback(
     (event: ReactMouseEvent<HTMLElement>) => {
-      if (!canBrowseFiles) return;
+      if (!canBrowseFiles || isTreeView) return;
 
       if (event.button === 3) {
         event.preventDefault();
@@ -2387,7 +2700,7 @@ export function FileExplorerPane({
         void navigateHistory(1);
       }
     },
-    [canBrowseFiles, navigateHistory],
+    [canBrowseFiles, isTreeView, navigateHistory],
   );
 
   const handleSyncCwd = useCallback(async () => {
@@ -2500,10 +2813,16 @@ export function FileExplorerPane({
   );
 
   const handleAddEntryToFavorites = useCallback(
-    (entry: FileEntry) => {
+    (entry: FileEntry, fullPath?: string) => {
       if (!entry.is_dir || isParentDirectoryEntry(entry)) return;
-      const basePath = currentPathRef.current;
-      addFavoriteDirectory(joinExplorerPath(basePath, entry.name, explorerBackendRef.current));
+      const targetPath =
+        fullPath ||
+        joinExplorerPath(
+          currentPathRef.current,
+          entry.name,
+          explorerBackendRef.current,
+        );
+      addFavoriteDirectory(targetPath);
     },
     [addFavoriteDirectory],
   );
@@ -2524,14 +2843,18 @@ export function FileExplorerPane({
   }, [autoSyncCwd, activeSessionId, loadDirectory]);
 
   const getEntryFullPath = useCallback(
-    (entry: FileEntry) => {
-      return joinExplorerPath(currentPath, entry.name, explorerBackend);
+    (entry: FileEntry, basePath = currentPath) => {
+      return joinExplorerPath(basePath, entry.name, explorerBackend);
     },
     [currentPath, explorerBackend],
   );
 
   const beginInlineRename = useCallback(
-    (entry: FileEntry) => {
+    (
+      entry: FileEntry,
+      targetPath = joinExplorerPath(currentPath, entry.name, explorerBackend),
+      targetParentPath = currentPath,
+    ) => {
       if (!activeSessionId || isParentDirectoryEntry(entry)) return;
 
       dragSelectionRef.current = null;
@@ -2539,7 +2862,8 @@ export function FileExplorerPane({
       setSelectedFiles(new Set([entry.name]));
       setInlineRenameState({
         entryName: entry.name,
-        oldPath: joinExplorerPath(currentPath, entry.name, explorerBackend),
+        oldPath: targetPath,
+        parentPath: targetParentPath,
         oldRawPathToken: entry.raw_path_token,
         initialName: entry.name,
         value: entry.name,
@@ -2563,7 +2887,10 @@ export function FileExplorerPane({
     }
 
     const backend = explorerBackendRef.current;
-    const newPath = joinExplorerPath(currentPathRef.current, newName, backend);
+    const parentPath =
+      normalizeExplorerPath(inlineRenameState.parentPath, backend) ||
+      normalizeExplorerPath(currentPathRef.current, backend);
+    const newPath = joinExplorerPath(parentPath, newName, backend);
     setInlineRenameState((prev) =>
       prev && prev.entryName === inlineRenameState.entryName
         ? { ...prev, value: newName, isSubmitting: true }
@@ -2606,11 +2933,26 @@ export function FileExplorerPane({
           oldRawPathToken: inlineRenameState.oldRawPathToken,
         });
       }
-      invalidateDirectoryChildrenCache(currentPathRef.current);
-      await loadDirectory(currentPathRef.current, {
-        history: "preserve",
-        selectEntryName: newName,
-      });
+      clearDirectoryChildrenCacheForPath(
+        activeSessionIdRef.current,
+        backend,
+        parentPath,
+      );
+      if (isTreeView) {
+        invalidateTreeDirectories([parentPath]);
+      }
+      if (
+        isSameExplorerDirectory(
+          parentPath,
+          currentPathRef.current,
+          backend,
+        )
+      ) {
+        await loadDirectory(parentPath, {
+          history: "preserve",
+          selectEntryName: newName,
+        });
+      }
       setInlineRenameState(null);
     } catch (e) {
       toast.error(getErrorMessage(e));
@@ -2624,7 +2966,8 @@ export function FileExplorerPane({
     activeConnectionId,
     activeSessionId,
     inlineRenameState,
-    invalidateDirectoryChildrenCache,
+    invalidateTreeDirectories,
+    isTreeView,
     loadDirectory,
   ]);
 
@@ -2719,10 +3062,14 @@ export function FileExplorerPane({
     ],
   );
 
-  const handleFileAIAction = async (entry: FileEntry, action: AICustomActionConfig) => {
+  const handleFileAIAction = async (
+    entry: FileEntry,
+    action: AICustomActionConfig,
+    fullPath = getEntryFullPath(entry),
+  ) => {
     if (!activeSessionId) return;
     const backend = explorerBackendRef.current;
-    const filePath = getEntryFullPath(entry);
+    const filePath = fullPath;
     try {
       const result = await invoke<RemoteTextFile>(
         backend === "local" ? "read_local_file_text" : "read_remote_file_text",
@@ -2748,20 +3095,30 @@ export function FileExplorerPane({
     }
   };
 
-  const handleCopyPath = (entry: FileEntry, mode: "dir" | "name" | "full") => {
+  const handleCopyPath = (
+    entry: FileEntry,
+    mode: "dir" | "name" | "full",
+    targetPath?: string,
+    targetParentPath = currentPath,
+  ) => {
     let text = "";
-    if (mode === "dir") text = currentPath;
+    if (mode === "dir") text = targetParentPath;
     else if (mode === "name") text = entry.name;
-    else text = getEntryFullPath(entry);
+    else text = targetPath || getEntryFullPath(entry, targetParentPath);
     navigator.clipboard.writeText(text);
   };
 
-  const handleSendToTerminal = (entry: FileEntry, mode: "dir" | "name" | "full") => {
+  const handleSendToTerminal = (
+    entry: FileEntry,
+    mode: "dir" | "name" | "full",
+    targetPath?: string,
+    targetParentPath = currentPath,
+  ) => {
     if (!activeSessionId) return;
     let text = "";
-    if (mode === "dir") text = currentPath;
+    if (mode === "dir") text = targetParentPath;
     else if (mode === "name") text = entry.name;
-    else text = getEntryFullPath(entry);
+    else text = targetPath || getEntryFullPath(entry, targetParentPath);
 
     sendTextToTerminal(text);
   };
@@ -2773,16 +3130,20 @@ export function FileExplorerPane({
 
   const buildDeleteItems = (entries: FileEntry[]): DeleteDialogItem[] => {
     return entries.map((entry) => ({
-      path: getEntryFullPath(entry),
+      path: pathResolver?.(entry) || getEntryFullPath(entry, basePath),
       name: entry.name,
       rawPathToken: entry.raw_path_token,
       isDirectory: entry.is_dir,
     }));
   };
 
-  const buildMoveItems = (entries: FileEntry[]): MoveDialogItem[] => {
+  const buildMoveItems = (
+    entries: FileEntry[],
+    basePath = currentPath,
+    pathResolver?: (entry: FileEntry) => string,
+  ): MoveDialogItem[] => {
     return entries.map((entry) => ({
-      oldPath: getEntryFullPath(entry),
+      oldPath: pathResolver?.(entry) || getEntryFullPath(entry, basePath),
       oldRawPathToken: entry.raw_path_token,
       name: entry.name,
       isDirectory: entry.is_dir,
@@ -3021,23 +3382,41 @@ export function FileExplorerPane({
   const handleMoveSuccess = (targetDirectory: string) => {
     const backend = explorerBackendRef.current;
     const sourceDirectory =
-      normalizeExplorerPath(currentPathRef.current, backend) ||
-      normalizeExplorerPath(homeDirRef.current, backend);
-    const refreshPlan = buildMoveSuccessRefreshPlan(sourceDirectory, targetDirectory, backend);
+      normalizeExplorerPath(
+        moveDialogData?.sourceDirectory ?? currentPathRef.current,
+        backend,
+      ) || normalizeExplorerPath(homeDirRef.current, backend);
+    const refreshPlan = buildMoveSuccessRefreshPlan(
+      sourceDirectory,
+      targetDirectory,
+      backend,
+    );
+    const movedCurrentDirectory = moveDialogData?.items.find(
+      (item) =>
+        item.isDirectory &&
+        isSameExplorerDirectory(
+          item.oldPath,
+          currentPathRef.current,
+          backend,
+        ),
+    );
+    const nextCurrentPath = movedCurrentDirectory
+      ? buildMoveTargetPath(targetDirectory, movedCurrentDirectory.name, backend)
+      : null;
     setSelectedFiles(new Set());
     lastSelectedRef.current = null;
+    clearTreeSelection();
     if (refreshPlan?.shouldClearSelection) {
-      clearDirectoryChildrenCacheForPath(
-        activeSessionIdRef.current,
-        backend,
-        refreshPlan.sourceDirectory,
-      );
-      clearDirectoryChildrenCacheForPath(
-        activeSessionIdRef.current,
-        backend,
+      const sourceDirectories = moveDialogData?.items.map((item) =>
+        getExplorerParentDirectory(item.oldPath, backend),
+      ) ?? [refreshPlan.sourceDirectory];
+      void refreshExplorerDirectories([
+        ...sourceDirectories,
         refreshPlan.targetDirectory,
-      );
-      void loadDirectory(refreshPlan.sourceDirectory, { history: "preserve" });
+      ]);
+      if (nextCurrentPath) {
+        void loadDirectory(nextCurrentPath);
+      }
     }
   };
 
@@ -3054,8 +3433,13 @@ export function FileExplorerPane({
   const sanitizeDownloadFileName = async (name: string): Promise<string> =>
     invoke<string>("sanitize_download_file_name", { name });
 
-  const downloadEntries = async (entries: FileEntry[]) => {
+  const downloadEntries = async (
+    entries: FileEntry[],
+    pathResolver?: (entry: FileEntry) => string,
+  ) => {
     if (!activeSessionId || entries.length === 0) return;
+    const resolveEntryPath = (entry: FileEntry) =>
+      pathResolver?.(entry) ?? getEntryFullPath(entry);
 
     try {
       const askEach = appSettings.transfer.ask_save_location;
@@ -3078,7 +3462,7 @@ export function FileExplorerPane({
             downloads.push({
               sessionId: activeSessionId,
               fileName: entry.name,
-              remotePath: getEntryFullPath(entry),
+              remotePath: resolveEntryPath(entry),
               localPath,
               kind: "directory",
             });
@@ -3088,7 +3472,7 @@ export function FileExplorerPane({
             downloads.push({
               sessionId: activeSessionId,
               fileName: entry.name,
-              remotePath: getEntryFullPath(entry),
+              remotePath: resolveEntryPath(entry),
               localPath,
               kind: "file",
             });
@@ -3103,7 +3487,7 @@ export function FileExplorerPane({
             downloads.push({
               sessionId: activeSessionId,
               fileName: entry.name,
-              remotePath: getEntryFullPath(entry),
+              remotePath: resolveEntryPath(entry),
               localPath,
               kind: entry.is_dir ? "directory" : "file",
             });
@@ -3121,7 +3505,7 @@ export function FileExplorerPane({
         downloads.push({
           sessionId: activeSessionId,
           fileName: entry.name,
-          remotePath: getEntryFullPath(entry),
+          remotePath: resolveEntryPath(entry),
           localPath,
           kind: entry.is_dir ? "directory" : "file",
         });
@@ -3157,9 +3541,9 @@ export function FileExplorerPane({
     await handleDownload(entry);
   };
 
-  const handleUploadFiles = async () => {
+  const handleUploadFiles = async (directoryPath = currentPath) => {
     if (!canUseRemoteTransfer) return;
-    const target = resolveUploadTarget();
+    const target = resolveUploadTarget(directoryPath);
     if (!target) return;
 
     try {
@@ -3186,9 +3570,9 @@ export function FileExplorerPane({
     }
   };
 
-  const handleUploadFolder = async () => {
+  const handleUploadFolder = async (directoryPath = currentPath) => {
     if (!canUseRemoteTransfer) return;
-    const target = resolveUploadTarget();
+    const target = resolveUploadTarget(directoryPath);
     if (!target) return;
 
     try {
@@ -3215,11 +3599,17 @@ export function FileExplorerPane({
     }
   };
 
-  const handleOpenExternal = async (entry: FileEntry) => {
+  const handleOpenExternal = async (
+    entry: FileEntry,
+    fullPath = getEntryFullPath(entry),
+  ) => {
     if (!activeSessionId || entry.is_dir) return;
     if (explorerBackendRef.current === "local") {
       try {
-        await openPath(getEntryFullPath(entry), appSettings.transfer.default_editor || undefined);
+        await openPath(
+          fullPath,
+          appSettings.transfer.default_editor || undefined,
+        );
       } catch (e) {
         toast.error(getErrorMessage(e));
       }
@@ -3234,7 +3624,7 @@ export function FileExplorerPane({
       localPath = await join(tDir, "nyaterm", activeSessionId, downloadTimestamp, safeName);
       await invoke("download_remote_file", {
         sessionId: activeSessionId,
-        remotePath: getEntryFullPath(entry),
+        remotePath: fullPath,
         localPath,
       });
     } catch (e) {
@@ -3252,7 +3642,7 @@ export function FileExplorerPane({
       await invoke("start_file_watch", {
         sessionId: activeSessionId,
         localPath,
-        remotePath: getEntryFullPath(entry),
+        remotePath: fullPath,
       });
 
       await openPath(localPath, appSettings.transfer.default_editor || undefined);
@@ -3261,7 +3651,10 @@ export function FileExplorerPane({
     }
   };
 
-  const handleOpenInternal = async (entry: FileEntry) => {
+  const handleOpenInternal = async (
+    entry: FileEntry,
+    fullPath = getEntryFullPath(entry),
+  ) => {
     const backend = explorerBackendRef.current;
     if (
       !activeSessionId ||
@@ -3274,7 +3667,7 @@ export function FileExplorerPane({
       return;
     }
 
-    const path = getEntryFullPath(entry);
+    const path = fullPath;
     if (resolveInternalEditorDisplay(appSettings.transfer.internal_editor_display) === "window") {
       try {
         await openRemoteFileEditor({
@@ -3315,9 +3708,9 @@ export function FileExplorerPane({
               : "fileExplorer.unsupportedEncodingOpenExternal",
           ),
         );
-        await handleOpenExternal(entry);
-        return;
-      }
+      await handleOpenExternal(entry, fullPath);
+      return;
+    }
 
       openFileDocument({
         sessionId: activeSessionId,
@@ -3339,12 +3732,369 @@ export function FileExplorerPane({
     }
   };
 
-  const handleOpenDefault = async (entry: FileEntry) => {
+  const handleOpenDefault = async (
+    entry: FileEntry,
+    fullPath = getEntryFullPath(entry),
+  ) => {
     if (resolveFileEditorOpenTarget(appSettings.transfer) !== "external") {
-      await handleOpenInternal(entry);
+      await handleOpenInternal(entry, fullPath);
       return;
     }
-    await handleOpenExternal(entry);
+    await handleOpenExternal(entry, fullPath);
+  };
+
+  const treeActionRows = useCallback(
+    (target: FileExplorerTreeRow) => {
+      if (target.isRoot) return [];
+      const selected = treeState.selectedRows.filter((row) => !row.isRoot);
+      return selected.some((row) => row.path === target.path) ? selected : [target];
+    },
+    [treeState.selectedRows],
+  );
+
+  const activateTreeFileParent = useCallback(
+    async (row: FileExplorerTreeRow) => {
+      if (row.entry.is_dir) return true;
+      const parentPath = normalizeExplorerPath(
+        row.parentPath,
+        explorerBackendRef.current,
+      );
+      if (!parentPath) return false;
+      if (
+        isSameExplorerDirectory(
+          parentPath,
+          currentPathRef.current,
+          explorerBackendRef.current,
+        )
+      ) {
+        return true;
+      }
+
+      const parentSnapshot = treeState.getDirectorySnapshot(parentPath);
+      return loadDirectory(
+        parentSnapshot?.path ?? parentPath,
+        parentSnapshot
+          ? {
+              rawPathToken: parentSnapshot.rawPathToken,
+              entries: parentSnapshot.entries,
+            }
+          : undefined,
+      );
+    },
+    [loadDirectory, treeState.getDirectorySnapshot],
+  );
+
+  const handleTreeOpenDirectory = useCallback(
+    (row: FileExplorerTreeRow) => {
+      if (!row.entry.is_dir) return;
+      const snapshot = treeState.getDirectorySnapshot(row.path);
+      if (snapshot) {
+        void loadDirectory(snapshot.path, {
+          rawPathToken: snapshot.rawPathToken,
+          entries: snapshot.entries,
+        });
+      } else {
+        treeState.activateDirectory(row);
+      }
+      if (!row.isRoot && !row.entry.is_symlink && !row.isExpanded) {
+        treeState.toggleDirectory(row);
+      }
+    },
+    [loadDirectory, treeState.activateDirectory, treeState.getDirectorySnapshot, treeState.toggleDirectory],
+  );
+
+  const handleTreePreview = (row: FileExplorerTreeRow) => {
+    void (async () => {
+      await activateTreeFileParent(row);
+      await handlePreview(row.entry, row.path);
+    })();
+  };
+
+  const handleTreeOpenDefault = (row: FileExplorerTreeRow) => {
+    void (async () => {
+      await activateTreeFileParent(row);
+      await handleOpenDefault(row.entry, row.path);
+    })();
+  };
+
+  const handleTreeOpenInternal = (row: FileExplorerTreeRow) => {
+    void (async () => {
+      await activateTreeFileParent(row);
+      await handleOpenInternal(row.entry, row.path);
+    })();
+  };
+
+  const handleTreeOpenExternal = (row: FileExplorerTreeRow) => {
+    void (async () => {
+      await activateTreeFileParent(row);
+      await handleOpenExternal(row.entry, row.path);
+    })();
+  };
+
+  const handleTreeRefresh = useCallback(
+    (row?: FileExplorerTreeRow | null) => {
+      const backend = explorerBackendRef.current;
+      if (!row) {
+        refreshAllTree();
+        const current = normalizeExplorerPath(
+          currentPathRef.current || homeDirRef.current,
+          backend,
+        );
+        if (!current) return;
+        clearDirectoryChildrenCacheForPath(
+          activeSessionIdRef.current,
+          backend,
+          current,
+        );
+        void loadDirectory(current, { history: "preserve" });
+        return;
+      }
+
+      const targetPath = row.entry.is_dir ? row.path : row.parentPath;
+      const normalizedPath = normalizeExplorerPath(targetPath, backend);
+      if (!normalizedPath) return;
+
+      void refreshExplorerDirectories([normalizedPath]);
+    },
+    [loadDirectory, refreshAllTree, refreshExplorerDirectories],
+  );
+
+  const handleTreeDelete = (rows: FileExplorerTreeRow[]) => {
+    if (!activeSessionId || rows.length === 0) return;
+    const pathByEntry = new Map(rows.map((row) => [row.entry, row.path]));
+    const entries = rows.map((row) => row.entry);
+    setDeleteDialogData({
+      sessionId: activeSessionId,
+      backend: explorerBackend,
+      items: buildDeleteItems(
+        entries,
+        currentPath,
+        (entry) => pathByEntry.get(entry) ?? currentPath,
+      ),
+    });
+  };
+
+  const handleTreeMove = (rows: FileExplorerTreeRow[]) => {
+    if (!activeSessionId || rows.length === 0) return;
+    const pathByEntry = new Map(rows.map((row) => [row.entry, row.path]));
+    const entries = rows.map((row) => row.entry);
+    setMoveDialogData({
+      sessionId: activeSessionId,
+      backend: explorerBackend,
+      sourceDirectory: rows[0]?.parentPath ?? currentPath,
+      initialTargetDirectory: currentPath,
+      items: buildMoveItems(
+        entries,
+        currentPath,
+        (entry) => pathByEntry.get(entry) ?? currentPath,
+      ),
+    });
+  };
+
+  const handleTreeDownload = (rows: FileExplorerTreeRow[]) => {
+    if (rows.length === 0) return;
+    const pathByEntry = new Map(rows.map((row) => [row.entry, row.path]));
+    void downloadEntries(
+      rows.map((row) => row.entry),
+      (entry) => pathByEntry.get(entry) ?? getEntryFullPath(entry),
+    );
+  };
+
+  const handleTreeAddToFavorites = useCallback(
+    (row: FileExplorerTreeRow) => {
+      if (!row.isRoot && row.entry.is_dir) {
+        addFavoriteDirectory(row.path);
+      }
+    },
+    [addFavoriteDirectory],
+  );
+
+  const handleTreeCopyPath = (
+    row: FileExplorerTreeRow,
+    mode: "dir" | "name" | "full",
+  ) => {
+    handleCopyPath(
+      row.entry,
+      mode,
+      row.path,
+      row.isRoot ? row.path : row.parentPath,
+    );
+  };
+
+  const handleTreeSendToTerminal = (
+    row: FileExplorerTreeRow,
+    mode: "dir" | "name" | "full",
+  ) => {
+    handleSendToTerminal(
+      row.entry,
+      mode,
+      row.path,
+      row.isRoot ? row.path : row.parentPath,
+    );
+  };
+
+  const handleTreeProperties = useCallback((row: FileExplorerTreeRow) => {
+    if (!activeSessionId) return;
+    setPropertiesDialogData({
+      sessionId: activeSessionId,
+      backend: explorerBackend,
+      fullPath: row.path,
+      rawPathToken: row.rawPathToken,
+      name: row.entry.name,
+      is_dir: row.entry.is_dir,
+    });
+  }, [activeSessionId, explorerBackend]);
+
+  const handleTreeAIAction = (
+    row: FileExplorerTreeRow,
+    action: AICustomActionConfig,
+  ) => {
+    void handleFileAIAction(row.entry, action, row.path);
+  };
+
+  const handleTreeSendToPeer = useCallback(
+    (rows: FileExplorerTreeRow[]) => {
+      if (!activeSessionId || rows.length === 0) return;
+      if (!peerEndpoint) {
+        onOpenPeerSelector?.();
+        return;
+      }
+      onSendEntries?.(
+        {
+          sessionId: activeSessionId,
+          kind: explorerBackend,
+          currentPath: rows[0]?.parentPath ?? currentPath,
+        },
+        rows.map((row) => ({
+          name: row.entry.name,
+          path: row.path,
+          isDirectory: row.entry.is_dir,
+        })),
+      );
+    },
+    [
+      activeSessionId,
+      currentPath,
+      explorerBackend,
+      onOpenPeerSelector,
+      onSendEntries,
+      peerEndpoint,
+    ],
+  );
+
+  const handleTreeSendToTarget = useCallback(
+    (rows: FileExplorerTreeRow[], targetSessionId: string) => {
+      if (!activeSessionId || rows.length === 0) return;
+      onSendEntriesToTarget?.(
+        {
+          sessionId: activeSessionId,
+          kind: explorerBackend,
+          currentPath: rows[0]?.parentPath ?? currentPath,
+        },
+        rows.map((row) => ({
+          name: row.entry.name,
+          path: row.path,
+          isDirectory: row.entry.is_dir,
+        })),
+        targetSessionId,
+      );
+    },
+    [
+      activeSessionId,
+      currentPath,
+      explorerBackend,
+      onSendEntriesToTarget,
+    ],
+  );
+
+  const handleDialogRefresh = useCallback(async () => {
+    const backend = explorerBackendRef.current;
+    const paths: string[] = [];
+    if (deleteDialogData) {
+      paths.push(
+        ...deleteDialogData.items.map((item) =>
+          getExplorerParentDirectory(item.path, backend),
+        ),
+      );
+    } else if (moveDialogData) {
+      paths.push(moveDialogData.sourceDirectory);
+    } else if (newItemDialogData) {
+      paths.push(newItemDialogData.currentDirPath);
+    } else if (newSymlinkDialogData) {
+      paths.push(newSymlinkDialogData.currentDirPath);
+    } else if (propertiesDialogData) {
+      paths.push(
+        getExplorerParentDirectory(propertiesDialogData.fullPath, backend),
+      );
+    } else {
+      paths.push(currentPathRef.current || homeDirRef.current);
+    }
+    return refreshExplorerDirectories(paths);
+  }, [
+    deleteDialogData,
+    moveDialogData,
+    newItemDialogData,
+    newSymlinkDialogData,
+    propertiesDialogData,
+    refreshExplorerDirectories,
+  ]);
+
+  const handleDialogDeleteSuccess = useCallback(() => {
+    const backend = explorerBackendRef.current;
+    const deletedItems = deleteDialogData?.items ?? [];
+    const current = currentPathRef.current;
+    const deletedAncestor = deletedItems.find((item) =>
+      pathStartsWithDirectory(current, item.path, backend),
+    );
+    setSelectedFiles(new Set());
+    lastSelectedRef.current = null;
+    clearTreeSelection();
+
+    if (deletedAncestor) {
+      const parentPath = getExplorerParentDirectory(
+        deletedAncestor.path,
+        backend,
+      );
+      if (parentPath && parentPath !== deletedAncestor.path) {
+        void refreshExplorerDirectories([parentPath]);
+        void loadDirectory(parentPath, {
+          selectEntryName: getLocalPathName(
+            deletedAncestor.path,
+            deletedAncestor.name,
+          ),
+        });
+        return;
+      }
+    }
+
+    const paths = deletedItems.map((item) =>
+      getExplorerParentDirectory(item.path, backend),
+    );
+    void refreshExplorerDirectories(
+      paths.length > 0 ? paths : [currentPathRef.current],
+    );
+  }, [
+    clearTreeSelection,
+    deleteDialogData,
+    loadDirectory,
+    refreshExplorerDirectories,
+  ]);
+
+  const handleDialogOpenEntry = (entry: FileEntry) => {
+    if (!isTreeView || !newItemDialogData) {
+      handleItemClick(entry);
+      return;
+    }
+    const fullPath = joinExplorerPath(
+      newItemDialogData.currentDirPath,
+      entry.name,
+      explorerBackendRef.current,
+    );
+    if (entry.is_dir) {
+      void loadDirectory(fullPath, { rawPathToken: entry.raw_path_token });
+    } else {
+      void handleOpenDefault(entry, fullPath);
+    }
   };
 
   const displayPath = currentPath || homeDir || "~";
@@ -3398,6 +4148,7 @@ export function FileExplorerPane({
   }, [displayEntries, visibleEntries]);
 
   useEffect(() => {
+    if (isTreeView) return;
     const entryName = pendingRevealNameRef.current;
     const container = listContainerRef.current;
     if (!entryName || !container) {
@@ -3420,7 +4171,7 @@ export function FileExplorerPane({
     });
 
     return () => window.cancelAnimationFrame(frame);
-  }, [displayEntries]);
+  }, [displayEntries, isTreeView]);
 
   return (
     <aside
@@ -3434,7 +4185,8 @@ export function FileExplorerPane({
 
       {canBrowseFiles && (
         <FileExplorerToolbar
-          selectedCount={selectedRealFiles.length}
+          isTreeView={isTreeView}
+          selectedCount={isTreeView ? selectedTreeRows.length : selectedRealFiles.length}
           isFileSearchActive={isFileSearchActive}
           isFileSearchExpanded={isFileSearchExpanded}
           showHiddenFiles={showHiddenFiles}
@@ -3442,15 +4194,43 @@ export function FileExplorerPane({
           showTransferActions={canUseRemoteTransfer}
           fileSearchQuery={fileSearchQuery}
           fileSearchInputRef={fileSearchInputRef}
-          onNewFile={handleNewFile}
-          onNewFolder={handleNewFolder}
-          onUploadFiles={handleUploadFiles}
-          onUploadFolder={handleUploadFolder}
-          onDownloadSelected={() => void handleDownloadSelected()}
-          onDeleteSelected={handleDeleteSelected}
+          onNewFile={() =>
+            handleNewFile(isTreeView ? getTreeOperationDirectoryPath() : undefined)
+          }
+          onNewFolder={() =>
+            handleNewFolder(isTreeView ? getTreeOperationDirectoryPath() : undefined)
+          }
+          onUploadFiles={() =>
+            handleUploadFiles(isTreeView ? getTreeOperationDirectoryPath() : undefined)
+          }
+          onUploadFolder={() =>
+            handleUploadFolder(isTreeView ? getTreeOperationDirectoryPath() : undefined)
+          }
+          onDownloadSelected={() =>
+            isTreeView
+              ? handleTreeDownload(selectedTreeRows)
+              : void handleDownloadSelected()
+          }
+          onDeleteSelected={() =>
+            isTreeView ? handleTreeDelete(selectedTreeRows) : handleDeleteSelected()
+          }
           onGoUp={handleGoUp}
-          onRefresh={() => void handleManualRefresh()}
+          onRefresh={() => {
+            if (isTreeView) {
+              handleTreeRefresh(null);
+              return;
+            }
+            void handleManualRefresh();
+          }}
           isRefreshing={isManualRefreshing}
+          onLocatePath={handleLocatePath}
+          locateLabel={
+            activeFilePath
+              ? t("fileExplorer.locateActiveFile")
+              : t("fileExplorer.locateTerminalPath")
+          }
+          canLocatePath={!!activeFilePath || cwdTrackingActive}
+          onToggleViewMode={handleToggleViewMode}
           onToggleHiddenFiles={handleToggleHiddenFiles}
           onExpandSearch={() => setIsFileSearchExpanded(true)}
           onSearchQueryChange={setFileSearchQuery}
@@ -3458,7 +4238,7 @@ export function FileExplorerPane({
         />
       )}
 
-      {canBrowseFiles && (
+      {canBrowseFiles && !isTreeView && (
         <FileExplorerPathBar
           isEditingPath={isEditingPath}
           pathInputText={pathInputText}
@@ -3499,13 +4279,15 @@ export function FileExplorerPane({
               className="h-full overflow-auto text-sm terminal-scroll outline-none"
               tabIndex={canBrowseFiles ? 0 : -1}
               onMouseDown={(event) => {
-                if (canBrowseFiles) {
-                  listContainerRef.current?.focus();
+                if (!canBrowseFiles) return;
+                if (
+                  isTreeView &&
+                  event.target instanceof Element &&
+                  event.target.closest("[data-file-tree-path]")
+                ) {
+                  return;
                 }
-                if (event.target === event.currentTarget) {
-                  setSelectedFiles(new Set());
-                  lastSelectedRef.current = null;
-                }
+                listContainerRef.current?.focus();
               }}
               onKeyDown={handleListKeyDown}
             >
@@ -3544,6 +4326,54 @@ export function FileExplorerPane({
                   </div>
                   <div>{t("fileExplorer.remoteBrowserDisabledDesc")}</div>
                 </div>
+              ) : isTreeView ? (
+                <FileExplorerTree
+                  key={`${activeSessionId ?? ""}:${explorerBackend}:${treeRootPath}`}
+                  rows={treeState.rows}
+                  selectedPaths={treeState.selectedPaths}
+                  backend={explorerBackend}
+                  scrollContainerRef={listContainerRef}
+                  revealRequest={treeRevealRequest}
+                  onRowClick={treeState.handleRowClick}
+                  onRowKeyDown={treeState.handleRowKeyDown}
+                  onSelectAll={treeState.selectAll}
+                  onDeleteSelected={() => handleTreeDelete(selectedTreeRows)}
+                  onToggleDirectory={treeState.toggleDirectory}
+                  onActivateDirectory={handleTreeOpenDirectory}
+                  onOpenFile={(row) => handleTreeOpenDefault(row)}
+                  onRequestRename={(row) => {
+                    if (!row.isRoot) {
+                      beginInlineRename(row.entry, row.path, row.parentPath);
+                    }
+                  }}
+                  onRetry={(row) => void treeState.refreshDirectory(row.path)}
+                  inlineRename={
+                    inlineRenameState
+                      ? {
+                          path: inlineRenameState.oldPath,
+                          value: inlineRenameState.value,
+                          isSubmitting: inlineRenameState.isSubmitting,
+                        }
+                      : null
+                  }
+                  onInlineRenameChange={(value) =>
+                    setInlineRenameState((previous) =>
+                      previous ? { ...previous, value } : previous,
+                    )
+                  }
+                  onInlineRenameSubmit={() => void handleInlineRenameSubmit()}
+                  onInlineRenameCancel={cancelInlineRename}
+                  onContextMenuRow={setTreeContextRow}
+                  onContextMenuSelect={treeState.selectContextRow}
+                  labels={{
+                    collapse: t("fileExplorer.collapseDirectory"),
+                    expand: t("fileExplorer.expandDirectory"),
+                    loading: t("fileExplorer.loading"),
+                    retry: t("common.retry"),
+                    emptyDirectory: t("fileExplorer.emptyDirectory"),
+                    tree: t("fileExplorer.treeAriaLabel"),
+                  }}
+                />
               ) : (
                 <>
                   <div
@@ -3735,9 +4565,52 @@ export function FileExplorerPane({
             </div>
           </div>
         </ContextMenuTrigger>
-        {canBrowseFiles && (
+        {canBrowseFiles && isTreeView && treeContextRow ? (
+          <FileExplorerEntryContextMenu
+            target={treeContextRow}
+            selectedTargets={treeActionRows(treeContextRow)}
+            activeSessionId={activeSessionId}
+            editorType={appSettings.transfer.editor_type || "external"}
+            showTransferActions={canUseRemoteTransfer}
+            terminalInputEnabled={terminalInputEnabled}
+            sendTargetOptions={sendTargetOptions}
+            getAiActions={(row) => getEntryAiActions(row.entry)}
+            onOpenDirectory={handleTreeOpenDirectory}
+            onOpenDefault={handleTreeOpenDefault}
+            onPreview={handleTreePreview}
+            onOpenInternal={handleTreeOpenInternal}
+            onOpenExternal={handleTreeOpenExternal}
+            onRefresh={handleTreeRefresh}
+            onNewFile={handleNewFile}
+            onNewFolder={handleNewFolder}
+            onNewSymlink={
+              explorerBackend === "remote" ? handleNewSymlink : undefined
+            }
+            onUpload={(path) => void handleUploadFiles(path)}
+            onUploadFolder={(path) => void handleUploadFolder(path)}
+            onDownload={handleTreeDownload}
+            onSendToPeer={handleTreeSendToPeer}
+            onSendToTarget={handleTreeSendToTarget}
+            onRename={(row) => beginInlineRename(row.entry, row.path, row.parentPath)}
+            onMove={handleTreeMove}
+            onDelete={handleTreeDelete}
+            onAddToFavorites={handleTreeAddToFavorites}
+            onCopyPath={handleTreeCopyPath}
+            onSendToTerminal={handleTreeSendToTerminal}
+            onProperties={handleTreeProperties}
+            onAIAction={handleTreeAIAction}
+          />
+        ) : canBrowseFiles ? (
           <ContextMenuContent className="w-52">
-            <ContextMenuItem onClick={() => void handleManualRefresh()}>
+            <ContextMenuItem
+              onClick={() => {
+                if (isTreeView) {
+                  handleTreeRefresh(null);
+                  return;
+                }
+                void handleManualRefresh();
+              }}
+            >
               <MdRefresh className={cn("mr-2 h-4 w-4", isManualRefreshing && "animate-spin")} />
               {t("fileExplorer.refresh")}
             </ContextMenuItem>
@@ -3749,11 +4622,11 @@ export function FileExplorerPane({
                     {t("fileExplorer.cmUpload")}
                   </ContextMenuSubTrigger>
                   <ContextMenuSubContent className="w-48">
-                    <ContextMenuItem onClick={handleUploadFiles}>
+                    <ContextMenuItem onClick={() => void handleUploadFiles()}>
                       <MdUpload className="mr-2 h-4 w-4" />
                       {t("fileExplorer.upload")}
                     </ContextMenuItem>
-                    <ContextMenuItem onClick={handleUploadFolder}>
+                    <ContextMenuItem onClick={() => void handleUploadFolder()}>
                       <MdDriveFolderUpload className="mr-2 h-4 w-4" />
                       {t("fileExplorer.uploadFolder")}
                     </ContextMenuItem>
@@ -3762,16 +4635,16 @@ export function FileExplorerPane({
                 <ContextMenuSeparator />
               </>
             )}
-            <ContextMenuItem onClick={handleNewFile}>
+            <ContextMenuItem onClick={() => handleNewFile()}>
               <MdNoteAdd className="mr-2 h-4 w-4" />
               {t("fileExplorer.newFile")}
             </ContextMenuItem>
-            <ContextMenuItem onClick={handleNewFolder}>
+            <ContextMenuItem onClick={() => handleNewFolder()}>
               <MdCreateNewFolder className="mr-2 h-4 w-4" />
               {t("fileExplorer.newFolder")}
             </ContextMenuItem>
             {explorerBackend === "remote" && (
-              <ContextMenuItem onClick={handleNewSymlink}>
+              <ContextMenuItem onClick={() => handleNewSymlink()}>
                 <MdLink className="mr-2 h-4 w-4" />
                 {t("fileExplorer.newSymlink")}
               </ContextMenuItem>
@@ -3800,12 +4673,12 @@ export function FileExplorerPane({
               </>
             ) : null}
             <ContextMenuSeparator />
-            <ContextMenuItem onClick={handleCurrentDirProperties}>
+            <ContextMenuItem onClick={() => handleCurrentDirProperties()}>
               <MdInfo className="mr-2 h-4 w-4" />
               {t("fileExplorer.properties")}
             </ContextMenuItem>
           </ContextMenuContent>
-        )}
+        ) : null}
       </ContextMenu>
 
       {canBrowseFiles && (
@@ -3818,25 +4691,25 @@ export function FileExplorerPane({
           }}
         >
           <div className="flex gap-4">
-            {!directoryLoading && !error && footerStats.totalItemCount > 0 && (
+            {!directoryLoading && !error && activeFooterStats.totalItemCount > 0 && (
               <>
                 <span>
-                  {footerStats.selectedItemCount > 0
+                  {activeFooterStats.selectedItemCount > 0
                     ? t("fileExplorer.selectedItems", {
-                        selected: footerStats.selectedItemCount,
-                        total: footerStats.totalItemCount,
+                        selected: activeFooterStats.selectedItemCount,
+                        total: activeFooterStats.totalItemCount,
                       })
                     : t("fileExplorer.totalItems", {
-                        count: footerStats.totalItemCount,
+                        count: activeFooterStats.totalItemCount,
                       })}
                 </span>
                 <span>{footerSizeText}</span>
               </>
             )}
           </div>
-          <div className="flex items-center gap-0.5">
-            {showTerminalActions && (
-              <>
+          {!isTreeView && showTerminalActions && (
+            <div className="flex items-center gap-0.5">
+              {terminalInputEnabled ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="inline-flex">
@@ -3857,54 +4730,54 @@ export function FileExplorerPane({
                       : t("fileExplorer.cwdTrackingUnavailable")}
                   </TooltipContent>
                 </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="inline-flex">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className={`h-6 w-6 rounded-md disabled:opacity-40 disabled:cursor-not-allowed ${
-                          cwdTrackingActive
-                            ? autoSyncCwd
-                              ? "text-primary"
-                              : "text-muted-foreground hover:text-foreground"
-                            : "text-muted-foreground"
-                        }`}
-                        onClick={handleToggleAutoSyncCwd}
-                        disabled={!cwdTrackingActive || !autoSyncScopeId}
-                      >
-                        <MdSyncLock className="h-[0.875rem] w-[0.875rem]" />
-                      </Button>
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">
-                    {cwdTrackingActive
-                      ? t("fileExplorer.autoSyncTerminalPath")
-                      : t("fileExplorer.cwdTrackingUnavailable")}
-                  </TooltipContent>
-                </Tooltip>
-                {terminalInputEnabled ? (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="inline-flex">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-6 w-6 rounded-md text-muted-foreground hover:text-foreground"
-                          onClick={() => {
-                            sendTextToTerminal(currentPath);
-                          }}
-                        >
-                          <LuClipboardPaste className="h-[0.875rem] w-[0.875rem]" />
-                        </Button>
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent side="top">{t("fileExplorer.sendToTerminal")}</TooltipContent>
-                  </Tooltip>
-                ) : null}
-              </>
-            )}{" "}
-          </div>
+              ) : null}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={`h-6 w-6 rounded-md disabled:opacity-40 disabled:cursor-not-allowed ${
+                        cwdTrackingActive
+                          ? autoSyncCwd
+                            ? "text-primary"
+                            : "text-muted-foreground hover:text-foreground"
+                          : "text-muted-foreground"
+                      }`}
+                      onClick={handleToggleAutoSyncCwd}
+                      disabled={!cwdTrackingActive || !autoSyncScopeId}
+                    >
+                      <MdSyncLock className="h-[0.875rem] w-[0.875rem]" />
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  {cwdTrackingActive
+                    ? t("fileExplorer.autoSyncTerminalPath")
+                    : t("fileExplorer.cwdTrackingUnavailable")}
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 rounded-md text-muted-foreground hover:text-foreground"
+                      onClick={() => {
+                        sendTextToTerminal(currentPath);
+                      }}
+                    >
+                      <LuClipboardPaste className="h-[0.875rem] w-[0.875rem]" />
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  {t("fileExplorer.sendToTerminal")}
+                </TooltipContent>
+              </Tooltip>
+            </div>
+          )}
         </div>
       )}
 
@@ -3919,15 +4792,22 @@ export function FileExplorerPane({
         onNewItemClose={() => setNewItemDialogData(null)}
         onNewSymlinkClose={() => setNewSymlinkDialogData(null)}
         onPropertiesClose={() => setPropertiesDialogData(null)}
-        onDeleteSuccess={() => {
-          setSelectedFiles(new Set());
-          lastSelectedRef.current = null;
-          void refreshCurrentDirectory();
-        }}
+        onDeleteSuccess={handleDialogDeleteSuccess}
         onMoveSuccess={handleMoveSuccess}
-        onRefresh={refreshCurrentDirectory}
-        onOpenDirectoryEntry={handleItemClick}
-        onOpenDefault={(entry) => void handleOpenDefault(entry)}
+        onRefresh={handleDialogRefresh}
+        onOpenDirectoryEntry={handleDialogOpenEntry}
+        onOpenDefault={(entry) => {
+          if (isTreeView && newItemDialogData) {
+            const fullPath = joinExplorerPath(
+              newItemDialogData.currentDirPath,
+              entry.name,
+              explorerBackendRef.current,
+            );
+            void handleOpenDefault(entry, fullPath);
+          } else {
+            void handleOpenDefault(entry);
+          }
+        }}
       />
     </aside>
   );

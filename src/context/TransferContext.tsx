@@ -21,7 +21,7 @@ import { pruneRetainedTransfers as pruneTransferMap } from "@/lib/transferRetent
 
 export type TransferDirection = "upload" | "download" | "copy";
 export type TransferKind = "file" | "directory";
-export type TransferSource = "sftp" | "zmodem" | "rdp-clipboard";
+export type TransferSource = "sftp" | "zmodem" | "rdp-clipboard" | "serial_modem";
 export type TransferStatus =
   | "queued"
   | "transferring"
@@ -82,7 +82,7 @@ export interface ExternalTransferProgress {
   totalSize: number;
   localPath?: string;
   remotePath?: string;
-  source?: TransferSource;
+  source?: Exclude<TransferSource, "sftp">;
 }
 
 export interface TransferItem {

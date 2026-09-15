@@ -78,6 +78,14 @@ function getTransferDisplayRank(transfer: TransferItem): number {
   return 2;
 }
 
+function isBackendModemTransfer(transfer: TransferItem): boolean {
+  return (
+    transfer.source === "zmodem" ||
+    transfer.source === "serial_modem" ||
+    transfer.source === "rdp-clipboard"
+  );
+}
+
 function HeaderActionButton({
   label,
   icon: Icon,
@@ -146,20 +154,28 @@ function TransferRow({
   const progress = computeTransferProgressPercent(item);
   const showProgressBar = shouldShowTransferProgressBar(item);
   const indeterminateProgress = isIndeterminateTransferProgress(item);
-  const isExternalTransfer = item.source === "zmodem" || item.source === "rdp-clipboard";
-  const canPause = !isExternalTransfer && item.status === "transferring";
-  const canPauseQueued = !isExternalTransfer && item.status === "queued";
-  const canResume = !isExternalTransfer && item.status === "paused";
-  const canRetry = !isExternalTransfer && (item.status === "error" || item.status === "cancelled");
+  const isModemTransfer = isBackendModemTransfer(item);
+  const canPause = !isModemTransfer && item.status === "transferring";
+  const canPauseQueued = !isModemTransfer && item.status === "queued";
+  const canResume = !isModemTransfer && item.status === "paused";
+  const canRetry = !isModemTransfer && (item.status === "error" || item.status === "cancelled");
   const canCancel =
-    !isExternalTransfer &&
+    !isModemTransfer &&
     (item.status === "queued" || item.status === "transferring" || item.status === "paused");
-  const canDelete = isExternalTransfer
+  const canDelete = isModemTransfer
     ? item.status !== "transferring"
     : !canCancel || item.status === "queued" || item.queueState === "pending";
 
   let statusColor = "#facc15";
   let statusText = formatRate(item.speedBytesPerSec ?? 0);
+
+  if (
+    item.source === "serial_modem" &&
+    item.status === "transferring" &&
+    item.bytesTransferred === 0
+  ) {
+    statusText = t("terminal.serialModemWaiting");
+  }
 
   if (item.status === "queued") {
     statusColor = "#a1a1aa";
@@ -293,7 +309,7 @@ function TransferRow({
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="min-w-[180px]">
-        {!isExternalTransfer && (
+        {!isModemTransfer && (
           <>
             <ContextMenuItem
               onClick={() => onPause(item.id)}
@@ -400,7 +416,7 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
   );
 
   const canDeleteTransfer = useCallback((transfer: TransferItem) => {
-    if (transfer.source === "zmodem" || transfer.source === "rdp-clipboard") {
+    if (isBackendModemTransfer(transfer)) {
       return transfer.status !== "transferring";
     }
     const canCancel =
@@ -471,20 +487,15 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
 
   const hasRunning = visibleTransfers.some(
     (transfer) =>
-      transfer.source !== "zmodem" &&
-      transfer.source !== "rdp-clipboard" &&
+      !isBackendModemTransfer(transfer) &&
       (transfer.status === "transferring" || transfer.status === "queued"),
   );
   const hasPaused = visibleTransfers.some(
-    (transfer) =>
-      transfer.source !== "zmodem" &&
-      transfer.source !== "rdp-clipboard" &&
-      transfer.status === "paused",
+    (transfer) => !isBackendModemTransfer(transfer) && transfer.status === "paused",
   );
   const hasActive = visibleTransfers.some(
     (transfer) =>
-      transfer.source !== "zmodem" &&
-      transfer.source !== "rdp-clipboard" &&
+      !isBackendModemTransfer(transfer) &&
       (transfer.status === "queued" ||
         transfer.status === "transferring" ||
         transfer.status === "paused"),
@@ -502,8 +513,7 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
       visibleTransfers
         .filter(
           (transfer) =>
-            transfer.source !== "zmodem" &&
-            transfer.source !== "rdp-clipboard" &&
+            !isBackendModemTransfer(transfer) &&
             (transfer.status === "transferring" || transfer.status === "queued"),
         )
         .map((transfer) => pauseTransfer(transfer.id)),
@@ -526,12 +536,7 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
   const handleResumeAll = useCallback(() => {
     void Promise.all(
       visibleTransfers
-        .filter(
-          (transfer) =>
-            transfer.source !== "zmodem" &&
-            transfer.source !== "rdp-clipboard" &&
-            transfer.status === "paused",
-        )
+        .filter((transfer) => !isBackendModemTransfer(transfer) && transfer.status === "paused")
         .map((transfer) => resumeTransfer(transfer.id)),
     );
   }, [resumeTransfer, visibleTransfers]);
@@ -541,8 +546,7 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
       visibleTransfers
         .filter(
           (transfer) =>
-            transfer.source !== "zmodem" &&
-            transfer.source !== "rdp-clipboard" &&
+            !isBackendModemTransfer(transfer) &&
             (transfer.status === "queued" ||
               transfer.status === "transferring" ||
               transfer.status === "paused"),
