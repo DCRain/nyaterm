@@ -59,6 +59,7 @@ import { matchesKeyEvent } from "@/lib/shortcutRegistry";
 import type { NewSessionTarget } from "@/lib/windowManager";
 import type { ConnectionTypeTag, Group, SavedConnection } from "@/types/global";
 import ConnectionItem from "./ConnectionItem";
+import { matchesConnectionSearch } from "./connectionSearch";
 import type { SavedConnectionsContextValue } from "./context";
 import {
   type DragTarget,
@@ -276,14 +277,10 @@ export default function SavedConnections({
 
   // ── Derived tree ──────────────────────────────────────────────────────────
   const { rootNodes, ungrouped } = useMemo(() => {
-    const filtered = savedConnections.filter((c) => {
-      if (typeFilter !== "all" && c.type !== typeFilter) return false;
+    const filtered = savedConnections.filter((connection) => {
+      if (typeFilter !== "all" && connection.type !== typeFilter) return false;
       if (!keyword) return true;
-      return (
-        c.name.toLowerCase().includes(keyword) ||
-        (c.host ?? "").toLowerCase().includes(keyword) ||
-        (c.username ?? "").toLowerCase().includes(keyword)
-      );
+      return matchesConnectionSearch(connection, keyword);
     });
 
     const sortConns = (list: SavedConnection[]) => {
@@ -1800,11 +1797,7 @@ export default function SavedConnections({
               <button
                 type="button"
                 className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--df-text-dimmed)] transition-colors hover:bg-[var(--df-bg-hover)] hover:text-[var(--df-text)]"
-                aria-label={
-                  filterText
-                    ? t("savedConnections.clearSearch")
-                    : t("common.close")
-                }
+                aria-label={filterText ? t("savedConnections.clearSearch") : t("common.close")}
                 onClick={() => {
                   if (filterText) {
                     setFilterText("");

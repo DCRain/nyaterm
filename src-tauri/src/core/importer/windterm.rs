@@ -131,6 +131,7 @@ fn parse_windterm_content_with_crypto(
             },
             group_path,
             description,
+            tags: Vec::new(),
             sort_order: 0,
             icon,
             auth: Some(auth),

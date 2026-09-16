@@ -153,6 +153,7 @@ fn prepare_electerm_bookmark(
         },
         group_path,
         description: None,
+        tags: Vec::new(),
         sort_order: 0,
         icon: None,
         auth: Some(ConnectionAuth {

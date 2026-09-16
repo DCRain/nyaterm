@@ -466,7 +466,6 @@ export interface AssetMetadata {
   memory_bytes?: number;
   accelerators?: AssetAccelerator[];
   disks?: AssetDisk[];
-  tags?: string[];
   notes?: string;
   updated_at?: string;
 }
@@ -543,6 +542,7 @@ export interface SavedConnection {
   type: ConnectionTypeTag;
   group_id?: string;
   description?: string;
+  tags?: string[];
   sort_order?: number;
   /** When true, open this connection after startup restore (terminal session types only). */
   open_on_startup?: boolean;

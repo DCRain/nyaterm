@@ -14,6 +14,7 @@ struct PreparedJsonConnection {
     config: ConnectionType,
     group_path: Option<Vec<String>>,
     description: Option<String>,
+    tags: Vec<String>,
     sort_order: i32,
     icon: Option<String>,
     auth: Option<ConnectionAuth>,
@@ -98,6 +99,8 @@ enum NyatermJsonSession {
         #[serde(default)]
         description: Option<String>,
         #[serde(default)]
+        tags: Vec<String>,
+        #[serde(default)]
         sort_order: i32,
         #[serde(default)]
         icon: Option<String>,
@@ -117,6 +120,8 @@ enum NyatermJsonSession {
         #[serde(default)]
         description: Option<String>,
         #[serde(default)]
+        tags: Vec<String>,
+        #[serde(default)]
         sort_order: i32,
         #[serde(default)]
         icon: Option<String>,
@@ -134,6 +139,8 @@ enum NyatermJsonSession {
         backspace_mode: String,
         #[serde(default)]
         description: Option<String>,
+        #[serde(default)]
+        tags: Vec<String>,
         #[serde(default)]
         sort_order: i32,
         #[serde(default)]
@@ -156,6 +163,8 @@ enum NyatermJsonSession {
         backspace_mode: String,
         #[serde(default)]
         description: Option<String>,
+        #[serde(default)]
+        tags: Vec<String>,
         #[serde(default)]
         sort_order: i32,
         #[serde(default)]

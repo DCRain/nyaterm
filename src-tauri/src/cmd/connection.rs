@@ -210,6 +210,7 @@ fn is_supported_connection_icon_format(format: image::ImageFormat) -> bool {
 
 fn normalize_connection_for_save(connection: &mut SavedConnection) {
     config::migrate_legacy_ssh_agent_settings(connection);
+    config::migrate_legacy_asset_tags(connection);
 }
 
 fn validate_ssh_agent_forwarding_identity_inputs(
@@ -1151,6 +1152,7 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
             },
             group_id: None,
             description: None,
+            tags: Vec::new(),
             sort_order: 0,
             icon: None,
             icon_auto_detect: None,
@@ -1222,6 +1224,7 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
             },
             group_id: None,
             description: None,
+            tags: Vec::new(),
             sort_order: 0,
             icon: None,
             icon_auto_detect: None,
@@ -1266,6 +1269,7 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
             },
             group_id: None,
             description: None,
+            tags: Vec::new(),
             sort_order: 0,
             icon: None,
             icon_auto_detect: None,
@@ -1302,6 +1306,7 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
             },
             group_id: None,
             description: None,
+            tags: Vec::new(),
             sort_order: 0,
             icon: None,
             icon_auto_detect: None,
@@ -1728,6 +1733,7 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
         let mut target = ssh_connection("target", Some("proxy"));
         target.group_id = Some("group".to_string());
         target.description = Some("keep description".to_string());
+        target.tags = vec!["preserve".to_string()];
         target.sort_order = 42;
         target.auth = Some(ConnectionAuth {
             mode: "key".to_string(),
@@ -1770,7 +1776,6 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
                 count: Some(1),
                 purpose: Some(AssetDiskPurpose::System),
             }]),
-            tags: Some(vec!["preserve".to_string()]),
             notes: Some("preserve notes".to_string()),
             updated_at: Some("2026-08-03T01:00:00.000Z".to_string()),
             ..Default::default()
@@ -1798,7 +1803,6 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
                     count: Some(4),
                     memory_bytes: Some(80 * 1024 * 1024 * 1024),
                 }]),
-                tags: Some(vec!["ignored".to_string()]),
                 notes: Some("ignored".to_string()),
                 updated_at: Some("2026-08-03T02:00:00.000Z".to_string()),
                 ..Default::default()
@@ -1812,6 +1816,7 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
         assert_eq!(updated.config, original.config);
         assert_eq!(updated.group_id, original.group_id);
         assert_eq!(updated.description, original.description);
+        assert_eq!(updated.tags, vec!["preserve".to_string()]);
         assert_eq!(updated.sort_order, original.sort_order);
         assert_eq!(
             updated.auth.as_ref().unwrap().key_id,
@@ -1834,7 +1839,6 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
         assert_eq!(asset.cpu_model.as_deref(), Some("New CPU"));
         assert_eq!(asset.cpu_cores, Some(16));
         assert_eq!(asset.memory_bytes, Some(64 * 1024 * 1024 * 1024));
-        assert_eq!(asset.tags.as_deref(), Some(&["preserve".to_string()][..]));
         assert_eq!(asset.notes.as_deref(), Some("preserve notes"));
         assert_eq!(
             asset.updated_at.as_deref(),
@@ -1889,6 +1893,21 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
             assert!(forwarding.enabled, "mode={mode}");
             assert!(forwarding.sources.stored_keys, "mode={mode}");
         }
+    }
+
+    #[test]
+    fn save_boundary_normalizes_connection_tags() {
+        let mut connection = connection_with_auth_mode("password");
+        connection.tags = vec![
+            " production ".to_string(),
+            String::new(),
+            "production".to_string(),
+            "Production".to_string(),
+        ];
+
+        normalize_connection_for_save(&mut connection);
+
+        assert_eq!(connection.tags, vec!["production", "Production"]);
     }
 
     #[cfg(unix)]
