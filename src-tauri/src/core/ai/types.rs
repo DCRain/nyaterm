@@ -1,6 +1,7 @@
 use crate::config::{
     AiAgentKind, AiBackendKind, AiMode, AiModelSource, AiPermissionMode, AiProviderKind, RiskLevel,
 };
+use crate::core::capabilities::RiskReasonCode;
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -103,6 +104,16 @@ pub enum AgentActionKind {
     FinalAnswer,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentApprovalReasonCode {
+    ConfirmEachCommand,
+    CriticalRisk,
+    RiskExceedsThreshold,
+    ExternalAgentPermission,
+    SafeAutoUnknownOrHighRisk,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentStepAction {
@@ -118,9 +129,11 @@ pub struct AgentStepAction {
     #[serde(default)]
     pub local_risk_level: Option<RiskLevel>,
     #[serde(default)]
-    pub risk_reason: Option<String>,
+    pub model_risk_reason: Option<String>,
     #[serde(default)]
-    pub approval_reason: Option<String>,
+    pub local_risk_reason_code: Option<RiskReasonCode>,
+    #[serde(default)]
+    pub approval_reason_code: Option<AgentApprovalReasonCode>,
     #[serde(default)]
     pub answer: Option<String>,
 }
