@@ -85,6 +85,7 @@ export function useVirtualList<T>(
 
   return {
     containerRef: setContainerRef,
+    containerNode,
     ...state,
     onScroll: () => setScrollTop(containerRef.current?.scrollTop ?? 0),
   };

@@ -34,24 +34,24 @@ export default function AssetCardGrid({
 }: AssetCardGridProps) {
   const [columnCount, setColumnCount] = useState(1);
   const rows = useMemo(() => chunkRecords(records, columnCount), [columnCount, records]);
-  const { containerRef, visibleItems, paddingTop, paddingBottom, onScroll } = useVirtualList(rows, {
+  const { containerRef, containerNode, visibleItems, paddingTop, paddingBottom, onScroll } =
+    useVirtualList(rows, {
     itemHeight: ASSET_CARD_ROW_HEIGHT + ASSET_CARD_GAP,
     overscan: 5,
   });
 
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+    if (!containerNode) return;
 
     const syncColumnCount = () => {
-      const width = container.clientWidth;
+      const width = containerNode.clientWidth;
       setColumnCount(width >= 1024 ? 3 : width >= 672 ? 2 : 1);
     };
     syncColumnCount();
     const observer = new ResizeObserver(syncColumnCount);
-    observer.observe(container);
+    observer.observe(containerNode);
     return () => observer.disconnect();
-  }, [containerRef]);
+  }, [containerNode]);
 
   return (
     <div
