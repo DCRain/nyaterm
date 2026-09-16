@@ -607,6 +607,54 @@ mod tests {
     }
 
     #[test]
+    fn nyaterm_json_imports_and_normalizes_connection_tags() {
+        let json = r#"
+{
+  "version": 1,
+  "sessions": [
+    {
+      "type": "ssh",
+      "name": "Production Server",
+      "host": "example.com",
+      "tags": [" production ", "", "production", "Production", "gpu", "gpu"]
+    }
+  ]
+}
+"#;
+
+        let prepared = parse_nyaterm_json_content(json).expect("parse tagged connection");
+
+        assert_eq!(
+            prepared.connections[0].tags,
+            vec![
+                "production".to_string(),
+                "Production".to_string(),
+                "gpu".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn nyaterm_json_imports_legacy_connections_without_tags() {
+        let json = r#"
+{
+  "version": 1,
+  "sessions": [
+    {
+      "type": "ssh",
+      "name": "Legacy Server",
+      "host": "legacy.example.com"
+    }
+  ]
+}
+"#;
+
+        let prepared = parse_nyaterm_json_content(json).expect("parse legacy connection");
+
+        assert!(prepared.connections[0].tags.is_empty());
+    }
+
+    #[test]
     fn nyaterm_json_rejects_duplicate_password_refs() {
         let json = r#"
 {

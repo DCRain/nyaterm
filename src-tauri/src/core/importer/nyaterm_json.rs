@@ -109,11 +109,13 @@ fn prepare_nyaterm_json_session(
             username,
             auth,
             description,
+            mut tags,
             sort_order,
             icon,
             dynamic_tab_title,
         } => {
             validate_port(port, "ssh session")?;
+            config::normalize_connection_tags(&mut tags);
             let context = format!("ssh session '{name}'");
             Ok(PreparedJsonConnection {
                 name: required_string(name, "name", "ssh session")?,
@@ -131,6 +133,7 @@ fn prepare_nyaterm_json_session(
                 },
                 group_path: normalize_optional_group_path(group_path, &context)?,
                 description: normalize_optional_string(description),
+                tags,
                 sort_order,
                 icon: normalize_optional_string(icon),
                 auth: Some(prepare_json_ssh_auth(
@@ -148,10 +151,12 @@ fn prepare_nyaterm_json_session(
             shell_args,
             working_dir,
             description,
+            mut tags,
             sort_order,
             icon,
             dynamic_tab_title,
         } => {
+            config::normalize_connection_tags(&mut tags);
             let context = format!("local_terminal session '{name}'");
             Ok(PreparedJsonConnection {
                 name: required_string(name, "name", "local_terminal session")?,
@@ -165,6 +170,7 @@ fn prepare_nyaterm_json_session(
                 },
                 group_path: normalize_optional_group_path(group_path, &context)?,
                 description: normalize_optional_string(description),
+                tags,
                 sort_order,
                 icon: normalize_optional_string(icon),
                 auth: None,
@@ -177,11 +183,13 @@ fn prepare_nyaterm_json_session(
             port,
             backspace_mode,
             description,
+            mut tags,
             sort_order,
             icon,
         } => {
             validate_port(port, "telnet session")?;
             validate_backspace_mode(&backspace_mode, "telnet session")?;
+            config::normalize_connection_tags(&mut tags);
             let context = format!("telnet session '{name}'");
             Ok(PreparedJsonConnection {
                 name: required_string(name, "name", "telnet session")?,
@@ -203,6 +211,7 @@ fn prepare_nyaterm_json_session(
                 },
                 group_path: normalize_optional_group_path(group_path, &context)?,
                 description: normalize_optional_string(description),
+                tags,
                 sort_order,
                 icon: normalize_optional_string(icon),
                 auth: None,
@@ -218,10 +227,12 @@ fn prepare_nyaterm_json_session(
             stop_bits,
             backspace_mode,
             description,
+            mut tags,
             sort_order,
             icon,
         } => {
             validate_serial_config(baud_rate, data_bits, &parity, &stop_bits, &backspace_mode)?;
+            config::normalize_connection_tags(&mut tags);
             let context = format!("serial session '{name}'");
             Ok(PreparedJsonConnection {
                 name: required_string(name, "name", "serial session")?,
@@ -238,6 +249,7 @@ fn prepare_nyaterm_json_session(
                 },
                 group_path: normalize_optional_group_path(group_path, &context)?,
                 description: normalize_optional_string(description),
+                tags,
                 sort_order,
                 icon: normalize_optional_string(icon),
                 auth: None,
