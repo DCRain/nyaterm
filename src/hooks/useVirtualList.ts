@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 interface VirtualListOptions<T> {
   itemHeight: number;
@@ -16,8 +16,14 @@ export function useVirtualList<T>(
   { getItemHeight, itemHeight, overscan = 4 }: VirtualListOptions<T>,
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const [containerNode, setContainerNode] = useState<HTMLDivElement | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
+
+  const setContainerRef = useCallback((node: HTMLDivElement | null) => {
+    containerRef.current = node;
+    setContainerNode(node);
+  }, []);
   const itemOffsets = useMemo(() => {
     const offsets = [0];
     for (let index = 0; index < items.length; index += 1) {
@@ -30,27 +36,25 @@ export function useVirtualList<T>(
   const totalHeight = itemOffsets[itemOffsets.length - 1] ?? 0;
 
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+    if (!containerNode) return;
 
-    const syncSize = () => setViewportHeight(container.clientHeight);
+    const syncSize = () => setViewportHeight(containerNode.clientHeight);
     syncSize();
 
     const observer = new ResizeObserver(syncSize);
-    observer.observe(container);
+    observer.observe(containerNode);
     return () => observer.disconnect();
-  }, []);
+  }, [containerNode]);
 
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+    if (!containerNode) return;
 
-    const maxScrollTop = Math.max(0, totalHeight - container.clientHeight);
-    if (container.scrollTop > maxScrollTop) {
-      container.scrollTop = maxScrollTop;
+    const maxScrollTop = Math.max(0, totalHeight - containerNode.clientHeight);
+    if (containerNode.scrollTop > maxScrollTop) {
+      containerNode.scrollTop = maxScrollTop;
       setScrollTop(maxScrollTop);
     }
-  }, [totalHeight]);
+  }, [containerNode, totalHeight]);
 
   const state = useMemo(() => {
     if (items.length === 0) {
@@ -80,7 +84,7 @@ export function useVirtualList<T>(
   }, [itemHeight, itemOffsets, items, overscan, scrollTop, totalHeight, viewportHeight]);
 
   return {
-    containerRef,
+    containerRef: setContainerRef,
     ...state,
     onScroll: () => setScrollTop(containerRef.current?.scrollTop ?? 0),
   };

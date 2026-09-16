@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct RemoteProcess {
@@ -13,6 +14,7 @@ pub struct RemoteProcess {
     pub elapsed: String,
     pub command: String,
     pub command_line: String,
+    pub ports: Vec<String>,
 }
 
 pub const PROCESS_LIST_UNSUPPORTED_MARKER: &str = "NYATERM_PROCESS_UNSUPPORTED";
@@ -146,6 +148,51 @@ emit_busybox_ps_minimal() {
   }'
 }
 
+emit_listening_sockets() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -H -tulnp 2>/dev/null | awk '
+    function clean(value) {
+      gsub(/[\t\r\n]/, " ", value)
+      return value
+    }
+    NF >= 5 {
+      proto = clean($1)
+      local = clean($5)
+      rest = $0
+      while (match(rest, /pid=[0-9]+/)) {
+        pid = substr(rest, RSTART + 4, RLENGTH - 4)
+        printf "SOCKET\t%s\t%s\t%s\n", pid, proto, local
+        rest = substr(rest, RSTART + RLENGTH)
+      }
+    }'
+    return 0
+  fi
+
+  if command -v netstat >/dev/null 2>&1; then
+    netstat -tulnp 2>/dev/null | awk '
+    function clean(value) {
+      gsub(/[\t\r\n]/, " ", value)
+      return value
+    }
+    $1 ~ /^(tcp|udp)$/ && $6 ~ /^(LISTEN|)$/ {
+      proto = clean($1)
+      local = clean($4)
+      if (match($0, /[0-9]+\//)) {
+        pid = substr($0, RSTART)
+        sub(/\/.*/, "", pid)
+        if (pid ~ /^[0-9]+$/) {
+          printf "SOCKET\t%s\t%s\t%s\n", pid, proto, local
+        }
+      }
+    }'
+  fi
+}
+
+finish() {
+  emit_listening_sockets
+  exit 0
+}
+
 emit_proc() {
   [ -d /proc ] || return 1
   found=0
@@ -218,7 +265,7 @@ if command -v ps >/dev/null 2>&1; then
   rows=$(ps -eo pid=,ppid=,user=,stat=,pcpu=,pmem=,rss=,vsz=,etime=,comm=,args= --no-headers 2>/dev/null | emit_ps_full)
   if [ -n "$rows" ]; then
     printf "%s\n" "$rows"
-    exit 0
+    finish
   fi
 
   case "$(uname -s 2>/dev/null)" in
@@ -226,7 +273,7 @@ if command -v ps >/dev/null 2>&1; then
       rows=$(ps -axo pid=,ppid=,user=,stat=,pcpu=,pmem=,rss=,vsz=,etime=,comm=,command= 2>/dev/null | emit_ps_full)
       if [ -n "$rows" ]; then
         printf "%s\n" "$rows"
-        exit 0
+        finish
       fi
       ;;
   esac
@@ -234,24 +281,24 @@ if command -v ps >/dev/null 2>&1; then
   rows=$(ps -o pid,ppid,user,stat,vsz,comm,args 2>/dev/null | emit_busybox_ps_o)
   if [ -n "$rows" ]; then
     printf "%s\n" "$rows"
-    exit 0
+    finish
   fi
 
   rows=$(ps w 2>/dev/null | emit_busybox_ps_minimal)
   if [ -n "$rows" ]; then
     printf "%s\n" "$rows"
-    exit 0
+    finish
   fi
 
   rows=$(ps 2>/dev/null | emit_busybox_ps_minimal)
   if [ -n "$rows" ]; then
     printf "%s\n" "$rows"
-    exit 0
+    finish
   fi
 fi
 
 if emit_proc; then
-  exit 0
+  finish
 fi
 
 unsupported
@@ -264,7 +311,40 @@ pub fn is_process_list_unsupported(output: &str) -> bool {
         .any(|line| line.trim() == PROCESS_LIST_UNSUPPORTED_MARKER)
 }
 
+fn socket_label(proto: &str, local: &str) -> String {
+    format!("{}:{}", proto, local)
+}
+
+fn collect_ports_by_pid(output: &str) -> HashMap<u32, Vec<String>> {
+    let mut ports_by_pid: HashMap<u32, Vec<String>> = HashMap::new();
+
+    for line in output.lines() {
+        let cols: Vec<&str> = line.split('\t').collect();
+        if cols.len() < 4 || cols[0] != "SOCKET" {
+            continue;
+        }
+
+        let pid = match cols[1].parse::<u32>() {
+            Ok(pid) => pid,
+            Err(_) => continue,
+        };
+        let label = socket_label(cols[2], cols[3]);
+        let ports = ports_by_pid.entry(pid).or_default();
+        if !ports.contains(&label) {
+            ports.push(label);
+        }
+    }
+
+    for ports in ports_by_pid.values_mut() {
+        ports.sort();
+    }
+
+    ports_by_pid
+}
+
 pub fn parse_process_output(output: &str) -> Vec<RemoteProcess> {
+    let ports_by_pid = collect_ports_by_pid(output);
+
     output
         .lines()
         .filter_map(|line| {
@@ -273,8 +353,10 @@ pub fn parse_process_output(output: &str) -> Vec<RemoteProcess> {
                 return None;
             }
 
+            let pid = cols[1].parse().ok()?;
+
             Some(RemoteProcess {
-                pid: cols[1].parse().ok()?,
+                pid,
                 ppid: cols[2].parse().unwrap_or(0),
                 user: cols[3].to_string(),
                 state: cols[4].to_string(),
@@ -285,6 +367,7 @@ pub fn parse_process_output(output: &str) -> Vec<RemoteProcess> {
                 elapsed: cols[9].to_string(),
                 command: cols[10].to_string(),
                 command_line: cols[11..].join("\t"),
+                ports: ports_by_pid.get(&pid).cloned().unwrap_or_default(),
             })
         })
         .collect()
@@ -350,5 +433,42 @@ mod tests {
         assert!(!is_process_list_unsupported(
             "PROCESS\t1\t0\troot\tS\t0\t0\t0\t0\t-\tsh\tsh\n"
         ));
+    }
+
+    #[test]
+    fn merges_socket_rows_into_process_ports() {
+        let rows = "PROCESS\t42\t1\troot\tSs\t0.4\t1.2\t1234\t5678\t01:02\tsshd\t/usr/sbin/sshd -D\n\
+                    SOCKET\t42\ttcp\t0.0.0.0:22\n\
+                    SOCKET\t42\ttcp\t[::]:22\n\
+                    SOCKET\t99\tudp\t0.0.0.0:53\n";
+
+        let processes = parse_process_output(rows);
+
+        assert_eq!(processes.len(), 1);
+        assert_eq!(
+            processes[0].ports,
+            vec!["tcp:0.0.0.0:22".to_string(), "tcp:[::]:22".to_string()]
+        );
+    }
+
+    #[test]
+    fn defaults_ports_to_empty_when_no_socket_rows() {
+        let rows = "PROCESS\t7\t0\t-\t-\t0\t0\t0\t0\t-\tinit\tinit\n";
+
+        let processes = parse_process_output(rows);
+
+        assert_eq!(processes.len(), 1);
+        assert!(processes[0].ports.is_empty());
+    }
+
+    #[test]
+    fn deduplicates_ports_for_same_pid() {
+        let rows = "PROCESS\t10\t1\troot\tS\t0\t0\t0\t0\t-\tnginx\tnginx\n\
+                    SOCKET\t10\ttcp\t0.0.0.0:80\n\
+                    SOCKET\t10\ttcp\t0.0.0.0:80\n";
+
+        let processes = parse_process_output(rows);
+
+        assert_eq!(processes[0].ports, vec!["tcp:0.0.0.0:80".to_string()]);
     }
 }

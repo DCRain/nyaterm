@@ -47,10 +47,11 @@ type ProcessDisplayMode = "compact" | "medium" | "narrow" | "wide";
 const MAX_CONSECUTIVE_FAILURES = 3;
 const PROCESS_UNSUPPORTED_ERROR = "process listing is unsupported on this remote host";
 const PROCESS_ROW_HEIGHT = 38;
-const PROCESS_DETAILS_HEIGHT = 120;
+const PROCESS_MEDIUM_ROW_HEIGHT = 52;
+const PROCESS_DETAILS_HEIGHT = 168;
 const PROCESS_COMPACT_ROW_HEIGHT = 46;
-const PROCESS_NARROW_DETAILS_HEIGHT = 132;
-const PROCESS_COMPACT_DETAILS_HEIGHT = 132;
+const PROCESS_NARROW_DETAILS_HEIGHT = 168;
+const PROCESS_COMPACT_DETAILS_HEIGHT = 168;
 
 function getProcessDisplayMode(width: number): ProcessDisplayMode {
   if (width > 0 && width < 260) return "compact";
@@ -66,7 +67,7 @@ function getProcessTableColumns(mode: ProcessDisplayMode) {
     case "medium":
       return "grid-cols-[minmax(0,1.25fr)_minmax(3.4rem,0.62fr)_minmax(3.5rem,0.54fr)_minmax(3.7rem,0.54fr)_1.5rem]";
     default:
-      return "grid-cols-[minmax(0,1.35fr)_minmax(3.4rem,0.62fr)_minmax(3.5rem,0.54fr)_minmax(3.7rem,0.54fr)_minmax(3.6rem,0.5fr)_1.5rem]";
+      return "grid-cols-[minmax(0,1.2fr)_minmax(3.4rem,0.62fr)_minmax(3.5rem,0.54fr)_minmax(3.7rem,0.54fr)_minmax(4.5rem,0.72fr)_1.5rem]";
   }
 }
 
@@ -77,7 +78,7 @@ function getProcessDataColumns(mode: ProcessDisplayMode) {
     case "medium":
       return "grid-cols-[minmax(0,1.25fr)_minmax(3.4rem,0.62fr)_minmax(3.5rem,0.54fr)_minmax(3.7rem,0.54fr)]";
     default:
-      return "grid-cols-[minmax(0,1.35fr)_minmax(3.4rem,0.62fr)_minmax(3.5rem,0.54fr)_minmax(3.7rem,0.54fr)_minmax(3.6rem,0.5fr)]";
+      return "grid-cols-[minmax(0,1.2fr)_minmax(3.4rem,0.62fr)_minmax(3.5rem,0.54fr)_minmax(3.7rem,0.54fr)_minmax(4.5rem,0.72fr)]";
   }
 }
 
@@ -92,8 +93,10 @@ function getProcessDataSpan(mode: ProcessDisplayMode) {
   }
 }
 
-function getProcessRowHeight(mode: ProcessDisplayMode) {
-  return mode === "compact" ? PROCESS_COMPACT_ROW_HEIGHT : PROCESS_ROW_HEIGHT;
+function getProcessRowHeight(mode: ProcessDisplayMode, process?: RemoteProcess) {
+  if (mode === "compact") return PROCESS_COMPACT_ROW_HEIGHT;
+  if (mode === "medium" && (process?.ports?.length ?? 0) > 0) return PROCESS_MEDIUM_ROW_HEIGHT;
+  return PROCESS_ROW_HEIGHT;
 }
 
 function getProcessDetailsHeight(mode: ProcessDisplayMode) {
@@ -111,10 +114,14 @@ function formatKb(kb: number): string {
   return `${val < 10 ? val.toFixed(1) : val.toFixed(0)} ${units[i]}`;
 }
 
+function formatPortsDisplay(ports: string[]) {
+  return ports.join(", ");
+}
+
 function processMatches(process: RemoteProcess, query: string) {
   if (!query) return true;
   const haystack =
-    `${process.pid} ${process.ppid} ${process.user} ${process.state} ${process.command} ${process.command_line}`.toLowerCase();
+    `${process.pid} ${process.ppid} ${process.user} ${process.state} ${process.command} ${process.command_line} ${formatPortsDisplay(process.ports ?? [])}`.toLowerCase();
   return haystack.includes(query);
 }
 
@@ -293,8 +300,8 @@ export default function ProcessManager({ activeSessionId }: ProcessManagerProps)
   } = useVirtualList(visibleProcesses, {
     getItemHeight: (process) =>
       process.pid === selectedPid
-        ? getProcessRowHeight(displayMode) + getProcessDetailsHeight(displayMode)
-        : getProcessRowHeight(displayMode),
+        ? getProcessRowHeight(displayMode, process) + getProcessDetailsHeight(displayMode)
+        : getProcessRowHeight(displayMode, process),
     itemHeight: getProcessRowHeight(displayMode),
     overscan: 8,
   });
@@ -314,9 +321,6 @@ export default function ProcessManager({ activeSessionId }: ProcessManagerProps)
 
   useEffect(() => {
     setSort((current) => {
-      if (displayMode !== "wide" && current.key === "user") {
-        return { key: "cpu", direction: "desc" };
-      }
       if ((displayMode === "compact" || displayMode === "narrow") && current.key === "memory") {
         return { key: "cpu", direction: "desc" };
       }
@@ -392,7 +396,7 @@ export default function ProcessManager({ activeSessionId }: ProcessManagerProps)
         }
       />
 
-      <div ref={panelBodyRef} className="flex-1 min-h-0 p-2.5">
+      <div ref={panelBodyRef} className="flex min-h-0 flex-1 flex-col p-2.5">
         {!activeSessionId ? (
           <EmptyState icon={<MdTaskAlt />} text={t("processManager.noSession")} />
         ) : !enabled ? (
@@ -423,7 +427,7 @@ export default function ProcessManager({ activeSessionId }: ProcessManagerProps)
             </div>
 
             <div
-              className="min-h-0 flex-1 overflow-hidden rounded-lg border"
+              className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border"
               style={{ borderColor: "var(--df-border)" }}
             >
               {!isCompactMode && (
@@ -432,21 +436,25 @@ export default function ProcessManager({ activeSessionId }: ProcessManagerProps)
 
               <div
                 ref={processListRef}
-                className={cn(
-                  "min-h-0 overflow-y-auto overflow-x-hidden terminal-scroll",
-                  isCompactMode ? "h-full" : "h-[calc(100%-2rem)]",
-                )}
+                className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden terminal-scroll"
                 onScroll={handleProcessListScroll}
               >
                 <div style={{ paddingTop: processPaddingTop, paddingBottom: processPaddingBottom }}>
-                  {virtualProcesses.map(({ item: process }) => (
+                  {virtualProcesses.map(({ item: process }) => {
+                    const rowHeight =
+                      process.pid === selectedPid
+                        ? getProcessRowHeight(displayMode, process) +
+                          getProcessDetailsHeight(displayMode)
+                        : getProcessRowHeight(displayMode, process);
+
+                    return (
                     <div
                       key={process.pid}
                       className={cn(
                         "border-b border-l-2 border-l-transparent text-xs transition-colors hover:bg-muted/30",
                         process.pid === selectedProcess?.pid && "bg-muted/40",
                       )}
-                      style={{ borderBottomColor: "var(--df-border)" }}
+                      style={{ borderBottomColor: "var(--df-border)", height: rowHeight }}
                     >
                       {isCompactMode ? (
                         <CompactProcessRow
@@ -511,7 +519,8 @@ export default function ProcessManager({ activeSessionId }: ProcessManagerProps)
                         />
                       )}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 {visibleProcesses.length === 0 && (
                   <div className="p-6 text-center text-sm text-muted-foreground">
@@ -627,7 +636,7 @@ function ProcessTableHeader({
   return (
     <div
       className={cn(
-        "grid h-8 items-center gap-1 border-b px-2 font-mono text-[0.625rem] font-semibold uppercase text-muted-foreground",
+        "grid h-8 shrink-0 items-center gap-1 border-b px-2 font-mono text-[0.625rem] font-semibold uppercase text-muted-foreground",
         getProcessTableColumns(mode),
       )}
       style={{ borderColor: "var(--df-border)" }}
@@ -662,12 +671,7 @@ function ProcessTableHeader({
         />
       )}
       {mode === "wide" && (
-        <ProcessColumnHeader
-          active={sort.key === "user"}
-          direction={sort.direction}
-          label={t("processManager.user")}
-          onClick={() => onToggleSort("user")}
-        />
+        <span className="truncate text-muted-foreground">{t("processManager.ports")}</span>
       )}
       <span />
     </div>
@@ -689,8 +693,18 @@ function ProcessTableRow({
   onCopyCommand: () => void;
   onCopyPid: () => void;
 }) {
+  const { t } = useTranslation();
+  const ports = process.ports ?? [];
+  const portsDisplay = formatPortsDisplay(ports);
+
   return (
-    <div className={cn("grid h-[38px] items-center gap-1 px-2", getProcessTableColumns(mode))}>
+    <div
+      className={cn(
+        "grid items-center gap-1 px-2",
+        mode === "medium" && ports.length > 0 ? "min-h-[52px]" : "h-[38px]",
+        getProcessTableColumns(mode),
+      )}
+    >
       <button
         type="button"
         className={cn(
@@ -700,8 +714,15 @@ function ProcessTableRow({
         )}
         onClick={onSelect}
       >
-        <span className="truncate font-medium" title={process.command_line}>
-          {process.command}
+        <span className="min-w-0">
+          <span className="block truncate font-medium" title={process.command_line}>
+            {process.command}
+          </span>
+          {mode === "medium" && ports.length > 0 && (
+            <span className="mt-0.5 block truncate font-mono text-[0.625rem] text-muted-foreground" title={portsDisplay}>
+              {portsDisplay}
+            </span>
+          )}
         </span>
         <span className="truncate text-right font-mono text-muted-foreground">{process.pid}</span>
         <span className={cn("truncate text-right font-mono", cpuTone(process.cpu_percent))}>
@@ -713,8 +734,11 @@ function ProcessTableRow({
           </span>
         )}
         {mode === "wide" && (
-          <span className="truncate font-mono text-muted-foreground" title={process.user}>
-            {process.user}
+          <span
+            className="truncate font-mono text-[0.625rem] text-muted-foreground"
+            title={ports.length > 0 ? portsDisplay : t("processManager.noPorts")}
+          >
+            {ports.length > 0 ? portsDisplay : t("processManager.noPorts")}
           </span>
         )}
       </button>
@@ -814,7 +838,7 @@ function ProcessDetails({
   const { t } = useTranslation();
   const compact = mode === "compact";
   const narrow = compact || mode === "narrow";
-  const detailHeight = compact ? "h-[132px]" : narrow ? "h-[132px]" : "h-[120px]";
+  const detailHeight = compact ? "h-[168px]" : narrow ? "h-[168px]" : "h-[168px]";
 
   return (
     <div
@@ -838,6 +862,27 @@ function ProcessDetails({
         />
         <Metric label="RSS" value={formatKb(process.rss_kb)} />
         <Metric label={t("processManager.elapsed")} value={process.elapsed} />
+      </div>
+
+      <div className="mt-2">
+        <span className="text-[0.625rem] uppercase text-muted-foreground">{t("processManager.ports")}</span>
+        {(process.ports ?? []).length > 0 ? (
+          <div className="mt-1 flex flex-wrap gap-1">
+            {(process.ports ?? []).map((port) => (
+              <Badge
+                key={port}
+                variant="outline"
+                className="h-5 shrink-0 px-1.5 font-mono text-[0.625rem] text-muted-foreground"
+              >
+                {port}
+              </Badge>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-1 font-mono text-[0.6875rem] text-muted-foreground">
+            {t("processManager.noPorts")}
+          </div>
+        )}
       </div>
 
       <div

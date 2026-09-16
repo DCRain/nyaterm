@@ -1035,6 +1035,7 @@ export interface RemoteProcess {
   elapsed: string;
   command: string;
   command_line: string;
+  ports: string[];
 }
 
 export interface RemoteCommandOutput {
