@@ -3,8 +3,8 @@ import type { Terminal } from "@xterm/xterm";
 import { useCallback, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  MdAddCircleOutline,
   MdAutoAwesome,
+  MdBolt,
   MdClearAll,
   MdContentCopy,
   MdContentPaste,
@@ -288,7 +288,7 @@ export default function TerminalContextMenu({
                     )
                   }
                 >
-                  <MdAddCircleOutline className="text-[0.875rem] text-muted-foreground mr-2" />
+                  <MdBolt className="text-[0.875rem] text-muted-foreground mr-2" />
                   {t("terminalCtx.saveAsQuickCommand")}
                 </ContextMenuItem>
               )}
