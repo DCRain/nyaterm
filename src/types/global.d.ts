@@ -1686,8 +1686,20 @@ export interface AIStreamEventPayload {
 }
 
 export type AgentActionKind = "execute_command" | "final_answer";
-export type AgentApprovalReasonCode = "confirmEachCommand" | "criticalRisk" | "riskExceedsThreshold" | "externalAgentPermission" | "safeAutoUnknownOrHighRisk";
-export type RiskReasonCode = "emptyCommand" | "irreversiblePattern" | "unclassifiedCommand" | "privilegedMutation" | "unknownCommand" | "ordinaryWrite" | "readOnlyDiagnostic";
+export type AgentApprovalReasonCode =
+  | "confirmEachCommand"
+  | "criticalRisk"
+  | "riskExceedsThreshold"
+  | "externalAgentPermission"
+  | "safeAutoUnknownOrHighRisk";
+export type RiskReasonCode =
+  | "emptyCommand"
+  | "irreversiblePattern"
+  | "unclassifiedCommand"
+  | "privilegedMutation"
+  | "unknownCommand"
+  | "ordinaryWrite"
+  | "readOnlyDiagnostic";
 export type AgentStepStatus =
   | "running"
   | "completed"
