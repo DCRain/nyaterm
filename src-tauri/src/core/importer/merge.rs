@@ -161,7 +161,7 @@ fn import_prepared_nyaterm_json(
             config: conn.config,
             group_id,
             description: conn.description,
-            tags: Vec::new(),
+            tags: conn.tags,
             sort_order: conn.sort_order,
             icon: conn.icon,
             icon_auto_detect: None,

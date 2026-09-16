@@ -15,7 +15,7 @@ export function ConnectionTagsField({ value, suggestions, onChange }: Connection
   const inputRef = useRef<HTMLInputElement>(null);
   const [inputValue, setInputValue] = useState("");
   const [focused, setFocused] = useState(false);
-  const [activeSuggestion, setActiveSuggestion] = useState(0);
+  const [activeSuggestion, setActiveSuggestion] = useState<number | null>(null);
 
   const filteredSuggestions = useMemo(() => {
     const query = inputValue.trim().toLowerCase();
@@ -38,12 +38,12 @@ export function ConnectionTagsField({ value, suggestions, onChange }: Connection
       if (!tag) return;
       if (value.includes(tag)) {
         setInputValue("");
-        setActiveSuggestion(0);
+        setActiveSuggestion(null);
         return;
       }
       onChange([...value, tag]);
       setInputValue("");
-      setActiveSuggestion(0);
+      setActiveSuggestion(null);
     },
     [onChange, value],
   );
@@ -93,7 +93,7 @@ export function ConnectionTagsField({ value, suggestions, onChange }: Connection
           onBlur={() => setFocused(false)}
           onChange={(event) => {
             setInputValue(event.target.value);
-            setActiveSuggestion(0);
+            setActiveSuggestion(null);
           }}
           onKeyDown={(event) => {
             if (event.nativeEvent.isComposing || event.key === "Process") return;
@@ -101,22 +101,29 @@ export function ConnectionTagsField({ value, suggestions, onChange }: Connection
             if (event.key === "ArrowDown" && filteredSuggestions.length > 0) {
               event.preventDefault();
               event.stopPropagation();
-              setActiveSuggestion((current) => (current + 1) % filteredSuggestions.length);
+              setActiveSuggestion((current) =>
+                current === null ? 0 : (current + 1) % filteredSuggestions.length,
+              );
               return;
             }
             if (event.key === "ArrowUp" && filteredSuggestions.length > 0) {
               event.preventDefault();
               event.stopPropagation();
-              setActiveSuggestion(
-                (current) =>
-                  (current - 1 + filteredSuggestions.length) % filteredSuggestions.length,
+              setActiveSuggestion((current) =>
+                current === null
+                  ? filteredSuggestions.length - 1
+                  : (current - 1 + filteredSuggestions.length) % filteredSuggestions.length,
               );
               return;
             }
             if (event.key === "Enter") {
               event.preventDefault();
               event.stopPropagation();
-              addTag(filteredSuggestions[activeSuggestion] ?? inputValue);
+              if (activeSuggestion !== null) {
+                addTag(filteredSuggestions[activeSuggestion] ?? inputValue);
+              } else if (inputValue.trim()) {
+                addTag(inputValue);
+              }
               return;
             }
             if (event.key === ",") {
@@ -149,7 +156,6 @@ export function ConnectionTagsField({ value, suggestions, onChange }: Connection
               className="flex w-full items-center rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent aria-selected:bg-accent"
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => addTag(tag)}
-              onMouseEnter={() => setActiveSuggestion(index)}
             >
               {tag}
             </button>

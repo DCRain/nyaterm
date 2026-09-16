@@ -25,6 +25,18 @@ function TestField({ onKeyDown }: { onKeyDown?: () => void }) {
 }
 
 describe("ConnectionTagsField", () => {
+  it("does not add a suggestion when Enter is pressed with empty input", async () => {
+    const user = userEvent.setup();
+    render(<TestField />);
+    const input = screen.getByRole("combobox");
+
+    await user.click(input);
+    await user.keyboard("{Enter}");
+
+    expect(screen.queryByRole("button", { name: "Remove gpu" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove staging" })).toBeNull();
+  });
+
   it("adds trimmed tags with Enter and comma while preventing exact duplicates", async () => {
     const user = userEvent.setup();
     render(<TestField />);
@@ -43,6 +55,28 @@ describe("ConnectionTagsField", () => {
     expect(screen.queryByText("Production")).not.toBeNull();
   });
 
+  it("adds an explicitly keyboard-selected suggestion with Enter", async () => {
+    const user = userEvent.setup();
+    render(<TestField />);
+    const input = screen.getByRole("combobox");
+
+    await user.type(input, "sta");
+    await user.keyboard("{ArrowDown}{Enter}");
+
+    expect(screen.queryByRole("button", { name: "Remove staging" })).not.toBeNull();
+  });
+
+  it("adds a suggestion when it is clicked", async () => {
+    const user = userEvent.setup();
+    render(<TestField />);
+    const input = screen.getByRole("combobox");
+
+    await user.type(input, "sta");
+    await user.click(screen.getByRole("option", { name: "staging" }));
+
+    expect(screen.queryByRole("button", { name: "Remove staging" })).not.toBeNull();
+  });
+
   it("removes tags with the remove button and empty Backspace", async () => {
     const user = userEvent.setup();
     render(<TestField />);
@@ -56,15 +90,10 @@ describe("ConnectionTagsField", () => {
     expect(screen.queryByRole("button", { name: "Remove gpu" })).toBeNull();
   });
 
-  it("reuses filtered existing tags and keeps Enter from reaching the parent form", async () => {
-    const user = userEvent.setup();
+  it("keeps Enter from reaching the parent form", () => {
     const parentKeyDown = vi.fn();
     render(<TestField onKeyDown={parentKeyDown} />);
     const input = screen.getByRole("combobox");
-
-    await user.type(input, "stag");
-    await user.click(screen.getByRole("option", { name: "staging" }));
-    expect(screen.queryByText("staging")).not.toBeNull();
 
     parentKeyDown.mockClear();
     fireEvent.keyDown(input, { key: "Enter" });

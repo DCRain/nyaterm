@@ -1084,6 +1084,7 @@ fn prepare_termius_connections(
             },
             group_path,
             description: Some("Imported from Termius".to_string()),
+            tags: Vec::new(),
             sort_order: 0,
             icon: None,
             auth: Some(auth),
