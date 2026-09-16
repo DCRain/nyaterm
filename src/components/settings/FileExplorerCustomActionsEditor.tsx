@@ -13,7 +13,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { SelectItem } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { createFileExplorerCustomAction } from "@/lib/fileExplorerActions";
+import {
+  createFileExplorerCustomAction,
+  normalizeFileExplorerConfirmationLevel,
+} from "@/lib/fileExplorerActions";
 import type { FileExplorerCustomAction } from "@/types/global";
 import {
   SettingNumberInput,
@@ -154,6 +157,25 @@ function ActionEditorDialog({
           >
             <SettingSwitch checked={draft.execute} onChange={(execute) => onChange({ execute })} />
           </SettingRow>
+          <SettingSelect
+            label={t("settings.fileExplorerCustomActionConfirmationLevel")}
+            desc={t("settings.fileExplorerCustomActionConfirmationLevelDesc")}
+            value={normalizeFileExplorerConfirmationLevel(draft.confirmation_level)}
+            controlClassName="max-w-sm"
+            onValueChange={(value) =>
+              onChange({ confirmation_level: normalizeFileExplorerConfirmationLevel(value) })
+            }
+          >
+            <SelectItem value="none">
+              {t("settings.fileExplorerCustomActionConfirmationLevelNone")}
+            </SelectItem>
+            <SelectItem value="warning">
+              {t("settings.fileExplorerCustomActionConfirmationLevelWarning")}
+            </SelectItem>
+            <SelectItem value="danger">
+              {t("settings.fileExplorerCustomActionConfirmationLevelDanger")}
+            </SelectItem>
+          </SettingSelect>
         </div>
         <DialogFooter className="border-t px-4 py-3">
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
@@ -207,6 +229,7 @@ export function FileExplorerCustomActionsEditor({
         normalizeTarget(draft.target) === "directory"
           ? 0
           : Math.max(0, draft.max_file_size_bytes ?? 0),
+      confirmation_level: normalizeFileExplorerConfirmationLevel(draft.confirmation_level),
     };
     if (!next.name || !next.command) return;
     if (normalizeTarget(next.target) === "file" && !next.match_pattern) return;
@@ -246,14 +269,29 @@ export function FileExplorerCustomActionsEditor({
                   ? t("settings.fileExplorerCustomActionTargetDirectory")
                   : action.match_pattern.trim() ||
                     t("settings.fileExplorerCustomActionPatternPlaceholder");
+              const confirmationLevel = normalizeFileExplorerConfirmationLevel(
+                action.confirmation_level,
+              );
               return (
                 <div
                   key={action.id}
                   className="flex items-center gap-2 px-3 py-2 hover:bg-muted/30"
                 >
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium">
-                      {action.name.trim() || t("settings.fileExplorerCustomActionUntitled")}
+                    <div className="flex min-w-0 items-center gap-2">
+                      <div className="truncate text-sm font-medium">
+                        {action.name.trim() || t("settings.fileExplorerCustomActionUntitled")}
+                      </div>
+                      {confirmationLevel === "warning" ? (
+                        <span className="shrink-0 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                          {t("settings.fileExplorerCustomActionConfirmationBadgeWarning")}
+                        </span>
+                      ) : null}
+                      {confirmationLevel === "danger" ? (
+                        <span className="shrink-0 rounded-full bg-destructive/15 px-2 py-0.5 text-[10px] font-medium text-destructive">
+                          {t("settings.fileExplorerCustomActionConfirmationBadgeDanger")}
+                        </span>
+                      ) : null}
                     </div>
                     <div className="truncate font-mono text-[11px] text-muted-foreground">
                       {summary}

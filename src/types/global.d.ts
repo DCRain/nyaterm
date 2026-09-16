@@ -1509,6 +1509,8 @@ export interface TerminalSettings {
 
 export type FileExplorerActionTarget = "file" | "directory";
 
+export type FileExplorerActionConfirmationLevel = "none" | "warning" | "danger";
+
 export interface FileExplorerCustomAction {
   id: string;
   name: string;
@@ -1525,6 +1527,8 @@ export interface FileExplorerCustomAction {
    * `0` or omitted means no limit. Ignored for directories.
    */
   max_file_size_bytes?: number;
+  /** Execution guard: none = direct; warning = confirm; danger = confirm + master password. */
+  confirmation_level?: FileExplorerActionConfirmationLevel;
 }
 
 export interface TransferSettings {

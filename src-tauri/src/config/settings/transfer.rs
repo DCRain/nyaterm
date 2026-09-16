@@ -20,6 +20,8 @@ pub struct FileExplorerCustomAction {
     /// Max file size in bytes for file-target actions. 0 means unlimited.
     #[serde(default)]
     pub max_file_size_bytes: u64,
+    #[serde(default = "default_file_explorer_confirmation_level")]
+    pub confirmation_level: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,6 +99,9 @@ fn default_recording_memory_limit_bytes() -> u64 {
 }
 fn default_file_explorer_action_target() -> String {
     "file".to_string()
+}
+fn default_file_explorer_confirmation_level() -> String {
+    "none".to_string()
 }
 
 impl Default for TransferSettings {

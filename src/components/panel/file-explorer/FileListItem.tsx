@@ -5,6 +5,7 @@ import {
   MdBookmarkAdd,
   MdContentCopy,
   MdCopyAll,
+  MdDangerous,
   MdDelete,
   MdDownload,
   MdDriveFileMove,
@@ -24,8 +25,10 @@ import {
   MdTerminal,
   MdUpload,
   MdVisibility,
+  MdWarningAmber,
 } from "react-icons/md";
 import { getFileIcon } from "@/components/icons";
+import { normalizeFileExplorerConfirmationLevel } from "@/lib/fileExplorerActions";
 import { cn, formatSize } from "@/lib/utils";
 import type { AICustomActionConfig, FileEntry, FileExplorerCustomAction } from "@/types/global";
 import {
@@ -658,16 +661,33 @@ export function FileListItem({
             {showTerminalActions && customActions.length > 0 && onCustomAction ? (
               <>
                 <ContextMenuSeparator />
-                {customActions.map((action) => (
-                  <ContextMenuItem
-                    key={action.id}
-                    // Top-level item (no submenu): same onClick path as "send to terminal".
-                    onClick={() => onCustomAction(entry, action)}
-                  >
-                    <MdPlayArrow className="text-[0.875rem] text-muted-foreground mr-2" />
-                    {action.name}
-                  </ContextMenuItem>
-                ))}
+                {customActions.map((action) => {
+                  const confirmationLevel = normalizeFileExplorerConfirmationLevel(
+                    action.confirmation_level,
+                  );
+                  const ActionIcon =
+                    confirmationLevel === "danger"
+                      ? MdDangerous
+                      : confirmationLevel === "warning"
+                        ? MdWarningAmber
+                        : MdPlayArrow;
+                  const actionIconClass =
+                    confirmationLevel === "danger"
+                      ? "text-destructive"
+                      : confirmationLevel === "warning"
+                        ? "text-amber-600 dark:text-amber-400"
+                        : "text-muted-foreground";
+                  return (
+                    <ContextMenuItem
+                      key={action.id}
+                      // Top-level item (no submenu): same onClick path as "send to terminal".
+                      onClick={() => onCustomAction(entry, action)}
+                    >
+                      <ActionIcon className={`text-[0.875rem] mr-2 ${actionIconClass}`} />
+                      {action.name}
+                    </ContextMenuItem>
+                  );
+                })}
               </>
             ) : null}
             <ContextMenuSeparator />

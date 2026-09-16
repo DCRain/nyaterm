@@ -1,3 +1,6 @@
+import CustomActionConfirmDialog, {
+  type CustomActionConfirmDialogData,
+} from "@/components/dialog/file-explorer/CustomActionConfirmDialog";
 import DeleteDialog, {
   type DeleteDialogData,
 } from "@/components/dialog/file-explorer/DeleteDialog";
@@ -16,11 +19,14 @@ import PropertiesDialog, {
 import type { FileEntry } from "@/types/global";
 
 interface FileExplorerDialogsProps {
+  customActionConfirmData: CustomActionConfirmDialogData | null;
   deleteDialogData: DeleteDialogData | null;
   moveDialogData: MoveDialogData | null;
   newItemDialogData: NewItemDialogData | null;
   newSymlinkDialogData: NewSymlinkDialogData | null;
   propertiesDialogData: PropertiesDialogData | null;
+  onCustomActionConfirmClose: () => void;
+  onCustomActionConfirm: (data: CustomActionConfirmDialogData) => void;
   onDeleteClose: () => void;
   onMoveClose: () => void;
   onNewItemClose: () => void;
@@ -34,11 +40,14 @@ interface FileExplorerDialogsProps {
 }
 
 export function FileExplorerDialogs({
+  customActionConfirmData,
   deleteDialogData,
   moveDialogData,
   newItemDialogData,
   newSymlinkDialogData,
   propertiesDialogData,
+  onCustomActionConfirmClose,
+  onCustomActionConfirm,
   onDeleteClose,
   onMoveClose,
   onNewItemClose,
@@ -52,6 +61,14 @@ export function FileExplorerDialogs({
 }: FileExplorerDialogsProps) {
   return (
     <>
+      {customActionConfirmData && (
+        <CustomActionConfirmDialog
+          data={customActionConfirmData}
+          onClose={onCustomActionConfirmClose}
+          onConfirm={onCustomActionConfirm}
+        />
+      )}
+
       {deleteDialogData && (
         <DeleteDialog
           data={deleteDialogData}

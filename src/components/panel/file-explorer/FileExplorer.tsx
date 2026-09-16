@@ -38,6 +38,7 @@ import {
 } from "react-icons/md";
 import { PiColumnsPlusRightBold } from "react-icons/pi";
 import { toast } from "sonner";
+import type { CustomActionConfirmDialogData } from "@/components/dialog/file-explorer/CustomActionConfirmDialog";
 import type {
   DeleteDialogData,
   DeleteDialogItem,
@@ -81,6 +82,7 @@ import {
   expandCommandTemplate,
   isFileExplorerActionSizeAllowed,
   matchFileExplorerActions,
+  normalizeFileExplorerConfirmationLevel,
 } from "@/lib/fileExplorerActions";
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
@@ -776,6 +778,8 @@ export function FileExplorerPane({
   const [error, setError] = useState<string | null>(null);
 
   const [inlineRenameState, setInlineRenameState] = useState<InlineRenameState | null>(null);
+  const [customActionConfirmData, setCustomActionConfirmData] =
+    useState<CustomActionConfirmDialogData | null>(null);
   const [deleteDialogData, setDeleteDialogData] = useState<DeleteDialogData | null>(null);
   const [moveDialogData, setMoveDialogData] = useState<MoveDialogData | null>(null);
   const [newItemDialogData, setNewItemDialogData] = useState<NewItemDialogData | null>(null);
@@ -2985,6 +2989,30 @@ export function FileExplorerPane({
 
   const customActionDedupeRef = useRef<{ key: string; at: number } | null>(null);
 
+  const executeCustomFileAction = useCallback(
+    (sessionId: string, command: string, action: FileExplorerCustomAction) => {
+      const data = buildTerminalCommandInput(command, action.execute);
+      const peerSessionIds = getSessionInputPeerIds(sessionId, syncGroups, tabs, broadcastToAll);
+      const options = {
+        preview: action.execute
+          ? ({ kind: "reset" } as const)
+          : ({ kind: "data", data: command } as const),
+        registerSubmission: action.execute ? command : null,
+        origin: "quick_command" as const,
+      };
+
+      const sendInput =
+        peerSessionIds.length > 0
+          ? sendSessionInputWithSync(sessionId, data, peerSessionIds, options)
+          : sendSessionInput(sessionId, data, options);
+      void sendInput.catch((error) => {
+        toast.error(getErrorMessage(error) || t("fileExplorer.customCommandUnavailable"));
+      });
+      void emit(`focus-terminal-${sessionId}`).catch(() => {});
+    },
+    [broadcastToAll, syncGroups, t, tabs],
+  );
+
   const handleCustomFileAction = useCallback(
     (entry: FileEntry, action: FileExplorerCustomAction) => {
       if (!activeSessionId || !terminalInputEnabled) {
@@ -3018,38 +3046,45 @@ export function FileExplorerPane({
       }
       customActionDedupeRef.current = { key: dedupeKey, at: now };
 
-      const sessionId = activeSessionId;
-      const data = buildTerminalCommandInput(command, action.execute);
-      const peerSessionIds = getSessionInputPeerIds(sessionId, syncGroups, tabs, broadcastToAll);
-      const options = {
-        preview: action.execute
-          ? ({ kind: "reset" } as const)
-          : ({ kind: "data", data: command } as const),
-        registerSubmission: action.execute ? command : null,
-        origin: "quick_command" as const,
-      };
+      const confirmationLevel = normalizeFileExplorerConfirmationLevel(action.confirmation_level);
+      if (confirmationLevel === "danger" && !appSettings.security.master_password) {
+        toast.error(t("fileExplorer.customCommandDangerNoMasterPassword"));
+        return;
+      }
 
-      // Match sendTextToTerminal: write immediately, focus in parallel.
-      // Delaying for menu unmount / awaiting focus made clicks feel like they "missed".
-      const sendInput =
-        peerSessionIds.length > 0
-          ? sendSessionInputWithSync(sessionId, data, peerSessionIds, options)
-          : sendSessionInput(sessionId, data, options);
-      void sendInput.catch((error) => {
-        toast.error(getErrorMessage(error) || t("fileExplorer.customCommandUnavailable"));
-      });
-      void emit(`focus-terminal-${sessionId}`).catch(() => {});
+      if (confirmationLevel === "warning" || confirmationLevel === "danger") {
+        setCustomActionConfirmData({
+          level: confirmationLevel,
+          actionName: action.name,
+          entryName: entry.name,
+          fullPath,
+          command,
+          execute: action.execute,
+          sessionId: activeSessionId,
+          action,
+        });
+        return;
+      }
+
+      executeCustomFileAction(activeSessionId, command, action);
     },
     [
       activeSessionId,
-      broadcastToAll,
+      appSettings.security.master_password,
+      executeCustomFileAction,
       explorerBackend,
       getEntryFullPath,
-      syncGroups,
       t,
-      tabs,
       terminalInputEnabled,
     ],
+  );
+
+  const handleCustomActionConfirm = useCallback(
+    (data: CustomActionConfirmDialogData) => {
+      executeCustomFileAction(data.sessionId, data.command, data.action);
+      setCustomActionConfirmData(null);
+    },
+    [executeCustomFileAction],
   );
 
   const handleFileAIAction = async (
@@ -4776,11 +4811,14 @@ export function FileExplorerPane({
       )}
 
       <FileExplorerDialogs
+        customActionConfirmData={customActionConfirmData}
         deleteDialogData={deleteDialogData}
         moveDialogData={moveDialogData}
         newItemDialogData={newItemDialogData}
         newSymlinkDialogData={newSymlinkDialogData}
         propertiesDialogData={propertiesDialogData}
+        onCustomActionConfirmClose={() => setCustomActionConfirmData(null)}
+        onCustomActionConfirm={handleCustomActionConfirm}
         onDeleteClose={() => setDeleteDialogData(null)}
         onMoveClose={() => setMoveDialogData(null)}
         onNewItemClose={() => setNewItemDialogData(null)}

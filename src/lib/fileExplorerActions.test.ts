@@ -8,6 +8,7 @@ import {
   matchesFileExplorerActionTarget,
   matchFileExplorerActions,
   matchSimpleGlob,
+  normalizeFileExplorerConfirmationLevel,
   normalizeFileExplorerMatchPattern,
 } from "./fileExplorerActions";
 
@@ -19,6 +20,17 @@ describe("fileExplorerActions matching", () => {
     expect(action.command).toBe("");
     expect(action.target).toBe("file");
     expect(action.max_file_size_bytes).toBe(0);
+    expect(action.confirmation_level).toBe("none");
+  });
+
+  it("normalizes confirmation levels and preserves overrides", () => {
+    expect(normalizeFileExplorerConfirmationLevel(undefined)).toBe("none");
+    expect(normalizeFileExplorerConfirmationLevel("warning")).toBe("warning");
+    expect(normalizeFileExplorerConfirmationLevel("danger")).toBe("danger");
+    expect(normalizeFileExplorerConfirmationLevel("invalid")).toBe("none");
+    expect(
+      createFileExplorerCustomAction({ confirmation_level: "danger" }).confirmation_level,
+    ).toBe("danger");
   });
 
   it("enforces optional max file size for file targets", () => {

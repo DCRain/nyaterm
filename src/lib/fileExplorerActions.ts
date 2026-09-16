@@ -1,7 +1,11 @@
 import type { FileExplorerBackendKind } from "@/components/panel/file-explorer/model";
 import { getFileExtension } from "@/components/panel/file-explorer/model";
 import { formatExplorerPathsForTerminal } from "@/lib/explorerPathDrag";
-import type { FileEntry, FileExplorerCustomAction } from "@/types/global";
+import type {
+  FileEntry,
+  FileExplorerActionConfirmationLevel,
+  FileExplorerCustomAction,
+} from "@/types/global";
 
 export interface FileExplorerActionContext {
   fullPath: string;
@@ -140,6 +144,13 @@ export function expandCommandTemplate(
     .join(basename);
 }
 
+export function normalizeFileExplorerConfirmationLevel(
+  level: string | undefined,
+): FileExplorerActionConfirmationLevel {
+  if (level === "warning" || level === "danger") return level;
+  return "none";
+}
+
 export function createFileExplorerCustomAction(
   partial?: Partial<FileExplorerCustomAction>,
 ): FileExplorerCustomAction {
@@ -158,6 +169,7 @@ export function createFileExplorerCustomAction(
     command: partial?.command ?? "",
     execute: partial?.execute ?? true,
     max_file_size_bytes: partial?.max_file_size_bytes ?? 0,
+    confirmation_level: normalizeFileExplorerConfirmationLevel(partial?.confirmation_level),
   };
 }
 
