@@ -12,7 +12,6 @@ import {
   setOwnerMainWindowLabel,
 } from "./lib/windowManager";
 
-const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const NewSessionPage = lazy(() => import("./pages/NewSessionPage"));
 const QuickCommandPage = lazy(() => import("./pages/QuickCommandPage"));
 const ProxyPage = lazy(() => import("./pages/ProxyPage"));
@@ -23,7 +22,6 @@ const FilePreviewPage = lazy(() => import("./pages/FilePreviewPage"));
 const NoteEditorPage = lazy(() => import("./pages/NoteEditorPage"));
 
 const PAGES: Record<string, React.ComponentType> = {
-  settings: SettingsPage,
   "new-session": NewSessionPage,
   "quick-command": QuickCommandPage,
   proxy: ProxyPage,
@@ -66,25 +64,21 @@ export default function ChildWindowRouter({ windowType }: { windowType: string }
     let unlistenFocusChanged: (() => void) | undefined;
     let programmaticClose = false;
     let lastFocusEmitAt = 0;
-    const pageHandlesCloseRequested = windowType === "settings";
+    currentWindow
+      .onCloseRequested(async (event) => {
+        if (programmaticClose || !isModalChildLabel(currentWindow.label)) return;
 
-    if (!pageHandlesCloseRequested) {
-      currentWindow
-        .onCloseRequested(async (event) => {
-          if (programmaticClose || !isModalChildLabel(currentWindow.label)) return;
-
-          programmaticClose = true;
-          event.preventDefault();
-          await prepareForModalChildClose(currentWindow.label).catch(() => {});
-          await currentWindow.close().catch(() => {
-            programmaticClose = false;
-          });
-        })
-        .then((unlisten) => {
-          unlistenCloseRequested = unlisten;
-        })
-        .catch(() => {});
-    }
+        programmaticClose = true;
+        event.preventDefault();
+        await prepareForModalChildClose(currentWindow.label).catch(() => {});
+        await currentWindow.close().catch(() => {
+          programmaticClose = false;
+        });
+      })
+      .then((unlisten) => {
+        unlistenCloseRequested = unlisten;
+      })
+      .catch(() => {});
 
     if (isModalChildLabel(currentWindow.label)) {
       currentWindow

@@ -29,6 +29,7 @@ import { useActivityBarController } from "./hooks/useActivityBarController";
 import { useActivitySessionCapabilities } from "./hooks/useActivitySessionCapabilities";
 import { type ExternalOpenRequest, useExternalOpenRequests } from "./hooks/useExternalOpenRequests";
 import { useFileDocumentCloseGuard } from "./hooks/useFileDocumentCloseGuard";
+import { useSettingsCloseGuard } from "./hooks/useSettingsCloseGuard";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts";
 import { useIdleLock } from "./hooks/useIdleLock";
 import { useMacSelectionGuard } from "./hooks/useMacSelectionGuard";
@@ -122,7 +123,11 @@ import {
   reduceFloatingPanelSelect,
   type TrayAction,
 } from "./lib/appWorkspace";
-import { collectFileDocumentPaneIds, removePaneFromTabs } from "./lib/appWorkspaceClose";
+import {
+  collectFileDocumentPaneIds,
+  collectSettingsPaneIds,
+  removePaneFromTabs,
+} from "./lib/appWorkspaceClose";
 import {
   type AssetMonitoringCacheEntry,
   buildAssetPatchFromGpuOverview,
@@ -141,6 +146,7 @@ import { normalizeHeaderStatusMode } from "./lib/headerStatus";
 import { invoke } from "./lib/invoke";
 import { logger } from "./lib/logger";
 import { NOTE_OPEN_EVENT, type NoteOpenDetail } from "./lib/noteEditorEvents";
+import { SETTINGS_OPEN_EVENT, type SettingsOpenDetail } from "./lib/settingsEvents";
 import { subscribeOpenSshTerminalAtPath } from "./lib/openSshTerminalAtPath";
 import { detectSystemLanguage } from "./lib/systemLanguage";
 import {
@@ -192,7 +198,6 @@ import {
   type NewSessionTarget,
   openNewSession,
   openNewSessionWithTarget,
-  openSettings,
   setOwnerMainWindowLabel,
 } from "./lib/windowManager";
 import {
@@ -276,6 +281,7 @@ function App() {
     openWorkbenchTab,
     openNoteTab,
     openExternalMarkdownTab,
+    openSettingsTab,
     updateTabSession,
     markTabConnectionFailed,
     updatePaneSession,
@@ -385,6 +391,14 @@ function App() {
     handleDiscardFileDocumentsAndClose,
     handlePendingFileDocumentCloseOpenChange,
   } = useFileDocumentCloseGuard();
+  const {
+    pendingSettingsPaneClose,
+    savingSettingsPanes,
+    requestSettingsPaneClose,
+    handleSaveSettingsPanesAndClose,
+    handleDiscardSettingsPanesAndClose,
+    handlePendingSettingsPaneCloseOpenChange,
+  } = useSettingsCloseGuard();
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [helpDotVisible, setHelpDotVisible] = useState(false);
   const [sendCommandDraft, setSendCommandDraft] = useState<SendCommandPanelDraft | null>(null);
@@ -2107,6 +2121,15 @@ function App() {
     return () => window.removeEventListener(NOTE_OPEN_EVENT, handler);
   }, [openNoteTab]);
 
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<SettingsOpenDetail>).detail;
+      openSettingsTab(detail?.section);
+    };
+    window.addEventListener(SETTINGS_OPEN_EVENT, handler);
+    return () => window.removeEventListener(SETTINGS_OPEN_EVENT, handler);
+  }, [openSettingsTab]);
+
   const { unreadTabIds, disconnectedTabIds } = useTabStatusIndicators(tabs, activeTabId);
 
   const handleSelectLeafTab = useCallback(
@@ -2365,7 +2388,12 @@ function App() {
       }
 
       if (pane.connecting) {
-        if (pane.view === "workbench" || pane.view === "note" || pane.view === "externalMarkdown") {
+        if (
+          pane.view === "workbench" ||
+          pane.view === "note" ||
+          pane.view === "externalMarkdown" ||
+          pane.view === "settings"
+        ) {
           return true;
         }
         if (pane.type === "RDP") {
@@ -2402,7 +2430,12 @@ function App() {
         return true;
       }
 
-      if (pane.view === "workbench" || pane.view === "note" || pane.view === "externalMarkdown") {
+      if (
+        pane.view === "workbench" ||
+        pane.view === "note" ||
+        pane.view === "externalMarkdown" ||
+        pane.view === "settings"
+      ) {
         return true;
       }
 
@@ -2492,10 +2525,15 @@ function App() {
   const requestCloseTabs = useCallback(
     async (tabsToClose: Tab[], options?: { nextActiveTabId?: string | null }) => {
       const tabIds = tabsToClose.map((tab) => tab.id);
-      const paneIds = collectFileDocumentPaneIds(tabsToClose);
-      await requestFileDocumentClose(paneIds, () => executeCloseTabs(tabIds, options));
+      const filePaneIds = collectFileDocumentPaneIds(tabsToClose);
+      const settingsPaneIds = collectSettingsPaneIds(tabsToClose);
+      await requestFileDocumentClose(filePaneIds, async () => {
+        await requestSettingsPaneClose(settingsPaneIds, async () => {
+          await executeCloseTabs(tabIds, options);
+        });
+      });
     },
-    [executeCloseTabs, requestFileDocumentClose],
+    [executeCloseTabs, requestFileDocumentClose, requestSettingsPaneClose],
   );
 
   const executeClosePane = useCallback(
@@ -2514,10 +2552,15 @@ function App() {
 
   const requestClosePane = useCallback(
     async (tab: Tab, pane: SessionPane) => {
-      const paneIds = pane.paneKind === "file" ? [pane.id] : [];
-      await requestFileDocumentClose(paneIds, () => executeClosePane(tab.id, pane.id));
+      const filePaneIds = pane.paneKind === "file" ? [pane.id] : [];
+      const settingsPaneIds = pane.view === "settings" ? [pane.id] : [];
+      await requestFileDocumentClose(filePaneIds, async () => {
+        await requestSettingsPaneClose(settingsPaneIds, async () => {
+          await executeClosePane(tab.id, pane.id);
+        });
+      });
     },
-    [executeClosePane, requestFileDocumentClose],
+    [executeClosePane, requestFileDocumentClose, requestSettingsPaneClose],
   );
 
   const handleCloseWorkspaceTab = useCallback(
@@ -2860,8 +2903,8 @@ function App() {
   useFileEditorZoom(updateAppSettings);
 
   const handleOpenSettings = useCallback(() => {
-    openSettings();
-  }, []);
+    openSettingsTab();
+  }, [openSettingsTab]);
 
   const handleLockScreen = useCallback(() => {
     if (appSettings.security.enable_startup_lock || appSettings.security.enable_idle_lock) {
@@ -2898,17 +2941,19 @@ function App() {
   const handleQuitApplication = useCallback(() => {
     setShowQuitConfirm(false);
     void requestFileDocumentClose(collectFileDocumentPaneIds(tabs), async () => {
-      await persistWorkspaceLayoutNow().catch((error) => {
-        logger.error({
-          domain: "settings.persistence",
-          event: "workspace_layout.persist_before_quit_failed",
-          message: "Failed to persist workspace layout before quit",
-          error,
+      await requestSettingsPaneClose(collectSettingsPaneIds(tabs), async () => {
+        await persistWorkspaceLayoutNow().catch((error) => {
+          logger.error({
+            domain: "settings.persistence",
+            event: "workspace_layout.persist_before_quit_failed",
+            message: "Failed to persist workspace layout before quit",
+            error,
+          });
         });
+        await invoke<void>("quit_application");
       });
-      await invoke<void>("quit_application");
     });
-  }, [persistWorkspaceLayoutNow, requestFileDocumentClose, tabs]);
+  }, [persistWorkspaceLayoutNow, requestFileDocumentClose, requestSettingsPaneClose, tabs]);
 
   useEffect(() => {
     if (!settingsLoaded) return;
@@ -2941,21 +2986,23 @@ function App() {
           }
 
           await requestFileDocumentClose(collectFileDocumentPaneIds(tabs), async () => {
-            await persistWorkspaceLayoutNow().catch((error) => {
-              logger.error({
-                domain: "settings.persistence",
-                event: "workspace_layout.persist_before_close_failed",
-                message: "Failed to persist workspace layout before close",
-                error,
+            await requestSettingsPaneClose(collectSettingsPaneIds(tabs), async () => {
+              await persistWorkspaceLayoutNow().catch((error) => {
+                logger.error({
+                  domain: "settings.persistence",
+                  event: "workspace_layout.persist_before_close_failed",
+                  message: "Failed to persist workspace layout before close",
+                  error,
+                });
               });
+              allowProgrammaticWindowCloseRef.current = true;
+              await currentWindow.close().catch(() => {
+                allowProgrammaticWindowCloseRef.current = false;
+              });
+              window.setTimeout(() => {
+                allowProgrammaticWindowCloseRef.current = false;
+              }, 1000);
             });
-            allowProgrammaticWindowCloseRef.current = true;
-            await currentWindow.close().catch(() => {
-              allowProgrammaticWindowCloseRef.current = false;
-            });
-            window.setTimeout(() => {
-              allowProgrammaticWindowCloseRef.current = false;
-            }, 1000);
           });
         });
       })
@@ -2972,6 +3019,7 @@ function App() {
     appSettings.general.minimize_to_tray,
     persistWorkspaceLayoutNow,
     requestFileDocumentClose,
+    requestSettingsPaneClose,
     settingsLoaded,
     tabs,
   ]);
@@ -5029,6 +5077,11 @@ function App() {
         onPendingFileDocumentCloseOpenChange={handlePendingFileDocumentCloseOpenChange}
         onSaveFileDocumentsAndClose={handleSaveFileDocumentsAndClose}
         onDiscardFileDocumentsAndClose={handleDiscardFileDocumentsAndClose}
+        pendingSettingsPaneClose={pendingSettingsPaneClose}
+        savingSettingsPanes={savingSettingsPanes}
+        onPendingSettingsPaneCloseOpenChange={handlePendingSettingsPaneCloseOpenChange}
+        onSaveSettingsPanesAndClose={handleSaveSettingsPanesAndClose}
+        onDiscardSettingsPanesAndClose={handleDiscardSettingsPanesAndClose}
         postLoginConfirm={postLoginConfirm}
         onPostLoginConfirmOpenChange={handlePostLoginConfirmOpenChange}
         onPostLoginContinue={handlePostLoginContinue}

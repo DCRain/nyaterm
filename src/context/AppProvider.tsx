@@ -21,6 +21,7 @@ import {
   normalizeQuickCommandUiConfig,
 } from "@/lib/quickCommandSettings";
 import { detectSystemLanguage } from "@/lib/systemLanguage";
+import { openSettingsTabInTabs } from "@/lib/settingsTab";
 import {
   collectSessionPanes,
   createFileDocumentPane,
@@ -921,6 +922,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [commitTabs, setActiveTabId],
   );
 
+  const openSettingsTab = useCallback(
+    (section?: string) => {
+      const result = openSettingsTabInTabs(tabsRef.current, section, i18n.t("settings.title"));
+      if (result.tabs !== tabsRef.current) {
+        void commitTabs(result.tabs);
+      }
+      setActiveTabId(result.activeTabId);
+      return result.activeTabId;
+    },
+    [commitTabs, setActiveTabId],
+  );
+
   const openExternalMarkdownTab = useCallback(
     (filePath: string, name?: string) => {
       const normalizedPath = filePath.replace(/\\/g, "/").toLowerCase();
@@ -1365,7 +1378,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
             pane.paneKind === "file" ||
             pane.view === "workbench" ||
             pane.view === "note" ||
-            pane.view === "externalMarkdown"
+            pane.view === "externalMarkdown" ||
+            pane.view === "settings"
           ) {
             return;
           }
@@ -1530,6 +1544,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       openWorkbenchTab,
       openNoteTab,
       openExternalMarkdownTab,
+      openSettingsTab,
       updateTabSession,
       markTabConnectionFailed,
       updatePaneSession,
@@ -1583,6 +1598,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       openWorkbenchTab,
       openNoteTab,
       openExternalMarkdownTab,
+      openSettingsTab,
       updateTabSession,
       markTabConnectionFailed,
       updatePaneSession,

@@ -239,75 +239,93 @@ describe("modal window raising", () => {
   });
 });
 
+describe("openSettings workspace tab bridge", () => {
+  it("dispatches a workspace settings event instead of opening a child window", async () => {
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+    const { openSettings } = await importWindowManager();
+
+    openSettings("appearance");
+
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "nyaterm:settings-open",
+        detail: { section: "appearance" },
+      }),
+    );
+    expect(mocks.invoke).not.toHaveBeenCalled();
+    dispatchSpy.mockRestore();
+  });
+});
+
 describe("child window load failure recovery", () => {
   it("closes and clears a revealed window after the command listener fails", async () => {
-    const { openSettings } = await importWindowManager();
-    const open = openSettings("appearance");
+    const { openQuickCommand } = await importWindowManager();
+    const open = openQuickCommand();
     await waitForInvoke();
     const token = createdToken();
-    emitLifecycle({ label: "settings", token, phase: "shell-ready" });
+    emitLifecycle({ label: "quick-command", token, phase: "shell-ready" });
     await open;
 
-    const win = mocks.windows.get("settings");
+    const win = mocks.windows.get("quick-command");
     expect(win?.show).toHaveBeenCalled();
-    emitLifecycle({ label: "settings", token, phase: "load-failed", stage: "command-listener" });
+    emitLifecycle({ label: "quick-command", token, phase: "load-failed", stage: "command-listener" });
 
     await vi.waitFor(() => expect(win?.close).toHaveBeenCalledOnce());
-    expect(mocks.windows.has("settings")).toBe(false);
+    expect(mocks.windows.has("quick-command")).toBe(false);
   });
 
   it("recreates a failed existing window on the next open", async () => {
-    const { openSettings } = await importWindowManager();
-    const firstOpen = openSettings("appearance");
+    const { openQuickCommand } = await importWindowManager();
+    const firstOpen = openQuickCommand();
     await waitForInvoke();
     const firstToken = createdToken();
-    emitLifecycle({ label: "settings", token: firstToken, phase: "shell-ready" });
+    emitLifecycle({ label: "quick-command", token: firstToken, phase: "shell-ready" });
     await firstOpen;
 
-    const firstWindow = mocks.windows.get("settings");
+    const firstWindow = mocks.windows.get("quick-command");
     emitLifecycle({
-      label: "settings",
+      label: "quick-command",
       token: firstToken,
       phase: "load-failed",
       stage: "command-listener",
     });
     await vi.waitFor(() => expect(firstWindow?.close).toHaveBeenCalledOnce());
 
-    const secondOpen = openSettings("general");
+    const secondOpen = openQuickCommand();
     await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalledTimes(2));
     const secondToken = createdToken(1);
-    emitLifecycle({ label: "settings", token: secondToken, phase: "shell-ready" });
+    emitLifecycle({ label: "quick-command", token: secondToken, phase: "shell-ready" });
     await secondOpen;
 
-    const secondWindow = mocks.windows.get("settings");
+    const secondWindow = mocks.windows.get("quick-command");
     expect(secondWindow).toBeTruthy();
     expect(secondWindow).not.toBe(firstWindow);
   });
 
   it("fails first open promptly and closes the orphan when bootstrap fails before shell ready", async () => {
-    const { openSettings } = await importWindowManager();
-    const open = openSettings("appearance");
+    const { openQuickCommand } = await importWindowManager();
+    const open = openQuickCommand();
     await waitForInvoke();
     const token = createdToken();
-    const win = mocks.windows.get("settings");
+    const win = mocks.windows.get("quick-command");
 
-    emitLifecycle({ label: "settings", token, phase: "load-failed", stage: "bootstrap-import" });
+    emitLifecycle({ label: "quick-command", token, phase: "load-failed", stage: "bootstrap-import" });
 
-    await expect(open).rejects.toThrow("Child window did not finish rendering: settings");
+    await expect(open).rejects.toThrow("Child window did not finish rendering: quick-command");
     await vi.waitFor(() => expect(win?.close).toHaveBeenCalled());
   });
 
   it("ignores stale load-failed events from an old token", async () => {
-    const { openSettings } = await importWindowManager();
-    const open = openSettings("appearance");
+    const { openQuickCommand } = await importWindowManager();
+    const open = openQuickCommand();
     await waitForInvoke();
     const token = createdToken();
-    emitLifecycle({ label: "settings", token, phase: "shell-ready" });
+    emitLifecycle({ label: "quick-command", token, phase: "shell-ready" });
     await open;
 
-    const win = mocks.windows.get("settings");
+    const win = mocks.windows.get("quick-command");
     emitLifecycle({
-      label: "settings",
+      label: "quick-command",
       token: "stale-token",
       phase: "load-failed",
       stage: "command-listener",
@@ -315,6 +333,6 @@ describe("child window load failure recovery", () => {
 
     await Promise.resolve();
     expect(win?.close).not.toHaveBeenCalled();
-    expect(mocks.windows.get("settings")).toBe(win);
+    expect(mocks.windows.get("quick-command")).toBe(win);
   });
 });

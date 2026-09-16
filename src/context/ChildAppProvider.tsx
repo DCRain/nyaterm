@@ -439,6 +439,7 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
       openWorkbenchTab: noopString,
       openNoteTab: noopString,
       openExternalMarkdownTab: noopString,
+      openSettingsTab: noopString,
       updateTabSession: noop,
       markTabConnectionFailed: noop,
       updatePaneSession: noop,

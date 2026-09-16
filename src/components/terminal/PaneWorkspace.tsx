@@ -11,6 +11,7 @@ import FtpWorkspace from "@/components/panel/file-explorer/FtpWorkspace";
 import WebDavWorkspace from "@/components/panel/file-explorer/WebDavWorkspace";
 import { FilePreviewContent } from "@/components/panel/file-explorer/FilePreviewContent";
 import NoteEditorPanel from "@/components/panel/note-editor/NoteEditorPanel";
+import SettingsPanel from "@/components/settings/SettingsPanel";
 import RdpPaneHost from "@/components/rdp/RdpPaneHost";
 import { Button } from "@/components/ui/button";
 import VncPaneHost from "@/components/vnc/VncPaneHost";
@@ -292,6 +293,27 @@ function PaneNodeView({
         onMouseDown={() => onActivatePane(node.id)}
       >
         {workbench ? <StartWorkspace {...workbench} /> : null}
+      </div>
+    );
+  }
+
+  if (node.view === "settings") {
+    return (
+      <div
+        className={`relative h-full w-full overflow-hidden ${
+          showChrome ? "rounded-sm border" : ""
+        } ${showChrome && isActive ? "ring-1 ring-primary/60" : ""}`}
+        style={{
+          borderColor: showChrome ? "var(--df-border)" : undefined,
+          backgroundColor: "var(--df-bg)",
+        }}
+        onMouseDown={() => onActivatePane(node.id)}
+      >
+        <SettingsPanel
+          paneId={node.id}
+          tabId={tab.id}
+          settingsSection={node.settingsSection}
+        />
       </div>
     );
   }

@@ -83,7 +83,7 @@ export function resolveActivitySessionContext(
 
   if (pane.paneKind === "terminal") {
     const view = pane.view;
-    if (view === "note" || view === "externalMarkdown" || view === "workbench") {
+    if (view === "note" || view === "externalMarkdown" || view === "workbench" || view === "settings") {
       return "none";
     }
     if (view === "s3" || view === "ftp" || view === "webdav" || view === "sftp") {

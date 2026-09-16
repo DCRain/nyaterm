@@ -27,6 +27,7 @@ import {
   MdHistory,
   MdLock,
   MdOutlineStickyNote2,
+  MdSettings,
   MdTerminal,
 } from "react-icons/md";
 import { toast } from "sonner";
@@ -1155,6 +1156,10 @@ function TabBar({
 
     if (pane?.view === "workbench") {
       return <MdApps className="text-sm shrink-0" style={{ color: "var(--df-primary)" }} />;
+    }
+
+    if (pane?.view === "settings") {
+      return <MdSettings className="text-sm shrink-0" style={{ color: "var(--df-primary)" }} />;
     }
 
     if (pane?.view === "note" || pane?.view === "externalMarkdown") {

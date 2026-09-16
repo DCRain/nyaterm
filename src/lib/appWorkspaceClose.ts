@@ -6,10 +6,23 @@ export interface PendingFileDocumentClose {
   action: () => Promise<void>;
 }
 
+export interface PendingSettingsPaneClose {
+  paneIds: string[];
+  action: () => Promise<void>;
+}
+
 export function collectFileDocumentPaneIds(tabs: Tab[]) {
   return tabs.flatMap((tab) =>
     collectSessionPanes(tab.root)
       .filter((pane) => pane.paneKind === "file")
+      .map((pane) => pane.id),
+  );
+}
+
+export function collectSettingsPaneIds(tabs: Tab[]) {
+  return tabs.flatMap((tab) =>
+    collectSessionPanes(tab.root)
+      .filter((pane) => pane.view === "settings")
       .map((pane) => pane.id),
   );
 }

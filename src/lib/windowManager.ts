@@ -20,6 +20,7 @@ import {
 import { invoke } from "./invoke";
 import { logger } from "./logger";
 import { isLinux, isMacOS } from "./platform";
+import { openSettingsInWorkspace } from "./settingsEvents";
 
 type ChildWindowStateKey =
   | "settings"
@@ -809,25 +810,8 @@ export function openChildWindow(opts: ChildWindowOptions): Promise<WebviewWindow
   return operation;
 }
 
-export async function openSettings(tab?: string) {
-  const label = scopedModalLabel("settings");
-  const url = tab
-    ? `index.html?window=settings&owner=${encodeURIComponent(ownerMainWindowLabel)}&tab=${encodeURIComponent(tab)}`
-    : `index.html?window=settings&owner=${encodeURIComponent(ownerMainWindowLabel)}`;
-  const win = await openChildWindow({
-    label,
-    title: i18n.t("settings.title"),
-    url,
-    parentLabel: ownerMainWindowLabel,
-    width: 800,
-    height: 560,
-    stateKey: "settings",
-  });
-  if (tab) {
-    const payload = { tab, targetWindowLabel: ownerMainWindowLabel };
-    dispatchChildWindowCommand(label, CHILD_WINDOW_COMMANDS.settingsOpenTab, payload);
-  }
-  return win;
+export function openSettings(tab?: string) {
+  openSettingsInWorkspace(tab);
 }
 
 export interface NewSessionTarget {

@@ -36,7 +36,6 @@ import {
   toggleActivityBarItemVisibility,
   type PanelOpenMode,
 } from "@/lib/appWorkspace";
-import { focusTerminalSession } from "@/lib/appSessionFactory";
 import { openSettings } from "@/lib/windowManager";
 import type { ActivityBarLayout, ActivityBarZone, UiConfig } from "@/types/global";
 
@@ -389,9 +388,7 @@ export function useActivityBarController({
   const handleItemSelect = useCallback(
     (id: string) => {
       if (id === "settings") {
-        const terminalSessionId = activeSessionId;
-        const restoreTerminalFocus = () => focusTerminalSession(terminalSessionId);
-        void openSettings().then(restoreTerminalFocus, restoreTerminalFocus);
+        void openSettings();
         return;
       }
       if (id === "lock") {

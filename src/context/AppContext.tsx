@@ -56,6 +56,8 @@ export interface AppContextType {
   openNoteTab: (noteId: string, name?: string) => string;
   /** Open or focus a temporary external markdown file tab (not persisted / not imported). */
   openExternalMarkdownTab: (filePath: string, name?: string) => string;
+  /** Open or focus the singleton settings tab in the center workspace. */
+  openSettingsTab: (section?: string) => string;
   updateTabSession: (tabId: string, sessionId: string) => void;
   markTabConnectionFailed: (tabId: string, error: string) => void;
   updatePaneSession: (tabId: string, paneId: string, sessionId: string) => void;

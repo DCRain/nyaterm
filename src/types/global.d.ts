@@ -125,7 +125,8 @@ export type SessionPaneView =
   | "webdav"
   | "workbench"
   | "note"
-  | "externalMarkdown";
+  | "externalMarkdown"
+  | "settings";
 
 /** Shared fields for one session-like leaf inside a workspace tab. */
 export interface WorkspacePaneBase {
@@ -142,6 +143,8 @@ export interface WorkspacePaneBase {
   noteId?: string;
   /** Absolute path when view is "externalMarkdown". */
   markdownPath?: string;
+  /** Active settings section when view is "settings". */
+  settingsSection?: string;
   /** Config for ad-hoc (temporary) sessions that have no saved connection. */
   temporaryConfig?: import("@/types/temporaryConnection").TemporaryLinkConfig;
   /** One-shot SSH runtime used to create and restore this pane. */

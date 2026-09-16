@@ -1,4 +1,3 @@
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   type ComponentType,
   useCallback,
@@ -29,7 +28,6 @@ import {
 import { RiGeminiLine } from "react-icons/ri";
 import { TbCubeSpark } from "react-icons/tb";
 import { toast } from "sonner";
-import ChildWindowHeader from "@/components/layout/ChildWindowHeader";
 import { AiAgentsTab, AiGeneralTab, AiModelsTab, AiRulesTab } from "@/components/settings/AiTab";
 import { AppearanceTab } from "@/components/settings/AppearanceTab";
 import { GeneralTab } from "@/components/settings/GeneralTab";
@@ -42,27 +40,17 @@ import { TerminalTab } from "@/components/settings/TerminalTab";
 import { TransferTab } from "@/components/settings/TransferTab";
 import { TranslationTab } from "@/components/settings/TranslationTab";
 import { ActionButton, ActionFooter } from "@/components/ui/action-footer";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AppContext, useApp } from "@/context/AppContext";
 import { SettingsDraftContext } from "@/context/SettingsDraftContext";
-import { useChildWindowCommand } from "@/hooks/useChildWindowCommand";
 import { useSettingsDraftState } from "@/hooks/useSettingsDraftState";
-import { CHILD_WINDOW_COMMANDS } from "@/lib/childWindowProtocol";
 import { type CloudSyncValidationCode, getCloudSyncValidationErrors } from "@/lib/cloudSync";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
-import { prepareForModalChildClose } from "@/lib/windowManager";
+import { registerSettingsPane } from "@/lib/settingsPaneRegistry";
+import { normalizeSettingsSection } from "@/lib/settingsNavigation";
+import { getOwnerMainWindowLabel } from "@/lib/windowManager";
 import type { AppSettings, UiConfig } from "@/types/global";
 
 type SettingsTabConfig = {
@@ -71,21 +59,6 @@ type SettingsTabConfig = {
   icon: string;
   Component?: ComponentType;
 };
-
-const SETTINGS_GROUP_DEFAULT_TABS: Record<string, string> = {
-  ai: "ai-general",
-  ai_group: "ai-general",
-  security_group: "security",
-  syncBackup_group: "syncBackup",
-  terminal: "terminal-general",
-  terminal_session: "terminal-general",
-  transfer_group: "transfer",
-  workspace: "general",
-};
-
-function normalizeSettingsTab(tab: string) {
-  return SETTINGS_GROUP_DEFAULT_TABS[tab] ?? tab;
-}
 
 function getCloudSyncValidationMessage(
   code: CloudSyncValidationCode,
@@ -109,24 +82,29 @@ function getCloudSyncValidationMessage(
   }
 }
 
-export default function SettingsPage() {
+export interface SettingsPanelProps {
+  paneId: string;
+  tabId: string;
+  settingsSection?: string;
+}
+
+export default function SettingsPanel({ paneId, tabId, settingsSection }: SettingsPanelProps) {
   const { t, i18n } = useTranslation();
   const app = useApp();
+  const { closeTab } = app;
   const committedSettings = app.appSettings;
 
-  const params = new URLSearchParams(window.location.search);
-  const requestedInitialTab = params.get("tab") || "general";
-  const ownerWindowLabel = params.get("owner") || "main";
-  const initialTab = normalizeSettingsTab(requestedInitialTab);
+  const ownerWindowLabel = getOwnerMainWindowLabel();
+  const initialTab = normalizeSettingsSection(settingsSection || "general");
   const [activeTab, setActiveTab] = useState(initialTab);
   const { draftSettings, isDirty, updateDraftSettings, acceptSavedSettings, discardDraftSettings } =
     useSettingsDraftState<AppSettings>(committedSettings);
   const [isSaving, setIsSaving] = useState(false);
-  const [closeConfirmOpen, setCloseConfirmOpen] = useState(false);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrollStates = useRef<Record<string, number>>({});
-  const forceCloseRef = useRef(false);
+  const isDirtyRef = useRef(isDirty);
+  isDirtyRef.current = isDirty;
 
   useLayoutEffect(() => {
     if (scrollContainerRef.current) {
@@ -134,13 +112,10 @@ export default function SettingsPage() {
     }
   }, [activeTab]);
 
-  useChildWindowCommand<{ tab: string; targetWindowLabel?: string | null }>(
-    CHILD_WINDOW_COMMANDS.settingsOpenTab,
-    (payload) => {
-      if (payload.targetWindowLabel && payload.targetWindowLabel !== ownerWindowLabel) return;
-      setActiveTab(normalizeSettingsTab(payload.tab));
-    },
-  );
+  useEffect(() => {
+    if (!settingsSection) return;
+    setActiveTab(normalizeSettingsSection(settingsSection));
+  }, [settingsSection]);
 
   type SettingsCategory = {
     id: string;
@@ -347,20 +322,24 @@ export default function SettingsPage() {
   );
   const saveBlockedMessage = saveBlockState?.message ?? null;
 
-  const closeSettingsWindow = useCallback(async () => {
-    const currentWindow = getCurrentWindow();
-    forceCloseRef.current = true;
-    await currentWindow.close().catch(() => {
-      forceCloseRef.current = false;
-    });
-  }, []);
+  const discardChanges = useCallback(async () => {
+    discardDraftSettings();
+    const committedLanguage = committedSettings.ui.language || "en";
+    if (i18n.language !== committedLanguage) {
+      await i18n.changeLanguage(committedLanguage);
+    }
+  }, [committedSettings.ui.language, discardDraftSettings, i18n]);
+
+  const closeSettingsTab = useCallback(() => {
+    closeTab(tabId);
+  }, [closeTab, tabId]);
 
   const saveDraftSettings = useCallback(
-    async (closeAfterSave: boolean) => {
+    async (options?: { closeAfterSave?: boolean }): Promise<boolean> => {
       const validationState = getDraftSaveBlockState();
       if (validationState) {
         toast.error(validationState.message);
-        return;
+        return false;
       }
 
       setIsSaving(true);
@@ -377,15 +356,15 @@ export default function SettingsPage() {
         app.replaceAppSettings(nextSettings);
         acceptSavedSettings(nextSettings);
 
-        if (closeAfterSave) {
-          setIsSaving(false);
-          await closeSettingsWindow();
-          return;
+        if (options?.closeAfterSave) {
+          closeSettingsTab();
         } else {
           toast.success(t("settings.saveSuccess"));
         }
+        return true;
       } catch (error) {
         toast.error(getErrorMessage(error));
+        return false;
       } finally {
         setIsSaving(false);
       }
@@ -393,7 +372,7 @@ export default function SettingsPage() {
     [
       acceptSavedSettings,
       app,
-      closeSettingsWindow,
+      closeSettingsTab,
       draftSettings,
       getDraftSaveBlockState,
       ownerWindowLabel,
@@ -402,75 +381,40 @@ export default function SettingsPage() {
   );
 
   const handleCancel = useCallback(async () => {
-    discardDraftSettings();
-
-    const committedLanguage = committedSettings.ui.language || "en";
-    if (i18n.language !== committedLanguage) {
-      await i18n.changeLanguage(committedLanguage);
-    }
-
-    await closeSettingsWindow();
-  }, [closeSettingsWindow, committedSettings.ui.language, discardDraftSettings, i18n]);
-
-  const requestClose = useCallback(() => {
-    if (isDirty) {
-      setCloseConfirmOpen(true);
-      return;
-    }
-    void closeSettingsWindow();
-  }, [closeSettingsWindow, isDirty]);
+    await discardChanges();
+    closeSettingsTab();
+  }, [closeSettingsTab, discardChanges]);
 
   const handleConfirm = useCallback(async () => {
     if (!isDirty) {
-      await closeSettingsWindow();
+      closeSettingsTab();
       return;
     }
-    await saveDraftSettings(true);
-  }, [closeSettingsWindow, isDirty, saveDraftSettings]);
+    await saveDraftSettings({ closeAfterSave: true });
+  }, [closeSettingsTab, isDirty, saveDraftSettings]);
 
   const handleApply = useCallback(async () => {
     if (!isDirty || isSaving) {
       return;
     }
-    await saveDraftSettings(false);
+    await saveDraftSettings();
   }, [isDirty, isSaving, saveDraftSettings]);
 
   useEffect(() => {
-    const currentWindow = getCurrentWindow();
-    let unlisten: (() => void) | undefined;
-
-    currentWindow
-      .onCloseRequested(async (event) => {
-        if (forceCloseRef.current || !isDirty) {
-          await prepareForModalChildClose(currentWindow.label).catch(() => {});
-          return;
-        }
-
-        event.preventDefault();
-        setCloseConfirmOpen(true);
-      })
-      .then((dispose) => {
-        unlisten = dispose;
-      })
-      .catch(() => {});
-
-    return () => {
-      unlisten?.();
-    };
-  }, [isDirty]);
+    return registerSettingsPane(paneId, {
+      isDirty: () => isDirtyRef.current,
+      discard: () => {
+        void discardChanges();
+      },
+      save: () => saveDraftSettings({ closeAfterSave: false }),
+    });
+  }, [discardChanges, paneId, saveDraftSettings]);
 
   return (
     <div
       className="h-full min-h-0 flex flex-col overflow-hidden"
       style={{ fontFamily: committedSettings.appearance.ui_font_family }}
     >
-      <ChildWindowHeader
-        title={t("settings.title")}
-        icon={<MdSettings className="text-base" />}
-        macOSDragOnly
-        onClose={requestClose}
-      />
-
       <SettingsDraftContext.Provider
         value={{
           committedSettings,
@@ -693,38 +637,6 @@ export default function SettingsPage() {
           </div>
         </AppContext.Provider>
       </SettingsDraftContext.Provider>
-
-      <AlertDialog open={closeConfirmOpen} onOpenChange={setCloseConfirmOpen}>
-        <AlertDialogContent size="sm">
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("settings.unsavedChangesTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>{t("settings.unsavedChangesDesc")}</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter className="group-data-[size=sm]/alert-dialog-content:grid-cols-3">
-            <AlertDialogCancel disabled={isSaving}>
-              {t("settings.continueEditing")}
-            </AlertDialogCancel>
-            <Button
-              variant="outline"
-              disabled={isSaving}
-              onClick={() => {
-                void saveDraftSettings(true);
-              }}
-            >
-              {isSaving ? t("common.saving") : t("settings.saveAndClose")}
-            </Button>
-            <AlertDialogAction
-              variant="destructive"
-              disabled={isSaving}
-              onClick={() => {
-                void handleCancel();
-              }}
-            >
-              {t("settings.discardChanges")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }

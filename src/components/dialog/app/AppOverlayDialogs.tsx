@@ -16,7 +16,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import type { ExternalMatchDialogState, PostLoginConfirmState } from "@/lib/appExternalDialogs";
-import type { PendingFileDocumentClose } from "@/lib/appWorkspaceClose";
+import type { PendingFileDocumentClose, PendingSettingsPaneClose } from "@/lib/appWorkspaceClose";
 import type { TemporaryLinkConfig } from "@/lib/temporaryLink";
 import type { Group, SavedConnection } from "@/types/global";
 
@@ -44,6 +44,11 @@ interface AppOverlayDialogsProps {
   onPendingFileDocumentCloseOpenChange: (open: boolean) => void;
   onSaveFileDocumentsAndClose: () => Promise<void> | void;
   onDiscardFileDocumentsAndClose: () => void;
+  pendingSettingsPaneClose: PendingSettingsPaneClose | null;
+  savingSettingsPanes: boolean;
+  onPendingSettingsPaneCloseOpenChange: (open: boolean) => void;
+  onSaveSettingsPanesAndClose: () => Promise<void> | void;
+  onDiscardSettingsPanesAndClose: () => void;
   postLoginConfirm: PostLoginConfirmState | null;
   onPostLoginConfirmOpenChange: (open: boolean) => void;
   onPostLoginContinue: () => void;
@@ -73,6 +78,11 @@ export default function AppOverlayDialogs({
   onPendingFileDocumentCloseOpenChange,
   onSaveFileDocumentsAndClose,
   onDiscardFileDocumentsAndClose,
+  pendingSettingsPaneClose,
+  savingSettingsPanes,
+  onPendingSettingsPaneCloseOpenChange,
+  onSaveSettingsPanesAndClose,
+  onDiscardSettingsPanesAndClose,
   postLoginConfirm,
   onPostLoginConfirmOpenChange,
   onPostLoginContinue,
@@ -113,6 +123,36 @@ export default function AppOverlayDialogs({
         onSaveAndClose={onSaveFileDocumentsAndClose}
         onDiscard={onDiscardFileDocumentsAndClose}
       />
+      <AlertDialog
+        open={pendingSettingsPaneClose !== null}
+        onOpenChange={onPendingSettingsPaneCloseOpenChange}
+      >
+        <AlertDialogContent size="sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("settings.unsavedChangesTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("settings.unsavedChangesDesc")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="group-data-[size=sm]/alert-dialog-content:grid-cols-3">
+            <AlertDialogCancel disabled={savingSettingsPanes}>
+              {t("settings.continueEditing")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="outline"
+              disabled={savingSettingsPanes}
+              onClick={() => void onSaveSettingsPanesAndClose()}
+            >
+              {savingSettingsPanes ? t("common.saving") : t("settings.saveAndClose")}
+            </AlertDialogAction>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={savingSettingsPanes}
+              onClick={onDiscardSettingsPanesAndClose}
+            >
+              {t("settings.discardChanges")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <AlertDialog open={postLoginConfirm !== null} onOpenChange={onPostLoginConfirmOpenChange}>
         <AlertDialogContent>
           <AlertDialogHeader>

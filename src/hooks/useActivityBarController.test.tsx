@@ -7,7 +7,7 @@ import { useActivityBarController } from "./useActivityBarController";
 
 const mocks = vi.hoisted(() => ({
   focusTerminalSession: vi.fn(),
-  openSettings: vi.fn<() => Promise<unknown>>(),
+  openSettings: vi.fn(),
 }));
 
 vi.mock("@/lib/appSessionFactory", () => ({
@@ -18,52 +18,19 @@ vi.mock("@/lib/windowManager", () => ({
   openSettings: mocks.openSettings,
 }));
 
-describe("useActivityBarController settings focus", () => {
+describe("useActivityBarController settings", () => {
   beforeEach(() => {
     mocks.focusTerminalSession.mockReset();
     mocks.openSettings.mockReset();
   });
 
-  it("restores the session captured when settings was selected", async () => {
-    let resolveSettings: (() => void) | undefined;
-    const settingsPromise = new Promise<void>((resolve) => {
-      resolveSettings = resolve;
-    });
-    mocks.openSettings.mockReturnValue(settingsPromise);
-    const { result, rerender } = renderController("session-1");
-
-    act(() => result.current.handleItemSelect("settings"));
-    rerender({ activeSessionId: "session-2" });
-
-    expect(mocks.openSettings).toHaveBeenCalledOnce();
-    expect(mocks.focusTerminalSession).not.toHaveBeenCalled();
-
-    await act(async () => {
-      resolveSettings?.();
-      await settingsPromise;
-    });
-
-    expect(mocks.focusTerminalSession).toHaveBeenCalledOnce();
-    expect(mocks.focusTerminalSession).toHaveBeenCalledWith("session-1");
-  });
-
-  it("restores focus ownership when opening settings rejects", async () => {
-    let rejectSettings: ((reason?: unknown) => void) | undefined;
-    const settingsPromise = new Promise<void>((_, reject) => {
-      rejectSettings = reject;
-    });
-    mocks.openSettings.mockReturnValue(settingsPromise);
+  it("opens settings without restoring terminal focus", () => {
     const { result } = renderController("session-1");
 
     act(() => result.current.handleItemSelect("settings"));
 
-    await act(async () => {
-      rejectSettings?.(new Error("settings failed"));
-      await settingsPromise.catch(() => {});
-    });
-
-    expect(mocks.focusTerminalSession).toHaveBeenCalledOnce();
-    expect(mocks.focusTerminalSession).toHaveBeenCalledWith("session-1");
+    expect(mocks.openSettings).toHaveBeenCalledOnce();
+    expect(mocks.focusTerminalSession).not.toHaveBeenCalled();
   });
 });
 

@@ -55,6 +55,10 @@ export function isExternalMarkdownPane(node: PaneNode): node is SessionPane {
   return isSessionPane(node) && node.view === "externalMarkdown";
 }
 
+export function isSettingsPane(node: PaneNode): node is SessionPane {
+  return isSessionPane(node) && node.view === "settings";
+}
+
 export function isS3WorkspacePane(node: PaneNode): node is SessionPane {
   return isSessionPane(node) && node.view === "s3";
 }
@@ -72,6 +76,7 @@ export function isSessionlessWorkspacePane(node: PaneNode): node is SessionPane 
     isWorkbenchPane(node) ||
     isNotePane(node) ||
     isExternalMarkdownPane(node) ||
+    isSettingsPane(node) ||
     isS3WorkspacePane(node) ||
     isFtpWorkspacePane(node) ||
     isWebDavWorkspacePane(node)
@@ -114,6 +119,7 @@ export function createSessionPane(
     view: overrides?.view,
     noteId: overrides?.noteId,
     markdownPath: overrides?.markdownPath,
+    settingsSection: overrides?.settingsSection,
     display: remoteDesktop
       ? ((overrides && "display" in overrides ? overrides.display : undefined) ?? {
           ...DEFAULT_REMOTE_DESKTOP_DISPLAY,
@@ -264,6 +270,7 @@ export function updateSessionPane(
       | "createRequestId"
       | "temporaryConfig"
       | "sshRuntimeMode"
+      | "settingsSection"
     >
   > & {
     display?: RemoteDesktopDisplay;
@@ -480,7 +487,7 @@ export function getReleasedSessionIds(
 
 function serializePane(node: PaneNode): RestorablePaneNode | null {
   if (isSessionPane(node)) {
-    if (node.paneKind === "file") return null;
+    if (node.paneKind === "file" || node.view === "settings") return null;
     return {
       id: node.id,
       kind: "leaf",
@@ -537,7 +544,12 @@ function hasRestorablePaneId(
 
 export function serializeTabsForPersistence(tabs: Tab[]): RestorableTab[] {
   return [...tabs]
-    .filter((tab) => !collectSessionPanes(tab.root).some((pane) => pane.view === "externalMarkdown"))
+    .filter(
+      (tab) =>
+        !collectSessionPanes(tab.root).some(
+          (pane) => pane.view === "externalMarkdown" || pane.view === "settings",
+        ),
+    )
     .sort((a, b) => a.persistOrder - b.persistOrder)
     .flatMap((tab) => {
       const root = serializePane(tab.root);
