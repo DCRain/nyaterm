@@ -12,10 +12,11 @@ mod platform {
     use std::thread;
     use windows_sys::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VK_LWIN, VK_RWIN};
+    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, DispatchMessageW, GetMessageW, HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED,
-        LLKHF_UP, MSG, SetWindowsHookExW, TranslateMessage, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP,
-        WM_SYSKEYDOWN, WM_SYSKEYUP,
+        CallNextHookEx, DispatchMessageW, GetForegroundWindow, GetMessageW, GetWindowThreadProcessId,
+        HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_UP, MSG, SetWindowsHookExW, TranslateMessage,
+        WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
     };
 
     static CAPTURE: OnceLock<Arc<CaptureState>> = OnceLock::new();
@@ -64,16 +65,14 @@ mod platform {
         };
 
         if previous_session_id != next_session_id {
-            let should_release_previous = reset_pressed_state(&state)?;
-            if should_release_previous {
-                if let Some(previous_session_id) = previous_session_id {
-                    let manager = manager.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let _ = manager
-                            .send_input(&previous_session_id, vec![RdpInputEvent::ReleaseAllKeys])
-                            .await;
-                    });
-                }
+            reset_pressed_state(&state)?;
+            if let Some(previous_session_id) = previous_session_id {
+                let manager = manager.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = manager
+                        .send_input(&previous_session_id, vec![RdpInputEvent::ReleaseAllKeys])
+                        .await;
+                });
             }
         }
 
@@ -153,6 +152,23 @@ mod platform {
                 )
             };
         };
+
+        if !is_foreground_process() {
+            if let Ok(mut win_key_down) = state.win_key_down.lock() {
+                *win_key_down = false;
+            }
+            if let Ok(mut captured_keys) = state.captured_keys.lock() {
+                captured_keys.clear();
+            }
+            return unsafe {
+                CallNextHookEx(
+                    null_mut::<std::ffi::c_void>() as HHOOK,
+                    code,
+                    wparam,
+                    lparam,
+                )
+            };
+        }
 
         let Some(event) = (unsafe { (lparam as *const KBDLLHOOKSTRUCT).as_ref() })
             .and_then(|raw| captured_key_event(wparam as u32, raw.vkCode, raw.scanCode, raw.flags))
@@ -348,6 +364,16 @@ mod platform {
 
     fn is_windows_scan_code(scan_code: u16, extended: bool) -> bool {
         extended && matches!(scan_code, 0x5b | 0x5c)
+    }
+
+    fn is_foreground_process() -> bool {
+        let hwnd = unsafe { GetForegroundWindow() };
+        if hwnd.is_null() {
+            return false;
+        }
+        let mut foreground_pid = 0u32;
+        unsafe { GetWindowThreadProcessId(hwnd, &mut foreground_pid) };
+        foreground_pid == unsafe { GetCurrentProcessId() }
     }
 
     #[cfg(test)]

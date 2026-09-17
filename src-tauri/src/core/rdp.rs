@@ -593,10 +593,20 @@ impl RdpEngine for IronRdpEngine {
             let mut database = session.input_database.lock().await;
             let mut output = Vec::new();
             for event in events {
+                let release_all_keys = matches!(event, RdpInputEvent::ReleaseAllKeys);
                 let fast_path = match rdp_input_to_fast_path_input(event) {
                     Some(RdpInputAction::Operations(operations)) => database.apply(operations),
                     Some(RdpInputAction::FastPath(event)) => smallvec::smallvec![event],
-                    None => database.release_all(),
+                    None => {
+                        let mut released = database.release_all();
+                        if release_all_keys {
+                            released.push(IronRdpFastPathInputEvent::KeyboardEvent(
+                                IronRdpKeyboardFlags::RELEASE,
+                                RDP_RIGHT_SHIFT_SCAN_CODE as u8,
+                            ));
+                        }
+                        released
+                    }
                 };
                 if !fast_path.is_empty() {
                     output.push(IronRdpInputEvent::FastPath(fast_path));
@@ -3832,6 +3842,29 @@ mod tests {
             }
             _ => panic!("expected mouse-wheel event"),
         }
+    }
+
+    #[test]
+    fn release_all_keys_includes_right_shift_release() {
+        let mut database = IronRdpInputDatabase::new();
+        let mut events = database.release_all();
+        events.push(IronRdpFastPathInputEvent::KeyboardEvent(
+            IronRdpKeyboardFlags::RELEASE,
+            RDP_RIGHT_SHIFT_SCAN_CODE as u8,
+        ));
+        let right_shift_release = RDP_RIGHT_SHIFT_SCAN_CODE as u8;
+        assert!(
+            events.iter().any(|event| {
+                matches!(
+                    event,
+                    IronRdpFastPathInputEvent::KeyboardEvent(
+                        IronRdpKeyboardFlags::RELEASE,
+                        scan_code
+                    ) if *scan_code == right_shift_release
+                )
+            }),
+            "expected explicit right-shift release fast-path event"
+        );
     }
 
     #[test]

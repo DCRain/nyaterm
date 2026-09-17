@@ -310,6 +310,58 @@ describe("RdpPaneHost", () => {
     vi.useRealTimers();
   });
 
+  it("clears keyboard capture and releases keys when the window blurs", async () => {
+    render(<RdpPaneHost pane={rdpPane()} active visible />);
+
+    await waitFor(() => expect(listeners.has("rdp-state-rdp-session")).toBe(true));
+    act(() => {
+      listeners.get("rdp-state-rdp-session")?.({
+        payload: { sessionId: "rdp-session", state: "active" },
+      });
+    });
+
+    invokeMock.mockClear();
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith("rdp_set_keyboard_capture", { sessionId: null });
+    expect(invokeMock).toHaveBeenCalledWith("rdp_input_batch", {
+      sessionId: "rdp-session",
+      events: [{ type: "release-all-keys" }],
+    });
+  });
+
+  it("releases keys on document hide even when no keys are tracked locally", async () => {
+    render(<RdpPaneHost pane={rdpPane()} active visible />);
+
+    await waitFor(() => expect(listeners.has("rdp-state-rdp-session")).toBe(true));
+    act(() => {
+      listeners.get("rdp-state-rdp-session")?.({
+        payload: { sessionId: "rdp-session", state: "active" },
+      });
+    });
+
+    invokeMock.mockClear();
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      get: () => true,
+    });
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      get: () => false,
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith("rdp_set_keyboard_capture", { sessionId: null });
+    expect(invokeMock).toHaveBeenCalledWith("rdp_input_batch", {
+      sessionId: "rdp-session",
+      events: [{ type: "release-all-keys" }],
+    });
+  });
+
   it("hides the transfer button when clipboard mode is not text-and-files", async () => {
     render(
       <RdpPaneHost

@@ -202,7 +202,6 @@ function RdpPaneHost({
   );
 
   const releaseAllKeys = useCallback(() => {
-    if (pressedKeysRef.current.size === 0) return;
     pressedKeysRef.current.clear();
     void sendInputBatch([{ type: "release-all-keys" }]);
   }, [sendInputBatch]);
@@ -489,14 +488,25 @@ function RdpPaneHost({
     }
   }, [active, visible]);
 
+  const handleWindowLostFocus = useCallback(() => {
+    void invoke("rdp_set_keyboard_capture", { sessionId: null }).catch(() => {});
+    releaseAllKeys();
+  }, [releaseAllKeys]);
+
   useEffect(() => {
-    window.addEventListener("blur", releaseAllKeys);
-    return () => {
-      window.removeEventListener("blur", releaseAllKeys);
-      cancelPrintableKeyFallbacks();
-      releaseAllKeys();
+    const handleVisibilityChange = () => {
+      if (document.hidden) handleWindowLostFocus();
     };
-  }, [cancelPrintableKeyFallbacks, releaseAllKeys]);
+
+    window.addEventListener("blur", handleWindowLostFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("blur", handleWindowLostFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      cancelPrintableKeyFallbacks();
+      handleWindowLostFocus();
+    };
+  }, [cancelPrintableKeyFallbacks, handleWindowLostFocus]);
 
   useEffect(() => {
     if (!active || !visible || pane.connecting || pane.connectError || state !== "active") {
