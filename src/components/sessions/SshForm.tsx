@@ -1762,10 +1762,11 @@ export function SshForm({
                       {t("dialog.sftpAdvancedDesc")}
                     </p>
                   </div>
-                  <div className="flex shrink-0 items-center gap-2">
+                  <div className="shrink-0">
                     <Switch
                       checked={sftpSettings.enabled}
                       disabled={networkDeviceProfile}
+                      aria-label={t("dialog.sftpAdvanced")}
                       onCheckedChange={(enabled) =>
                         setSftpSettings({
                           ...sftpSettings,
@@ -1773,9 +1774,6 @@ export function SshForm({
                         })
                       }
                     />
-                    <span className="text-xs text-muted-foreground">
-                      {t("dialog.enabled", "Enabled")}
-                    </span>
                   </div>
                 </div>
 
