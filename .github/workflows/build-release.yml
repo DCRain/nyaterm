@@ -254,6 +254,11 @@ jobs:
             throw "Release executable not found in $releaseDir"
           }
 
+          $sidecar = Join-Path "src-tauri/binaries" "nyaterm-mcp-$target.exe"
+          if (-not (Test-Path $sidecar)) {
+            throw "MCP sidecar not found at $sidecar"
+          }
+
           $assetName = "NyaTerm_${version}_windows_${arch}_portable.zip"
           $portableRoot = Join-Path $env:RUNNER_TEMP "NyaTerm-portable-package"
           $portableDir = Join-Path $portableRoot "NyaTerm-portable"
@@ -263,6 +268,7 @@ jobs:
           Remove-Item -LiteralPath $portableRoot -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
           Copy-Item -LiteralPath $exe -Destination (Join-Path $portableDir "NyaTerm.exe")
+          Copy-Item -LiteralPath $sidecar -Destination (Join-Path $portableDir "nyaterm-mcp.exe")
           New-Item -ItemType File -Path (Join-Path $portableDir "portable.flag") -Force | Out-Null
           New-Item -ItemType File -Path (Join-Path $dataDir ".keep") -Force | Out-Null
 
