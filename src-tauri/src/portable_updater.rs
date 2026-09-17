@@ -21,6 +21,8 @@ const PORTABLE_ROOT: &str = "NyaTerm-portable";
 const PORTABLE_EXE: &str = "NyaTerm.exe";
 const PORTABLE_MCP: &str = "nyaterm-mcp.exe";
 const PORTABLE_MARKER: &str = "portable.flag";
+const MCP_BACKUP_PREFIX: &str = ".nyaterm-mcp-update-backup-";
+const LEGACY_MCP_BACKUP: &str = ".nyaterm-mcp-update-backup.exe";
 const HELPER_FLAG: &str = "--nyaterm-portable-update-helper";
 const CLEANUP_ENV: &str = "NYATERM_PORTABLE_UPDATE_CLEANUP";
 const WORK_DIR_PREFIX: &str = "nyaterm-portable-update-";
@@ -423,11 +425,11 @@ fn replace_portable_files(
     let new_exe = target_dir.join(".nyaterm-update-new.exe");
     let backup_exe = target_dir.join(".nyaterm-update-backup.exe");
     let new_mcp = target_dir.join(".nyaterm-mcp-update-new.exe");
-    let backup_mcp = target_dir.join(".nyaterm-mcp-update-backup.exe");
+    cleanup_stale_mcp_backups(target_dir);
+    let backup_mcp = target_dir.join(format!("{MCP_BACKUP_PREFIX}{}.exe", Uuid::new_v4()));
     let _ = fs::remove_file(&new_exe);
     let _ = fs::remove_file(&backup_exe);
     let _ = fs::remove_file(&new_mcp);
-    let _ = fs::remove_file(&backup_mcp);
     fs::copy(source_exe, &new_exe)?;
     if let Err(error) = fs::copy(source_mcp, &new_mcp) {
         let _ = fs::remove_file(&new_exe);
@@ -450,6 +452,22 @@ fn replace_portable_files(
         let _ = fs::remove_file(&backup_mcp);
     }
     result
+}
+
+fn cleanup_stale_mcp_backups(target_dir: &Path) {
+    let _ = fs::remove_file(target_dir.join(LEGACY_MCP_BACKUP));
+    let Ok(entries) = fs::read_dir(target_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if name.starts_with(MCP_BACKUP_PREFIX) && name.ends_with(".exe") {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
 }
 
 fn commit_portable_files<F>(
@@ -726,6 +744,33 @@ mod tests {
         assert_eq!(fs::read(&target_mcp).unwrap(), b"new-mcp");
         assert!(!directory.join(".nyaterm-update-backup.exe").exists());
         assert!(!directory.join(".nyaterm-mcp-update-backup.exe").exists());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn portable_replace_ignores_unremovable_stale_mcp_backup() {
+        let directory = test_dir("portable-stale-mcp-backup");
+        let source_dir = directory.join("source");
+        fs::create_dir(&source_dir).unwrap();
+        let source_exe = source_dir.join(PORTABLE_EXE);
+        let source_mcp = source_dir.join(PORTABLE_MCP);
+        let target_exe = directory.join(PORTABLE_EXE);
+        let target_mcp = directory.join(PORTABLE_MCP);
+        let stale_backup = directory.join(format!("{MCP_BACKUP_PREFIX}stale.exe"));
+        fs::write(&source_exe, b"new-exe").unwrap();
+        fs::write(&source_mcp, b"new-mcp").unwrap();
+        fs::write(&target_exe, b"old-exe").unwrap();
+        fs::write(&target_mcp, b"old-mcp").unwrap();
+
+        // A directory makes remove_file fail on every platform, simulating a stale backup
+        // that Windows cannot delete while an older sidecar process still has it open.
+        fs::create_dir(&stale_backup).unwrap();
+
+        replace_portable_files(&source_exe, &target_exe, &source_mcp).unwrap();
+
+        assert_eq!(fs::read(&target_exe).unwrap(), b"new-exe");
+        assert_eq!(fs::read(&target_mcp).unwrap(), b"new-mcp");
+        assert!(stale_backup.is_dir());
         fs::remove_dir_all(directory).unwrap();
     }
 
