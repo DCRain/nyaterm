@@ -74,9 +74,8 @@ impl Storage {
         Ok(())
     }
     pub fn list_known_hosts(&self) -> AppResult<Vec<KnownHostEntry>> {
-        let mut records: Vec<(String, Vec<u8>)> =
+        let records: Vec<(String, Vec<u8>)> =
             self.list_raw_by_prefix(KNOWN_HOSTS_TABLE, KNOWN_HOST_PREFIX)?;
-        records.sort_by(|left, right| left.0.cmp(&right.0));
 
         let mut entries = Vec::new();
         for (id, value) in records {
@@ -93,6 +92,15 @@ impl Storage {
                 fingerprint: known_host_fingerprint(&record),
             });
         }
+        entries.sort_by(|left, right| {
+            left.host_identifier
+                .to_lowercase()
+                .cmp(&right.host_identifier.to_lowercase())
+                .then_with(|| left.host_identifier.cmp(&right.host_identifier))
+                .then_with(|| left.key_type.cmp(&right.key_type))
+                .then_with(|| left.marker.cmp(&right.marker))
+                .then_with(|| left.id.cmp(&right.id))
+        });
         Ok(entries)
     }
     pub fn delete_known_host(&self, id: &str) -> AppResult<()> {

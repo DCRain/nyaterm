@@ -25,6 +25,9 @@ export function KnownHostsManagementTab({ onCountChange }: KnownHostsManagementT
   const [entries, setEntries] = useState<KnownHostEntry[]>([]);
   const [deletingEntry, setDeletingEntry] = useState<KnownHostEntry | null>(null);
   const [clearOpen, setClearOpen] = useState(false);
+  const [deletePending, setDeletePending] = useState(false);
+  const [clearPending, setClearPending] = useState(false);
+  const mutationPending = deletePending || clearPending;
 
   const loadKnownHosts = useCallback(async () => {
     try {
@@ -41,23 +44,30 @@ export function KnownHostsManagementTab({ onCountChange }: KnownHostsManagementT
   }, [loadKnownHosts]);
 
   const handleDeleteConfirm = async () => {
-    if (!deletingEntry) return;
+    if (!deletingEntry || mutationPending) return;
+    setDeletePending(true);
     try {
       await invoke("delete_known_host", { id: deletingEntry.id });
       setDeletingEntry(null);
       await loadKnownHosts();
     } catch (error) {
       toast.error(t("knownHosts.deleteFailed", { error: getErrorMessage(error) }));
+    } finally {
+      setDeletePending(false);
     }
   };
 
   const handleClearConfirm = async () => {
+    if (mutationPending) return;
+    setClearPending(true);
     try {
       await invoke("clear_known_hosts");
       setClearOpen(false);
       await loadKnownHosts();
     } catch (error) {
       toast.error(t("knownHosts.clearFailed", { error: getErrorMessage(error) }));
+    } finally {
+      setClearPending(false);
     }
   };
 
@@ -72,6 +82,7 @@ export function KnownHostsManagementTab({ onCountChange }: KnownHostsManagementT
               size="sm"
               className="h-7 shrink-0 px-2 text-xs text-destructive hover:bg-destructive/10"
               onClick={() => setClearOpen(true)}
+              disabled={mutationPending}
             >
               {t("knownHosts.clearAll")}
             </Button>
@@ -107,6 +118,7 @@ export function KnownHostsManagementTab({ onCountChange }: KnownHostsManagementT
                     className="shrink-0 text-destructive hover:bg-destructive/10"
                     onClick={() => setDeletingEntry(entry)}
                     aria-label={t("knownHosts.deleteEntry")}
+                    disabled={mutationPending}
                   >
                     <MdDelete className="text-base" />
                   </Button>
@@ -125,7 +137,7 @@ export function KnownHostsManagementTab({ onCountChange }: KnownHostsManagementT
 
       <Dialog
         open={deletingEntry !== null}
-        onOpenChange={(open) => !open && setDeletingEntry(null)}
+        onOpenChange={(open) => !open && !deletePending && setDeletingEntry(null)}
       >
         <DialogContent showCloseButton={false} className="max-w-xs">
           <DialogHeader>
@@ -137,27 +149,27 @@ export function KnownHostsManagementTab({ onCountChange }: KnownHostsManagementT
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDeletingEntry(null)}>
+            <Button variant="outline" onClick={() => setDeletingEntry(null)} disabled={deletePending}>
               {t("common.cancel")}
             </Button>
-            <Button variant="destructive" onClick={handleDeleteConfirm}>
+            <Button variant="destructive" onClick={handleDeleteConfirm} disabled={mutationPending}>
               {t("common.delete")}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      <Dialog open={clearOpen} onOpenChange={setClearOpen}>
+      <Dialog open={clearOpen} onOpenChange={(open) => !clearPending && setClearOpen(open)}>
         <DialogContent showCloseButton={false} className="max-w-xs">
           <DialogHeader>
             <DialogTitle>{t("knownHosts.clearTitle")}</DialogTitle>
             <DialogDescription>{t("knownHosts.clearConfirm")}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setClearOpen(false)}>
+            <Button variant="outline" onClick={() => setClearOpen(false)} disabled={clearPending}>
               {t("common.cancel")}
             </Button>
-            <Button variant="destructive" onClick={handleClearConfirm}>
+            <Button variant="destructive" onClick={handleClearConfirm} disabled={mutationPending}>
               {t("knownHosts.clearAll")}
             </Button>
           </DialogFooter>

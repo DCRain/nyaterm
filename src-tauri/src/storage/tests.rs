@@ -434,6 +434,27 @@ fn known_hosts_management_lists_fingerprints_and_deletes_exact_record() {
 }
 
 #[test]
+fn known_hosts_management_sorts_entries_by_host_name() {
+    let (dir, storage) = test_storage("known-hosts-sort");
+    storage
+        .replace_known_hosts_export(
+            "Zulu.example ssh-rsa AAAA\nalpha.example ssh-rsa BBBB\nBeta.example ssh-ed25519 CCCC\n",
+        )
+        .expect("save known hosts");
+
+    let entries = storage.list_known_hosts().expect("list known hosts");
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.host_identifier.as_str())
+            .collect::<Vec<_>>(),
+        ["alpha.example", "Beta.example", "Zulu.example"]
+    );
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn known_hosts_management_clear_removes_ssh_records_without_touching_rdp() {
     let (dir, storage) = test_storage("known-hosts-clear");
     storage
