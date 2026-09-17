@@ -685,6 +685,8 @@
     "serverPlaceholder": "我的服务器",
     "sftpAdvanced": "远程文件",
     "sftpAdvancedDesc": "控制 SSH 文件浏览器，以及终端目录跟随方式。",
+    "sftpCompatibilityMode": "SFTP 兼容模式",
+    "sftpCompatibilityModeDesc": "用于功能受限或非标准的 SFTP 服务器。启用后会复用单个 SFTP 会话，并避免同时创建多个 SFTP 通道，可能降低文件浏览和传输性能。",
     "sftpCwdFollowMode": "目录跟随",
     "sftpCwdFollowOff": "关闭",
     "sftpCwdFollowOffDesc": "不安装 Shell hook，也不跟随终端当前目录。",

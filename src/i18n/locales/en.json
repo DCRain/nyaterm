@@ -686,6 +686,8 @@
     "serverPlaceholder": "My Server",
     "sftpAdvanced": "Remote files",
     "sftpAdvancedDesc": "Controls the SSH file browser and how terminal directories are tracked.",
+    "sftpCompatibilityMode": "SFTP compatibility mode",
+    "sftpCompatibilityModeDesc": "For limited or non-standard SFTP servers. Reuses a single SFTP session and avoids opening multiple SFTP channels concurrently. This may reduce file browsing and transfer performance.",
     "sftpCwdFollowMode": "Directory tracking",
     "sftpCwdFollowOff": "Off",
     "sftpCwdFollowOffDesc": "Do not install shell hooks or follow the terminal directory.",

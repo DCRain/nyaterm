@@ -685,6 +685,8 @@
     "serverPlaceholder": "내 서버",
     "sftpAdvanced": "원격 파일",
     "sftpAdvancedDesc": "SSH 파일 탐색기 및 터미널 디렉터리 추적 방식을 제어합니다.",
+    "sftpCompatibilityMode": "SFTP 호환 모드",
+    "sftpCompatibilityModeDesc": "기능이 제한되었거나 비표준인 SFTP 서버용입니다. 단일 SFTP 세션을 재사용하고 여러 SFTP 채널을 동시에 열지 않습니다. 파일 탐색 및 전송 성능이 저하될 수 있습니다.",
     "sftpCwdFollowMode": "디렉터리 추적",
     "sftpCwdFollowOff": "끄기",
     "sftpCwdFollowOffDesc": "셸 후크를 설치하거나 터미널 디렉터리를 따라가지 않습니다.",

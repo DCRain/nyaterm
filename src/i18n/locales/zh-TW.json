@@ -685,6 +685,8 @@
     "serverPlaceholder": "我的伺服器",
     "sftpAdvanced": "遠端檔案",
     "sftpAdvancedDesc": "控制 SSH 檔案瀏覽器，以及終端目錄跟隨方式。",
+    "sftpCompatibilityMode": "SFTP 相容模式",
+    "sftpCompatibilityModeDesc": "適用於功能受限或非標準的 SFTP 伺服器。啟用後會重複使用單一 SFTP 工作階段，並避免同時建立多個 SFTP 通道，可能降低檔案瀏覽和傳輸效能。",
     "sftpCwdFollowMode": "目錄跟隨",
     "sftpCwdFollowOff": "關閉",
     "sftpCwdFollowOffDesc": "不安裝 Shell hook，也不跟隨終端目前目錄。",
