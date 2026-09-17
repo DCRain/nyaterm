@@ -13,8 +13,45 @@ impl RemoteFs for SftpBackend {
     }
 
     async fn home_dir(&self) -> AppResult<String> {
-        let sftp = self.open_sftp().await?;
-        let home = sftp.canonicalize(".").await?;
+        let sftp = match self.open_sftp_for_operation("home_dir").await {
+            Ok(sftp) => sftp,
+            Err(error) => {
+                tracing::warn!(
+                    operation = "home_dir",
+                    stage = "open_session",
+                    error = %error,
+                    stream_closed = is_sftp_stream_closed_app_error(&error),
+                    "SFTP home directory operation failed"
+                );
+                return Err(error);
+            }
+        };
+        tracing::debug!(
+            sftp_session_id = sftp.sftp_session_id(),
+            operation = "home_dir",
+            stage = "open_session",
+            "SFTP home directory session opened"
+        );
+        let home = match sftp.canonicalize(".").await {
+            Ok(home) => home,
+            Err(error) => {
+                tracing::warn!(
+                    sftp_session_id = sftp.sftp_session_id(),
+                    operation = "home_dir",
+                    stage = "canonicalize",
+                    error = %error,
+                    stream_closed = is_sftp_stream_closed_error(&error),
+                    "SFTP home directory operation failed"
+                );
+                return Err(error.into());
+            }
+        };
+        tracing::debug!(
+            sftp_session_id = sftp.sftp_session_id(),
+            operation = "home_dir",
+            stage = "close_session",
+            "SFTP home directory session close requested"
+        );
         let _ = sftp.close().await;
 
         if home.is_empty() {
@@ -867,19 +904,21 @@ impl RemoteFs for SftpBackend {
             &directory_controller.build_event("started", 0, None),
         );
 
-        let result = async {
-            let inventory = self
-                .collect_remote_directory_inventory(remote_path, local_path, &directory_controller)
-                .await?;
-            self.download_remote_directory_files(
-                app,
-                inventory,
-                directory_controller.clone(),
-                &transfer_settings,
-            )
+        let result = match self
+            .collect_remote_directory_inventory(remote_path, local_path, &directory_controller)
             .await
-        }
-        .await;
+        {
+            Ok(inventory) => self
+                .download_remote_directory_files(
+                    app,
+                    inventory,
+                    directory_controller.clone(),
+                    &transfer_settings,
+                )
+                .await
+                .map_err(|error| ("download_files", error)),
+            Err(error) => Err(("inventory", error)),
+        };
 
         match result {
             Ok(summary) => {
@@ -902,7 +941,7 @@ impl RemoteFs for SftpBackend {
                 unregister_transfer(&directory_controller.id());
                 Ok(())
             }
-            Err(e) => {
+            Err((stage, e)) => {
                 if matches!(e, AppError::Cancelled(_)) {
                     let _ = app.emit(
                         "transfer-event",
@@ -910,6 +949,16 @@ impl RemoteFs for SftpBackend {
                     );
                     cleanup_cancelled_download(local_path).await;
                 } else {
+                    tracing::warn!(
+                        operation = "download_directory",
+                        session_id,
+                        transfer_id = %directory_controller.id(),
+                        remote_path,
+                        stage,
+                        error = %e,
+                        stream_closed = is_sftp_stream_closed_app_error(&e),
+                        "SFTP directory download failed"
+                    );
                     let _ = app.emit(
                         "transfer-event",
                         &directory_controller.build_event("error", 0, Some(e.to_string())),

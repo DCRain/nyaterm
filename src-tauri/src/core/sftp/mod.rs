@@ -2002,7 +2002,18 @@ pub async fn get_home_dir(manager: Arc<SessionManager>, session_id: &str) -> App
     let auto_fs = get_or_create_auto_fs(&manager, session_id).await?;
     let guard = auto_fs.backend().await?;
     let fs = guard.as_ref().unwrap();
-    let result = fs.home_dir().await?;
+    let result = match fs.home_dir().await {
+        Ok(result) => result,
+        Err(error) => {
+            tracing::warn!(
+                operation = "get_home_dir",
+                session_id,
+                error = %error,
+                "Remote home directory lookup failed"
+            );
+            return Err(error);
+        }
+    };
 
     if result.is_empty() {
         Err(AppError::Config(

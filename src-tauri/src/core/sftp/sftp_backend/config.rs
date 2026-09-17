@@ -67,6 +67,25 @@ pub(super) fn is_sftp_not_found(error: &SftpError) -> bool {
     )
 }
 
+pub(super) fn is_sftp_stream_closed_error(error: &SftpError) -> bool {
+    matches!(
+        error,
+        SftpError::UnexpectedBehavior(message) if message == "SFTP stream closed"
+    )
+}
+
+pub(super) fn is_sftp_stream_closed_app_error(error: &AppError) -> bool {
+    match error {
+        AppError::Sftp(error) => is_sftp_stream_closed_error(error),
+        AppError::Channel(message) => message.contains("SFTP stream closed"),
+        AppError::Io(error) => error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<SftpError>())
+            .is_some_and(is_sftp_stream_closed_error),
+        _ => false,
+    }
+}
+
 #[allow(dead_code)]
 pub(super) fn ignore_sftp_not_found(result: Result<(), SftpError>) -> AppResult<()> {
     match result {

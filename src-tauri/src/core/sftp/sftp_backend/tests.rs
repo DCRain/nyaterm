@@ -216,6 +216,19 @@ fn sftp_directory_list_retry_rejects_remote_and_protocol_failures() {
 }
 
 #[test]
+fn sftp_stream_closed_detection_matches_only_exact_unexpected_behavior() {
+    assert!(is_sftp_stream_closed_error(&SftpError::UnexpectedBehavior(
+        "SFTP stream closed".to_string()
+    )));
+    assert!(!is_sftp_stream_closed_error(&sftp_status_error(
+        StatusCode::ConnectionLost
+    )));
+    assert!(!is_sftp_stream_closed_error(
+        &SftpError::UnexpectedBehavior("session closed".to_string())
+    ));
+}
+
+#[test]
 fn write_text_permission_restore_preserves_posix_mode_bits() {
     assert_eq!(
         permissions_to_preserve_after_write(Some(0o100644)),
