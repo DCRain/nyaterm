@@ -809,11 +809,12 @@ impl SftpBackend {
 
         let temp_path = copy_remote_sidecar_path(target_path, "tmp");
         let result: AppResult<u64> = async {
-            let source_sftp = self.open_sftp().await?;
-            let target_sftp = target.open_sftp().await?;
+            let sessions = self.open_sftp_pair(target).await?;
+            let source_sftp = sessions.source();
+            let target_sftp = sessions.target();
             if let Some(parent) = target_path.rsplit_once('/').map(|(parent, _)| parent) {
                 if !parent.is_empty() {
-                    ensure_remote_dir_exists(&target_sftp, parent).await?;
+                    ensure_remote_dir_exists(target_sftp, parent).await?;
                 }
             }
 
@@ -829,57 +830,100 @@ impl SftpBackend {
                 AppError::Channel(format!("Source connection read open failed: {error}"))
             })?;
             let mut target_file = target
-                .create_remote_copy_temp_file(&target_sftp, &temp_path)
+                .create_remote_copy_temp_file(target_sftp, &temp_path)
                 .await
                 .map_err(|error| {
                     AppError::Channel(format!("Target connection write open failed: {error}"))
                 })?;
-            let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(4);
-            let reader_controller = controller.clone();
-            let source_path_owned = source_path.to_string();
-            let reader = tokio::spawn(async move {
+
+            let mut bytes_written = 0_u64;
+            let mut last_progress = Instant::now();
+            if sessions.requires_sequential_io() {
                 let mut buffer = vec![0_u8; 512 * 1024];
                 loop {
-                    wait_for_transfer_ready(&reader_controller).await?;
+                    wait_for_transfer_ready(&controller).await?;
                     let read = source_file.read(&mut buffer).await.map_err(|error| {
                         AppError::Channel(format!(
-                            "Source connection disconnected or read failed for {source_path_owned}: {error}"
+                            "Source connection disconnected or read failed for {source_path}: {error}"
                         ))
                     })?;
                     if read == 0 {
                         break;
                     }
-                    tx.send(buffer[..read].to_vec()).await.map_err(|_| {
-                        AppError::Channel("Target writer stopped before source completed".to_string())
-                    })?;
+                    wait_for_sftp_upload_io(
+                        &controller,
+                        None,
+                        target_file.write_all(&buffer[..read]),
+                        |error| {
+                            AppError::Channel(format!(
+                                "Target connection disconnected or write failed for {target_path}: {error}"
+                            ))
+                        },
+                    )
+                    .await?;
+                    bytes_written = bytes_written.saturating_add(read as u64);
+                    controller.update_progress(bytes_written, total_size);
+                    if last_progress.elapsed() >= TRANSFER_PROGRESS_INTERVAL {
+                        last_progress = Instant::now();
+                        let _ = app.emit(
+                            "transfer-event",
+                            &controller.build_event("progress", total_size, None),
+                        );
+                    }
                 }
-                AppResult::Ok(())
-            });
+            } else {
+                let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(4);
+                let reader_controller = controller.clone();
+                let source_path_owned = source_path.to_string();
+                let reader = tokio::spawn(async move {
+                    let mut buffer = vec![0_u8; 512 * 1024];
+                    loop {
+                        wait_for_transfer_ready(&reader_controller).await?;
+                        let read = source_file.read(&mut buffer).await.map_err(|error| {
+                            AppError::Channel(format!(
+                                "Source connection disconnected or read failed for {source_path_owned}: {error}"
+                            ))
+                        })?;
+                        if read == 0 {
+                            break;
+                        }
+                        tx.send(buffer[..read].to_vec()).await.map_err(|_| {
+                            AppError::Channel(
+                                "Target writer stopped before source completed".to_string(),
+                            )
+                        })?;
+                    }
+                    AppResult::Ok(())
+                });
 
-            let mut bytes_written = 0_u64;
-            let mut last_progress = Instant::now();
-            while let Some(chunk) = rx.recv().await {
-                wait_for_transfer_ready(&controller).await?;
-                wait_for_sftp_upload_io(&controller, None, target_file.write_all(&chunk), |error| {
-                    AppError::Channel(format!(
-                        "Target connection disconnected or write failed for {target_path}: {error}"
-                    ))
-                })
-                .await?;
-                bytes_written = bytes_written.saturating_add(chunk.len() as u64);
-                controller.update_progress(bytes_written, total_size);
-                if last_progress.elapsed() >= TRANSFER_PROGRESS_INTERVAL {
-                    last_progress = Instant::now();
-                    let _ = app.emit(
-                        "transfer-event",
-                        &controller.build_event("progress", total_size, None),
-                    );
+                while let Some(chunk) = rx.recv().await {
+                    wait_for_transfer_ready(&controller).await?;
+                    wait_for_sftp_upload_io(
+                        &controller,
+                        None,
+                        target_file.write_all(&chunk),
+                        |error| {
+                            AppError::Channel(format!(
+                                "Target connection disconnected or write failed for {target_path}: {error}"
+                            ))
+                        },
+                    )
+                    .await?;
+                    bytes_written = bytes_written.saturating_add(chunk.len() as u64);
+                    controller.update_progress(bytes_written, total_size);
+                    if last_progress.elapsed() >= TRANSFER_PROGRESS_INTERVAL {
+                        last_progress = Instant::now();
+                        let _ = app.emit(
+                            "transfer-event",
+                            &controller.build_event("progress", total_size, None),
+                        );
+                    }
                 }
+
+                reader.await.map_err(|error| {
+                    AppError::Channel(format!("Source reader task failed: {error}"))
+                })??;
             }
-
-            reader
-                .await
-                .map_err(|error| AppError::Channel(format!("Source reader task failed: {error}")))??;
             wait_for_sftp_upload_io(&controller, None, target_file.shutdown(), |error| {
                 AppError::Channel(format!(
                     "Target connection flush failed for {target_path}: {error}"
@@ -887,10 +931,9 @@ impl SftpBackend {
             })
             .await?;
             target
-                .commit_remote_copy_temp(&target_sftp, &temp_path, target_path)
+                .commit_remote_copy_temp(target_sftp, &temp_path, target_path)
                 .await?;
-            let _ = source_sftp.close().await;
-            let _ = target_sftp.close().await;
+            sessions.close().await;
             Ok(bytes_written)
         }
         .await;
@@ -1367,13 +1410,14 @@ impl SftpBackend {
 
             for file in files {
                 wait_for_transfer_ready(&controller).await?;
-                let source_sftp = self.open_sftp().await?;
-                let target_sftp = target.open_sftp().await?;
+                let sessions = self.open_sftp_pair(target).await?;
+                let source_sftp = sessions.source();
+                let target_sftp = sessions.target();
                 let temp_path = copy_remote_sidecar_path(&file.target_path, "tmp");
                 *active_remote_temp_for_loop.lock().unwrap() = Some(temp_path.clone());
                 if let Some(parent) = file.target_path.rsplit_once('/').map(|(parent, _)| parent) {
                     if !parent.is_empty() {
-                        ensure_remote_dir_exists(&target_sftp, parent).await?;
+                        ensure_remote_dir_exists(target_sftp, parent).await?;
                     }
                 }
 
@@ -1384,7 +1428,7 @@ impl SftpBackend {
                     ))
                 })?;
                 let mut target_file = target
-                    .create_remote_copy_temp_file(&target_sftp, &temp_path)
+                    .create_remote_copy_temp_file(target_sftp, &temp_path)
                     .await
                     .map_err(|error| {
                         AppError::Channel(format!(
@@ -1392,57 +1436,95 @@ impl SftpBackend {
                             file.target_path
                         ))
                     })?;
-                let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(4);
-                let reader_controller = controller.clone();
-                let source_path_owned = file.source_path.clone();
-                let reader = tokio::spawn(async move {
+                if sessions.requires_sequential_io() {
                     let mut buffer = vec![0_u8; 512 * 1024];
                     loop {
-                        wait_for_transfer_ready(&reader_controller).await?;
+                        wait_for_transfer_ready(&controller).await?;
                         let read = source_file.read(&mut buffer).await.map_err(|error| {
                             AppError::Channel(format!(
-                                "Source connection disconnected or read failed for {source_path_owned}: {error}"
+                                "Source connection disconnected or read failed for {}: {error}",
+                                file.source_path
                             ))
                         })?;
                         if read == 0 {
                             break;
                         }
-                        tx.send(buffer[..read].to_vec()).await.map_err(|_| {
-                            AppError::Channel(
-                                "Target writer stopped before source completed".to_string(),
-                            )
-                        })?;
+                        wait_for_sftp_upload_io(
+                            &controller,
+                            None,
+                            target_file.write_all(&buffer[..read]),
+                            |error| {
+                                AppError::Channel(format!(
+                                    "Target connection disconnected or write failed for {}: {error}",
+                                    file.target_path
+                                ))
+                            },
+                        )
+                        .await?;
+                        bytes_written = bytes_written.saturating_add(read as u64);
+                        controller.update_progress(bytes_written, total_size);
+                        if last_progress.elapsed() >= TRANSFER_PROGRESS_INTERVAL {
+                            last_progress = Instant::now();
+                            let _ = app.emit(
+                                "transfer-event",
+                                &controller.build_event("progress", file.size, None),
+                            );
+                        }
                     }
-                    AppResult::Ok(())
-                });
+                } else {
+                    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(4);
+                    let reader_controller = controller.clone();
+                    let source_path_owned = file.source_path.clone();
+                    let reader = tokio::spawn(async move {
+                        let mut buffer = vec![0_u8; 512 * 1024];
+                        loop {
+                            wait_for_transfer_ready(&reader_controller).await?;
+                            let read = source_file.read(&mut buffer).await.map_err(|error| {
+                                AppError::Channel(format!(
+                                    "Source connection disconnected or read failed for {source_path_owned}: {error}"
+                                ))
+                            })?;
+                            if read == 0 {
+                                break;
+                            }
+                            tx.send(buffer[..read].to_vec()).await.map_err(|_| {
+                                AppError::Channel(
+                                    "Target writer stopped before source completed".to_string(),
+                                )
+                            })?;
+                        }
+                        AppResult::Ok(())
+                    });
 
-                while let Some(chunk) = rx.recv().await {
-                    wait_for_transfer_ready(&controller).await?;
-                    wait_for_sftp_upload_io(
-                        &controller,
-                        None,
-                        target_file.write_all(&chunk),
-                        |error| {
-                            AppError::Channel(format!(
-                                "Target connection disconnected or write failed for {}: {error}",
-                                file.target_path
-                            ))
-                        },
-                    )
-                    .await?;
-                    bytes_written = bytes_written.saturating_add(chunk.len() as u64);
-                    controller.update_progress(bytes_written, total_size);
-                    if last_progress.elapsed() >= TRANSFER_PROGRESS_INTERVAL {
-                        last_progress = Instant::now();
-                        let _ = app.emit(
-                            "transfer-event",
-                            &controller.build_event("progress", file.size, None),
-                        );
+                    while let Some(chunk) = rx.recv().await {
+                        wait_for_transfer_ready(&controller).await?;
+                        wait_for_sftp_upload_io(
+                            &controller,
+                            None,
+                            target_file.write_all(&chunk),
+                            |error| {
+                                AppError::Channel(format!(
+                                    "Target connection disconnected or write failed for {}: {error}",
+                                    file.target_path
+                                ))
+                            },
+                        )
+                        .await?;
+                        bytes_written = bytes_written.saturating_add(chunk.len() as u64);
+                        controller.update_progress(bytes_written, total_size);
+                        if last_progress.elapsed() >= TRANSFER_PROGRESS_INTERVAL {
+                            last_progress = Instant::now();
+                            let _ = app.emit(
+                                "transfer-event",
+                                &controller.build_event("progress", file.size, None),
+                            );
+                        }
                     }
+
+                    reader.await.map_err(|error| {
+                        AppError::Channel(format!("Source reader task failed: {error}"))
+                    })??;
                 }
-                reader.await.map_err(|error| {
-                    AppError::Channel(format!("Source reader task failed: {error}"))
-                })??;
                 wait_for_sftp_upload_io(&controller, None, target_file.shutdown(), |error| {
                     AppError::Channel(format!(
                         "Target connection flush failed for {}: {error}",
@@ -1451,11 +1533,10 @@ impl SftpBackend {
                 })
                 .await?;
                 target
-                    .commit_remote_copy_temp(&target_sftp, &temp_path, &file.target_path)
+                    .commit_remote_copy_temp(target_sftp, &temp_path, &file.target_path)
                     .await?;
                 *active_remote_temp_for_loop.lock().unwrap() = None;
-                let _ = source_sftp.close().await;
-                let _ = target_sftp.close().await;
+                sessions.close().await;
                 completed = completed.saturating_add(1);
                 controller.update_item_progress(completed, total_files);
             }

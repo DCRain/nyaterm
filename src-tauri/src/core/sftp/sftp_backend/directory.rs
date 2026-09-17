@@ -267,6 +267,7 @@ impl SftpBackend {
         let max_open_handles = sftp.max_open_handles();
         let result = collect_remove_inventory(&sftp, path, path_bytes.clone()).await;
         let _ = sftp.close().await;
+        drop(sftp);
         let inventory = result?;
 
         if inventory.files.is_empty() && inventory.dirs.is_empty() {
@@ -290,7 +291,7 @@ impl SftpBackend {
             };
         }
 
-        let concurrency = sftp_directory_concurrency(max_open_handles);
+        let concurrency = sftp_directory_concurrency(max_open_handles, self.compatibility_mode());
         let pool = SftpSessionPool::new(
             self,
             concurrency.session_pool_size,
@@ -522,7 +523,8 @@ impl SftpBackend {
         directory_controller: Arc<TransferController>,
         transfer_settings: &crate::config::TransferSettings,
     ) -> AppResult<DirectoryTransferSummary> {
-        let concurrency = sftp_directory_concurrency(inventory.max_open_handles);
+        let concurrency =
+            sftp_directory_concurrency(inventory.max_open_handles, self.compatibility_mode());
         if inventory.files.is_empty() {
             return Ok(DirectoryTransferSummary {
                 completed: 0,
@@ -566,7 +568,8 @@ impl SftpBackend {
         directory_controller: &Arc<TransferController>,
         transfer_settings: &crate::config::TransferSettings,
     ) -> AppResult<DirectoryTransferSummary> {
-        let concurrency = sftp_directory_concurrency(inventory.max_open_handles);
+        let concurrency =
+            sftp_directory_concurrency(inventory.max_open_handles, self.compatibility_mode());
         if inventory.files.is_empty() {
             return Ok(DirectoryTransferSummary {
                 completed: 0,

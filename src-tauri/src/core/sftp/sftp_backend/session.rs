@@ -16,6 +16,11 @@ impl SftpSessionPool {
         config: SftpClientConfig,
         operation: &'static str,
     ) -> AppResult<Self> {
+        let size = if backend.compatibility_mode() {
+            1
+        } else {
+            size
+        };
         let mut sessions = Vec::with_capacity(size);
         for _ in 0..size {
             sessions.push(Arc::new(
@@ -40,49 +45,145 @@ impl SftpSessionPool {
     }
 }
 
-pub(super) struct ManagedSftpSession {
+pub(super) struct SftpSessionCore {
     inner: SftpSession,
     _permit: OwnedSemaphorePermit,
     sftp_session_id: u64,
+}
+
+pub(super) struct CompatibilitySftpSession {
+    core: Arc<SftpSessionCore>,
+    operation_lock: Arc<Mutex<()>>,
+}
+
+impl CompatibilitySftpSession {
+    fn new(core: Arc<SftpSessionCore>) -> Self {
+        Self {
+            core,
+            operation_lock: Arc::new(Mutex::new(())),
+        }
+    }
+}
+
+pub(super) struct ManagedSftpSession {
+    core: Arc<SftpSessionCore>,
     operation: &'static str,
+    close_on_finish: bool,
+    _operation_guard: Option<OwnedMutexGuard<()>>,
+}
+
+pub(super) struct ManagedSftpSessionPair {
+    source: ManagedSftpSession,
+    target: Option<ManagedSftpSession>,
+    requires_sequential_io: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SftpSessionAcquireOrder {
+    Shared,
+    SourceFirst,
+    TargetFirst,
+}
+
+pub(super) fn sftp_session_acquire_order(
+    source_compatibility_key: Option<usize>,
+    target_compatibility_key: Option<usize>,
+) -> SftpSessionAcquireOrder {
+    match (source_compatibility_key, target_compatibility_key) {
+        (Some(source), Some(target)) if source == target => SftpSessionAcquireOrder::Shared,
+        (Some(source), Some(target)) if source > target => SftpSessionAcquireOrder::TargetFirst,
+        (None, Some(_)) => SftpSessionAcquireOrder::TargetFirst,
+        _ => SftpSessionAcquireOrder::SourceFirst,
+    }
+}
+
+impl ManagedSftpSessionPair {
+    fn new(
+        source: ManagedSftpSession,
+        target: Option<ManagedSftpSession>,
+        requires_sequential_io: bool,
+    ) -> Self {
+        Self {
+            source,
+            target,
+            requires_sequential_io,
+        }
+    }
+
+    pub(super) fn source(&self) -> &SftpSession {
+        &self.source
+    }
+
+    pub(super) fn target(&self) -> &SftpSession {
+        self.target.as_deref().unwrap_or(&self.source)
+    }
+
+    pub(super) fn requires_sequential_io(&self) -> bool {
+        self.requires_sequential_io
+    }
+
+    pub(super) async fn close(self) {
+        let Self { source, target, .. } = self;
+        let _ = source.close().await;
+        if let Some(target) = target {
+            let _ = target.close().await;
+        }
+    }
 }
 
 impl ManagedSftpSession {
-    pub(super) fn new(
-        inner: SftpSession,
-        permit: OwnedSemaphorePermit,
-        sftp_session_id: u64,
+    fn fresh(core: Arc<SftpSessionCore>, operation: &'static str) -> Self {
+        Self {
+            core,
+            operation,
+            close_on_finish: true,
+            _operation_guard: None,
+        }
+    }
+
+    fn shared(
+        core: Arc<SftpSessionCore>,
         operation: &'static str,
+        operation_guard: OwnedMutexGuard<()>,
     ) -> Self {
         Self {
-            inner,
-            _permit: permit,
-            sftp_session_id,
+            core,
             operation,
+            close_on_finish: false,
+            _operation_guard: Some(operation_guard),
         }
     }
 
     pub(super) fn sftp_session_id(&self) -> u64 {
-        self.sftp_session_id
+        self.core.sftp_session_id
     }
 
     pub(super) async fn close(&self) -> Result<(), SftpError> {
+        if !self.close_on_finish {
+            tracing::debug!(
+                sftp_session_id = self.sftp_session_id(),
+                operation = self.operation,
+                stage = "release_session",
+                "SFTP compatibility session retained"
+            );
+            return Ok(());
+        }
         tracing::debug!(
-            sftp_session_id = self.sftp_session_id,
+            sftp_session_id = self.sftp_session_id(),
             operation = self.operation,
             stage = "close_session",
             "SFTP session closing"
         );
-        let result = self.inner.close().await;
+        let result = self.core.inner.close().await;
         match &result {
             Ok(()) => tracing::debug!(
-                sftp_session_id = self.sftp_session_id,
+                sftp_session_id = self.sftp_session_id(),
                 operation = self.operation,
                 stage = "close_session",
                 "SFTP session closed"
             ),
             Err(error) => tracing::warn!(
-                sftp_session_id = self.sftp_session_id,
+                sftp_session_id = self.sftp_session_id(),
                 operation = self.operation,
                 stage = "close_session",
                 error = %error,
@@ -98,15 +199,16 @@ impl Deref for ManagedSftpSession {
     type Target = SftpSession;
 
     fn deref(&self) -> &Self::Target {
-        &self.inner
+        &self.core.inner
     }
 }
 
 impl SftpBackend {
     pub(crate) async fn probe(ssh_handle: &Arc<SshConnectionHandles>) -> AppResult<()> {
         tracing::debug!(operation = "probe", "SFTP probe started");
-        let sftp =
-            Self::open_sftp_raw(ssh_handle.clone(), SftpClientConfig::default(), "probe").await?;
+        let core =
+            Self::open_sftp_core(ssh_handle.clone(), SftpClientConfig::default(), "probe").await?;
+        let sftp = ManagedSftpSession::fresh(core, "probe");
         tracing::debug!(
             sftp_session_id = sftp.sftp_session_id(),
             operation = "probe",
@@ -127,11 +229,47 @@ impl SftpBackend {
         Ok(())
     }
 
-    pub(super) async fn open_sftp_raw(
+    pub(crate) async fn probe_and_create(
+        ssh_handle: Arc<SshConnectionHandles>,
+        encoding: &str,
+        pipeline_depth_override: Option<u32>,
+        compatibility_mode: bool,
+        compatibility_config: SftpClientConfig,
+    ) -> AppResult<Self> {
+        tracing::debug!(
+            compatibility_mode,
+            operation = "probe",
+            "SFTP probe started"
+        );
+        let config = if compatibility_mode {
+            compatibility_config
+        } else {
+            SftpClientConfig::default()
+        };
+        let core = Self::open_sftp_core(ssh_handle.clone(), config, "probe").await?;
+        if compatibility_mode {
+            tracing::info!(
+                sftp_session_id = core.sftp_session_id,
+                "SFTP compatibility session retained after probe"
+            );
+            return Ok(Self::new_with_compatibility_session(
+                ssh_handle,
+                encoding,
+                pipeline_depth_override,
+                Some(Arc::new(CompatibilitySftpSession::new(core))),
+            ));
+        }
+
+        let sftp = ManagedSftpSession::fresh(core, "probe");
+        let _ = sftp.close().await;
+        Ok(Self::new(ssh_handle, encoding, pipeline_depth_override))
+    }
+
+    pub(super) async fn open_sftp_core(
         ssh_handle: Arc<SshConnectionHandles>,
         config: SftpClientConfig,
         operation: &'static str,
-    ) -> AppResult<ManagedSftpSession> {
+    ) -> AppResult<Arc<SftpSessionCore>> {
         for attempt in 0..=SFTP_CHANNEL_OPEN_RETRY_DELAYS.len() {
             let sftp_session_id = NEXT_SFTP_SESSION_ID.fetch_add(1, Ordering::Relaxed);
             tracing::debug!(
@@ -230,12 +368,11 @@ impl SftpBackend {
                     stage = "sftp_client_init",
                     "SFTP client initialized"
                 );
-                AppResult::Ok(Ok(ManagedSftpSession::new(
-                    sftp,
-                    permit,
+                AppResult::Ok(Ok(Arc::new(SftpSessionCore {
+                    inner: sftp,
+                    _permit: permit,
                     sftp_session_id,
-                    operation,
-                )))
+                })))
             })
             .await;
             let setup_result = match setup_result {
@@ -295,12 +432,8 @@ impl SftpBackend {
         &self,
         operation: &'static str,
     ) -> AppResult<ManagedSftpSession> {
-        Self::open_sftp_raw(
-            self.ssh_handle.clone(),
-            SftpClientConfig::default(),
-            operation,
-        )
-        .await
+        self.open_sftp_with_client_config_for_operation(SftpClientConfig::default(), operation)
+            .await
     }
 
     pub(super) async fn open_sftp_with_client_config(
@@ -316,7 +449,61 @@ impl SftpBackend {
         config: SftpClientConfig,
         operation: &'static str,
     ) -> AppResult<ManagedSftpSession> {
-        Self::open_sftp_raw(self.ssh_handle.clone(), config, operation).await
+        if let Some(compatibility_session) = &self.compatibility_session {
+            let operation_guard = compatibility_session
+                .operation_lock
+                .clone()
+                .lock_owned()
+                .await;
+            return Ok(ManagedSftpSession::shared(
+                compatibility_session.core.clone(),
+                operation,
+                operation_guard,
+            ));
+        }
+
+        let core = Self::open_sftp_core(self.ssh_handle.clone(), config, operation).await?;
+        Ok(ManagedSftpSession::fresh(core, operation))
+    }
+
+    pub(super) async fn open_sftp_pair(
+        &self,
+        target: &SftpBackend,
+    ) -> AppResult<ManagedSftpSessionPair> {
+        let source_key = self
+            .compatibility_session
+            .as_ref()
+            .map(|session| Arc::as_ptr(session) as usize);
+        let target_key = target
+            .compatibility_session
+            .as_ref()
+            .map(|session| Arc::as_ptr(session) as usize);
+        let requires_sequential_io = source_key.is_some() || target_key.is_some();
+
+        match sftp_session_acquire_order(source_key, target_key) {
+            SftpSessionAcquireOrder::Shared => {
+                let source = self.open_sftp_for_operation("remote_copy").await?;
+                Ok(ManagedSftpSessionPair::new(source, None, true))
+            }
+            SftpSessionAcquireOrder::TargetFirst => {
+                let target_session = target.open_sftp_for_operation("remote_copy_target").await?;
+                let source = self.open_sftp_for_operation("remote_copy_source").await?;
+                Ok(ManagedSftpSessionPair::new(
+                    source,
+                    Some(target_session),
+                    true,
+                ))
+            }
+            SftpSessionAcquireOrder::SourceFirst => {
+                let source = self.open_sftp_for_operation("remote_copy_source").await?;
+                let target_session = target.open_sftp_for_operation("remote_copy_target").await?;
+                Ok(ManagedSftpSessionPair::new(
+                    source,
+                    Some(target_session),
+                    requires_sequential_io,
+                ))
+            }
+        }
     }
 
     pub(super) async fn exec(&self, command: &str) -> AppResult<ExecResult> {

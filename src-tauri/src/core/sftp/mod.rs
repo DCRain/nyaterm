@@ -98,6 +98,8 @@ pub(crate) struct AutoRemoteFs {
     cache_key: String,
     sftp_encoding: String,
     sftp_pipeline_depth_override: Option<u32>,
+    sftp_compatibility_mode: bool,
+    sftp_transfer_settings: crate::config::TransferSettings,
     force_sftp: bool,
 }
 
@@ -109,6 +111,8 @@ impl AutoRemoteFs {
         username: &str,
         sftp_encoding: &str,
         sftp_pipeline_depth_override: Option<u32>,
+        sftp_compatibility_mode: bool,
+        sftp_transfer_settings: crate::config::TransferSettings,
         force_sftp: bool,
     ) -> Self {
         Self {
@@ -117,8 +121,26 @@ impl AutoRemoteFs {
             cache_key: cache_key(host, port, username),
             sftp_encoding: sftp_encoding.to_string(),
             sftp_pipeline_depth_override,
+            sftp_compatibility_mode,
+            sftp_transfer_settings,
             force_sftp,
         }
+    }
+
+    async fn create_sftp_backend(&self) -> AppResult<Box<dyn RemoteFs>> {
+        let client_config = SftpBackend::client_config_for_settings(
+            &self.sftp_transfer_settings,
+            self.sftp_pipeline_depth_override,
+        );
+        let backend = SftpBackend::probe_and_create(
+            self.ssh_handle.clone(),
+            &self.sftp_encoding,
+            self.sftp_pipeline_depth_override,
+            self.sftp_compatibility_mode,
+            client_config,
+        )
+        .await?;
+        Ok(Box::new(backend))
     }
 
     async fn ensure_backend(&self) -> AppResult<()> {
@@ -145,14 +167,10 @@ impl AutoRemoteFs {
     }
 
     async fn probe_backends(&self) -> AppResult<Box<dyn RemoteFs>> {
-        if self.force_sftp {
-            SftpBackend::probe(&self.ssh_handle).await?;
+        if self.force_sftp || self.sftp_compatibility_mode {
+            let backend = self.create_sftp_backend().await?;
             save_cached_backend(&self.cache_key, "sftp", false, None);
-            return Ok(Box::new(SftpBackend::new(
-                self.ssh_handle.clone(),
-                &self.sftp_encoding,
-                self.sftp_pipeline_depth_override,
-            )));
+            return Ok(backend);
         }
 
         if let Some(cached) = load_cached_backend(&self.cache_key) {
@@ -166,14 +184,10 @@ impl AutoRemoteFs {
         let sftp_failure;
 
         tracing::debug!("Probing SFTP backend");
-        match SftpBackend::probe(&self.ssh_handle).await {
-            Ok(()) => {
+        match self.create_sftp_backend().await {
+            Ok(backend) => {
                 save_cached_backend(&self.cache_key, "sftp", false, None);
-                return Ok(Box::new(SftpBackend::new(
-                    self.ssh_handle.clone(),
-                    &self.sftp_encoding,
-                    self.sftp_pipeline_depth_override,
-                )));
+                return Ok(backend);
             }
             Err(e) => {
                 let reason = e.to_string();
@@ -212,18 +226,7 @@ impl AutoRemoteFs {
 
     async fn try_cached_backend(&self, name: &str) -> Option<Box<dyn RemoteFs>> {
         match name {
-            "sftp" => {
-                SftpBackend::probe(&self.ssh_handle)
-                    .await
-                    .ok()
-                    .map(|()| -> Box<dyn RemoteFs> {
-                        Box::new(SftpBackend::new(
-                            self.ssh_handle.clone(),
-                            &self.sftp_encoding,
-                            self.sftp_pipeline_depth_override,
-                        ))
-                    })
-            }
+            "sftp" => self.create_sftp_backend().await.ok(),
             "scp_enhanced" => ScpEnhancedBackend::probe(&self.ssh_handle).await.ok().map(
                 |()| -> Box<dyn RemoteFs> {
                     Box::new(ScpEnhancedBackend::new(self.ssh_handle.clone()))
@@ -246,6 +249,43 @@ impl AutoRemoteFs {
     }
 }
 
+pub(crate) fn create_auto_remote_fs(
+    app: &tauri::AppHandle,
+    ssh_handle: Arc<SshConnectionHandles>,
+    config: &crate::core::ssh::SshConfig,
+    force_sftp: bool,
+) -> Arc<AutoRemoteFs> {
+    let sftp_encoding = if config.sftp.filename_encoding.trim().is_empty() {
+        config.encoding.clone()
+    } else {
+        config.sftp.filename_encoding.clone()
+    };
+    let transfer_settings = crate::config::load_app_settings(app)
+        .map(|settings| settings.transfer)
+        .unwrap_or_default();
+    Arc::new(AutoRemoteFs::new(
+        ssh_handle,
+        &config.host,
+        config.port,
+        &config.username,
+        &sftp_encoding,
+        config.sftp.pipeline_depth,
+        config.sftp.compatibility_mode,
+        transfer_settings,
+        force_sftp,
+    ))
+}
+
+pub(crate) async fn create_compatibility_remote_fs(
+    app: &tauri::AppHandle,
+    ssh_handle: Arc<SshConnectionHandles>,
+    config: &crate::core::ssh::SshConfig,
+) -> AppResult<Arc<AutoRemoteFs>> {
+    let auto_fs = create_auto_remote_fs(app, ssh_handle, config, true);
+    auto_fs.ensure_backend().await?;
+    Ok(auto_fs)
+}
+
 // ---------------------------------------------------------------------------
 // Public API functions called by cmd/sftp.rs
 // ---------------------------------------------------------------------------
@@ -261,6 +301,7 @@ async fn get_ssh_info(
     String,
     String,
     Option<u32>,
+    bool,
 )> {
     let sessions = manager.sessions.lock().await;
     let session = sessions
@@ -275,32 +316,30 @@ async fn get_ssh_info(
         .downcast::<SshConnectionHandles>()
         .map_err(|_| AppError::Config("Failed to get SSH handle".to_string()))?;
 
-    let (host, port, username, encoding, sftp_encoding, sftp_pipeline_depth_override) =
-        if let Some(ref cfg_any) = session.ssh_config {
-            if let Some(cfg) = cfg_any.downcast_ref::<crate::core::ssh::SshConfig>() {
-                let sftp_encoding = if cfg.sftp.filename_encoding.trim().is_empty() {
-                    cfg.encoding.clone()
-                } else {
-                    cfg.sftp.filename_encoding.clone()
-                };
-                (
-                    cfg.host.clone(),
-                    cfg.port,
-                    cfg.username.clone(),
-                    cfg.encoding.clone(),
-                    sftp_encoding,
-                    cfg.sftp.pipeline_depth,
-                )
+    let (
+        host,
+        port,
+        username,
+        encoding,
+        sftp_encoding,
+        sftp_pipeline_depth_override,
+        sftp_compatibility_mode,
+    ) = if let Some(ref cfg_any) = session.ssh_config {
+        if let Some(cfg) = cfg_any.downcast_ref::<crate::core::ssh::SshConfig>() {
+            let sftp_encoding = if cfg.sftp.filename_encoding.trim().is_empty() {
+                cfg.encoding.clone()
             } else {
-                (
-                    "unknown".to_string(),
-                    22,
-                    "unknown".to_string(),
-                    "UTF-8".to_string(),
-                    "UTF-8".to_string(),
-                    None,
-                )
-            }
+                cfg.sftp.filename_encoding.clone()
+            };
+            (
+                cfg.host.clone(),
+                cfg.port,
+                cfg.username.clone(),
+                cfg.encoding.clone(),
+                sftp_encoding,
+                cfg.sftp.pipeline_depth,
+                cfg.sftp.compatibility_mode,
+            )
         } else {
             (
                 "unknown".to_string(),
@@ -309,8 +348,20 @@ async fn get_ssh_info(
                 "UTF-8".to_string(),
                 "UTF-8".to_string(),
                 None,
+                false,
             )
-        };
+        }
+    } else {
+        (
+            "unknown".to_string(),
+            22,
+            "unknown".to_string(),
+            "UTF-8".to_string(),
+            "UTF-8".to_string(),
+            None,
+            false,
+        )
+    };
 
     Ok((
         ssh_handle,
@@ -320,6 +371,7 @@ async fn get_ssh_info(
         encoding,
         sftp_encoding,
         sftp_pipeline_depth_override,
+        sftp_compatibility_mode,
     ))
 }
 
@@ -343,8 +395,21 @@ async fn get_or_create_auto_fs(
         session.info.ssh_runtime_mode == Some(SshRuntimeMode::Sftp)
     };
 
-    let (ssh_handle, host, port, username, _encoding, sftp_encoding, sftp_pipeline_depth_override) =
-        get_ssh_info(manager, session_id).await?;
+    let (
+        ssh_handle,
+        host,
+        port,
+        username,
+        _encoding,
+        sftp_encoding,
+        sftp_pipeline_depth_override,
+        sftp_compatibility_mode,
+    ) = get_ssh_info(manager, session_id).await?;
+    let transfer_settings = manager
+        .app_handle()
+        .and_then(|app| crate::config::load_app_settings(app).ok())
+        .map(|settings| settings.transfer)
+        .unwrap_or_default();
     let auto_fs = Arc::new(AutoRemoteFs::new(
         ssh_handle,
         &host,
@@ -352,6 +417,8 @@ async fn get_or_create_auto_fs(
         &username,
         &sftp_encoding,
         sftp_pipeline_depth_override,
+        sftp_compatibility_mode,
+        transfer_settings,
         force_sftp,
     ));
 

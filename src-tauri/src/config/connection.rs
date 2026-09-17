@@ -459,6 +459,8 @@ impl SshTerminalType {
 pub struct SftpSettings {
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub compatibility_mode: bool,
     #[serde(default)]
     pub cwd_follow_mode: SftpCwdFollowMode,
     #[serde(
@@ -480,6 +482,7 @@ impl Default for SftpSettings {
     fn default() -> Self {
         Self {
             enabled: true,
+            compatibility_mode: false,
             cwd_follow_mode: SftpCwdFollowMode::ShellIntegration,
             shell_detection_timeout_ms: default_sftp_shell_detection_timeout_ms(),
             filename_encoding: String::new(),
@@ -2071,12 +2074,16 @@ mod tests {
         .expect("connection");
 
         assert!(connection.sftp.enabled);
+        assert!(!connection.sftp.compatibility_mode);
         assert_eq!(
             connection.sftp.cwd_follow_mode,
             SftpCwdFollowMode::ShellIntegration
         );
         assert_eq!(connection.sftp.shell_detection_timeout_ms, 3000);
         assert_eq!(connection.sftp.pipeline_depth, None);
+
+        let encoded = serde_json::to_value(&connection).expect("serialized connection");
+        assert!(encoded.get("sftp").is_none());
     }
 
     #[test]
@@ -2112,6 +2119,34 @@ mod tests {
         assert_eq!(encoded["pipeline_depth"], 32);
         let decoded: SftpSettings = serde_json::from_value(encoded).expect("roundtrip settings");
         assert_eq!(decoded.pipeline_depth, Some(32));
+    }
+
+    #[test]
+    fn sftp_compatibility_mode_defaults_off_and_only_serializes_when_enabled() {
+        let automatic = serde_json::to_value(SftpSettings::default()).expect("default settings");
+        assert!(automatic.get("compatibility_mode").is_none());
+
+        let settings = SftpSettings {
+            compatibility_mode: true,
+            ..SftpSettings::default()
+        };
+        let encoded = serde_json::to_value(&settings).expect("compatibility settings");
+        assert_eq!(encoded["compatibility_mode"], true);
+        let decoded: SftpSettings = serde_json::from_value(encoded).expect("roundtrip settings");
+        assert!(decoded.compatibility_mode);
+
+        let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "conn-1",
+            "name": "Test",
+            "type": "ssh",
+            "host": "example.com",
+            "port": 22,
+            "username": "root",
+            "sftp": { "compatibility_mode": true }
+        }))
+        .expect("connection");
+        let encoded = serde_json::to_value(connection).expect("serialized connection");
+        assert_eq!(encoded["sftp"]["compatibility_mode"], true);
     }
 
     #[test]

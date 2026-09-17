@@ -80,7 +80,13 @@ impl RemoteFs for SftpBackend {
         let (sftp, dir) = loop {
             let sftp = match self.open_sftp().await {
                 Ok(sftp) => sftp,
-                Err(error) if should_retry_sftp_directory_list(&error, retries_used) => {
+                Err(error)
+                    if should_retry_sftp_directory_list(
+                        &error,
+                        retries_used,
+                        self.compatibility_mode(),
+                    ) =>
+                {
                     retries_used += 1;
                     continue;
                 }
@@ -91,7 +97,11 @@ impl RemoteFs for SftpBackend {
                 Ok(dir) => break (sftp, dir),
                 Err(error) => {
                     let error = AppError::Sftp(error);
-                    let should_retry = should_retry_sftp_directory_list(&error, retries_used);
+                    let should_retry = should_retry_sftp_directory_list(
+                        &error,
+                        retries_used,
+                        self.compatibility_mode(),
+                    );
                     let _ = sftp.close().await;
                     if should_retry {
                         retries_used += 1;
@@ -331,6 +341,7 @@ impl RemoteFs for SftpBackend {
             ignore_sftp_not_found(sftp.remove_file_bytes(raw_path).await)?;
         } else if sftp_attrs_is_dir(&meta) {
             let _ = sftp.close().await;
+            drop(sftp);
             self.remove_dir_fast_ref(path).await?;
             return Ok(());
         } else {
@@ -823,6 +834,7 @@ impl RemoteFs for SftpBackend {
             }
         };
         let _ = sftp_for_resolve.close().await;
+        drop(sftp_for_resolve);
 
         let mut last_err = None;
         for attempt in 0..=max_retries {
@@ -995,6 +1007,7 @@ impl RemoteFs for SftpBackend {
             return Ok(());
         }
         let _ = sftp_for_check.close().await;
+        drop(sftp_for_check);
 
         let (request_kib, pipeline_depth, max_concurrent_writes) =
             sftp_pipeline_config(transfer_settings, self.pipeline_depth_override);
