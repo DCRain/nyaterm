@@ -3,7 +3,9 @@ import { useTranslation } from "react-i18next";
 import { MdFileOpen, MdRefresh, MdSend } from "react-icons/md";
 import { getFileIcon } from "@/components/icons";
 import { formatSize } from "@/lib/utils";
-import FileExplorerEntryContextMenu from "./FileExplorerEntryContextMenu";
+import FileExplorerEntryContextMenu, {
+  FileExplorerContextMenuActionBar,
+} from "./FileExplorerEntryContextMenu";
 import type { FileExplorerTreeRow } from "./fileExplorerTreeModel";
 import type { AICustomActionConfig, FileEntry } from "@/types/global";
 import {
@@ -52,6 +54,10 @@ interface FileListItemProps {
   onDelete: (entry: FileEntry) => void;
   onAddToFavorites: (entry: FileEntry) => void;
   onCopyPath: (entry: FileEntry, mode: "dir" | "name" | "full") => void;
+  onCopyEntry?: (entry: FileEntry) => void;
+  onCutEntry?: (entry: FileEntry) => void;
+  onPaste?: () => void;
+  canPaste?: boolean;
   onSendToTerminal?: (entry: FileEntry, mode: "dir" | "name" | "full") => void;
   onProperties: (entry: FileEntry) => void;
   aiActions: AICustomActionConfig[];
@@ -110,6 +116,10 @@ export function FileListItem({
   onDelete,
   onAddToFavorites,
   onCopyPath,
+  onCopyEntry,
+  onCutEntry,
+  onPaste,
+  canPaste,
   onSendToTerminal,
   onProperties,
   aiActions,
@@ -396,7 +406,9 @@ export function FileListItem({
       </ContextMenuTrigger>
       {isParentDirectoryEntry ? (
         <ContextMenuContent
-          className="min-w-[200px]"
+          className={
+            onPaste ? "w-64 max-w-[calc(100vw-1rem)] min-w-0" : "min-w-[200px]"
+          }
           onCloseAutoFocus={(event) => {
             if (!preventNextContextMenuAutoFocusRef.current) {
               return;
@@ -405,6 +417,12 @@ export function FileListItem({
             event.preventDefault();
           }}
         >
+          {onPaste && (
+            <FileExplorerContextMenuActionBar
+              onPaste={onPaste}
+              canPaste={!!canPaste}
+            />
+          )}
           <ContextMenuItem onClick={() => onItemClick(entry)}>
             <MdFileOpen className="text-[0.875rem] text-muted-foreground mr-2" />
             {t("fileExplorer.goUp")}
@@ -418,6 +436,10 @@ export function FileListItem({
       ) : (
         <FileExplorerEntryContextMenu
           target={contextRow}
+          onCopyEntries={onCopyEntry ? () => onCopyEntry(entry) : undefined}
+          onCutEntries={onCutEntry ? () => onCutEntry(entry) : undefined}
+          onPaste={onPaste}
+          canPaste={canPaste}
           selectedTargets={[contextRow]}
           activeSessionId={activeSessionId}
           editorType={editorType}

@@ -5,6 +5,9 @@
 //! The upper layers and the frontend never need to know which protocol is in use.
 
 mod cache;
+mod clipboard;
+pub use clipboard::{find_missing_remote_entries, move_file_entry};
+use clipboard::{same_remote_endpoint, validate_remote_copy_destination};
 pub(crate) mod duplicate;
 mod scp_enhanced;
 mod scp_normal;
@@ -25,7 +28,7 @@ use crate::core::ssh::SshConnectionHandles;
 use crate::error::{AppError, AppResult};
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::protocol::StatusCode;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::Emitter;
@@ -75,6 +78,16 @@ pub struct CopyFileEntryRequest {
     pub is_directory: bool,
     pub transfer_id: Option<String>,
     pub duplicate_strategy_override: Option<String>,
+    pub source_started_at: Option<String>,
+    pub target_started_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CopyEntryOutcome {
+    Copied,
+    Skipped,
+    Cancelled,
 }
 
 fn is_remote_delete_not_found(error: &AppError) -> bool {
@@ -716,6 +729,11 @@ async fn ensure_local_session_kind(
         CopyEndpointKind::Local => session.info.session_type == crate::core::SessionType::Local,
         CopyEndpointKind::Remote => session.info.session_type == crate::core::SessionType::SSH,
     };
+    if !session.info.connected {
+        return Err(AppError::Channel(format!(
+            "Session '{session_id}' is disconnected"
+        )));
+    }
     if matches_kind {
         Ok(())
     } else {
@@ -1814,6 +1832,17 @@ pub async fn copy_file_entry(
     manager: Arc<SessionManager>,
     request: CopyFileEntryRequest,
 ) -> AppResult<()> {
+    copy_file_entry_with_outcome(app, manager, request)
+        .await
+        .map(|_| ())
+}
+
+pub async fn copy_file_entry_with_outcome(
+    app: tauri::AppHandle,
+    manager: Arc<SessionManager>,
+    request: CopyFileEntryRequest,
+) -> AppResult<CopyEntryOutcome> {
+    validate_copy_session_generations(&manager, &request).await?;
     let source_session_id = request.source.session_id;
     let source_kind = request.source.kind;
     let source_path = request.source.path;
@@ -1827,6 +1856,16 @@ pub async fn copy_file_entry(
 
     ensure_local_session_kind(&manager, &source_session_id, &source_kind).await?;
     ensure_local_session_kind(&manager, &target_session_id, &target_kind).await?;
+
+    if source_kind == CopyEndpointKind::Remote && target_kind == CopyEndpointKind::Remote {
+        validate_remote_copy_destination(
+            &source_path,
+            &target_dir,
+            &file_name,
+            is_directory,
+            same_remote_endpoint(&manager, &source_session_id, &target_session_id).await?,
+        )?;
+    }
 
     let settings = crate::config::load_app_settings(&app)
         .map(|settings| settings.transfer)
@@ -1859,7 +1898,7 @@ pub async fn copy_file_entry(
                         is_directory,
                         transfer_id,
                     );
-                    return Ok(());
+                    return Ok(CopyEntryOutcome::Skipped);
                 }
             }
         }
@@ -1890,7 +1929,7 @@ pub async fn copy_file_entry(
                         is_directory,
                         transfer_id,
                     );
-                    return Ok(());
+                    return Ok(CopyEntryOutcome::Skipped);
                 }
             }
         }
@@ -1898,7 +1937,7 @@ pub async fn copy_file_entry(
     let target_path = target.path;
     let target_existed = target.existed;
 
-    match (&source_kind, &target_kind, is_directory) {
+    let result = match (&source_kind, &target_kind, is_directory) {
         (CopyEndpointKind::Local, CopyEndpointKind::Local, false) => {
             let controller = transfer::create_child_file_transfer_controller(
                 transfer_id,
@@ -2062,7 +2101,36 @@ pub async fn copy_file_entry(
                 }
             }
         }
+    };
+    match result {
+        Ok(()) => Ok(CopyEntryOutcome::Copied),
+        Err(AppError::Cancelled(_)) => Ok(CopyEntryOutcome::Cancelled),
+        Err(error) => Err(error),
     }
+}
+
+async fn validate_copy_session_generations(
+    manager: &SessionManager,
+    request: &CopyFileEntryRequest,
+) -> AppResult<()> {
+    let sessions = manager.sessions.lock().await;
+    for (id, expected) in [
+        (&request.source.session_id, &request.source_started_at),
+        (&request.target.session_id, &request.target_started_at),
+    ] {
+        let session = sessions
+            .get(id)
+            .ok_or_else(|| AppError::SessionNotFound(id.clone()))?;
+        if expected
+            .as_ref()
+            .is_some_and(|started| *started != session.info.started_at)
+        {
+            return Err(AppError::Channel(format!(
+                "Session '{id}' reconnected; clipboard source was kept"
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub async fn get_home_dir(manager: Arc<SessionManager>, session_id: &str) -> AppResult<String> {

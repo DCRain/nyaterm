@@ -48,6 +48,7 @@ import type { NewItemDialogData } from "@/components/dialog/file-explorer/NewIte
 import type { NewSymlinkDialogData } from "@/components/dialog/file-explorer/NewSymlinkDialog";
 import type { PropertiesDialogData } from "@/components/dialog/file-explorer/PropertiesDialog";
 import ExternalFileDropOverlay from "@/components/ExternalFileDropOverlay";
+import { PasteConfirmDialog } from "@/components/dialog/file-explorer/PasteConfirmDialog";
 import PanelHeader from "@/components/layout/PanelHeader";
 import { Button } from "@/components/ui/button";
 import {
@@ -80,6 +81,10 @@ import { MAX_EDITOR_FILE_BYTES } from "@/lib/fileEditorLimits";
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
 import { sendSessionInput, sendSessionInputWithSync } from "@/lib/sessionInput";
+import {
+  selectionToClipboardEntries,
+  type FileClipboardMode,
+} from "@/lib/sftpClipboard";
 import { matchesKeyEvent } from "@/lib/shortcutRegistry";
 import { getSessionInputPeerIds } from "@/lib/syncInputGroups";
 import { cn, formatSize } from "@/lib/utils";
@@ -105,7 +110,9 @@ import {
   FileExplorerPathBar,
 } from "./FileExplorerPathBar";
 import { FileExplorerToolbar } from "./FileExplorerToolbar";
-import FileExplorerEntryContextMenu from "./FileExplorerEntryContextMenu";
+import FileExplorerEntryContextMenu, {
+  FileExplorerContextMenuActionBar,
+} from "./FileExplorerEntryContextMenu";
 import FileExplorerTree from "./FileExplorerTree";
 import { FileListItem } from "./FileListItem";
 import {
@@ -158,6 +165,7 @@ import {
   type FileExplorerTreeEntry,
   type FileExplorerTreeRow,
 } from "./fileExplorerTreeModel";
+import { useFileExplorerClipboard } from "./useFileExplorerClipboard";
 import { useFileExplorerTree } from "./useFileExplorerTree";
 
 const MemoizedFileExplorer = memo(FileExplorer);
@@ -651,6 +659,7 @@ function FileExplorer(props: FileExplorerProps) {
 
   return (
     <div ref={containerRef} className="relative h-full min-h-0">
+      <PasteConfirmDialog />
       <FileExplorerPane
         {...props}
         activeSessionName={
@@ -2324,6 +2333,44 @@ function FileExplorerPane({
       return;
     }
 
+    if (
+      canUseRemoteTransfer &&
+      !event.nativeEvent.isComposing &&
+      !inlineRenameState
+    ) {
+      for (const action of ["copy", "cut", "paste"] as const) {
+        if (
+          !matchesKeyEvent(
+            resolveShortcutKeys(
+              `fileExplorer.${action}`,
+              appSettings.keybindings,
+            ),
+            event.nativeEvent,
+          )
+        )
+          continue;
+        event.preventDefault();
+        event.stopPropagation();
+        if (action === "paste") void fileClipboard.paste();
+        else if (isTreeView)
+          void fileClipboard.copyEntries(
+            selectionToClipboardEntries(selectedTreeRows),
+            action,
+          );
+        else
+          void fileClipboard.copyEntries(
+            selectionToClipboardEntries(
+              selectedRealFiles.map((entry) => ({
+                entry,
+                path: getEntryFullPath(entry),
+              })),
+            ),
+            action,
+          );
+        return;
+      }
+    }
+
     if (isTreeView) {
       if (
         target instanceof HTMLElement &&
@@ -3321,6 +3368,30 @@ function FileExplorerPane({
     [treeState.selectedRows],
   );
 
+  const fileClipboard = useFileExplorerClipboard(
+    activeSessionId,
+    canUseRemoteTransfer,
+    currentPath,
+  );
+  const copyListEntry = (entry: FileEntry, mode: FileClipboardMode) => {
+    const entries = selectedFiles.has(entry.name) ? selectedRealFiles : [entry];
+    void fileClipboard.copyEntries(
+      selectionToClipboardEntries(
+        entries.map((entry) => ({ entry, path: getEntryFullPath(entry) })),
+      ),
+      mode,
+    );
+  };
+  useEffect(() => {
+    const refresh = () => {
+      if (isTreeView) treeState.refreshAll();
+      void refreshCurrentDirectory();
+    };
+    window.addEventListener("file-explorer-paste-finished", refresh);
+    return () =>
+      window.removeEventListener("file-explorer-paste-finished", refresh);
+  }, [isTreeView, treeState.refreshAll, refreshCurrentDirectory]);
+
   const activateTreeFileParent = useCallback(
     async (row: FileExplorerTreeRow) => {
       if (row.entry.is_dir) return true;
@@ -4105,6 +4176,22 @@ function FileExplorerPane({
                           onDelete={handleDeleteFromContextMenu}
                           onAddToFavorites={handleAddEntryToFavorites}
                           onCopyPath={handleCopyPath}
+                          onCopyEntry={
+                            canUseRemoteTransfer
+                              ? (entry) => copyListEntry(entry, "copy")
+                              : undefined
+                          }
+                          onCutEntry={
+                            canUseRemoteTransfer
+                              ? (entry) => copyListEntry(entry, "cut")
+                              : undefined
+                          }
+                          onPaste={
+                            canUseRemoteTransfer
+                              ? () => void fileClipboard.paste()
+                              : undefined
+                          }
+                          canPaste={fileClipboard.canPaste}
                           onSendToTerminal={
                             terminalInputEnabled ? handleSendToTerminal : undefined
                           }
@@ -4156,6 +4243,30 @@ function FileExplorerPane({
           <FileExplorerEntryContextMenu
             target={treeContextRow}
             selectedTargets={treeActionRows(treeContextRow)}
+            onCopyEntries={
+              canUseRemoteTransfer
+                ? (rows) =>
+                    void fileClipboard.copyEntries(
+                      selectionToClipboardEntries(rows),
+                      "copy",
+                    )
+                : undefined
+            }
+            onCutEntries={
+              canUseRemoteTransfer
+                ? (rows) =>
+                    void fileClipboard.copyEntries(
+                      selectionToClipboardEntries(rows),
+                      "cut",
+                    )
+                : undefined
+            }
+            onPaste={
+              canUseRemoteTransfer
+                ? () => void fileClipboard.paste()
+                : undefined
+            }
+            canPaste={fileClipboard.canPaste}
             activeSessionId={activeSessionId}
             editorType={appSettings.transfer.editor_type || "external"}
             showTransferActions={canUseRemoteTransfer}
@@ -4188,7 +4299,18 @@ function FileExplorerPane({
             onAIAction={handleTreeAIAction}
           />
         ) : canBrowseFiles ? (
-          <ContextMenuContent className="w-52">
+          <ContextMenuContent
+            className={cn(
+              "max-w-[calc(100vw-1rem)]",
+              canUseRemoteTransfer ? "w-64 min-w-0" : "w-52",
+            )}
+          >
+            {canUseRemoteTransfer && (
+              <FileExplorerContextMenuActionBar
+                onPaste={() => void fileClipboard.paste()}
+                canPaste={fileClipboard.canPaste}
+              />
+            )}
             <ContextMenuItem
               onClick={() =>
                 isTreeView

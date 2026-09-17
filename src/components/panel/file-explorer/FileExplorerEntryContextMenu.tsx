@@ -4,6 +4,8 @@ import {
   MdAutoAwesome,
   MdBookmarkAdd,
   MdContentCopy,
+  MdContentCut,
+  MdContentPaste,
   MdCopyAll,
   MdCreateNewFolder,
   MdDelete,
@@ -28,6 +30,7 @@ import {
 import type { AICustomActionConfig } from "@/types/global";
 import {
   ContextMenuContent,
+  ContextMenuGroup,
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuSub,
@@ -77,11 +80,107 @@ interface FileExplorerEntryContextMenuProps {
     mode: "dir" | "name" | "full",
   ) => void;
   onProperties: (row: FileExplorerTreeRow) => void;
+  onCopyEntries?: (rows: FileExplorerTreeRow[]) => void;
+  onCutEntries?: (rows: FileExplorerTreeRow[]) => void;
+  onPaste?: () => void;
+  canPaste?: boolean;
   onAIAction: (row: FileExplorerTreeRow, action: AICustomActionConfig) => void;
 }
 
 function rowsContain(rows: FileExplorerTreeRow[], target: FileExplorerTreeRow) {
   return rows.some((row) => row.path === target.path);
+}
+
+interface FileExplorerContextMenuActionBarProps {
+  onCut?: () => void;
+  onCopy?: () => void;
+  onPaste?: () => void;
+  onRename?: () => void;
+  onDelete?: () => void;
+  canCut?: boolean;
+  canCopy?: boolean;
+  canPaste?: boolean;
+  canRename?: boolean;
+  canDelete?: boolean;
+}
+
+export function FileExplorerContextMenuActionBar({
+  onCut,
+  onCopy,
+  onPaste,
+  onRename,
+  onDelete,
+  canCut = false,
+  canCopy = false,
+  canPaste = false,
+  canRename = false,
+  canDelete = false,
+}: FileExplorerContextMenuActionBarProps) {
+  const { t } = useTranslation();
+
+  return (
+    <>
+      <ContextMenuGroup className="grid grid-cols-5 gap-0.5 p-0.5">
+        <ContextMenuItem
+          className="h-12 min-w-0 flex-col justify-center gap-1 px-0.5 py-1 text-[0.625rem] leading-none"
+          disabled={!canCut}
+          onClick={onCut}
+          title={t("fileExplorer.cmCut")}
+        >
+          <MdContentCut className="size-4" />
+          <span className="line-clamp-2 w-full text-center leading-[1.05]">
+            {t("fileExplorer.cmCut")}
+          </span>
+        </ContextMenuItem>
+        <ContextMenuItem
+          className="h-12 min-w-0 flex-col justify-center gap-1 px-0.5 py-1 text-[0.625rem] leading-none"
+          disabled={!canCopy}
+          onClick={onCopy}
+          title={t("fileExplorer.cmCopy")}
+        >
+          <MdContentCopy className="size-4" />
+          <span className="line-clamp-2 w-full text-center leading-[1.05]">
+            {t("fileExplorer.cmCopy")}
+          </span>
+        </ContextMenuItem>
+        <ContextMenuItem
+          className="h-12 min-w-0 flex-col justify-center gap-1 px-0.5 py-1 text-[0.625rem] leading-none"
+          disabled={!canPaste}
+          onClick={onPaste}
+          title={t("fileExplorer.cmPaste")}
+        >
+          <MdContentPaste className="size-4" />
+          <span className="line-clamp-2 w-full text-center leading-[1.05]">
+            {t("fileExplorer.cmPaste")}
+          </span>
+        </ContextMenuItem>
+        <ContextMenuItem
+          className="h-12 min-w-0 flex-col justify-center gap-1 px-0.5 py-1 text-[0.625rem] leading-none"
+          disabled={!canRename}
+          onClick={onRename}
+          title={t("fileExplorer.cmRename")}
+        >
+          <MdEdit className="size-4" />
+          <span className="line-clamp-2 w-full text-center leading-[1.05]">
+            {t("fileExplorer.cmRename")}
+          </span>
+        </ContextMenuItem>
+        <ContextMenuItem
+          className="h-12 min-w-0 flex-col justify-center gap-1 px-0.5 py-1 text-[0.625rem] leading-none"
+          disabled={!canDelete}
+          onClick={onDelete}
+          title={t("fileExplorer.cmDelete")}
+          variant="destructive"
+        >
+          <MdDelete className="size-4" />
+          <span className="line-clamp-2 w-full text-center leading-[1.05]">
+            {t("fileExplorer.cmDelete")}
+          </span>
+        </ContextMenuItem>
+      </ContextMenuGroup>
+      <ContextMenuSeparator />
+    </>
+  );
 }
 
 export default function FileExplorerEntryContextMenu({
@@ -115,6 +214,10 @@ export default function FileExplorerEntryContextMenu({
   onCopyPath,
   onSendToTerminal,
   onProperties,
+  onCopyEntries,
+  onCutEntries,
+  onPaste,
+  canPaste = false,
   onAIAction,
 }: FileExplorerEntryContextMenuProps) {
   const { t } = useTranslation();
@@ -127,12 +230,30 @@ export default function FileExplorerEntryContextMenu({
   const isFile = !!target && !target.entry.is_dir;
   const showOpenInternal = isFile && editorType === "external";
   const showOpenExternal = isFile && editorType === "internal";
+  const showActionBar = !!onCopyEntries || !!onCutEntries || !!onPaste;
+  const hasActionableTarget = !!target && !target.isRoot && actionRows.length > 0;
 
   return (
     <ContextMenuContent
-      className="min-w-[200px]"
+      className={showActionBar ? "w-64 max-w-[calc(100vw-1rem)] min-w-0" : "min-w-[200px]"}
       onCloseAutoFocus={onCloseAutoFocus}
     >
+      {showActionBar && (
+        <FileExplorerContextMenuActionBar
+          onCut={() => onCutEntries?.(actionRows)}
+          onCopy={() => onCopyEntries?.(actionRows)}
+          onPaste={onPaste}
+          onRename={() => {
+            if (target && activeSessionId) onRename(target);
+          }}
+          onDelete={() => onDelete(actionRows)}
+          canCut={hasActionableTarget && !!onCutEntries}
+          canCopy={hasActionableTarget && !!onCopyEntries}
+          canPaste={canPaste && !!onPaste}
+          canRename={hasActionableTarget && !!activeSessionId}
+          canDelete={hasActionableTarget}
+        />
+      )}
       {target ? (
         <>
           <ContextMenuItem
@@ -250,14 +371,16 @@ export default function FileExplorerEntryContextMenu({
 
           {!target.isRoot && (
             <>
-              <ContextMenuItem
-                onClick={() => {
-                  if (activeSessionId) onRename(target);
-                }}
-              >
-                <MdEdit className="text-[0.875rem] text-muted-foreground mr-2" />
-                {t("fileExplorer.cmRename")}
-              </ContextMenuItem>
+              {!showActionBar && (
+                <ContextMenuItem
+                  onClick={() => {
+                    if (activeSessionId) onRename(target);
+                  }}
+                >
+                  <MdEdit className="text-[0.875rem] text-muted-foreground mr-2" />
+                  {t("fileExplorer.cmRename")}
+                </ContextMenuItem>
+              )}
               <ContextMenuItem
                 onClick={() => {
                   if (activeSessionId) onMove(actionRows);
@@ -266,13 +389,15 @@ export default function FileExplorerEntryContextMenu({
                 <MdDriveFileMove className="text-[0.875rem] text-muted-foreground mr-2" />
                 {t("fileExplorer.cmMove")}
               </ContextMenuItem>
-              <ContextMenuItem
-                variant="destructive"
-                onClick={() => onDelete(actionRows)}
-              >
-                <MdDelete className="text-[0.875rem] mr-2" />
-                {t("fileExplorer.cmDelete")}
-              </ContextMenuItem>
+              {!showActionBar && (
+                <ContextMenuItem
+                  variant="destructive"
+                  onClick={() => onDelete(actionRows)}
+                >
+                  <MdDelete className="text-[0.875rem] mr-2" />
+                  {t("fileExplorer.cmDelete")}
+                </ContextMenuItem>
+              )}
               <ContextMenuSeparator />
             </>
           )}

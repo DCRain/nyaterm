@@ -984,13 +984,15 @@ impl SftpBackend {
         &self,
         source_root: &str,
         target_root: &str,
-    ) -> AppResult<(Vec<RemoteCopyFile>, u64)> {
+    ) -> AppResult<(Vec<RemoteCopyFile>, Vec<String>, u64)> {
         let sftp = self.open_sftp().await?;
         let mut files = Vec::new();
         let mut total_size = 0_u64;
         let mut stack = vec![(source_root.to_string(), target_root.to_string())];
+        let mut directories = Vec::new();
 
         while let Some((source_dir, target_dir)) = stack.pop() {
+            directories.push(target_dir.clone());
             let entries = sftp.read_dir(&source_dir).await?;
             for entry in entries {
                 let name = entry.file_name();
@@ -1014,7 +1016,7 @@ impl SftpBackend {
             }
         }
         let _ = sftp.close().await;
-        Ok((files, total_size))
+        Ok((files, directories, total_size))
     }
 
     #[allow(dead_code)]
@@ -1381,7 +1383,7 @@ impl SftpBackend {
     ) -> AppResult<()> {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let (files, total_size) = self
+        let (files, directories, total_size) = self
             .collect_remote_copy_files(source_path, target_path)
             .await?;
         let total_files = files.len() as u64;
@@ -1404,6 +1406,12 @@ impl SftpBackend {
         let active_remote_temp = Arc::new(StdMutex::new(None::<String>));
         let active_remote_temp_for_loop = active_remote_temp.clone();
         let result: AppResult<(u64, u64)> = async {
+            let sftp = target.open_sftp().await?;
+            for directory in directories {
+                wait_for_transfer_ready(&controller).await?;
+                ensure_remote_dir_exists(&sftp, &directory).await?;
+            }
+            let _ = sftp.close().await;
             let mut bytes_written = 0_u64;
             let mut completed = 0_u64;
             let mut last_progress = Instant::now();
