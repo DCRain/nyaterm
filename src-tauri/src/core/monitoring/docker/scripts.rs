@@ -1,4 +1,5 @@
 pub fn docker_overview_script(docker: &str) -> String {
+    let docker_compose = standalone_compose_command(docker);
     format!(
         r#"sh -c '
 info_error=$({docker} info 2>&1 >/dev/null)
@@ -26,7 +27,11 @@ printf "DOCKER_VERSION\t%s\n" "$version"
 if {docker} compose version >/dev/null 2>&1; then
   printf "COMPOSE_AVAILABLE\t1\n"
 else
-  printf "COMPOSE_AVAILABLE\t0\n"
+  compose_version=$({docker_compose} version --short 2>/dev/null || true)
+  case "$compose_version" in
+    2.*|v2.*) printf "COMPOSE_AVAILABLE\t1\n" ;;
+    *) printf "COMPOSE_AVAILABLE\t0\n" ;;
+  esac
 fi
 '"#
     )
@@ -49,12 +54,17 @@ pub fn docker_networks_script(docker: &str) -> String {
 }
 
 pub fn docker_compose_projects_script(docker: &str) -> String {
+    let docker_compose = standalone_compose_command(docker);
     format!(
         r#"sh -c '
-if ! {docker} compose version >/dev/null 2>&1; then
+if {docker} compose version >/dev/null 2>&1; then
+  {docker} compose ls --format json || true
   exit 0
 fi
-{docker} compose ls --format json || true
+compose_version=$({docker_compose} version --short 2>/dev/null || true)
+case "$compose_version" in
+  2.*|v2.*) {docker_compose} ls --format json || true ;;
+esac
 '"#
     )
 }
@@ -86,4 +96,42 @@ fn sh_quote_local(value: &str) -> String {
         return "''".to_string();
     }
     format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn standalone_compose_command(docker: &str) -> String {
+    docker
+        .strip_suffix("docker")
+        .map(|prefix| format!("{prefix}docker-compose"))
+        .unwrap_or_else(|| "docker-compose".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derives_standalone_compose_from_docker_prefix() {
+        assert_eq!(
+            standalone_compose_command("sudo -n env PATH=/usr/local/bin:$PATH docker"),
+            "sudo -n env PATH=/usr/local/bin:$PATH docker-compose"
+        );
+    }
+
+    #[test]
+    fn overview_checks_standalone_compose_v2_as_fallback() {
+        let script = docker_overview_script("docker");
+
+        assert!(script.contains("docker compose version"));
+        assert!(script.contains("docker-compose version --short"));
+        assert!(script.contains("2.*|v2.*"));
+    }
+
+    #[test]
+    fn compose_projects_use_standalone_command_when_plugin_is_unavailable() {
+        let script = docker_compose_projects_script("sudo -n docker");
+
+        assert!(script.contains("sudo -n docker compose ls --format json"));
+        assert!(script.contains("sudo -n docker-compose version --short"));
+        assert!(script.contains("sudo -n docker-compose ls --format json"));
+    }
 }
