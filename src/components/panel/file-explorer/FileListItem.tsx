@@ -322,7 +322,7 @@ export function FileListItem({
                     {entry.name}
                   </span>
                 ) : (
-                  <HoverCard openDelay={450} closeDelay={100}>
+                  <HoverCard openDelay={800} closeDelay={100}>
                     <HoverCardTrigger asChild>
                       <span
                         className="min-w-0 flex-1 truncate text-xs"
