@@ -2,6 +2,30 @@ fn local_managed_integration_enabled(dynamic_title_enabled: bool, windows_host: 
     windows_host || dynamic_title_enabled
 }
 
+#[cfg(target_os = "windows")]
+fn ensure_local_terminal_supported() -> AppResult<()> {
+    let Some(version) = crate::platform::windows_version::current_windows_version() else {
+        tracing::warn!(
+            "Unable to query Windows version before Local Terminal creation; continuing"
+        );
+        return Ok(());
+    };
+
+    if !version.supports_conpty() {
+        return Err(crate::error::AppError::Unsupported(format!(
+            "Local Terminal requires Windows 10 version 1809 (Build 17763) or later. Current Windows build: {}.",
+            version.build
+        )));
+    }
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn ensure_local_terminal_supported() -> AppResult<()> {
+    Ok(())
+}
+
 /// Spawns a local shell in a PTY and registers the session with the manager.
 pub async fn create_local_session(
     app: AppHandle,
@@ -10,6 +34,7 @@ pub async fn create_local_session(
     owner_window_label: Option<String>,
     session_ready_hook: Option<SessionReadyHook>,
 ) -> AppResult<String> {
+    ensure_local_terminal_supported()?;
     tracing::info!("Creating local PTY session");
     let resolved_shell_spec = match &config {
         Some(cfg) if !cfg.shell_path.trim().is_empty() => resolve_shell_command(

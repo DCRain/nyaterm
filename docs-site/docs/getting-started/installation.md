@@ -8,9 +8,11 @@ sidebar_position: 1
 
 NyaTerm 支持以下操作系统：
 
-- **Windows** 10/11 (64-bit)
+- **Windows** 10 版本 1809（Build 17763）或更高版本 / Windows 11 (64-bit)
 - **macOS** 12+ (Intel & Apple Silicon)
 - **Linux**（Ubuntu 20.04+、Fedora 36+、Arch Linux 等）
+
+Windows 本地终端依赖系统 ConPTY，因此 Windows 10 1809（Build 17763）是最低支持版本。
 
 ## 下载安装
 
