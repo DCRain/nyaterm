@@ -435,13 +435,24 @@ export default function SettingsPage() {
     await saveDraftSettings(false);
   }, [isDirty, isSaving, saveDraftSettings]);
 
+  const isDirtyRef = useRef(isDirty);
+
+  useEffect(() => {
+    isDirtyRef.current = isDirty;
+  }, [isDirty]);
+
+  // Register the close-requested listener exactly once for the page lifetime. Tauri only
+  // delivers close-requested while a JS listener exists: re-registering on isDirty churn
+  // leaves a gap where the event arrives after the old listener is gone and the fresh one
+  // is not registered yet, so the close is silently dropped until the next close() call.
   useEffect(() => {
     const currentWindow = getCurrentWindow();
     let unlisten: (() => void) | undefined;
+    let disposed = false;
 
     currentWindow
       .onCloseRequested(async (event) => {
-        if (forceCloseRef.current || !isDirty) {
+        if (forceCloseRef.current || !isDirtyRef.current) {
           await prepareForModalChildClose(currentWindow.label).catch(() => {});
           return;
         }
@@ -450,14 +461,19 @@ export default function SettingsPage() {
         setCloseConfirmOpen(true);
       })
       .then((dispose) => {
+        if (disposed) {
+          dispose();
+          return;
+        }
         unlisten = dispose;
       })
       .catch(() => {});
 
     return () => {
+      disposed = true;
       unlisten?.();
     };
-  }, [isDirty]);
+  }, []);
 
   return (
     <div
