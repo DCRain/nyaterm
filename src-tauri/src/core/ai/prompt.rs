@@ -437,7 +437,11 @@ pub(super) fn build_observation_message(
         .map(|c| format!("exit code {c}"))
         .unwrap_or_else(|| "unknown exit code".to_string());
     let output = if obs.output.len() > 8000 {
-        let truncated = &obs.output[obs.output.len() - 8000..];
+        let mut start = obs.output.len() - 8000;
+        while !obs.output.is_char_boundary(start) {
+            start += 1;
+        }
+        let truncated = &obs.output[start..];
         format!("...(truncated)\n{truncated}")
     } else {
         obs.output.clone()
@@ -969,6 +973,19 @@ mod tests {
         assert!(message.contains("명령 `ls` 실행이 완료되었습니다"));
         assert!(message.contains("출력:"));
         assert!(message.contains("execute_command 또는 final_answer"));
+    }
+
+    #[test]
+    fn safely_truncates_multibyte_observation_output() {
+        let obs = CommandObservation {
+            output: "你".repeat(3000),
+            exit_code: Some(0),
+            duration_ms: 42,
+        };
+
+        let message = build_observation_message(&obs, "cat file", "zh-CN");
+        assert!(message.contains("...(truncated)\n你"));
+        assert!(message.contains("命令 `cat file` 执行完成"));
     }
 
     #[test]
