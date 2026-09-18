@@ -4,9 +4,12 @@ mod tests {
         DO, IAC, OPT_NAWS, OPT_SUPPRESS_GO_AHEAD, TelnetEnterMode, TelnetLineEditor,
         TelnetAutoLogin, TelnetAutoLoginAction, TelnetAutoLoginConfig,
         TelnetAutoLoginCredentials, TelnetSessionConfig, WILL, maybe_build_naws,
-        negotiate_response, normalize_enter_bytes, split_write_chunks, strip_telnet_commands,
+        await_telnet_connection, negotiate_response, normalize_enter_bytes, split_write_chunks,
+        strip_telnet_commands,
     };
+    use crate::error::AppError;
     use std::time::Instant;
+    use tokio::sync::oneshot;
 
     #[test]
     fn standard_negotiation_responds_by_default() {
@@ -14,6 +17,35 @@ mod tests {
             negotiate_response(WILL, OPT_SUPPRESS_GO_AHEAD, true, true),
             vec![IAC, DO, OPT_SUPPRESS_GO_AHEAD]
         );
+    }
+
+    #[tokio::test]
+    async fn connection_wait_can_be_cancelled_before_connect_finishes() {
+        let (cancel_tx, cancel_rx) = oneshot::channel();
+        cancel_tx.send(()).expect("send cancellation");
+
+        let result = await_telnet_connection(
+            std::future::pending::<std::io::Result<()>>(),
+            Some(cancel_rx),
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(AppError::Cancelled(message)) if message == "Session creation cancelled"
+        ));
+    }
+
+    #[tokio::test]
+    async fn connection_wait_returns_connect_result_without_cancellation() {
+        let result = await_telnet_connection(
+            std::future::ready(Ok::<_, std::io::Error>(42_u8)),
+            None,
+        )
+        .await
+        .expect("connect result");
+
+        assert_eq!(result, 42);
     }
 
     #[test]
