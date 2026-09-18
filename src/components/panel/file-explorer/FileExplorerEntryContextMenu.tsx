@@ -133,7 +133,7 @@ export function FileExplorerContextMenuActionBar({
           </span>
         </ContextMenuItem>
         <ContextMenuItem
-          className="h-12 min-w-0 flex-col justify-center gap-1 px-0.5 py-1 text-[0.625rem] leading-none"
+          className="before:bg-border/70 before:absolute before:top-1/2 before:-left-px before:h-5 before:w-px before:-translate-y-1/2 h-12 min-w-0 flex-col justify-center gap-1 px-0.5 py-1 text-[0.625rem] leading-none"
           disabled={!canCopy}
           onClick={onCopy}
           title={t("fileExplorer.cmCopy")}
@@ -144,7 +144,7 @@ export function FileExplorerContextMenuActionBar({
           </span>
         </ContextMenuItem>
         <ContextMenuItem
-          className="h-12 min-w-0 flex-col justify-center gap-1 px-0.5 py-1 text-[0.625rem] leading-none"
+          className="before:bg-border/70 before:absolute before:top-1/2 before:-left-px before:h-5 before:w-px before:-translate-y-1/2 h-12 min-w-0 flex-col justify-center gap-1 px-0.5 py-1 text-[0.625rem] leading-none"
           disabled={!canPaste}
           onClick={onPaste}
           title={t("fileExplorer.cmPaste")}
@@ -155,7 +155,7 @@ export function FileExplorerContextMenuActionBar({
           </span>
         </ContextMenuItem>
         <ContextMenuItem
-          className="h-12 min-w-0 flex-col justify-center gap-1 px-0.5 py-1 text-[0.625rem] leading-none"
+          className="before:bg-border/70 before:absolute before:top-1/2 before:-left-px before:h-5 before:w-px before:-translate-y-1/2 h-12 min-w-0 flex-col justify-center gap-1 px-0.5 py-1 text-[0.625rem] leading-none"
           disabled={!canRename}
           onClick={onRename}
           title={t("fileExplorer.cmRename")}
@@ -166,7 +166,7 @@ export function FileExplorerContextMenuActionBar({
           </span>
         </ContextMenuItem>
         <ContextMenuItem
-          className="h-12 min-w-0 flex-col justify-center gap-1 px-0.5 py-1 text-[0.625rem] leading-none"
+          className="before:bg-border/70 before:absolute before:top-1/2 before:-left-px before:h-5 before:w-px before:-translate-y-1/2 h-12 min-w-0 flex-col justify-center gap-1 px-0.5 py-1 text-[0.625rem] leading-none"
           disabled={!canDelete}
           onClick={onDelete}
           title={t("fileExplorer.cmDelete")}
