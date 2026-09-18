@@ -31,6 +31,10 @@ pub enum AppError {
     #[error("{0}")]
     Config(String),
 
+    #[cfg_attr(not(windows), allow(dead_code))]
+    #[error("{0}")]
+    Unsupported(String),
+
     #[error("{0}")]
     Storage(String),
 
