@@ -5,29 +5,44 @@ import { invoke } from "@/lib/invoke";
 import type { FileDocumentPane } from "@/types/global";
 import FileDocumentEditor from "./FileDocumentEditor";
 
-vi.mock("@codemirror/state", () => ({
-  EditorState: {
-    create: ({ doc }: { doc: string }) => ({ doc: { length: doc.length } }),
+vi.mock("@/components/file-editor/FileCodeMirrorSurface", () => ({
+  default: ({
+    onReady,
+  }: {
+    onReady?: (view: {
+      state: { doc: { length: number; toString: () => string } };
+      dispatch: (args: { changes: { insert: string } }) => void;
+      focus: () => void;
+      requestMeasure?: () => void;
+    }) => void;
+  }) => {
+    const view = {
+      state: { doc: { length: 5, toString: () => "hello" } },
+      dispatch({ changes }: { changes: { insert: string } }) {
+        this.state = { doc: { length: changes.insert.length, toString: () => changes.insert } };
+      },
+      setState(nextState: { doc: { length: number; toString: () => string } }) {
+        this.state = nextState;
+      },
+      focus() {},
+      requestMeasure() {},
+    };
+    onReady?.(view);
+    return <div data-testid="file-cm-surface" />;
   },
 }));
 
-vi.mock("@codemirror/view", () => ({
-  EditorView: class {
-    static updateListener = { of: (listener: unknown) => listener };
-    state: { doc: { length: number } };
-
-    constructor({ state }: { state: { doc: { length: number } } }) {
-      this.state = state;
-    }
-
-    dispatch({ changes }: { changes: { insert: string } }) {
-      this.state = { doc: { length: changes.insert.length } };
-    }
-
-    destroy() {}
-
-    focus() {}
-  },
+vi.mock("@/context/ThemeContext", () => ({
+  useTheme: () => ({
+    theme: {
+      colors: {
+        bg: "#0d1117",
+        text: "#e6edf3",
+        primary: "#388bfd",
+        terminal: { selectionBackground: "#1f4b73" },
+      },
+    },
+  }),
 }));
 
 vi.mock("@/lib/codeMirrorFileView", () => ({

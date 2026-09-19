@@ -10,12 +10,9 @@ type EditorOpenSettings = Pick<TransferSettings, "editor_type"> &
   Partial<Pick<TransferSettings, "internal_editor_display">>;
 
 export function resolveInternalEditorDisplay(
-  // The workspace-tab editor mode has been removed — the built-in editor now
-  // always opens in its own independent window (see the CodeMirror opaque-iframe
-  // rendering fix). Kept as a function (ignoring its argument) so any legacy
-  // persisted `"workspace"` value normalizes to `"window"` without a migration.
-  _value?: TransferSettings["internal_editor_display"] | string,
+  value?: TransferSettings["internal_editor_display"] | string,
 ): InternalEditorDisplay {
+  if (value === "workspace") return "workspace";
   return "window";
 }
 

@@ -84,6 +84,7 @@ import {
   matchFileExplorerActions,
   normalizeFileExplorerConfirmationLevel,
 } from "@/lib/fileExplorerActions";
+import { MAX_EDITOR_FILE_BYTES } from "@/lib/fileEditorLimits";
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
 import {
@@ -97,7 +98,7 @@ import { getSessionInputPeerIds } from "@/lib/syncInputGroups";
 import { cn, formatSize, shellQuote } from "@/lib/utils";
 import type { FileWindowTarget } from "@/lib/windowManager";
 import { openAutoUpload, openFilePreview, openRemoteFileEditor } from "@/lib/windowManager";
-import { findSessionPaneById } from "@/lib/workspaceTabs";
+import { findOpenFileDocument, findSessionPaneById } from "@/lib/workspaceTabs";
 import type {
   AICustomActionConfig,
   FileEntry,
@@ -107,7 +108,7 @@ import type {
   SessionInfo,
   SessionType,
 } from "@/types/global";
-import { resolveFileEditorOpenTarget } from "./editorOpenMode";
+import { resolveFileEditorOpenTarget, resolveInternalEditorDisplay } from "./editorOpenMode";
 import { FileExplorerDialogs } from "./FileExplorerDialogs";
 import {
   clearDirectoryChildrenCacheForPath,
@@ -164,6 +165,7 @@ import {
   subscribeFileExplorerSessionSnapshots,
   syncExplorerDirectoryToTerminalCwd,
   syncExplorerDirectoryToTerminalCwdChange,
+  type TextFileOpenResult,
 } from "./model";
 import { useExternalFileDrop } from "./useExternalFileDrop";
 import {
@@ -715,6 +717,8 @@ export function FileExplorerPane({
     savedConnections,
     tabs,
     activeTabId,
+    setActivePane,
+    openFileDocument,
     syncGroups,
     broadcastToAll,
   } = useApp();
@@ -3733,18 +3737,65 @@ export function FileExplorerPane({
       return;
     }
 
-    // The built-in editor now always opens in its own independent window — the
-    // workspace-tab editor mode (`openFileDocument` + direct DOM CodeMirror
-    // mount) has been removed in favor of the iframe-based opaque surface.
+    const path = fullPath;
+    if (resolveInternalEditorDisplay(appSettings.transfer.internal_editor_display) === "window") {
+      try {
+        await openRemoteFileEditor({
+          sessionId: activeSessionId,
+          backend,
+          path,
+          name: entry.name,
+          size: entry.size,
+          mtime: entry.mtime,
+          target: fileWindowTarget,
+        });
+      } catch (error) {
+        toast.error(getErrorMessage(error) || t("fileExplorer.openInternalFailed"));
+      }
+      return;
+    }
+
+    const existing = findOpenFileDocument(tabs, {
+      backend,
+      sessionId: activeSessionId,
+      path,
+    });
+    if (existing) {
+      setActivePane(existing.tabId, existing.paneId);
+      return;
+    }
+
     try {
-      await openRemoteFileEditor({
+      const result = await invoke<TextFileOpenResult>(
+        backend === "local" ? "open_local_file_text" : "open_remote_file_text",
+        { sessionId: activeSessionId, path, maxBytes: MAX_EDITOR_FILE_BYTES },
+      );
+      if (result.status === "unsupported") {
+        toast.info(
+          t(
+            result.reason === "binary"
+              ? "fileExplorer.binaryOpenExternal"
+              : "fileExplorer.unsupportedEncodingOpenExternal",
+          ),
+        );
+        await handleOpenExternal(entry, fullPath);
+        return;
+      }
+
+      openFileDocument({
         sessionId: activeSessionId,
-        backend,
-        path: fullPath,
         name: entry.name,
-        size: entry.size,
-        mtime: entry.mtime,
-        target: fileWindowTarget,
+        type: activeSessionType,
+        connectionId: activeConnectionId ?? undefined,
+        backend,
+        path,
+        file: {
+          content: result.file.content,
+          size: result.file.size,
+          mtime: result.file.mtime ?? entry.mtime,
+          mtimeNanos: result.file.mtimeNanos,
+          contentHash: result.file.contentHash,
+        },
       });
     } catch (error) {
       toast.error(getErrorMessage(error) || t("fileExplorer.openInternalFailed"));

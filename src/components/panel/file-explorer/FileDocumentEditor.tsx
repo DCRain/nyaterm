@@ -1,12 +1,15 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MdRefresh, MdSave } from "react-icons/md";
 import { toast } from "sonner";
 import ReloadDirtyDialog from "@/components/dialog/remote-file-editor/ReloadDirtyDialog";
 import RemoteFileConflictDialog from "@/components/dialog/remote-file-editor/RemoteFileConflictDialog";
+import FileCodeMirrorSurface from "@/components/file-editor/FileCodeMirrorSurface";
 import { Button } from "@/components/ui/button";
+import { useApp } from "@/context/AppContext";
+import { useTheme } from "@/context/ThemeContext";
 import { codeMirrorFileViewExtensions } from "@/lib/codeMirrorFileView";
 import { getErrorMessage } from "@/lib/errors";
 import { MAX_EDITOR_FILE_BYTES } from "@/lib/fileEditorLimits";
@@ -15,9 +18,8 @@ import {
   registerFileDocument,
   updateFileDocumentState,
 } from "@/lib/fileDocumentRegistry";
-import { useApp } from "@/context/AppContext";
-import { invoke } from "@/lib/invoke";
 import { clampFileEditorFontSize } from "@/lib/fileEditorFontSize";
+import { invoke } from "@/lib/invoke";
 import { formatSize } from "@/lib/utils";
 import type { FileDocumentPane } from "@/types/global";
 import { languageFromFilename, type TextFileOpenResult } from "./model";
@@ -38,10 +40,11 @@ interface FileDocumentEditorProps {
 export default function FileDocumentEditor({ pane, active }: FileDocumentEditorProps) {
   const { t } = useTranslation();
   const { appSettings } = useApp();
+  const { theme } = useTheme();
+  const colors = theme.colors;
   const editorFontSize = clampFileEditorFontSize(
     appSettings.transfer.internal_editor_font_size,
   );
-  const editorParentRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const suppressUpdateRef = useRef(false);
   const savingRef = useRef(false);
@@ -62,6 +65,35 @@ export default function FileDocumentEditor({ pane, active }: FileDocumentEditorP
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const [conflictOpen, setConflictOpen] = useState(false);
   const [reloadConfirmOpen, setReloadConfirmOpen] = useState(false);
+
+  const language = useMemo(
+    () => languageFromFilename(pane.name || pane.file.path),
+    [pane.file.path, pane.name],
+  );
+
+  const createEditorState = useCallback(
+    (content: string) =>
+      EditorState.create({
+        doc: content,
+        extensions: codeMirrorFileViewExtensions(language, {
+          editable: true,
+          solidColors: colors,
+          updateListener: EditorView.updateListener.of((update) => {
+            if (!update.docChanged || suppressUpdateRef.current) return;
+            contentRef.current = update.state.doc.toString();
+            setDirty(contentRef.current !== baseRef.current.content);
+          }),
+        }),
+      }),
+    [colors, language],
+  );
+
+  const initialEditorState = useMemo(
+    () => createEditorState(pane.file.initial.content),
+    // FileCodeMirrorSurface remounts on path change; theme swaps use view.setState.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pane.file.path, pane.name],
+  );
 
   const replaceEditorContent = useCallback((content: string) => {
     const view = viewRef.current;
@@ -181,41 +213,32 @@ export default function FileDocumentEditor({ pane, active }: FileDocumentEditorP
     }
   }, [pane.file.backend, pane.file.path, pane.sessionId, replaceEditorContent, t]);
 
+  const handleEditorReady = useCallback(
+    (view: EditorView) => {
+      viewRef.current = view;
+      if (view.state.doc.toString() !== contentRef.current) {
+        replaceEditorContent(contentRef.current);
+      }
+      window.requestAnimationFrame(() => {
+        view.requestMeasure?.();
+        if (active) view.focus();
+      });
+    },
+    [active, replaceEditorContent],
+  );
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-run only on theme color changes
   useEffect(() => {
-    const parent = editorParentRef.current;
-    if (!parent) return;
-
-    const view = new EditorView({
-      parent,
-      state: EditorState.create({
-        doc: contentRef.current,
-        extensions: codeMirrorFileViewExtensions(
-          languageFromFilename(pane.name || pane.file.path),
-          {
-            editable: true,
-            updateListener: EditorView.updateListener.of((update) => {
-              if (!update.docChanged || suppressUpdateRef.current) return;
-              contentRef.current = update.state.doc.toString();
-              setDirty(contentRef.current !== baseRef.current.content);
-            }),
-          },
-        ),
-      }),
-    });
-    viewRef.current = view;
-
-    const resizeObserver = new ResizeObserver(() => {
-      view.requestMeasure?.();
-    });
-    resizeObserver.observe(parent);
-    requestAnimationFrame(() => view.requestMeasure?.());
-
-    return () => {
-      resizeObserver.disconnect();
-      view.destroy();
-      viewRef.current = null;
-    };
-  }, [pane.file.path, pane.name]);
+    const view = viewRef.current;
+    if (!view) return;
+    const nextState = createEditorState(view.state.doc.toString());
+    suppressUpdateRef.current = true;
+    try {
+      view.setState(nextState);
+    } finally {
+      suppressUpdateRef.current = false;
+    }
+  }, [colors]);
 
   useEffect(() => {
     if (!active) return;
@@ -303,13 +326,17 @@ export default function FileDocumentEditor({ pane, active }: FileDocumentEditorP
           {error}
         </div>
       ) : null}
-      <div
-        ref={editorParentRef}
-        className="min-h-0 flex-1 h-full"
-        style={{ fontSize: `${editorFontSize}px` }}
-      />
+      <div className="relative min-h-0 flex-1">
+        <FileCodeMirrorSurface
+          key={pane.file.path}
+          initialState={initialEditorState}
+          colors={colors}
+          fontSize={editorFontSize}
+          onReady={handleEditorReady}
+        />
+      </div>
       <div className="flex h-7 shrink-0 items-center justify-between border-t px-3 text-[11px] text-muted-foreground">
-        <span>{languageFromFilename(pane.name || pane.file.path).toLocaleUpperCase()}</span>
+        <span>{language.toLocaleUpperCase()}</span>
         <span className="flex items-center gap-2">
           <span>{formatSize(size)}</span>
           <span>{t("fileEditor.encodingUtf8")}</span>

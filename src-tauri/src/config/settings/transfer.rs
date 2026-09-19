@@ -77,9 +77,7 @@ fn default_editor_type() -> String {
     "external".to_string()
 }
 fn default_internal_editor_display() -> String {
-    // The workspace-tab editor mode has been removed — the built-in editor now
-    // always opens in its own independent window. Field kept for backward
-    // compatibility with older persisted settings / cloud-sync payloads.
+    // "window" = independent child window; "workspace" = in-app tab pane.
     "window".to_string()
 }
 fn default_internal_editor_font_size() -> u32 {

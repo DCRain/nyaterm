@@ -14,21 +14,21 @@ describe("file editor open mode", () => {
     ).toBe("external");
   });
 
-  it("always opens the internal editor in its own window (workspace tab mode removed)", () => {
+  it("defaults internal editor to a child window", () => {
     expect(resolveFileEditorOpenTarget({ editor_type: "internal" })).toBe(
       "internal-window",
     );
     expect(resolveInternalEditorDisplay(undefined)).toBe("window");
   });
 
-  it("normalizes a legacy persisted workspace value to window", () => {
+  it("opens internal editor in a workspace tab when configured", () => {
     expect(
       resolveFileEditorOpenTarget({
         editor_type: "internal",
         internal_editor_display: "workspace",
       }),
-    ).toBe("internal-window");
-    expect(resolveInternalEditorDisplay("workspace")).toBe("window");
+    ).toBe("internal-workspace");
+    expect(resolveInternalEditorDisplay("workspace")).toBe("workspace");
   });
 
   it("opens internal editor in a child window when configured", () => {
@@ -38,5 +38,6 @@ describe("file editor open mode", () => {
         internal_editor_display: "window",
       }),
     ).toBe("internal-window");
+    expect(resolveInternalEditorDisplay("window")).toBe("window");
   });
 });
