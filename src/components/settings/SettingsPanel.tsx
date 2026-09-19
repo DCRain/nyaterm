@@ -400,6 +400,10 @@ export default function SettingsPanel({ paneId, tabId, settingsSection }: Settin
     await saveDraftSettings();
   }, [isDirty, isSaving, saveDraftSettings]);
 
+  // Register the close-requested listener exactly once for the page lifetime. Tauri only
+  // delivers close-requested while a JS listener exists: re-registering on isDirty churn
+  // leaves a gap where the event arrives after the old listener is gone and the fresh one
+  // is not registered yet, so the close is silently dropped until the next close() call.
   useEffect(() => {
     return registerSettingsPane(paneId, {
       isDirty: () => isDirtyRef.current,

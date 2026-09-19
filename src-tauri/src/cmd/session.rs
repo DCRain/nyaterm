@@ -308,7 +308,7 @@ pub async fn create_telnet_session(
     startup_command: Option<StartupCommandPayload>,
 ) -> AppResult<String> {
     let pending_creation = state.begin_session_creation(create_request_id).await;
-    let (guard, _cancel_rx) = match pending_creation {
+    let (guard, cancel_rx) = match pending_creation {
         Some((guard, cancel_rx)) => (Some(guard), Some(cancel_rx)),
         None => (None, None),
     };
@@ -382,6 +382,7 @@ pub async fn create_telnet_session(
         cfg,
         connection_id,
         Some(window.label().to_string()),
+        cancel_rx,
         startup_command.map(|command| core::TelnetStartupCommand {
             command: command.command,
             delay_ms: command.delay_ms,

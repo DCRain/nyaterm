@@ -3,6 +3,9 @@ mod windows_external_drop;
 #[cfg(windows)]
 mod windows_fullscreen;
 
+#[cfg(any(windows, test))]
+pub(crate) mod windows_version;
+
 #[cfg(target_os = "linux")]
 mod linux_appimage_wayland;
 

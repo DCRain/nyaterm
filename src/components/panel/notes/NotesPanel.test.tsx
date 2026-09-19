@@ -22,6 +22,7 @@ vi.mock("@/lib/logger", () => ({ logger: { error: mocks.log } }));
 vi.mock("sonner", () => ({ toast: { success: mocks.success, error: mocks.error } }));
 vi.mock("@/lib/windowManager", () => ({ openNoteEditor: vi.fn() }));
 vi.mock("react-i18next", () => ({
+  initReactI18next: { type: "3rdParty", init: vi.fn() },
   useTranslation: () => ({
     t: (key: string, options?: { count: number }) => (options ? `${key}: ${options.count}` : key),
   }),

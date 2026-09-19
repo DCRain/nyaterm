@@ -20,7 +20,7 @@ use crate::config::{
     AgentCommandExecutionMode, AiAgentKind, AiPermissionMode, AiSettings, RiskLevel,
 };
 use crate::core::capabilities::{
-    TerminalExecuteRequest, TerminalExecutionPresentation, execute_terminal_command,
+    RiskReasonCode, TerminalExecuteRequest, TerminalExecutionPresentation, execute_terminal_command,
 };
 use crate::core::session::{SessionManager, SessionType};
 use crate::core::ssh::SshConnectionHandles;
@@ -38,9 +38,9 @@ use super::prompt::{
 use super::redaction::{redact_context, redact_sensitive_text};
 use super::stream::{active_streams, emit_stream_event, is_cancelled};
 use super::types::{
-    AgentActionKind, AgentLlmResponse, AgentStepAction, AgentStepPayload, AgentStepStatus,
-    AiChatRequest, AiMessage, AiMessageRole, AiStreamEventPayload, AiTerminalTarget,
-    AppendAiAuditRequest, CommandObservation, now_rfc3339, uuid,
+    AgentActionKind, AgentApprovalReasonCode, AgentLlmResponse, AgentStepAction, AgentStepPayload,
+    AgentStepStatus, AiChatRequest, AiMessage, AiMessageRole, AiStreamEventPayload,
+    AiTerminalTarget, AppendAiAuditRequest, CommandObservation, now_rfc3339, uuid,
 };
 
 // ---------------------------------------------------------------------------
@@ -370,7 +370,8 @@ struct RiskAssessment {
     local_risk: RiskLevel,
     local_auto_executable: bool,
     effective_risk: RiskLevel,
-    risk_reason: Option<String>,
+    model_risk_reason: Option<String>,
+    local_risk_reason_code: Option<RiskReasonCode>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -566,58 +567,46 @@ fn max_risk(a: RiskLevel, b: RiskLevel) -> RiskLevel {
     if a >= b { a } else { b }
 }
 
-fn risk_label(risk: &RiskLevel) -> &'static str {
-    match risk {
-        RiskLevel::Low => "low",
-        RiskLevel::Medium => "medium",
-        RiskLevel::High => "high",
-        RiskLevel::Critical => "critical",
-    }
-}
-
-fn assess_local_command_risk(command: &str) -> (RiskLevel, String, bool) {
+fn assess_local_command_risk(command: &str) -> (RiskLevel, Option<RiskReasonCode>, bool) {
     let risk = crate::core::capabilities::assess_command_risk(command);
-    (risk.level, risk.reason, risk.auto_executable)
+    (risk.level, risk.reason_code, risk.auto_executable)
 }
 
 fn assess_agent_command_risk(parsed: &AgentLlmResponse, command: &str) -> RiskAssessment {
     let model_risk = parsed.risk_level.clone().unwrap_or(RiskLevel::Medium);
-    let (local_risk, local_reason, local_auto_executable) = assess_local_command_risk(command);
+    let (local_risk, local_reason_code, local_auto_executable) = assess_local_command_risk(command);
     let effective_risk = max_risk(model_risk.clone(), local_risk.clone());
-    let risk_reason = parsed
+    let model_risk_reason = parsed
         .risk_reason
         .as_ref()
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| format!("AI: {}; local: {}", value.trim(), local_reason))
-        .or_else(|| Some(format!("local: {local_reason}")));
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
 
     RiskAssessment {
         model_risk,
         local_risk,
         local_auto_executable,
         effective_risk,
-        risk_reason,
+        model_risk_reason,
+        local_risk_reason_code: local_reason_code,
     }
 }
 
 fn decide_agent_command_execution(
     settings: &AiSettings,
     assessment: &RiskAssessment,
-) -> (ApprovalDecision, Option<String>) {
+) -> (ApprovalDecision, Option<AgentApprovalReasonCode>) {
     match settings.agent_command_execution_mode {
         AgentCommandExecutionMode::ConfirmEach => (
             ApprovalDecision::NeedsApproval,
-            Some("execution policy requires confirmation for every command".to_string()),
+            Some(AgentApprovalReasonCode::ConfirmEachCommand),
         ),
         AgentCommandExecutionMode::Auto => (ApprovalDecision::Auto, None),
         AgentCommandExecutionMode::Smart => {
             if assessment.effective_risk == RiskLevel::Critical {
                 return (
                     ApprovalDecision::NeedsApproval,
-                    Some(
-                        "critical risk always requires manual confirmation in smart mode"
-                            .to_string(),
-                    ),
+                    Some(AgentApprovalReasonCode::CriticalRisk),
                 );
             }
             if assessment.effective_risk <= settings.agent_smart_auto_execute_max_risk {
@@ -625,11 +614,7 @@ fn decide_agent_command_execution(
             } else {
                 (
                     ApprovalDecision::NeedsApproval,
-                    Some(format!(
-                        "effective risk {} exceeds smart auto-execute threshold {}",
-                        risk_label(&assessment.effective_risk),
-                        risk_label(&settings.agent_smart_auto_execute_max_risk)
-                    )),
+                    Some(AgentApprovalReasonCode::RiskExceedsThreshold),
                 )
             }
         }
@@ -639,11 +624,11 @@ fn decide_agent_command_execution(
 fn decide_external_agent_command_execution(
     mode: &AiPermissionMode,
     assessment: &RiskAssessment,
-) -> (ApprovalDecision, Option<String>) {
+) -> (ApprovalDecision, Option<AgentApprovalReasonCode>) {
     match mode {
         AiPermissionMode::Observer | AiPermissionMode::Confirm => (
             ApprovalDecision::NeedsApproval,
-            Some("external agent permission mode requires confirmation".to_string()),
+            Some(AgentApprovalReasonCode::ExternalAgentPermission),
         ),
         AiPermissionMode::Auto
             if assessment.local_auto_executable && assessment.effective_risk < RiskLevel::High =>
@@ -652,7 +637,7 @@ fn decide_external_agent_command_execution(
         }
         AiPermissionMode::Auto => (
             ApprovalDecision::NeedsApproval,
-            Some("safe auto requires confirmation for unknown or high-risk commands".to_string()),
+            Some(AgentApprovalReasonCode::SafeAutoUnknownOrHighRisk),
         ),
         AiPermissionMode::FullAccess => (ApprovalDecision::Auto, None),
     }
@@ -662,7 +647,7 @@ fn build_execute_action(
     command: &str,
     target: Option<AiTerminalTarget>,
     assessment: &RiskAssessment,
-    approval_reason: Option<String>,
+    approval_reason_code: Option<AgentApprovalReasonCode>,
 ) -> AgentStepAction {
     AgentStepAction {
         kind: AgentActionKind::ExecuteCommand,
@@ -671,8 +656,9 @@ fn build_execute_action(
         risk_level: Some(assessment.effective_risk.clone()),
         model_risk_level: Some(assessment.model_risk.clone()),
         local_risk_level: Some(assessment.local_risk.clone()),
-        risk_reason: assessment.risk_reason.clone(),
-        approval_reason,
+        model_risk_reason: assessment.model_risk_reason.clone(),
+        local_risk_reason_code: assessment.local_risk_reason_code,
+        approval_reason_code,
         answer: None,
     }
 }
@@ -685,8 +671,9 @@ fn build_final_action(answer: String) -> AgentStepAction {
         risk_level: None,
         model_risk_level: None,
         local_risk_level: None,
-        risk_reason: None,
-        approval_reason: None,
+        model_risk_reason: None,
+        local_risk_reason_code: None,
+        approval_reason_code: None,
         answer: Some(answer),
     }
 }
@@ -792,7 +779,7 @@ pub(super) async fn run_external_agent_command_step(
     let assessment = assess_agent_command_risk(&parsed, &command);
     let command_target =
         resolve_agent_command_target(request, parsed.target_terminal_session_id.as_deref())?;
-    let (decision, approval_reason) = if request.agent_kind == AiAgentKind::Nyaterm {
+    let (decision, approval_reason_code) = if request.agent_kind == AiAgentKind::Nyaterm {
         decide_agent_command_execution(settings, &assessment)
     } else {
         decide_external_agent_command_execution(&request.permission_mode, &assessment)
@@ -825,7 +812,7 @@ pub(super) async fn run_external_agent_command_step(
                 &command,
                 Some(command_target.clone()),
                 &assessment,
-                approval_reason.clone(),
+                approval_reason_code.clone(),
             ),
             observation: None,
             status: AgentStepStatus::NeedsApproval,
@@ -850,7 +837,7 @@ pub(super) async fn run_external_agent_command_step(
                     &command,
                     Some(command_target.clone()),
                     &assessment,
-                    approval_reason,
+                    approval_reason_code,
                 ),
                 observation: None,
                 status: AgentStepStatus::Rejected,
@@ -1236,6 +1223,20 @@ mod tests {
             risk_reason: Some("model reason".to_string()),
             answer: None,
         }
+    }
+
+    #[test]
+    fn keeps_model_and_local_risk_reasons_separate() {
+        let assessment = assess_agent_command_risk(&parsed_response(Some(RiskLevel::Low)), "ls");
+
+        assert_eq!(
+            assessment.model_risk_reason.as_deref(),
+            Some("model reason")
+        );
+        assert_eq!(
+            assessment.local_risk_reason_code,
+            Some(RiskReasonCode::ReadOnlyDiagnostic)
+        );
     }
 
     #[test]
@@ -1790,7 +1791,7 @@ pub(super) async fn run_agent_stream(
                         continue;
                     }
                 };
-                let (decision, approval_reason) =
+                let (decision, approval_reason_code) =
                     decide_agent_command_execution(&settings, &assessment);
 
                 tracing::info!(
@@ -1816,7 +1817,7 @@ pub(super) async fn run_agent_stream(
                             &command,
                             Some(command_target.clone()),
                             &assessment,
-                            approval_reason.clone(),
+                            approval_reason_code.clone(),
                         ),
                         observation: None,
                         status: AgentStepStatus::NeedsApproval,
@@ -1846,7 +1847,7 @@ pub(super) async fn run_agent_stream(
                                 &command,
                                 Some(command_target.clone()),
                                 &assessment,
-                                approval_reason,
+                                approval_reason_code,
                             ),
                             observation: None,
                             status: AgentStepStatus::Rejected,

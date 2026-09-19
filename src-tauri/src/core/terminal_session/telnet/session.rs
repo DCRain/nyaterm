@@ -38,45 +38,13 @@ async fn telnet_session_task(
     manager: Arc<SessionManager>,
     mut cmd_rx: SessionCommandReceiver,
     output_control_tx: SessionCommandSender,
+    stream: TcpStream,
     config: TelnetSessionConfig,
     connection_id: Option<String>,
     encoding: String,
     startup_command: Option<TelnetStartupCommand>,
 ) {
     let backspace_as_bs = config.backspace_mode == "ctrl_h";
-    let host = config.host.clone();
-    let port = config.port;
-    let addr = format!("{}:{}", host, port);
-    let stream = match TcpStream::connect(&addr).await {
-        Ok(s) => s,
-        Err(e) => {
-            log_event(StructuredLog {
-                level: StructuredLogLevel::Error,
-                domain: "session.lifecycle".to_string(),
-                event: "session.connection_failed".to_string(),
-                message: "Telnet connection failed".to_string(),
-                ids: Some(serde_json::json!({
-                    "session_id": session_id.clone(),
-                    "connection_id": connection_id.clone(),
-                })),
-                data: Some(serde_json::json!({
-                    "session_type": "Telnet",
-                    "host": host,
-                    "port": port,
-                })),
-                error: Some(serde_json::json!({ "message": e.to_string() })),
-                client_timestamp: None,
-            });
-            let _ = app.emit(
-                &format!("session-error-{}", session_id),
-                format!("Connection failed: {}", e),
-            );
-            let _ = app.emit(&format!("session-closed-{}", session_id), ());
-            manager.remove_session(&session_id).await;
-            return;
-        }
-    };
-
     let (mut reader, mut writer) = stream.into_split();
     let output_event = format!("terminal-output-{}", session_id);
     let closed_event = format!("session-closed-{}", session_id);

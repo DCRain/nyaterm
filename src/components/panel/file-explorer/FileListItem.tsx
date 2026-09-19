@@ -31,6 +31,7 @@ import { getFileIcon } from "@/components/icons";
 import { normalizeFileExplorerConfirmationLevel } from "@/lib/fileExplorerActions";
 import { cn, formatSize } from "@/lib/utils";
 import type { AICustomActionConfig, FileEntry, FileExplorerCustomAction } from "@/types/global";
+import { FileExplorerContextMenuActionBar } from "./FileExplorerEntryContextMenu";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -82,6 +83,10 @@ interface FileListItemProps {
   onCopyPath: (entry: FileEntry, mode: "dir" | "name" | "full") => void;
   /** Hide terminal path/CD actions (SFTP workspace has no shell). Default true. */
   showTerminalActions?: boolean;
+  onCopyEntry?: (entry: FileEntry) => void;
+  onCutEntry?: (entry: FileEntry) => void;
+  onPaste?: () => void;
+  canPaste?: boolean;
   onSendToTerminal?: (entry: FileEntry, mode: "dir" | "name" | "full") => void;
   onCdToDirectory?: (entry: FileEntry) => void;
   /** Open a new SSH terminal at this directory (SFTP remote). */
@@ -149,6 +154,10 @@ export function FileListItem({
   onAddToFavorites,
   onCopyPath,
   showTerminalActions = true,
+  onCopyEntry,
+  onCutEntry,
+  onPaste,
+  canPaste,
   onSendToTerminal,
   onCdToDirectory,
   onOpenTerminalHere,
@@ -195,6 +204,7 @@ export function FileListItem({
         ? MdSend
         : MdUpload;
   const showPeerTransferMenu = !!peerTransferAction && !!onSendToPeer && !isParentDirectoryEntry;
+  const showActionBar = !!onCopyEntry || !!onCutEntry || !!onPaste;
 
   useLayoutEffect(() => {
     if (!isRenaming) {
@@ -391,7 +401,7 @@ export function FileListItem({
                     {entry.name}
                   </span>
                 ) : (
-                  <HoverCard openDelay={450} closeDelay={100}>
+                  <HoverCard openDelay={800} closeDelay={100}>
                     <HoverCardTrigger asChild>
                       <span
                         className="min-w-0 flex-1 truncate text-xs"
@@ -477,7 +487,7 @@ export function FileListItem({
         </li>
       </ContextMenuTrigger>
       <ContextMenuContent
-        className="min-w-[200px]"
+        className={showActionBar ? "w-64 max-w-[calc(100vw-1rem)] min-w-0" : "min-w-[200px]"}
         onCloseAutoFocus={(event) => {
           if (!preventNextContextMenuAutoFocusRef.current) {
             return;
@@ -488,6 +498,7 @@ export function FileListItem({
       >
         {isParentDirectoryEntry ? (
           <>
+            {onPaste && <FileExplorerContextMenuActionBar onPaste={onPaste} canPaste={!!canPaste} />}
             <ContextMenuItem onClick={() => onItemClick(entry)}>
               <MdFileOpen className="text-[0.875rem] text-muted-foreground mr-2" />
               {t("fileExplorer.goUp")}
@@ -500,6 +511,23 @@ export function FileListItem({
           </>
         ) : (
           <>
+            {showActionBar && (
+              <FileExplorerContextMenuActionBar
+                onCut={onCutEntry ? () => onCutEntry(entry) : undefined}
+                onCopy={onCopyEntry ? () => onCopyEntry(entry) : undefined}
+                onPaste={onPaste}
+                onRename={() => {
+                  preventNextContextMenuAutoFocusRef.current = true;
+                  if (activeSessionId) onRename(entry);
+                }}
+                onDelete={() => onDelete(entry)}
+                canCut={!!onCutEntry}
+                canCopy={!!onCopyEntry}
+                canPaste={!!canPaste && !!onPaste}
+                canRename={!!activeSessionId}
+                canDelete
+              />
+            )}
             <ContextMenuItem
               onClick={() => (entry.is_dir ? onItemClick(entry) : onOpenDefault(entry))}
             >
@@ -596,23 +624,27 @@ export function FileListItem({
                 <ContextMenuSeparator />
               </>
             )}
-            <ContextMenuItem
-              onClick={() => {
-                preventNextContextMenuAutoFocusRef.current = true;
-                activeSessionId && onRename(entry);
-              }}
-            >
-              <MdEdit className="text-[0.875rem] text-muted-foreground mr-2" />
-              {t("fileExplorer.cmRename")}
-            </ContextMenuItem>
+            {!showActionBar && (
+              <ContextMenuItem
+                onClick={() => {
+                  preventNextContextMenuAutoFocusRef.current = true;
+                  activeSessionId && onRename(entry);
+                }}
+              >
+                <MdEdit className="text-[0.875rem] text-muted-foreground mr-2" />
+                {t("fileExplorer.cmRename")}
+              </ContextMenuItem>
+            )}
             <ContextMenuItem onClick={() => activeSessionId && onMove(entry)}>
               <MdDriveFileMove className="text-[0.875rem] text-muted-foreground mr-2" />
               {t("fileExplorer.cmMove")}
             </ContextMenuItem>
-            <ContextMenuItem variant="destructive" onClick={() => onDelete(entry)}>
-              <MdDelete className="text-[0.875rem] mr-2" />
-              {t("fileExplorer.cmDelete")}
-            </ContextMenuItem>
+            {!showActionBar && (
+              <ContextMenuItem variant="destructive" onClick={() => onDelete(entry)}>
+                <MdDelete className="text-[0.875rem] mr-2" />
+                {t("fileExplorer.cmDelete")}
+              </ContextMenuItem>
+            )}
             <ContextMenuSeparator />
             {entry.is_dir && (
               <>

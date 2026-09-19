@@ -52,7 +52,6 @@ fn parse_windterm_content_with_crypto(
             continue;
         }
 
-        let auto_login = parse_windterm_auto_login(entry, crypto)?;
         let target = entry
             .get("session.target")
             .and_then(|v| v.as_str())
@@ -69,6 +68,19 @@ fn parse_windterm_content_with_crypto(
             .and_then(normalize_windterm_string_ref)
             .unwrap_or(&host)
             .to_string();
+
+        let auto_login = match parse_windterm_auto_login(entry, crypto) {
+            Ok(auto_login) => auto_login,
+            Err(error) => {
+                tracing::warn!(
+                    session_name = %name,
+                    session_target = %target,
+                    %error,
+                    "Skipping unreadable WindTerm auto-login credentials during session import"
+                );
+                None
+            }
+        };
 
         let port = match entry.get("session.port").and_then(|v| v.as_u64()) {
             Some(port) if (1..=u64::from(u16::MAX)).contains(&port) => port as u16,

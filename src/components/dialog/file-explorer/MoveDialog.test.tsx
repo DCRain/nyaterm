@@ -4,6 +4,7 @@ import { invoke } from "@/lib/invoke";
 import MoveDialog, { type MoveDialogData } from "./MoveDialog";
 
 vi.mock("react-i18next", () => ({
+  initReactI18next: { type: "3rdParty", init: vi.fn() },
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) =>
       options?.count == null ? key : `${key}:${options.count}`,

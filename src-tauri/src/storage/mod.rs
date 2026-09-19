@@ -19,6 +19,7 @@ mod util;
 mod tests;
 
 pub(crate) use ftp_known_hosts::FtpCertificateMetadata;
+pub(crate) use known_hosts::KnownHostEntry;
 pub(crate) use rdp_known_hosts::RdpCertificateMetadata;
 
 #[allow(unused_imports)]
@@ -394,6 +395,18 @@ pub(crate) fn render_known_hosts_export() -> AppResult<String> {
 
 pub(crate) fn replace_known_hosts_export(content: &str) -> AppResult<()> {
     storage()?.replace_known_hosts_export(content)
+}
+
+pub(crate) fn list_known_hosts() -> AppResult<Vec<KnownHostEntry>> {
+    storage()?.list_known_hosts()
+}
+
+pub(crate) fn delete_known_host(id: &str) -> AppResult<()> {
+    storage()?.delete_known_host(id)
+}
+
+pub(crate) fn clear_known_hosts() -> AppResult<()> {
+    storage()?.clear_known_hosts()
 }
 
 pub(crate) fn check_rdp_known_host(

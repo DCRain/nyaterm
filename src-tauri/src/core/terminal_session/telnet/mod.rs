@@ -14,13 +14,13 @@ use crate::core::zmodem::{
     ZmodemEvent, ZmodemTransfer, ZmodemUploadDrain, start_zmodem_transfer,
 };
 use crate::core::{RecordingManager, SessionOutputCoalescer};
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::observability::{StructuredLog, StructuredLogLevel, log_event, log_rate_limited};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::{Mutex as TokioMutex, mpsc};
+use tokio::sync::{Mutex as TokioMutex, mpsc, oneshot};
 
 const IAC: u8 = 255;
 const WILL: u8 = 251;

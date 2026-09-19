@@ -58,6 +58,7 @@ vi.mock("@/context/AppContext", () => ({
 }));
 
 vi.mock("react-i18next", () => ({
+  initReactI18next: { type: "3rdParty", init: vi.fn() },
   useTranslation: () => ({
     t: (key: string, options?: { name?: string }) =>
       options?.name ? `${key}:${options.name}` : key,

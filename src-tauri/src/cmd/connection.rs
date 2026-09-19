@@ -929,6 +929,23 @@ fn validate_private_key_content(content: &str, passphrase: Option<&str>) -> AppR
     }
 }
 
+fn derive_public_key_for_copy(content: &str, passphrase: Option<&str>) -> AppResult<String> {
+    let usable_passphrase = passphrase.filter(|value| !value.is_empty());
+    if let Ok(private_key) = russh::keys::decode_secret_key(content, usable_passphrase) {
+        return private_key.public_key().to_openssh().map_err(|error| {
+            AppError::Config(format!("failed to encode SSH public key: {error}"))
+        });
+    }
+
+    // OpenSSH containers keep the public key outside the encrypted private payload.
+    let private_key = ssh_key::PrivateKey::from_openssh(content)
+        .map_err(|error| AppError::Config(format!("failed to derive SSH public key: {error}")))?;
+    private_key
+        .public_key()
+        .to_openssh()
+        .map_err(|error| AppError::Config(format!("failed to encode SSH public key: {error}")))
+}
+
 fn validate_certificate_content(content: &str) -> AppResult<()> {
     russh::keys::Certificate::from_openssh(content)
         .map(|_| ())
@@ -1052,9 +1069,9 @@ fn find_connection_for_proxy_jump<'a>(
 mod tests {
     use super::{
         CONNECTION_ICON_MAX_BYTES, SavedAccountSummary, delete_group_from_config,
-        import_connection_icon_data_url, import_connection_icon_from_path,
-        normalize_connection_for_save, resolve_account_password_update,
-        resolve_private_key_for_save, resolve_text_secret_input,
+        derive_public_key_for_copy, import_connection_icon_data_url,
+        import_connection_icon_from_path, normalize_connection_for_save,
+        resolve_account_password_update, resolve_private_key_for_save, resolve_text_secret_input,
         update_connection_asset_from_monitoring_in_config, update_connection_icon_in_config,
         validate_certificate_content, validate_local_terminal_config, validate_private_key_content,
         validate_proxy_jump_config, validate_sftp_settings_config,
@@ -1467,6 +1484,46 @@ e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
     fn encrypted_private_key_without_passphrase_is_accepted() {
         validate_private_key_content(TEST_ENCRYPTED_PRIVATE_KEY, None)
             .expect("encrypted private key can be saved without passphrase");
+    }
+
+    #[test]
+    fn derive_public_key_for_copy_matches_private_key_public_key() {
+        let private_key = russh::keys::decode_secret_key(TEST_PRIVATE_KEY, None)
+            .expect("test private key should decode");
+        let expected = private_key
+            .public_key()
+            .to_openssh()
+            .expect("test public key should encode");
+
+        let actual = derive_public_key_for_copy(TEST_PRIVATE_KEY, None)
+            .expect("public key should be derived from the private key");
+
+        ssh_key::PublicKey::from_openssh(&actual).expect("derived key should be valid OpenSSH");
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn derive_public_key_for_copy_reads_encrypted_openssh_public_section() {
+        let container = ssh_key::PrivateKey::from_openssh(TEST_ENCRYPTED_PRIVATE_KEY)
+            .expect("encrypted OpenSSH container should parse without decrypting its payload");
+        let expected = container
+            .public_key()
+            .to_openssh()
+            .expect("container public key should encode");
+
+        let actual = derive_public_key_for_copy(TEST_ENCRYPTED_PRIVATE_KEY, None)
+            .expect("public key should be readable without a stored passphrase");
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn derive_public_key_for_copy_rejects_invalid_private_key() {
+        let invalid = "-----BEGIN PRIVATE KEY-----\nnot-a-private-key\n-----END PRIVATE KEY-----";
+        let error = derive_public_key_for_copy(invalid, None)
+            .expect_err("invalid private-key data must not produce a public key");
+
+        assert!(!error.to_string().contains("BEGIN PRIVATE KEY"));
     }
 
     #[test]
@@ -2020,6 +2077,14 @@ pub fn get_ssh_key_private_key(app: tauri::AppHandle, id: String) -> AppResult<O
 }
 
 #[tauri::command]
+pub fn get_ssh_key_public_key(app: tauri::AppHandle, id: String) -> AppResult<String> {
+    let key = config::load_key_by_id(&app, &id)?;
+    let private_key = config::decrypt_key_pem(&key)?
+        .ok_or_else(|| AppError::Config("SSH private key data is missing".to_string()))?;
+    derive_public_key_for_copy(&private_key, key.passphrase.as_deref())
+}
+
+#[tauri::command]
 pub fn save_ssh_key(app: tauri::AppHandle, mut key: SshKey) -> AppResult<String> {
     let mut cfg = config::load_keys(&app)?;
 
@@ -2059,6 +2124,21 @@ pub fn delete_ssh_key(app: tauri::AppHandle, id: String) -> AppResult<()> {
     config::save_keys(&app, &cfg)?;
     schedule_cloud_sync_notify(app.clone());
     Ok(())
+}
+
+#[tauri::command]
+pub fn get_known_hosts() -> AppResult<Vec<crate::storage::KnownHostEntry>> {
+    crate::storage::list_known_hosts()
+}
+
+#[tauri::command]
+pub fn delete_known_host(id: String) -> AppResult<()> {
+    crate::storage::delete_known_host(&id)
+}
+
+#[tauri::command]
+pub fn clear_known_hosts() -> AppResult<()> {
+    crate::storage::clear_known_hosts()
 }
 
 #[tauri::command]

@@ -179,41 +179,17 @@ fn operating_system_label() -> String {
 
 #[cfg(target_os = "windows")]
 fn windows_version_label() -> String {
-    use windows::Win32::System::SystemInformation::OSVERSIONINFOEXW;
-    use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
-
-    const VER_NT_WORKSTATION: u8 = 1;
-    type RtlGetVersion = unsafe extern "system" fn(*mut OSVERSIONINFOEXW) -> i32;
-
-    let mut version = OSVERSIONINFOEXW {
-        dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOEXW>() as u32,
-        ..Default::default()
-    };
-
-    let Some(rtl_get_version) = (unsafe {
-        let ntdll = GetModuleHandleA(c"ntdll.dll".as_ptr().cast());
-        if ntdll.is_null() {
-            None
-        } else {
-            GetProcAddress(ntdll, c"RtlGetVersion".as_ptr().cast())
-        }
-    }) else {
-        return "Windows".to_string();
-    };
-
-    let rtl_get_version: RtlGetVersion = unsafe { std::mem::transmute(rtl_get_version) };
-
-    // RtlGetVersion queries the current Windows version in-process, avoiding a console process.
-    if unsafe { rtl_get_version(&mut version) } >= 0 {
-        windows_version_label_from_parts(
-            version.dwMajorVersion,
-            version.dwMinorVersion,
-            version.dwBuildNumber,
-            version.wProductType == VER_NT_WORKSTATION,
-        )
-    } else {
-        "Windows".to_string()
-    }
+    crate::platform::windows_version::current_windows_version().map_or_else(
+        || "Windows".to_string(),
+        |version| {
+            windows_version_label_from_parts(
+                version.major,
+                version.minor,
+                version.build,
+                version.workstation,
+            )
+        },
+    )
 }
 
 #[cfg(any(target_os = "windows", test))]

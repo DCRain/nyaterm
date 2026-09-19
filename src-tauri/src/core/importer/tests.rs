@@ -251,6 +251,110 @@ mod tests {
     }
 
     #[test]
+    fn windterm_unreadable_auto_login_keeps_session_and_top_level_key() {
+        let crypto = derive_windterm_crypto("fingerprint-1", "master-secret");
+        let wrong_crypto = derive_windterm_crypto("different-fingerprint", "different-secret");
+        let encrypted = encrypt_windterm_auto_login_for_test(
+            r#"{"Password":"stale","PasswordEnabled":true,"session.user":"stale-user"}"#,
+            &wrong_crypto,
+        );
+        let entry = serde_json::json!({ "session.autoLogin": encrypted });
+        let error = parse_windterm_auto_login(&entry, Some(&crypto)).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Failed to decrypt WindTerm autoLogin data")
+        );
+
+        let root = importer_test_dir("windterm-unreadable-auto-login-key-fallback");
+        std::fs::create_dir_all(&root).expect("create test dir");
+        let key_path = root.join("id_ed25519");
+        std::fs::write(&key_path, "private key material").expect("write key");
+        let escaped_key_path =
+            serde_json::to_string(&key_path.to_string_lossy()).expect("escape key path");
+        let content = format!(
+            r#"
+[
+  {{
+    "session.protocol": "SSH",
+    "session.target": "fallback@example.com",
+    "session.label": "Stale credentials",
+    "session.autoLogin": "{encrypted}",
+    "ssh.identityFilePath.windows": {escaped_key_path}
+  }}
+]
+"#
+        );
+
+        let prepared = parse_windterm_content_with_crypto(&content, Some(&crypto), None)
+            .expect("unreadable auto-login must not block session import");
+
+        assert_eq!(prepared.connections.len(), 1);
+        assert_eq!(prepared.ssh_keys.len(), 1);
+        assert!(matches!(
+            &prepared.connections[0].config,
+            ConnectionType::Ssh { host, username, .. }
+                if host == "example.com" && username == "fallback"
+        ));
+        let auth = prepared.connections[0].auth.as_ref().expect("auth");
+        assert_eq!(auth.mode, "key");
+        assert_eq!(auth.key_id, Some(prepared.ssh_keys[0].id.clone()));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn windterm_mixed_readable_and_unreadable_auto_login_imports_all_sessions() {
+        let crypto = derive_windterm_crypto("fingerprint-1", "master-secret");
+        let wrong_crypto = derive_windterm_crypto("different-fingerprint", "different-secret");
+        let unreadable = encrypt_windterm_auto_login_for_test(
+            r#"{"Password":"stale","PasswordEnabled":true}"#,
+            &wrong_crypto,
+        );
+        let readable = encrypt_windterm_auto_login_for_test(
+            r#"{"Password":"secret","PasswordEnabled":true,"session.user":"saved-user"}"#,
+            &crypto,
+        );
+        let content = format!(
+            r#"
+[
+  {{
+    "session.protocol": "SSH",
+    "session.target": "fallback@bad.example.com",
+    "session.label": "Bad saved credentials",
+    "session.autoLogin": "{unreadable}"
+  }},
+  {{
+    "session.protocol": "SSH",
+    "session.target": "target-user@good.example.com",
+    "session.label": "Good saved credentials",
+    "session.autoLogin": "{readable}"
+  }}
+]
+"#
+        );
+
+        let prepared = parse_windterm_content_with_crypto(&content, Some(&crypto), None)
+            .expect("one unreadable credential must not abort the batch");
+
+        assert_eq!(prepared.connections.len(), 2);
+        assert!(matches!(
+            &prepared.connections[0].config,
+            ConnectionType::Ssh { host, username, .. }
+                if host == "bad.example.com" && username == "fallback"
+        ));
+        assert_eq!(prepared.connections[0].auth.as_ref().expect("auth").mode, "none");
+        assert!(matches!(
+            &prepared.connections[1].config,
+            ConnectionType::Ssh { host, username, .. }
+                if host == "good.example.com" && username == "saved-user"
+        ));
+        let good_auth = prepared.connections[1].auth.as_ref().expect("auth");
+        assert_eq!(good_auth.mode, "password");
+        assert_eq!(good_auth.password.as_deref(), Some("test-encrypted:secret"));
+    }
+
+    #[test]
     fn windterm_requires_master_password_when_enabled() {
         let root = importer_test_dir("windterm-master-password-required");
         let terminal = root.join("terminal");

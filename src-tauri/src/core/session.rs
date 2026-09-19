@@ -782,6 +782,10 @@ impl SessionManager {
         let _ = self.app_handle.set(app);
     }
 
+    pub(crate) fn app_handle(&self) -> Option<&tauri::AppHandle> {
+        self.app_handle.get()
+    }
+
     pub fn set_recording_manager(&self, recording_manager: Arc<RecordingManager>) {
         let _ = self.recording_manager.set(recording_manager);
     }

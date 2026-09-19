@@ -104,6 +104,7 @@ const DEFAULT_SSH_ALGORITHMS: SshAlgorithmPreferences = {
 };
 const DEFAULT_SFTP_SETTINGS: SftpSettings = {
   enabled: true,
+  compatibility_mode: false,
   cwd_follow_mode: "shell_integration",
   shell_detection_timeout_ms: DEFAULT_SFTP_SHELL_DETECTION_TIMEOUT_MS,
   filename_encoding: "",
@@ -147,6 +148,7 @@ function normalizeSshAlgorithms(
 function normalizeSftpSettings(value: SavedConnection["sftp"] | undefined): SftpSettings {
   return {
     enabled: value?.enabled ?? true,
+    compatibility_mode: value?.compatibility_mode ?? false,
     cwd_follow_mode: value?.cwd_follow_mode || "shell_integration",
     shell_detection_timeout_ms:
       value?.shell_detection_timeout_ms ?? DEFAULT_SFTP_SHELL_DETECTION_TIMEOUT_MS,

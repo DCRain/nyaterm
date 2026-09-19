@@ -7,6 +7,13 @@ import {
 } from "@/lib/transferDuplicatePrompt";
 import type { FileEntry, FileProperties } from "@/types/global";
 
+export function findMissingRemoteEntries(
+  sessionId: string,
+  paths: string[],
+): Promise<string[]> {
+  return invoke<string[]>("find_missing_remote_entries", { sessionId, paths });
+}
+
 async function remotePathExists(
   sessionId: string,
   path: string,

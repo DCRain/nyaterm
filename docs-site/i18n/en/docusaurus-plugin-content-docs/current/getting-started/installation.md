@@ -8,9 +8,11 @@ sidebar_position: 1
 
 NyaTerm supports the following operating systems:
 
-- **Windows** 10/11 (64-bit)
+- **Windows** 10 version 1809 (Build 17763) or later / Windows 11 (64-bit)
 - **macOS** 12+ (Intel & Apple Silicon)
 - **Linux** (Ubuntu 20.04+, Fedora 36+, Arch Linux, and similar distributions)
+
+Local Terminal on Windows depends on the system ConPTY API, so Windows 10 version 1809 (Build 17763) is the minimum supported release.
 
 ## Download and install
 

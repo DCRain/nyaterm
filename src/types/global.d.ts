@@ -362,6 +362,16 @@ export interface SshKey {
   passphrase?: string;
 }
 
+/** Stored SSH host key metadata exposed by the known-hosts management UI. */
+export interface KnownHostEntry {
+  id: string;
+  marker?: string | null;
+  hostIdentifier: string;
+  hostPatterns: string[];
+  keyType: string;
+  fingerprint?: string | null;
+}
+
 /** Managed account entry stored in local app storage. */
 export interface SavedAccount {
   id: string;
@@ -495,6 +505,7 @@ export type SftpCwdFollowMode = "off" | "shell_integration" | "rc_file";
 
 export interface SftpSettings {
   enabled: boolean;
+  compatibility_mode: boolean;
   cwd_follow_mode: SftpCwdFollowMode;
   shell_detection_timeout_ms: number;
   filename_encoding?: string;
@@ -924,7 +935,7 @@ export interface UiConfig {
   /** Relative height weight per panel id for stacked multi-open panels. */
   panel_stack_sizes: Record<string, number>;
   network_panel_active_tab?: "tunnel" | "proxy";
-  security_auth_panel_active_tab?: "keys" | "passwords" | "otp" | "credentials";
+  security_auth_panel_active_tab?: "keys" | "passwords" | "otp" | "credentials" | "known-hosts";
   show_quick_cmd_bar: boolean;
   show_serial_send_panel: boolean;
   serial_send_height: number;
@@ -1847,6 +1858,20 @@ export interface AIStreamEventPayload {
 }
 
 export type AgentActionKind = "execute_command" | "final_answer";
+export type AgentApprovalReasonCode =
+  | "confirmEachCommand"
+  | "criticalRisk"
+  | "riskExceedsThreshold"
+  | "externalAgentPermission"
+  | "safeAutoUnknownOrHighRisk";
+export type RiskReasonCode =
+  | "emptyCommand"
+  | "irreversiblePattern"
+  | "unclassifiedCommand"
+  | "privilegedMutation"
+  | "unknownCommand"
+  | "ordinaryWrite"
+  | "readOnlyDiagnostic";
 export type AgentStepStatus =
   | "running"
   | "completed"
@@ -1861,8 +1886,9 @@ export interface AgentStepAction {
   riskLevel?: RiskLevel | null;
   modelRiskLevel?: RiskLevel | null;
   localRiskLevel?: RiskLevel | null;
-  riskReason?: string | null;
-  approvalReason?: string | null;
+  modelRiskReason?: string | null;
+  localRiskReasonCode?: RiskReasonCode | null;
+  approvalReasonCode?: AgentApprovalReasonCode | null;
   answer?: string | null;
 }
 
