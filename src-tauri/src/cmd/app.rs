@@ -50,6 +50,11 @@ pub struct ChildWindowOptions {
     resizable: Option<bool>,
     always_on_top: Option<bool>,
     state_key: Option<crate::window_state::ChildWindowStateKey>,
+    /// When explicitly `false`, the child window is built fully opaque (no
+    /// Acrylic/transparency) and skips the global transparency application —
+    /// used by windows (e.g. the file editor) that render an iframe-hosted
+    /// `CodeMirror` surface and cannot tolerate translucent `WebView2` compositing.
+    transparent: Option<bool>,
 }
 
 #[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -356,6 +361,7 @@ pub async fn open_child_window(
         .map_or(requested_height, |state| state.height);
     let maximized = restored_state.as_ref().is_some_and(|state| state.maximized);
     let kind = options.kind.unwrap_or(ChildWindowKind::Modal);
+    let opaque_requested = options.transparent == Some(false);
     let parent_label = options
         .parent_label
         .as_deref()
@@ -378,9 +384,18 @@ pub async fn open_child_window(
 
     #[cfg(windows)]
     {
-        // Match the main window: keep the webview transparency-capable so
-        // Acrylic / opacity settings apply to settings and other child dialogs.
-        builder = builder.transparent(true);
+        if opaque_requested {
+            // Some child windows (e.g. the file editor's iframe-hosted CodeMirror
+            // surface) need a guaranteed-opaque WebView2 compositing target —
+            // translucent windows can leave iframe content unpainted in release.
+            builder = builder
+                .transparent(false)
+                .background_color(tauri::window::Color(0x0d, 0x11, 0x17, 255));
+        } else {
+            // Match the main window: keep the webview transparency-capable so
+            // Acrylic / opacity settings apply to settings and other child dialogs.
+            builder = builder.transparent(true);
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -419,7 +434,9 @@ pub async fn open_child_window(
         .build()
         .map_err(|error| AppError::Config(error.to_string()))?;
 
-    crate::app::apply_window_transparency_for_window(&window);
+    if !opaque_requested {
+        crate::app::apply_window_transparency_for_window(&window);
+    }
     // macOS addChildWindow:ordered: can bypass builder.visible(false) and place the window
     // above its parent. Order it out immediately after build so the WebView's first frame and
     // page ready handshake complete before an empty window is exposed; revealChildWindow

@@ -8,8 +8,14 @@ import type { ThemeColors } from "./themes";
 export function syncWindowTransparencyDom(
   colors: ThemeColors,
   appearance: AppearanceSettings,
+  /**
+   * When true, always treat the window as opaque regardless of the
+   * transparency setting — used by windows (e.g. the file editor) whose
+   * content cannot tolerate translucent WebView2 compositing.
+   */
+  forceOpaque = false,
 ): () => void {
-  const enabled = isWindowTransparencyEnabled(appearance);
+  const enabled = !forceOpaque && isWindowTransparencyEnabled(appearance);
   const blurEnabled = enabled && Boolean(appearance.window_transparency_blur);
   const vars = buildSurfaceCssVariables(colors, appearance);
   const root = document.documentElement;
@@ -53,6 +59,13 @@ export function syncWindowTransparencyDom(
 }
 
 /** Keep html/body + :root CSS vars in sync with window transparency settings. */
-export function useWindowTransparencyDom(colors: ThemeColors, appearance: AppearanceSettings) {
-  useEffect(() => syncWindowTransparencyDom(colors, appearance), [appearance, colors]);
+export function useWindowTransparencyDom(
+  colors: ThemeColors,
+  appearance: AppearanceSettings,
+  forceOpaque = false,
+) {
+  useEffect(
+    () => syncWindowTransparencyDom(colors, appearance, forceOpaque),
+    [appearance, colors, forceOpaque],
+  );
 }

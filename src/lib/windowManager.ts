@@ -42,6 +42,13 @@ interface ChildWindowOptions {
   height?: number;
   resizable?: boolean;
   stateKey?: ChildWindowStateKey;
+  /**
+   * When explicitly `false`, the child window is built fully opaque (no
+   * Acrylic/transparency) on the native side. Used by windows that host an
+   * iframe-based CodeMirror surface, which needs guaranteed opaque WebView2
+   * compositing to render reliably in release builds.
+   */
+  transparent?: boolean;
 }
 
 const MAIN_WINDOW_LABEL = "main";
@@ -736,6 +743,7 @@ async function openChildWindowInternal(opts: ChildWindowOptions) {
         resizable: opts.resizable ?? true,
         alwaysOnTop: needsAlwaysOnTop(opts.label),
         stateKey: opts.stateKey,
+        transparent: opts.transparent,
       },
     });
     const invokeMs = Math.round(performance.now() - startedAt);
@@ -972,6 +980,9 @@ export function openRemoteFileEditor(data: RemoteFileEditorWindowData) {
     width: 980,
     height: 720,
     stateKey: "file-editor",
+    // Force opaque native compositing — the editor renders CodeMirror inside an
+    // opaque iframe with literal colors and cannot tolerate window transparency.
+    transparent: false,
   }).then((win) => {
     const payload = { targetLabel: label, data };
     dispatchChildWindowCommand(label, CHILD_WINDOW_COMMANDS.remoteFileEditorOpen, payload);

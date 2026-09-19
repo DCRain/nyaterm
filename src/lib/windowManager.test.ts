@@ -257,6 +257,29 @@ describe("openSettings workspace tab bridge", () => {
   });
 });
 
+describe("openRemoteFileEditor payload", () => {
+  it("requests a fully opaque native window for the CodeMirror iframe surface", async () => {
+    const { openRemoteFileEditor } = await importWindowManager();
+    const open = openRemoteFileEditor({
+      sessionId: "s1",
+      path: "/tmp/a.txt",
+      name: "a.txt",
+      size: 10,
+      mtime: 0,
+    });
+    await waitForInvoke();
+
+    const args = mocks.invoke.mock.calls[0][1] as {
+      options: { label: string; transparent?: boolean };
+    };
+    expect(args.options.transparent).toBe(false);
+
+    const token = createdToken();
+    emitLifecycle({ label: args.options.label, token, phase: "shell-ready" });
+    await open;
+  });
+});
+
 describe("child window load failure recovery", () => {
   it("closes and clears a revealed window after the command listener fails", async () => {
     const { openQuickCommand } = await importWindowManager();

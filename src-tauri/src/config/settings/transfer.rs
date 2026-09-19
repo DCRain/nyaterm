@@ -77,7 +77,10 @@ fn default_editor_type() -> String {
     "external".to_string()
 }
 fn default_internal_editor_display() -> String {
-    "workspace".to_string()
+    // The workspace-tab editor mode has been removed — the built-in editor now
+    // always opens in its own independent window. Field kept for backward
+    // compatibility with older persisted settings / cloud-sync payloads.
+    "window".to_string()
 }
 fn default_internal_editor_font_size() -> u32 {
     13
@@ -148,7 +151,7 @@ mod tests {
 
         assert!(!settings.recording_auto_start);
         assert_eq!(settings.editor_type, "external");
-        assert_eq!(settings.internal_editor_display, "workspace");
+        assert_eq!(settings.internal_editor_display, "window");
         assert_eq!(settings.internal_editor_font_size, 13);
     }
 }

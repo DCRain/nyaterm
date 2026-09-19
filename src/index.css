@@ -651,7 +651,14 @@ html.nyaterm-explorer-path-dragging * {
   .nyaterm-note-editor-shell *:focus-visible,
   .nyaterm-note-editor-shell iframe:focus,
   .nyaterm-note-editor-shell iframe:focus-visible,
-  .nyaterm-note-editor-shell [contenteditable="true"]:focus {
+  .nyaterm-note-editor-shell [contenteditable="true"]:focus,
+  /* File editor (independent window) writing surface: same treatment as the note editor. */
+  .nyaterm-file-editor-shell,
+  .nyaterm-file-editor-shell *:focus,
+  .nyaterm-file-editor-shell *:focus-visible,
+  .nyaterm-file-editor-shell iframe:focus,
+  .nyaterm-file-editor-shell iframe:focus-visible,
+  .nyaterm-file-editor-shell [contenteditable="true"]:focus {
     outline: none !important;
     outline-width: 0 !important;
     box-shadow: none !important;
@@ -694,6 +701,33 @@ html[data-window-transparency="true"] .nyaterm-note-editor-shell .nyaterm-solid-
 .nyaterm-note-editor-shell iframe:focus-visible {
   outline: 0 !important;
   border: 0 !important;
+  box-shadow: none !important;
+}
+
+/*
+ * File editor (independent window only) writing surface. The editor's own
+ * fully opaque native window (`transparent: false`) means CodeMirror mounts
+ * directly into this document — no iframe isolation needed — so this block
+ * only needs to kill focus-ring/shadow chrome around the CM root.
+ */
+.nyaterm-file-editor-shell,
+.nyaterm-file-editor-shell .nyaterm-solid-surface {
+  background: var(--df-bg-panel-solid, var(--df-bg-panel));
+  color: var(--df-text-solid, var(--df-text));
+  min-height: 0;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+  --tw-shadow: 0 0 #0000 !important;
+}
+
+html[data-window-transparency="true"] .nyaterm-file-editor-shell,
+html[data-window-transparency="true"] .nyaterm-file-editor-shell.nyaterm-solid-surface,
+html[data-window-transparency="true"] .nyaterm-file-editor-shell .nyaterm-solid-surface {
+  border: none !important;
+  outline: none !important;
   box-shadow: none !important;
 }
 

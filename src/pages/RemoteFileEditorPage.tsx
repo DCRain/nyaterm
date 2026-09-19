@@ -20,6 +20,7 @@ import { toast } from "sonner";
 import ReloadDirtyDialog from "@/components/dialog/remote-file-editor/ReloadDirtyDialog";
 import RemoteFileConflictDialog from "@/components/dialog/remote-file-editor/RemoteFileConflictDialog";
 import UnsavedChangesDialog from "@/components/dialog/remote-file-editor/UnsavedChangesDialog";
+import FileCodeMirrorSurface from "@/components/file-editor/FileCodeMirrorSurface";
 import ChildWindowHeader from "@/components/layout/ChildWindowHeader";
 import {
   getLocalPathName,
@@ -35,6 +36,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useApp } from "@/context/AppContext";
+import { useTheme } from "@/context/ThemeContext";
 import { useChildWindowCommand } from "@/hooks/useChildWindowCommand";
 import { useFileEditorZoom } from "@/hooks/useFileEditorZoom";
 import { CHILD_WINDOW_COMMANDS } from "@/lib/childWindowProtocol";
@@ -165,7 +167,9 @@ function formatTargetLabel(target?: FileWindowTarget) {
 export default function RemoteFileEditorPage() {
   const { t } = useTranslation();
   const { appSettings, updateAppSettings } = useApp();
-  useFileEditorZoom(updateAppSettings);
+  const { theme } = useTheme();
+  const colors = theme.colors;
+  const { handleZoomIn, handleZoomOut } = useFileEditorZoom(updateAppSettings);
   const editorFontSize = clampFileEditorFontSize(
     appSettings.transfer.internal_editor_font_size,
   );
@@ -173,8 +177,8 @@ export default function RemoteFileEditorPage() {
     const params = new URLSearchParams(window.location.search);
     return parseJsonSearchParam<RemoteFileEditorData>(params.get("data"));
   }, []);
-  const editorParentRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const initialEditorStateRef = useRef<EditorState | null>(null);
   const forceCloseRef = useRef(false);
   const suppressEditorUpdateRef = useRef(false);
   const editorStatesRef = useRef<Record<string, EditorState>>({});
@@ -229,6 +233,10 @@ export default function RemoteFileEditorPage() {
         doc: content,
         extensions: codeMirrorFileViewExtensions(language, {
           editable: true,
+          // Literal colors: this window's theme isn't synced with the main
+          // window's `var(--df-*)` variables (see `ChildAppProvider`), so the
+          // editor bakes in colors from `useTheme()` directly.
+          solidColors: colors,
           updateListener: EditorView.updateListener.of((update) => {
             const id = activeTabIdRef.current;
             if (!id) return;
@@ -242,10 +250,41 @@ export default function RemoteFileEditorPage() {
           }),
         }),
       }),
-    [updateTab],
+    [colors, updateTab],
   );
 
-  const setEditorState = useCallback((state: EditorState) => {
+  const applyEditorContent = useCallback(
+    (content: string, language: string, options?: { focus?: boolean }) => {
+      const id = activeTabIdRef.current;
+      if (!id) return;
+
+      const view = viewRef.current;
+      if (view) {
+        try {
+          suppressEditorUpdateRef.current = true;
+          if (view.state.doc.toString() !== content) {
+            view.dispatch({
+              changes: { from: 0, to: view.state.doc.length, insert: content },
+            });
+          }
+        } finally {
+          suppressEditorUpdateRef.current = false;
+        }
+        editorStatesRef.current[id] = view.state;
+        setCursorPosition(getCursorPosition(view.state));
+        if (options?.focus) {
+          window.requestAnimationFrame(() => view.focus());
+        }
+        return;
+      }
+
+      const nextState = createEditorState(content, language);
+      editorStatesRef.current[id] = nextState;
+    },
+    [createEditorState],
+  );
+
+  const setEditorState = useCallback((state: EditorState, options?: { focus?: boolean }) => {
     const view = viewRef.current;
     if (!view) return;
     try {
@@ -255,7 +294,9 @@ export default function RemoteFileEditorPage() {
       suppressEditorUpdateRef.current = false;
     }
     setCursorPosition(getCursorPosition(state));
-    window.requestAnimationFrame(() => view.focus());
+    if (options?.focus) {
+      window.requestAnimationFrame(() => view.focus());
+    }
   }, []);
 
   const rememberCurrentEditorState = useCallback(() => {
@@ -377,10 +418,10 @@ export default function RemoteFileEditorPage() {
           error: "",
           lastSavedAt: null,
         }));
-        const nextState = createEditorState(file.content, tab.language);
-        editorStatesRef.current[id] = nextState;
         if (activeTabIdRef.current === id) {
-          setEditorState(nextState);
+          applyEditorContent(file.content, tab.language);
+        } else {
+          editorStatesRef.current[id] = createEditorState(file.content, tab.language);
         }
       } catch (err) {
         updateTab(id, (current) => ({
@@ -390,7 +431,7 @@ export default function RemoteFileEditorPage() {
         }));
       }
     },
-    [createEditorState, openExternalFile, removeUnsupportedTab, setEditorState, t, updateTab],
+    [applyEditorContent, createEditorState, openExternalFile, removeUnsupportedTab, t, updateTab],
   );
 
   const addOrFocusTab = useCallback(
@@ -428,10 +469,10 @@ export default function RemoteFileEditorPage() {
     currentWindow.setTitle(title).catch(() => {});
   }, [activeTab, t]);
 
-  useEffect(() => {
-    const parent = editorParentRef.current;
-    if (!parent) return;
-
+  // Computed lazily, once: `FileCodeMirrorSurface` only ever reads this for the
+  // very first mount and never remounts on re-render, so it's safe to build
+  // eagerly here (avoids a `useMemo`/effect race with `activeTabIdRef`).
+  if (initialEditorStateRef.current === null) {
     const initialTab = activeTabIdRef.current
       ? tabsRef.current.find((tab) => tab.id === activeTabIdRef.current)
       : null;
@@ -441,28 +482,43 @@ export default function RemoteFileEditorPage() {
     if (initialTab) {
       editorStatesRef.current[initialTab.id] = initialState;
     }
+    initialEditorStateRef.current = initialState;
+  }
 
-    const view = new EditorView({
-      parent,
-      state: initialState,
-    });
-    viewRef.current = view;
+  const handleEditorReady = useCallback(
+    (view: EditorView) => {
+      viewRef.current = view;
+      const id = activeTabIdRef.current;
+      const tab = id ? tabsRef.current.find((item) => item.id === id) : null;
+      if (tab && view.state.doc.toString() !== tab.content) {
+        applyEditorContent(tab.content, tab.language);
+      }
+      window.requestAnimationFrame(() => {
+        view.requestMeasure?.();
+        view.focus();
+      });
+    },
+    [applyEditorContent],
+  );
 
-    const resizeObserver = new ResizeObserver(() => {
-      view.requestMeasure?.();
-    });
-    resizeObserver.observe(parent);
-    window.requestAnimationFrame(() => {
-      view.requestMeasure?.();
-      view.focus();
-    });
-
-    return () => {
-      resizeObserver.disconnect();
-      view.destroy();
-      viewRef.current = null;
-    };
-  }, [createEditorState]);
+  // This window's theme isn't synced with the main window's `var(--df-*)`
+  // variables, so when the UI theme changes we rebuild every cached
+  // EditorState with the fresh literal `solidColors` and swap the active one in
+  // imperatively (matches the contract documented on `FileCodeMirrorSurface`).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally re-runs only on color changes, not on every createEditorState/setEditorState identity change
+  useEffect(() => {
+    let changedActiveState: EditorState | null = null;
+    for (const tab of tabsRef.current) {
+      const cached = editorStatesRef.current[tab.id];
+      if (!cached) continue;
+      const nextState = createEditorState(cached.doc.toString(), tab.language);
+      editorStatesRef.current[tab.id] = nextState;
+      if (tab.id === activeTabIdRef.current) {
+        changedActiveState = nextState;
+      }
+    }
+    if (changedActiveState) setEditorState(changedActiveState);
+  }, [colors]);
 
   useEffect(() => {
     if (!activeTabId) return;
@@ -473,7 +529,7 @@ export default function RemoteFileEditorPage() {
       editorStatesRef.current[currentTab.id] ??
       createEditorState(currentTab.content, currentTab.language);
     editorStatesRef.current[currentTab.id] = state;
-    setEditorState(state);
+    setEditorState(state, { focus: true });
   }, [activeTabId, createEditorState, setEditorState]);
 
   useEffect(() => {
@@ -686,7 +742,7 @@ export default function RemoteFileEditorPage() {
 
   return (
     <div
-      className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground"
+      className="nyaterm-file-editor-shell flex h-full min-h-0 flex-col overflow-hidden"
       data-file-editor-root="true"
     >
       <ChildWindowHeader
@@ -885,10 +941,13 @@ export default function RemoteFileEditorPage() {
               {t("common.loading")}
             </div>
           )}
-          <div
-            ref={editorParentRef}
-            className="h-full min-h-0"
-            style={{ fontSize: `${editorFontSize}px` }}
+          <FileCodeMirrorSurface
+            initialState={initialEditorStateRef.current!}
+            colors={colors}
+            fontSize={editorFontSize}
+            onReady={handleEditorReady}
+            onZoomIn={handleZoomIn}
+            onZoomOut={handleZoomOut}
           />
         </div>
 

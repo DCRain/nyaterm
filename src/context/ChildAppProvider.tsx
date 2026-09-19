@@ -49,6 +49,21 @@ function syncChildAppLanguage(language: string | undefined) {
   }
 }
 
+/**
+ * The file editor window renders CodeMirror inside an opaque iframe with
+ * literal colors and is opened fully opaque natively (see `open_child_window`
+ * / `openRemoteFileEditor`). Its outer chrome must stay opaque too, or the
+ * translucent `--df-*` variable chain used for Acrylic windows would leave
+ * the header/tab bar mismatched against the guaranteed-opaque iframe content.
+ */
+function isFileEditorWindow() {
+  try {
+    return new URLSearchParams(window.location.search).get("window") === "file-editor";
+  } catch {
+    return false;
+  }
+}
+
 const DEFAULT_APP_SETTINGS: AppSettings = {
   general: {
     startup_restore: true,
@@ -159,7 +174,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   },
   transfer: {
     editor_type: "external",
-    internal_editor_display: "workspace",
+    internal_editor_display: "window",
     internal_editor_font_size: 13,
     download_threads: 3,
     upload_threads: 3,
@@ -510,7 +525,7 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
     appSettings.appearance.theme,
     appSettings.appearance.custom_themes ?? [],
   ).colors;
-  useWindowTransparencyDom(themeColors, appSettings.appearance);
+  useWindowTransparencyDom(themeColors, appSettings.appearance, isFileEditorWindow());
 
   return (
     <AppContext.Provider value={contextValue}>

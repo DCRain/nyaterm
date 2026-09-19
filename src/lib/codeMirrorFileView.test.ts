@@ -1,7 +1,10 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
-import { codeMirrorFileViewExtensions } from "./codeMirrorFileView";
+import { themeList } from "@/lib/themes";
+import { codeMirrorFileViewExtensions, isDarkColor } from "./codeMirrorFileView";
+
+const sampleColors = themeList[0].colors;
 
 function findRules(fragment: string): string[] {
   const rules: string[] = [];
@@ -19,17 +22,42 @@ function findRules(fragment: string): string[] {
   return rules;
 }
 
-function mountEditor(): HTMLDivElement {
+function mountEditor(
+  language = "plaintext",
+  options?: Parameters<typeof codeMirrorFileViewExtensions>[1],
+): HTMLDivElement {
   const host = document.createElement("div");
   document.body.appendChild(host);
   new EditorView({
     state: EditorState.create({
-      doc: "hello",
-      extensions: codeMirrorFileViewExtensions("plaintext"),
+      doc: "#!/bin/bash\necho hello",
+      extensions: codeMirrorFileViewExtensions(language, options),
     }),
     parent: host,
   });
   return host;
+}
+
+/**
+ * Reads the compiled CSS for a given set of file-view extensions straight
+ * from CodeMirror's `StyleModule`s via the `EditorState` facet, without ever
+ * mounting to the DOM. `StyleModule.mount` keeps one shared `<style>` tag per
+ * `document` and accumulates every module it has ever seen for the lifetime
+ * of that document (see `style-mod`'s `StyleSet`), so scraping `document.head`
+ * after mounting multiple editors in the same test file is unreliable —
+ * rules from earlier tests' mounts never get cleared out, even if the
+ * `<style>` element itself is removed. Reading the facet directly is
+ * side-effect free and isolated per call.
+ */
+function extensionRuleText(options?: Parameters<typeof codeMirrorFileViewExtensions>[1]): string {
+  const state = EditorState.create({
+    doc: "hello",
+    extensions: codeMirrorFileViewExtensions("plaintext", options),
+  });
+  return state
+    .facet(EditorView.styleModule)
+    .map((mod) => mod.getRules())
+    .join("\n");
 }
 
 describe("codeMirrorFileView selection styling", () => {
@@ -105,5 +133,85 @@ describe("codeMirrorFileView search panel styling", () => {
     } finally {
       host.remove();
     }
+  });
+});
+
+describe("codeMirrorFileView solidColors mode", () => {
+  it("bakes literal theme colors into the editor surface instead of CSS variables", () => {
+    const ruleText = extensionRuleText({ solidColors: sampleColors });
+
+    // Literal colors from the provided theme must appear verbatim...
+    expect(ruleText).toContain(sampleColors.bg);
+    expect(ruleText).toContain(sampleColors.text);
+    // ...and none of the `var(--df-*)` / `var(--foreground)` custom-property
+    // references from the default (non-iframe) theme should leak through.
+    expect(ruleText).not.toContain("var(--df-");
+    expect(ruleText).not.toContain("var(--foreground)");
+    expect(ruleText).not.toContain("var(--background)");
+  });
+
+  it("bakes literal syntax highlight colors instead of CSS variables", () => {
+    const ruleText = extensionRuleText({ solidColors: sampleColors });
+
+    expect(ruleText).toContain(sampleColors.primary);
+    expect(ruleText).not.toContain("var(--df-primary)");
+    expect(ruleText).not.toContain("var(--df-text-muted)");
+  });
+
+  it("falls back to the CSS-variable theme when no solidColors are provided", () => {
+    const ruleText = extensionRuleText();
+
+    expect(ruleText).toContain("var(--foreground)");
+    expect(ruleText).toContain("var(--df-primary)");
+  });
+
+  it("bakes literal base text color on cm-content without forcing cm-line colors", () => {
+    const ruleText = extensionRuleText({ solidColors: sampleColors });
+    const contentRule = ruleText.split("}").find((rule) => rule.includes("user-select: text"));
+    const lineRule = ruleText
+      .split("}")
+      .find((rule) => /\.cm-line\s*\{[^{]*cursor: text;/.test(`${rule}}`));
+
+    expect(contentRule).toBeDefined();
+    expect(contentRule).toContain(sampleColors.text);
+    expect(lineRule).toBeDefined();
+    expect(lineRule).not.toContain(`color: ${sampleColors.text}`);
+  });
+
+  it("disables scrollPastEnd in solidColors iframe mode", () => {
+    const host = mountEditor("plaintext", { solidColors: sampleColors });
+    try {
+      // scrollPastEnd adds bottom padding on the content element; solidColors mode omits it.
+      const content = host.querySelector(".cm-content") as HTMLElement | null;
+      expect(content?.style.paddingBottom).not.toBe("50vh");
+    } finally {
+      host.remove();
+    }
+  });
+
+  it("tokenizes shell sources with highlight spans in solidColors mode", () => {
+    const host = mountEditor("shell", { solidColors: sampleColors });
+    try {
+      const spans = host.querySelectorAll(".cm-line span");
+      expect(spans.length).toBeGreaterThan(0);
+    } finally {
+      host.remove();
+    }
+  });
+});
+
+describe("isDarkColor", () => {
+  it("identifies dark literal hex backgrounds", () => {
+    expect(isDarkColor("#0d1117")).toBe(true);
+    expect(isDarkColor("#000000")).toBe(true);
+  });
+
+  it("identifies light literal hex backgrounds", () => {
+    expect(isDarkColor("#ffffff")).toBe(false);
+    expect(isDarkColor("#f5f5f5")).toBe(false);
+  });
+
+  it("defaults to dark for unparseable input (non-hex color values)", () => {
+    expect(isDarkColor("not-a-color")).toBe(true);
   });
 });

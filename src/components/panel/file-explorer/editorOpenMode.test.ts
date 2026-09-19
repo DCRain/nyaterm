@@ -14,11 +14,21 @@ describe("file editor open mode", () => {
     ).toBe("external");
   });
 
-  it("opens internal editor in the workspace by default", () => {
+  it("always opens the internal editor in its own window (workspace tab mode removed)", () => {
     expect(resolveFileEditorOpenTarget({ editor_type: "internal" })).toBe(
-      "internal-workspace",
+      "internal-window",
     );
-    expect(resolveInternalEditorDisplay(undefined)).toBe("workspace");
+    expect(resolveInternalEditorDisplay(undefined)).toBe("window");
+  });
+
+  it("normalizes a legacy persisted workspace value to window", () => {
+    expect(
+      resolveFileEditorOpenTarget({
+        editor_type: "internal",
+        internal_editor_display: "workspace",
+      }),
+    ).toBe("internal-window");
+    expect(resolveInternalEditorDisplay("workspace")).toBe("window");
   });
 
   it("opens internal editor in a child window when configured", () => {
