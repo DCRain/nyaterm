@@ -105,6 +105,29 @@ describe("AI provider settings", () => {
     });
   });
 
+  it("preserves default reasoning efforts when customizing an unconfigured model", () => {
+    const initial = settingsWithProviders();
+    delete initial.models[0].supported_reasoning_efforts;
+    render(<Harness initial={initial} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "ai.editModelConfig" }));
+    expect(screen.getByRole("button", { name: "none" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "minimal" }).getAttribute("aria-pressed")).toBe(
+      "false",
+    );
+    expect(screen.getByRole("button", { name: "low" }).getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(screen.getByRole("button", { name: "minimal" }));
+    expect(currentSettings.models[0].supported_reasoning_efforts).toEqual([
+      "none",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+  });
+
   it.each([
     ["Ollama", "ollama"],
     ["OpenAI-compatible", "openai_compatible"],

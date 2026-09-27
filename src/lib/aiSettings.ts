@@ -21,9 +21,16 @@ export const MODEL_REASONING_EFFORTS: AIModelReasoningEffort[] = [
   "ultra",
 ];
 
+export const DEFAULT_MODEL_REASONING_EFFORTS: AIModelReasoningEffort[] = [
+  "none",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+];
+
 export function getModelReasoningOptions(model: AIModelConfigItem | null): AIReasoningEffort[] {
-  const supported = model?.supported_reasoning_efforts;
-  if (!supported) return ["auto", "none", "low", "medium", "high", "xhigh"];
+  const supported = model?.supported_reasoning_efforts ?? DEFAULT_MODEL_REASONING_EFFORTS;
   return ["auto", ...MODEL_REASONING_EFFORTS.filter((effort) => supported.includes(effort))];
 }
 

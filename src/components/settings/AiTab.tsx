@@ -46,6 +46,7 @@ import {
   aiModelIdForCredential,
   aiModelIdForProvider,
   BUILTIN_PROVIDERS,
+  DEFAULT_MODEL_REASONING_EFFORTS,
   getCustomProviderBaseUrlPlaceholder,
   getProviderLabel,
   isBuiltinProvider,
@@ -1409,7 +1410,9 @@ export function AiModelsTab() {
   };
 
   const toggleModelReasoningEffort = (model: AIModelConfigItem, effort: AIModelReasoningEffort) => {
-    const selected = new Set(model.supported_reasoning_efforts ?? []);
+    const selected = new Set(
+      model.supported_reasoning_efforts ?? DEFAULT_MODEL_REASONING_EFFORTS,
+    );
     if (selected.has(effort)) selected.delete(effort);
     else selected.add(effort);
     updateModel(model.id, {
@@ -2066,7 +2069,9 @@ export function AiModelsTab() {
                         className="mt-2 flex flex-wrap gap-2"
                       >
                         {MODEL_REASONING_EFFORTS.map((effort) => {
-                          const selected = model.supported_reasoning_efforts?.includes(effort);
+                          const selected = (
+                            model.supported_reasoning_efforts ?? DEFAULT_MODEL_REASONING_EFFORTS
+                          ).includes(effort);
                           return (
                             <Button
                               key={effort}
