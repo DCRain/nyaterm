@@ -53,6 +53,23 @@ function settingsWithProviders(): AISettings {
   return ai;
 }
 
+function settingsWithNoKeyProvider(kind: "ollama" | "openai_compatible"): AISettings {
+  const ai = settingsWithProviders();
+  ai.provider_credentials = [
+    {
+      ...ai.provider_credentials[0],
+      id: `no-key-${kind}`,
+      name: kind === "ollama" ? "Local Ollama" : "Local OpenAI-compatible",
+      provider_kind: kind,
+      api_protocol: kind,
+      base_url: kind === "ollama" ? "http://localhost:11434/" : "http://localhost:1234/v1/",
+      api_key: "",
+    },
+  ];
+  ai.models = [];
+  return ai;
+}
+
 describe("AI provider settings", () => {
   beforeEach(() => {
     invokeMock.mockReset();
@@ -86,6 +103,40 @@ describe("AI provider settings", () => {
       last_seen_at: null,
       supported_reasoning_efforts: ["low"],
     });
+  });
+
+  it.each([
+    ["Ollama", "ollama"],
+    ["OpenAI-compatible", "openai_compatible"],
+  ] as const)("allows %s without an API key to test and refresh models", async (_label, kind) => {
+    invokeMock.mockResolvedValueOnce(["first-model"]).mockResolvedValueOnce(["refreshed-model"]);
+    render(<Harness initial={settingsWithNoKeyProvider(kind)} />);
+
+    expect((screen.getByPlaceholderText("settings.apiKey") as HTMLInputElement).required).toBe(
+      false,
+    );
+    const connectionButton = screen.getByRole("button", {
+      name: "ai.connectionTest",
+    }) as HTMLButtonElement;
+    const refreshButton = screen.getByRole("button", {
+      name: "ai.refreshModels",
+    }) as HTMLButtonElement;
+    expect(connectionButton.disabled).toBe(false);
+    expect(refreshButton.disabled).toBe(false);
+
+    await act(async () => fireEvent.click(connectionButton));
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "test_ai_provider_connection", {
+      aiSettings: expect.any(Object),
+      credentialId: `no-key-${kind}`,
+    });
+    expect(currentSettings.models.some((model) => model.name === "first-model")).toBe(true);
+
+    await act(async () => fireEvent.click(refreshButton));
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "test_ai_provider_connection", {
+      aiSettings: expect.any(Object),
+      credentialId: `no-key-${kind}`,
+    });
+    expect(currentSettings.models.some((model) => model.name === "refreshed-model")).toBe(true);
   });
 
   it("gives a second account a unique name and keeps models bound to each account", () => {

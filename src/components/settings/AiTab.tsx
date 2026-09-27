@@ -41,7 +41,6 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useApp } from "@/context/AppContext";
-import { isCloudSecretMasked, secretInputValue, secretPlaceholder } from "@/lib/cloudSync";
 import {
   AI_PROVIDERS,
   aiModelIdForCredential,
@@ -54,6 +53,7 @@ import {
   supportsApiFormatSelection,
 } from "@/lib/aiSettings";
 import { writeClipboardText } from "@/lib/clipboard";
+import { isCloudSecretMasked, secretInputValue, secretPlaceholder } from "@/lib/cloudSync";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import { getOwnerMainWindowLabel } from "@/lib/windowManager";
@@ -61,8 +61,8 @@ import type {
   AICustomActionConfig,
   AIModelConfigItem,
   AIModelReasoningEffort,
-  AIProviderCredential,
   AIProviderApiProtocol,
+  AIProviderCredential,
   AIProviderKind,
   AISettings,
   ClaudeCodeIntegrationSettings,
@@ -1178,7 +1178,12 @@ export function AiModelsTab() {
     selectedProviderCredential?.id,
   );
   const selectedProviderEndpointMissing = !selectedProviderCredential?.base_url?.trim();
-  const selectedProviderApiKeyMissing = !selectedProviderCredential?.api_key?.trim();
+  const selectedProviderApiKeyRequired =
+    !!selectedProviderCredential &&
+    selectedProviderCredential.provider_kind !== "ollama" &&
+    selectedProviderCredential.provider_kind !== "openai_compatible";
+  const selectedProviderApiKeyMissing =
+    selectedProviderApiKeyRequired && !selectedProviderCredential?.api_key?.trim();
   // biome-ignore lint/correctness/useExhaustiveDependencies: These transient fields belong to the selected account.
   useEffect(() => {
     setProviderNameInput(null);
@@ -2348,7 +2353,8 @@ export function AiModelsTab() {
               </div>
               <div className="grid gap-2 border-b border-border/60 py-2.5 sm:grid-cols-[minmax(0,1fr)_minmax(0,2.2fr)] sm:items-center">
                 <Label className="text-xs font-normal">
-                  {t("settings.apiKey")} <span aria-hidden="true">*</span>
+                  {t("settings.apiKey")}
+                  {selectedProviderApiKeyRequired ? <span aria-hidden="true"> *</span> : null}
                 </Label>
                 <div className="space-y-1">
                   <div className="relative">
@@ -2367,7 +2373,7 @@ export function AiModelsTab() {
                         t("settings.apiKey"),
                       )}
                       className="h-9 rounded-lg pr-10 text-sm"
-                      required
+                      required={selectedProviderApiKeyRequired}
                       aria-invalid={showProviderValidation && selectedProviderApiKeyMissing}
                       onBlur={() => setShowProviderValidation(true)}
                       onChange={(event) => {
