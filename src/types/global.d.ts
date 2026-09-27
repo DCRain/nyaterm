@@ -1445,11 +1445,24 @@ export interface ExternalMcpSettings {
 export type AIReasoningEffort =
   | "auto"
   | "none"
+  | "minimal"
   | "low"
   | "medium"
   | "high"
-  | "xhigh";
+  | "xhigh"
+  | "max"
+  | "ultra";
+export type AIModelReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max"
+  | "ultra";
 export type AIApiFormat = "chat_completions" | "responses";
+export type AIProviderApiProtocol = "openai_compatible" | "anthropic" | "gemini" | "ollama";
 export type AIModelSource = "rust-genai" | "manual";
 export type AIBackendKind = "genai" | "codex";
 export type CodexThreadMode = "persistent" | "ephemeral";
@@ -1476,6 +1489,7 @@ export interface AIModelConfigItem {
   enabled: boolean;
   source: AIModelSource;
   last_seen_at?: string | null;
+  supported_reasoning_efforts?: AIModelReasoningEffort[];
 }
 
 export interface CodexIntegrationSettings {
@@ -1514,6 +1528,8 @@ export interface AIProviderCredential {
   id: string;
   name: string;
   provider_kind: AIProviderKind;
+  icon_data_url?: string | null;
+  api_protocol?: AIProviderApiProtocol | null;
   api_format: AIApiFormat;
   base_url?: string | null;
   api_key?: string | null;
