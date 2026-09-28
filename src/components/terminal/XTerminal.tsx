@@ -175,6 +175,8 @@ type SearchAddonWithLifecycle = SearchAddon & {
  * xterm.js terminal for a session. Handles OSC 133 shell integration (or fallback prompt
  * detection), fuzzy command history suggestions, and resize/fit. Key props: sessionId, active.
  */
+const MAX_WRAPPED_LINE_LOOKBACK_ROWS = 512;
+
 export default function XTerminal({
   sessionId,
   sessionName,
@@ -512,9 +514,12 @@ export default function XTerminal({
         }),
       );
       unlistenBag.add(
-        listen<SerialModemEventPayload>(`serial-modem-event-${sessionId}`, (event) => {
-          wake({ type: "serialModem", payload: event.payload });
-        }),
+        listen<SerialModemEventPayload>(
+          `serial-modem-event-${sessionId}`,
+          (event) => {
+            wake({ type: "serialModem", payload: event.payload });
+          },
+        ),
       );
       unlistenBag.add(
         listen<AiCaptureEvent>(`ai-capture-${sessionId}`, (event) => {
@@ -1190,11 +1195,11 @@ export default function XTerminal({
           origin,
         }).catch(() => {});
       }
-        return sendSessionInput(sessionId, data, {
-          preview: null,
-          registerSubmission: command,
+      return sendSessionInput(sessionId, data, {
+        preview: null,
+        registerSubmission: command,
         origin,
-        }).catch(() => {});
+      }).catch(() => {});
     };
 
     const canReconnectDisconnectedSession = () =>
@@ -1218,7 +1223,8 @@ export default function XTerminal({
     };
 
     const assertTemporaryConfigMatchesSessionType = () => {
-      if (!temporaryConfigRef.current || temporaryConfigMatchesSessionType()) return;
+      if (!temporaryConfigRef.current || temporaryConfigMatchesSessionType())
+        return;
       throw new Error("Temporary session config protocol mismatch");
     };
 
@@ -1273,7 +1279,9 @@ export default function XTerminal({
           if (connectionId) {
             return invoke<string>("create_ssh_session", {
               connectionId,
-              startupCommand: buildStartupCommandPayload(restoreCwdStartupCommand),
+              startupCommand: buildStartupCommandPayload(
+                restoreCwdStartupCommand,
+              ),
             });
           }
           assertTemporaryConfigMatchesSessionType();
@@ -1281,12 +1289,16 @@ export default function XTerminal({
             const { protocol: _protocol, ...sshConfig } = temporaryConfig;
             return invoke<string>("create_temporary_ssh_session", {
               config: sshConfig,
-              startupCommand: buildStartupCommandPayload(restoreCwdStartupCommand),
+              startupCommand: buildStartupCommandPayload(
+                restoreCwdStartupCommand,
+              ),
             });
           }
           return invoke<string>("create_ssh_session", {
             connectionId,
-            startupCommand: buildStartupCommandPayload(restoreCwdStartupCommand),
+            startupCommand: buildStartupCommandPayload(
+              restoreCwdStartupCommand,
+            ),
           });
       }
     };
@@ -1924,7 +1936,10 @@ export default function XTerminal({
       const map = lineTimestampsRef.current;
 
       let startLine = cursorLine;
-      while (startLine > 0) {
+      while (
+        startLine > 0 &&
+        cursorLine - startLine < MAX_WRAPPED_LINE_LOOKBACK_ROWS
+      ) {
         const line = buf.getLine(startLine);
         if (line && !line.isWrapped) break;
         startLine -= 1;
@@ -1945,6 +1960,8 @@ export default function XTerminal({
       outputDrain,
       frameGate,
       noteSkippedOutput,
+      noteOutputPressure,
+      disposeOutputPressure,
       maybeRecoverPerformanceMode,
       refreshOutputPressureMode,
       updateOutputDrainMode,
@@ -2104,7 +2121,10 @@ export default function XTerminal({
           case "serialModem":
             if (event.payload.type === "progress") {
               zmodemActiveRef.current = true;
-            } else if (event.payload.type === "complete" || event.payload.type === "failed") {
+            } else if (
+              event.payload.type === "complete" ||
+              event.payload.type === "failed"
+            ) {
               zmodemActiveRef.current = false;
             }
             serialModemHandler.handle(event.payload);
@@ -2195,6 +2215,7 @@ export default function XTerminal({
       enterDisconnectedState,
       enterDisconnectedStateIfAttachSessionMissing,
       noteSkippedOutput,
+      noteOutputPressure,
       noteOutputActivity,
       updateCredentialPromptInputMode,
       feedCredentialOutput,
@@ -2344,7 +2365,11 @@ export default function XTerminal({
       }
 
       if (data === "\x04" && fallbackInteractive) {
-        fallbackInteractive = nextFallbackInteractiveState(fallbackInteractive, data, "");
+        fallbackInteractive = nextFallbackInteractiveState(
+          fallbackInteractive,
+          data,
+          "",
+        );
         inputStateRef.current = createTerminalInputState();
       }
 
@@ -2432,19 +2457,30 @@ export default function XTerminal({
           disconnected: disconnectedRef.current,
           aiCapturing: aiCapturingRef.current,
           credentialPrompt: isCredentialPromptInputMode(),
-          interactive: fallbackInteractive || commandSuggestionSuppressedRef.current,
+          interactive:
+            fallbackInteractive || commandSuggestionSuppressedRef.current,
         })
       ) {
         const buffer = terminal.buffer.active;
         const cursorLine = buffer.baseY + buffer.cursorY;
         let startLine = cursorLine;
-        while (startLine > 0 && buffer.getLine(startLine)?.isWrapped)
+        while (
+          startLine > 0 &&
+          cursorLine - startLine < MAX_WRAPPED_LINE_LOOKBACK_ROWS &&
+          buffer.getLine(startLine)?.isWrapped
+        )
           startLine--;
-        const marker = terminal.registerMarker(startLine - cursorLine);
-        if (marker) commandNavigation.add(marker);
+        if (!buffer.getLine(startLine)?.isWrapped) {
+          const marker = terminal.registerMarker(startLine - cursorLine);
+          if (marker) commandNavigation.add(marker);
+        }
       }
       if (data === "\r" && command && !shellIntegrationRef.current.enabled) {
-        fallbackInteractive = nextFallbackInteractiveState(fallbackInteractive, data, command);
+        fallbackInteractive = nextFallbackInteractiveState(
+          fallbackInteractive,
+          data,
+          command,
+        );
       }
       inputStateRef.current = applyTerminalInputData(
         inputStateRef.current,
@@ -2508,7 +2544,11 @@ export default function XTerminal({
     const handleTerminalPointerDown = () => {
       commandNavigation.reset();
     };
-    containerEl.addEventListener("pointerdown", handleTerminalPointerDown, true);
+    containerEl.addEventListener(
+      "pointerdown",
+      handleTerminalPointerDown,
+      true,
+    );
 
     const commandSelectionChangeDisposable = terminal.onSelectionChange(() => {
       if (!terminal.hasSelection()) {
@@ -2665,6 +2705,7 @@ export default function XTerminal({
         fitSchedulerRef.current = null;
       }
       sessionEvents.dispose();
+      disposeOutputPressure();
       zmodemHandler.dispose();
       serialModemHandler.dispose();
       frameGate.dispose({ ackRemaining: true, reason: "terminal_cleanup" });
@@ -2746,16 +2787,10 @@ export default function XTerminal({
     terminalReady,
     performanceMode,
   });
-  useKeywordHighlighter(
-    terminalInstance,
-    terminalSettings,
-    sessionId,
-    isDark,
-    {
-      suspended: keywordHighlighterSuspended,
-      releaseCachesAfterDelay: !visible || hibernated,
-    },
-  );
+  useKeywordHighlighter(terminalInstance, terminalSettings, sessionId, isDark, {
+    suspended: keywordHighlighterSuspended,
+    releaseCachesAfterDelay: !visible || hibernated,
+  });
 
   const { tooltipState, menuState, closeMenu } = useActionLinks(
     terminalInstance,
