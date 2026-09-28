@@ -2477,6 +2477,9 @@
     },
     "shortcutLabels": {
       "closeTab": "Close Active Tab",
+      "commandNavNext": "Jump to Next Command",
+      "commandNavPrev": "Jump to Previous Command",
+      "commandNavSelect": "Select Command Output Block",
       "copyFiles": "Copy Files",
       "copySelectedSavedConnections": "Copy Selected Saved Connections",
       "cutFiles": "Cut Files",

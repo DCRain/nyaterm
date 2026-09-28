@@ -90,6 +90,30 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     labelKey: "settings.shortcutLabels.manageSyncGroups",
     defaultKeys: "ctrl+shift+g, meta+shift+g",
   },
+  {
+    id: "terminal.clearAll",
+    category: "terminal",
+    labelKey: "terminalCtx.clearAll",
+    defaultKeys: "ctrl+alt+shift+l, meta+alt+shift+l",
+  },
+  {
+    id: "terminal.commandNav.prev",
+    category: "terminal",
+    labelKey: "settings.shortcutLabels.commandNavPrev",
+    defaultKeys: "ctrl+shift+arrowleft, meta+shift+arrowleft",
+  },
+  {
+    id: "terminal.commandNav.next",
+    category: "terminal",
+    labelKey: "settings.shortcutLabels.commandNavNext",
+    defaultKeys: "ctrl+shift+arrowright, meta+shift+arrowright",
+  },
+  {
+    id: "terminal.commandNav.select",
+    category: "terminal",
+    labelKey: "settings.shortcutLabels.commandNavSelect",
+    defaultKeys: "ctrl+shift+/, meta+shift+/",
+  },
 
   // --- Tab / Session ---
   {

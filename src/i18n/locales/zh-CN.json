@@ -2475,6 +2475,9 @@
     },
     "shortcutLabels": {
       "closeTab": "关闭当前标签",
+      "commandNavNext": "跳到下一个命令",
+      "commandNavPrev": "跳到上一个命令",
+      "commandNavSelect": "选择命令输出段",
       "copyFiles": "复制文件",
       "copySelectedSavedConnections": "复制选中的已保存连接",
       "cutFiles": "剪切文件",
