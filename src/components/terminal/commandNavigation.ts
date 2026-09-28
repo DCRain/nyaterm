@@ -15,7 +15,9 @@ export function nextFallbackInteractiveState(
   if (data === "\x04") return false;
   if (data !== "\r" || !command) return interactive;
   if (startsObviousInteractiveSession(command)) return true;
-  if (/^(?:exit|quit|\.exit)(?:\(\))?$/iu.test(command.trim())) return false;
+  if (/^(?:(?:exit|quit)(?:\(\))?|\.exit|\.quit|\\q)$/iu.test(command.trim())) {
+    return false;
+  }
   return interactive;
 }
 

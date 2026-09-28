@@ -167,5 +167,7 @@ describe("fallback command detection", () => {
     expect(nextFallbackInteractiveState(true, "\x04", "")).toBe(false);
     expect(nextFallbackInteractiveState(false, "\r", "ls")).toBe(false);
     expect(nextFallbackInteractiveState(true, "\r", "exit()")).toBe(false);
+    expect(nextFallbackInteractiveState(true, "\r", "\\q")).toBe(false);
+    expect(nextFallbackInteractiveState(true, "\r", ".quit")).toBe(false);
   });
 });
