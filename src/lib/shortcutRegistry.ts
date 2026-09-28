@@ -90,6 +90,30 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     labelKey: "settings.shortcutLabels.manageSyncGroups",
     defaultKeys: "ctrl+shift+g, meta+shift+g",
   },
+  {
+    id: "terminal.clearAll",
+    category: "terminal",
+    labelKey: "terminalCtx.clearAll",
+    defaultKeys: "ctrl+shift+l, meta+shift+l",
+  },
+  {
+    id: "terminal.commandNav.prev",
+    category: "terminal",
+    labelKey: "settings.shortcutLabels.commandNavPrev",
+    defaultKeys: "ctrl+shift+arrowleft, meta+shift+arrowleft",
+  },
+  {
+    id: "terminal.commandNav.next",
+    category: "terminal",
+    labelKey: "settings.shortcutLabels.commandNavNext",
+    defaultKeys: "ctrl+shift+arrowright, meta+shift+arrowright",
+  },
+  {
+    id: "terminal.commandNav.select",
+    category: "terminal",
+    labelKey: "settings.shortcutLabels.commandNavSelect",
+    defaultKeys: "ctrl+shift+/, meta+shift+/",
+  },
 
   // --- Tab / Session ---
   {
@@ -277,7 +301,8 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     id: "special.lockScreen",
     category: "special",
     labelKey: "settings.shortcutLabels.lockScreen",
-    defaultKeys: "ctrl+shift+l, meta+shift+l",
+    // Ctrl+Shift+L 让给 terminal.clearAll（全部清除），锁屏挪到 Ctrl+Alt+L
+    defaultKeys: "ctrl+alt+l, meta+alt+l",
   },
 ];
 

@@ -9,7 +9,7 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import MultiLinePasteDialog from "@/components/dialog/terminal/MultiLinePasteDialog";
 import ExternalFileDropOverlay from "@/components/ExternalFileDropOverlay";
-import { useTerminalAppSettings } from "@/context/AppContext";
+import { useApp, useTerminalAppSettings } from "@/context/AppContext";
 import { useTheme } from "@/context/ThemeContext";
 import { useTransfer } from "@/context/TransferContext";
 import { useActionLinks } from "@/hooks/useActionLinks";
@@ -28,6 +28,7 @@ import {
   buildTerminalThemeColors,
   isTerminalTransparencyEnabled,
 } from "@/lib/backgroundImage";
+import { matchesKeyEvent, resolveKeys } from "@/lib/shortcutRegistry";
 import {
   readClipboardPathPayload,
   readClipboardText,
@@ -224,6 +225,12 @@ export default function XTerminal({
     completeExternalTransfer,
     failExternalTransfer,
   } = useTransfer();
+  const { appSettings } = useApp();
+  const keybindingsRef = useRef(appSettings.keybindings);
+  useEffect(() => {
+    keybindingsRef.current = appSettings.keybindings;
+  }, [appSettings.keybindings]);
+
   const terminalAppSettings = useTerminalAppSettings();
   const {
     appearance,
@@ -644,7 +651,7 @@ export default function XTerminal({
   });
 
   // Shell integration state
-  const { shellIntegrationRef } = useShellIntegration();
+  const { shellIntegrationRef, commandMarkersRef, pushCommandMarker, clearCommandMarkers } = useShellIntegration();
   const canShowCommandSuggestions = useCallback(
     (options?: { allowEmpty?: boolean }) => {
       if (credentialPromptInputUntilRef.current > Date.now()) {
@@ -994,6 +1001,259 @@ export default function XTerminal({
 
     terminalRef.current = terminal;
     setTerminalInstance(terminal);
+
+    // 命令导航游标：Ctrl+Shift+←/→ 沿候选行移动时用的“当前位置”。
+    // 不能直接用终端光标行，因为 terminal.scrollToLine 只滚动视图、
+    // 不会移动光标，那样第二次按方向键 currentLine 一直不变，就跳不动了。
+    let commandNavCursorLine: number | null = null;
+    // 累积选择锚点：Ctrl+Shift+/ 第一次选中“当前命令到下一命令前一行”，
+    // 再按一次向后扩展一段（包括下一条命令及其输出）。
+    let commandSelectionAnchor: { startLine: number; endLine: number } | null = null;
+
+    const getAbsCursorLine = () => {
+      const buffer = terminal.buffer.active;
+      return buffer.baseY + buffer.cursorY;
+    };
+
+    // 清空导航 / 累积选择状态。在以下场景调用：
+    // - 用户按普通方向键（shell 光标移动，之前导航位置已失效）
+    // - 用户鼠标点击终端（重新从光标位置出发）
+    // - 用户清掉选择（让 Ctrl+Shift+/ 从当前光标重新开始，而不是卡在“已到最底”分支）
+    // 不清会导致：下一次 Ctrl+Shift+←/→ 从错误位置出发；Ctrl+Shift+/ 第二次后彻底失效。
+    const resetCommandNavigationState = () => {
+      commandNavCursorLine = null;
+      commandSelectionAnchor = null;
+    };
+
+    const getCommandNavCursorLine = () => {
+      if (commandNavCursorLine === null) {
+        commandNavCursorLine = getAbsCursorLine();
+      }
+      return commandNavCursorLine;
+    };
+
+    // 命令导航候选 = 每条命令的起始 marker + 当前光标所在行（“最底部”）
+    const getCommandNavigationPositions = (): number[] => {
+      const cursorLine = getAbsCursorLine();
+      const set = new Set<number>();
+      for (const m of commandMarkersRef.current) {
+        if (!m.isDisposed && Number.isFinite(m.line)) set.add(m.line);
+      }
+      set.add(cursorLine);
+      return Array.from(set).sort((a, b) => a - b);
+    };
+
+    // 目标行高亮：跳转 / 复制后短暂高亮对应的行，给用户视觉反馈
+    let highlightDecorations: { dispose: () => void }[] = [];
+    let highlightTimer: number | null = null;
+    const clearHighlightDecorations = () => {
+      for (const deco of highlightDecorations) deco.dispose();
+      highlightDecorations = [];
+      if (highlightTimer !== null) {
+        window.clearTimeout(highlightTimer);
+        highlightTimer = null;
+      }
+    };
+    const highlightLines = (lines: number[]) => {
+      clearHighlightDecorations();
+      if (lines.length === 0) return;
+      const buffer = terminal.buffer.active;
+      const cursorLine = buffer.baseY + buffer.cursorY;
+      for (const line of lines) {
+        const marker = terminal.registerMarker(line - cursorLine);
+        if (!marker) continue;
+        const deco = terminal.registerDecoration({
+          marker,
+          x: 0,
+          width: terminal.cols,
+          layer: "top",
+        });
+        if (!deco) {
+          marker.dispose();
+          continue;
+        }
+        deco.onRender((el) => {
+          el.style.backgroundColor = "rgba(100, 150, 255, 0.35)";
+          el.style.pointerEvents = "none";
+        });
+        highlightDecorations.push(deco);
+      }
+      highlightTimer = window.setTimeout(() => {
+        clearHighlightDecorations();
+      }, 1800);
+    };
+
+    const handleCommandNavigationKey = (event: KeyboardEvent): boolean | null => {
+      // 单独的 ←/→/↑/↓ 会移动 shell 光标，重置导航游标
+      const isPlainArrow =
+        !event.ctrlKey &&
+        !event.shiftKey &&
+        !event.altKey &&
+        !event.metaKey &&
+        (event.key === "ArrowLeft" ||
+          event.key === "ArrowRight" ||
+          event.key === "ArrowUp" ||
+          event.key === "ArrowDown");
+      if (isPlainArrow) {
+        resetCommandNavigationState();
+        return null;
+      }
+
+      // 所有导航 / 选择 / 全部清除快捷键都从注册表读取，允许设置页自定义
+      const kb = keybindingsRef.current;
+      const isNavPrev = matchesKeyEvent(
+        resolveKeys("terminal.commandNav.prev", kb),
+        event,
+      );
+      const isNavNext = matchesKeyEvent(
+        resolveKeys("terminal.commandNav.next", kb),
+        event,
+      );
+      const isNavSelect = matchesKeyEvent(
+        resolveKeys("terminal.commandNav.select", kb),
+        event,
+      );
+      const isClearAll = matchesKeyEvent(
+        resolveKeys("terminal.clearAll", kb),
+        event,
+      );
+
+      if (isNavPrev || isNavNext) {
+        const positions = getCommandNavigationPositions();
+        if (positions.length <= 1) return true;
+
+        const currentLine = getCommandNavCursorLine();
+        let target: number | null = null;
+
+        if (isNavPrev) {
+          // 找严格小于 currentLine 的最大位置；不要用 cursorLine+1 之类技巧，
+          // 否则最上面那条命令（line 可能等于 0）会被直接跳过。
+          for (let i = positions.length - 1; i >= 0; i--) {
+            if (positions[i] < currentLine) {
+              target = positions[i];
+              break;
+            }
+          }
+        } else {
+          for (let i = 0; i < positions.length; i++) {
+            if (positions[i] > currentLine) {
+              target = positions[i];
+              break;
+            }
+          }
+        }
+
+        if (target !== null) {
+          commandNavCursorLine = target;
+          // 跳转时清掉累积选择锚点，避免与 Ctrl+Shift+/ 状态混在一起
+          commandSelectionAnchor = null;
+          terminal.scrollToLine(target);
+          highlightLines([target]);
+        }
+        return true;
+      }
+
+      if (isNavSelect) {
+        const markers = commandMarkersRef.current
+          .filter((m) => !m.isDisposed && Number.isFinite(m.line))
+          .map((m) => m.line)
+          .sort((a, b) => a - b);
+        if (markers.length === 0) return true;
+
+        const cursorLine = getAbsCursorLine();
+
+        let nextStart: number;
+        let nextEnd: number;
+
+        if (commandSelectionAnchor === null) {
+          // 首次：从当前命令（导航游标 / 光标行所在命令）开始，
+          // 到下一个命令的起始行前一行结束
+          const anchorLine = commandNavCursorLine ?? cursorLine;
+          let startLine: number | null = null;
+          for (let i = markers.length - 1; i >= 0; i--) {
+            if (markers[i] <= anchorLine) {
+              startLine = markers[i];
+              break;
+            }
+          }
+          if (startLine === null) return true;
+
+          let nextLine: number | null = null;
+          for (let i = 0; i < markers.length; i++) {
+            if (markers[i] > startLine) {
+              nextLine = markers[i];
+              break;
+            }
+          }
+          nextStart = startLine;
+          nextEnd = nextLine !== null ? nextLine - 1 : cursorLine;
+        } else {
+          // 已有选中：找当前 endLine 之后的下一个 marker 作为新增段起点
+          let extensionStart: number | null = null;
+          for (let i = 0; i < markers.length; i++) {
+            if (markers[i] > commandSelectionAnchor.endLine) {
+              extensionStart = markers[i];
+              break;
+            }
+          }
+          if (extensionStart === null) return true; // 已到最底，不再扩展
+
+          nextStart = commandSelectionAnchor.startLine;
+
+          let nextLine: number | null = null;
+          for (let i = 0; i < markers.length; i++) {
+            if (markers[i] > extensionStart) {
+              nextLine = markers[i];
+              break;
+            }
+          }
+          nextEnd = nextLine !== null ? nextLine - 1 : cursorLine;
+        }
+
+        commandSelectionAnchor = { startLine: nextStart, endLine: nextEnd };
+
+        // 用 xterm 的选区 API 选中该区域，让用户自己决定是否复制
+        terminal.selectLines(nextStart, nextEnd);
+        terminal.scrollToLine(nextStart);
+        return true;
+      }
+
+      if (isClearAll) {
+        clearAllRef.current();
+        return true;
+      }
+
+      return null;
+    };
+
+    terminal.attachCustomKeyEventHandler((event) => {
+      const handled = handleCommandNavigationKey(event);
+      if (handled === true) {
+        event.preventDefault();
+        event.stopPropagation();
+        return false;
+      }
+      return true;
+    });
+
+    // 兜底：某些 WebView / 快捷键冲突会绕过 xterm 的 key handler，
+    // 这里在捕获阶段直接监听容器，确保快捷键能生效。
+    // 注意：捕获阶段一旦命中并 stopPropagation，xterm 自带的 keydown 就不会再触发，
+    // 所以 handleCommandNavigationKey 只会执行一次，不会重复跳。
+    const commandNavCaptureHandler = (event: KeyboardEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) return;
+      const handled = handleCommandNavigationKey(event);
+      if (handled === true) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+    window.addEventListener("keydown", commandNavCaptureHandler, true);
+    const removeCommandNavCapture = () => {
+      window.removeEventListener("keydown", commandNavCaptureHandler, true);
+    };
+
+
     fitAddonRef.current = fitAddon;
     inputStateRef.current = createTerminalInputState();
     credentialPromptBufferRef.current = "";
@@ -1642,6 +1902,10 @@ export default function XTerminal({
       if (data.startsWith("A")) {
         si.enabled = true;
         si.commandRunning = false;
+        const marker = terminal.registerMarker(0);
+        if (marker) {
+          pushCommandMarker(marker);
+        }
         return false;
       }
 
@@ -2149,6 +2413,40 @@ export default function XTerminal({
     );
 
     const dataDisposable = terminal.onData((data) => {
+      // 兜底：本地 CMD / PowerShell 等不发送 OSC 133 的 shell，
+      // 以用户按 Enter 那一刻的光标位置作为“命令开始”标记。
+      if (data === "\r" || data === "\n" || data === "\r\n") {
+        const buffer = terminal.buffer.active;
+        const cursorLine = buffer.baseY + buffer.cursorY;
+
+        // 从光标行向上找最近一个非空行作为命令起始行。
+        // 这样即使回车回显已经让光标挪到空行，也能正确标记命令所在行，
+        // 避免把空行当成命令位置导致某些命令“被忽略”。
+        let markerLine = cursorLine;
+        while (markerLine >= 0) {
+          const line = buffer.getLine(markerLine);
+          if (line && line.translateToString(true).trim().length > 0) break;
+          markerLine--;
+        }
+
+        if (markerLine >= 0) {
+          const existingMarkers = commandMarkersRef.current;
+          const lastMarker = existingMarkers[existingMarkers.length - 1];
+          const alreadyMarked =
+            lastMarker &&
+            !lastMarker.isDisposed &&
+            lastMarker.line === markerLine;
+
+          if (!alreadyMarked) {
+            const offset = markerLine - cursorLine;
+            const marker = terminal.registerMarker(offset);
+            if (marker) {
+              pushCommandMarker(marker);
+            }
+          }
+        }
+      }
+
       const trackedOrigin = inputOriginTracker.consume();
       const origin = resolveXTerminalDataOrigin(
         trackedOrigin,
@@ -2393,6 +2691,26 @@ export default function XTerminal({
     observer.observe(containerRef.current);
 
     const containerEl = containerRef.current;
+
+    // 鼠标点击终端 = 用户重新指定当前位置，清掉导航 / 累积选择缓存，
+    // 否则下一次 Ctrl+Shift+←/→ 会从旧位置继续，Ctrl+Shift+/ 也会卡在旧锚点上。
+    const handleTerminalPointerDown = () => {
+      commandNavCursorLine = null;
+      // 点击会让 xterm 清掉选择，下一次 Ctrl+Shift+/ 应该从新位置重新开始
+      if (!terminal.hasSelection()) {
+        commandSelectionAnchor = null;
+      }
+    };
+    containerEl.addEventListener("pointerdown", handleTerminalPointerDown, true);
+
+    // 用户通过点击 / 拖拽清空了选区时，同步清掉累积选择锚点，防止
+    // Ctrl+Shift+/ 走进“已到最底，不再扩展”的分支后彻底没反应。
+    const commandSelectionChangeDisposable = terminal.onSelectionChange(() => {
+      if (!terminal.hasSelection()) {
+        commandSelectionAnchor = null;
+      }
+    });
+
     const selectionController = installXTerminalSelectionController({
       terminal,
       containerEl,
@@ -2485,6 +2803,15 @@ export default function XTerminal({
       clearCredentialPromptInputMode();
       shellIntegrationRef.current.enabled = false;
       shellIntegrationRef.current.commandRunning = false;
+      clearCommandMarkers();
+      clearHighlightDecorations();
+      removeCommandNavCapture();
+      containerEl.removeEventListener(
+        "pointerdown",
+        handleTerminalPointerDown,
+        true,
+      );
+      commandSelectionChangeDisposable.dispose();
       replaceInputCommandRef.current = null;
       pasteTextRef.current = () => {};
       resetCredentialAutofill();
