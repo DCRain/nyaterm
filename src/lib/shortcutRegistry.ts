@@ -94,7 +94,7 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     id: "terminal.clearAll",
     category: "terminal",
     labelKey: "terminalCtx.clearAll",
-    defaultKeys: "ctrl+shift+l, meta+shift+l",
+    defaultKeys: "ctrl+alt+shift+l, meta+alt+shift+l",
   },
   {
     id: "terminal.commandNav.prev",
@@ -301,8 +301,7 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     id: "special.lockScreen",
     category: "special",
     labelKey: "settings.shortcutLabels.lockScreen",
-    // Ctrl+Shift+L 让给 terminal.clearAll（全部清除），锁屏挪到 Ctrl+Alt+L
-    defaultKeys: "ctrl+alt+l, meta+alt+l",
+    defaultKeys: "ctrl+shift+l, meta+shift+l",
   },
 ];
 

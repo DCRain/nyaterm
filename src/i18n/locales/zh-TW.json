@@ -2470,9 +2470,9 @@
     },
     "shortcutLabels": {
       "closeTab": "關閉目前標籤",
-    "commandNavPrev": "跳到上一個命令",
-    "commandNavNext": "跳到下一個命令",
-    "commandNavSelect": "選擇命令輸出段",
+      "commandNavNext": "跳到下一個命令",
+      "commandNavPrev": "跳到上一個命令",
+      "commandNavSelect": "選擇命令輸出段",
       "copyFiles": "複製檔案",
       "copySelectedSavedConnections": "複製選取的已儲存連線",
       "cutFiles": "剪下檔案",

@@ -2475,9 +2475,9 @@
     },
     "shortcutLabels": {
       "closeTab": "활성 탭 닫기",
-    "commandNavPrev": "이전 명령으로 이동",
-    "commandNavNext": "다음 명령으로 이동",
-    "commandNavSelect": "명령 출력 블록 선택",
+      "commandNavNext": "다음 명령으로 이동",
+      "commandNavPrev": "이전 명령으로 이동",
+      "commandNavSelect": "명령 출력 블록 선택",
       "copyFiles": "파일 복사",
       "copySelectedSavedConnections": "선택한 저장된 연결 복사",
       "cutFiles": "파일 잘라내기",
