@@ -7,6 +7,18 @@ export function startsObviousInteractiveSession(command: string): boolean {
   );
 }
 
+export function nextFallbackInteractiveState(
+  interactive: boolean,
+  data: string,
+  command: string,
+): boolean {
+  if (data === "\x04") return false;
+  if (data !== "\r" || !command) return interactive;
+  if (startsObviousInteractiveSession(command)) return true;
+  if (/^(?:exit|quit|\.exit)(?:\(\))?$/iu.test(command.trim())) return false;
+  return interactive;
+}
+
 export function shouldRecordFallbackCommand(options: {
   command: string;
   sessionType: SessionType;
@@ -19,7 +31,7 @@ export function shouldRecordFallbackCommand(options: {
 }): boolean {
   return (
     Boolean(options.command) &&
-    options.sessionType === "Local" &&
+    (options.sessionType === "Local" || options.sessionType === "SSH") &&
     !options.shellIntegrationEnabled &&
     options.bufferType === "normal" &&
     !options.disconnected &&

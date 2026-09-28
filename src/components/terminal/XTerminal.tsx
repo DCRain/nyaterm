@@ -85,8 +85,8 @@ import ActionLinkTooltip from "./ActionLinkTooltip";
 import CommandSuggestions from "./CommandSuggestions";
 import {
   CommandNavigation,
+  nextFallbackInteractiveState,
   shouldRecordFallbackCommand,
-  startsObviousInteractiveSession,
 } from "./commandNavigation";
 import CredentialSuggestions from "./CredentialSuggestions";
 import { installRemoteColorOscGuard } from "./remoteColorOscGuard";
@@ -2343,6 +2343,11 @@ export default function XTerminal({
         return;
       }
 
+      if (data === "\x04" && fallbackInteractive) {
+        fallbackInteractive = nextFallbackInteractiveState(fallbackInteractive, data, "");
+        inputStateRef.current = createTerminalInputState();
+      }
+
       if (
         canShowCommandSuggestions() &&
         showSuggestionsRef.current &&
@@ -2427,11 +2432,7 @@ export default function XTerminal({
           disconnected: disconnectedRef.current,
           aiCapturing: aiCapturingRef.current,
           credentialPrompt: isCredentialPromptInputMode(),
-          interactive:
-            fallbackInteractive ||
-            commandSuggestionSuppressedRef.current ||
-            commandStartsSuggestionSuppressingProgram(command) ||
-            isPagerSearchOrCommandInput(command),
+          interactive: fallbackInteractive || commandSuggestionSuppressedRef.current,
         })
       ) {
         const buffer = terminal.buffer.active;
@@ -2443,10 +2444,7 @@ export default function XTerminal({
         if (marker) commandNavigation.add(marker);
       }
       if (data === "\r" && command && !shellIntegrationRef.current.enabled) {
-        if (startsObviousInteractiveSession(command)) fallbackInteractive = true;
-        else if (fallbackInteractive && /^(?:exit|quit|\.exit)(?:\(\))?$/iu.test(command.trim())) {
-          fallbackInteractive = false;
-        }
+        fallbackInteractive = nextFallbackInteractiveState(fallbackInteractive, data, command);
       }
       inputStateRef.current = applyTerminalInputData(
         inputStateRef.current,

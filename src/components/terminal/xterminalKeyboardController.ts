@@ -222,14 +222,14 @@ export function installXTerminalKeyboardController({
         matchesKeyEvent(resolveShortcutKeys("terminal.commandNav.prev", kb), e)
       ) {
         e.preventDefault();
-        if (!disconnectedRef.current) navigateCommand(-1);
+        navigateCommand(-1);
         return false;
       }
       if (
         matchesKeyEvent(resolveShortcutKeys("terminal.commandNav.next", kb), e)
       ) {
         e.preventDefault();
-        if (!disconnectedRef.current) navigateCommand(1);
+        navigateCommand(1);
         return false;
       }
       if (
@@ -239,12 +239,12 @@ export function installXTerminalKeyboardController({
         )
       ) {
         e.preventDefault();
-        if (!disconnectedRef.current) selectCommandBlock();
+        selectCommandBlock();
         return false;
       }
       if (matchesKeyEvent(resolveShortcutKeys("terminal.clearAll", kb), e)) {
         e.preventDefault();
-        if (!disconnectedRef.current) clearAll();
+        clearAll();
         return false;
       }
     }

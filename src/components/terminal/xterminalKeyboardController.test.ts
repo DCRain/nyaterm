@@ -187,12 +187,20 @@ describe("installXTerminalKeyboardController IME Backspace routing", () => {
     expect(harness.terminal.input).toHaveBeenCalledWith("\x0c", true);
   });
 
-  it("swallows command navigation while disconnected", () => {
+  it("keeps local command actions available while disconnected", () => {
     const harness = createHarness("application", "SSH", {}, { disconnected: true });
-    const event = shortcutEvent("ArrowLeft", "ArrowLeft", { shiftKey: true });
-    expect(harness.keyHandler(event)).toBe(false);
-    expect(event.defaultPrevented).toBe(true);
-    expect(harness.navigateCommand).not.toHaveBeenCalled();
+    for (const [event, action] of [
+      [shortcutEvent("ArrowLeft", "ArrowLeft", { shiftKey: true }), harness.navigateCommand],
+      [shortcutEvent("ArrowRight", "ArrowRight", { shiftKey: true }), harness.navigateCommand],
+      [shortcutEvent("/", "Slash", { shiftKey: true }), harness.selectCommandBlock],
+      [shortcutEvent("L", "KeyL", { altKey: true, shiftKey: true }), harness.clearAll],
+    ] as const) {
+      expect(harness.keyHandler(event)).toBe(false);
+      expect(event.defaultPrevented).toBe(true);
+      expect(action).toHaveBeenCalled();
+    }
+    expect(harness.navigateCommand).toHaveBeenNthCalledWith(1, -1);
+    expect(harness.navigateCommand).toHaveBeenNthCalledWith(2, 1);
   });
   it("swallows keyboard input before direct send paths while locked", () => {
     const harness = createHarness("application", "Local", {}, { appLocked: true });

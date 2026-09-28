@@ -2,6 +2,7 @@ import type { IMarker } from "@xterm/xterm";
 import { describe, expect, it, vi } from "vitest";
 import {
   CommandNavigation,
+  nextFallbackInteractiveState,
   shouldRecordFallbackCommand,
   startsObviousInteractiveSession,
 } from "./commandNavigation";
@@ -106,8 +107,27 @@ describe("fallback command detection", () => {
     interactive: false,
   };
 
-  it("accepts a tracked local shell submission without OSC 133", () => {
+  it("accepts tracked local and SSH shell submissions without OSC 133", () => {
     expect(shouldRecordFallbackCommand(valid)).toBe(true);
+    expect(shouldRecordFallbackCommand({ ...valid, sessionType: "SSH" })).toBe(
+      true,
+    );
+  });
+
+  it("records interactive program launches and absolute-path shell commands", () => {
+    for (const sessionType of ["Local", "SSH"] as const) {
+      for (const command of [
+        "vim test.txt",
+        "less file",
+        "top",
+        "/bin/ls",
+        "/usr/bin/python",
+      ]) {
+        expect(
+          shouldRecordFallbackCommand({ ...valid, sessionType, command }),
+        ).toBe(true);
+      }
+    }
   });
 
   it("rejects OSC, alternate screen, disconnected and interactive input", () => {
@@ -119,7 +139,8 @@ describe("fallback command detection", () => {
       { credentialPrompt: true },
       { interactive: true },
       { command: "" },
-      { sessionType: "SSH" as const },
+      { sessionType: "Telnet" as const },
+      { sessionType: "Serial" as const },
     ]) {
       expect(shouldRecordFallbackCommand({ ...valid, ...change })).toBe(false);
     }
@@ -138,5 +159,13 @@ describe("fallback command detection", () => {
     }
     expect(startsObviousInteractiveSession("python script.py")).toBe(false);
     expect(startsObviousInteractiveSession("dir")).toBe(false);
+  });
+
+  it("tracks REPL input until Ctrl+D or an explicit exit", () => {
+    expect(nextFallbackInteractiveState(false, "\r", "python")).toBe(true);
+    expect(nextFallbackInteractiveState(true, "\r", "print(1)")).toBe(true);
+    expect(nextFallbackInteractiveState(true, "\x04", "")).toBe(false);
+    expect(nextFallbackInteractiveState(false, "\r", "ls")).toBe(false);
+    expect(nextFallbackInteractiveState(true, "\r", "exit()")).toBe(false);
   });
 });
