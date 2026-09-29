@@ -687,6 +687,7 @@ function App() {
               { display: getRemoteDesktopPaneDisplay(conn) },
             );
             tabId = pending.tabId;
+            paneId = pending.paneId;
             createRequestId = pending.createRequestId;
             if (targetLeafId) {
               setTerminalWindows((current) =>
@@ -707,18 +708,21 @@ function App() {
                 sessionId = await invoke<string>("create_local_session", {
                   connectionId,
                   createRequestId,
+                  recordingScopeId: paneId,
                 });
                 break;
               case "telnet":
                 sessionId = await invoke<string>("create_telnet_session", {
                   connectionId,
                   createRequestId,
+                  recordingScopeId: paneId,
                 });
                 break;
               case "serial":
                 sessionId = await invoke<string>("create_serial_session", {
                   connectionId,
                   createRequestId,
+                  recordingScopeId: paneId,
                 });
                 break;
               case "rdp":
@@ -731,6 +735,7 @@ function App() {
                 sessionId = await invoke<string>("create_ssh_session", {
                   connectionId,
                   createRequestId,
+                  recordingScopeId: paneId,
                 });
                 break;
             }
@@ -1080,6 +1085,7 @@ function App() {
           createRequestId,
           undefined,
           options?.runtimeModeOverride,
+          pending.paneId,
         );
         if (!hasTab(tabId)) {
           await closeStaleCreatedSession(sessionId);
@@ -1228,7 +1234,12 @@ function App() {
       const { tabId, createRequestId } = pending;
 
       try {
-        const sessionId = await createTemporarySession(config, createRequestId);
+        const sessionId = await createTemporarySession(
+          config,
+          createRequestId,
+          undefined,
+          pending.paneId,
+        );
         if (!hasTab(tabId)) {
           await closeStaleCreatedSession(sessionId);
           return;
@@ -1259,7 +1270,11 @@ function App() {
       const { tabId, createRequestId } = pending;
 
       try {
-        const sessionId = await createExternalLocalSession(workingDir, createRequestId);
+        const sessionId = await createExternalLocalSession(
+          workingDir,
+          createRequestId,
+          pending.paneId,
+        );
         if (!hasTab(tabId)) {
           await closeStaleCreatedSession(sessionId);
           return;
@@ -1597,7 +1612,13 @@ function App() {
       }
 
       try {
-        const sessionId = await createSessionForConnection(connection, createRequestId);
+        const sessionId = await createSessionForConnection(
+          connection,
+          createRequestId,
+          undefined,
+          undefined,
+          pending.paneId,
+        );
         if (!hasTab(tabId)) {
           await closeStaleCreatedSession(sessionId);
           return;
@@ -1788,6 +1809,12 @@ function App() {
 
   const closeReleasedSessions = useCallback(
     async (previousTabs: Tab[], nextTabs: Tab[]) => {
+      const retainedPaneIds = new Set(
+        nextTabs.flatMap((tab) => collectSessionPanes(tab.root).map((pane) => pane.id)),
+      );
+      const releasedPanes = previousTabs
+        .flatMap((tab) => collectSessionPanes(tab.root))
+        .filter((pane) => !retainedPaneIds.has(pane.id));
       const releasedSessionIds = getReleasedSessionIds(previousTabs, nextTabs);
       const results = await Promise.all(
         releasedSessionIds.map((sessionId) => {
@@ -1797,7 +1824,13 @@ function App() {
           return pane ? closePaneBackendSession(pane) : Promise.resolve(true);
         }),
       );
-      return results.every(Boolean);
+      if (!results.every(Boolean)) return false;
+      await Promise.all(
+        releasedPanes
+          .filter((pane) => pane.paneKind !== "file")
+          .map((pane) => invoke("finish_recording_scope", { scopeId: pane.id })),
+      );
+      return true;
     },
     [closePaneBackendSession],
   );
@@ -2001,20 +2034,29 @@ function App() {
   // --- Shortcut callbacks ---
 
   const handleNewLocalTerminal = useCallback(() => {
-    invoke<string>("create_local_session")
+    const pending = addPendingTab(t("menu.newLocalTerminal"), "Local");
+    invoke<string>("create_local_session", {
+      recordingScopeId: pending.paneId,
+      createRequestId: pending.createRequestId,
+    })
       .then((sessionId) => {
-        addTab(sessionId, t("menu.newLocalTerminal"), "Local");
+        if (!hasTab(pending.tabId)) {
+          void closeStaleCreatedSession(sessionId);
+          return;
+        }
+        updateTabSession(pending.tabId, sessionId);
       })
-      .catch((e) =>
+      .catch((e) => {
         logger.error({
           domain: "session.lifecycle",
           event: "session.create_failed",
           message: "Failed to create local session",
           data: { session_type: "Local" },
           error: e,
-        }),
-      );
-  }, [addTab, t]);
+        });
+        markTabConnectionFailed(pending.tabId, getErrorMessage(e));
+      });
+  }, [addPendingTab, hasTab, markTabConnectionFailed, t, updateTabSession]);
 
   const handleCloseActiveTab = useCallback(() => {
     if (!activeTab) return;
@@ -2373,7 +2415,7 @@ function App() {
         );
         try {
           const sessionId = await createSessionForPane(
-            pane,
+            { ...pane, id: pending.paneId },
             createRequestId,
             startupCommand,
             workingDir,
@@ -2807,7 +2849,10 @@ function App() {
         setTerminalWindows((current) =>
           current ? splitTerminalWindowForTab(current, tab.id, direction, newTabId) : current,
         );
-        const sessionId = await createSessionForPane(pane, pending.createRequestId);
+        const sessionId = await createSessionForPane(
+          { ...pane, id: pending.paneId },
+          pending.createRequestId,
+        );
         if (newTabId) {
           if (!hasTab(newTabId)) {
             await closeStaleCreatedSession(sessionId);

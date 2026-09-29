@@ -545,7 +545,7 @@ async fn telnet_session_task(
     output.close();
     reader_handle.abort();
     if let Some(ref recorder) = recording_mgr {
-        recorder.cleanup_session(&session_id);
+        recorder.disconnect_session(&session_id);
     }
     manager.remove_session(&session_id).await;
     let _ = app.emit(&closed_event, ());

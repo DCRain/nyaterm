@@ -1695,7 +1695,7 @@ pub(super) async fn ssh_io_loop(
     output.close();
 
     if let Some(ref recorder) = recording_mgr {
-        recorder.cleanup_session(&session_id);
+        recorder.disconnect_session(&session_id);
     }
 
     manager.remove_session(&session_id).await;

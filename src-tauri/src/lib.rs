@@ -259,6 +259,7 @@ pub fn run() {
             cmd::session::fuzzy_search_candidates,
             cmd::session::start_recording,
             cmd::session::stop_recording,
+            cmd::session::finish_recording_scope,
             cmd::session::is_recording,
             cmd::session::save_session_transcript,
             cmd::session::terminal_history_search,
@@ -442,6 +443,11 @@ pub fn run() {
                 _event,
                 tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
             ) {
+                if matches!(_event, tauri::RunEvent::Exit) {
+                    if let Some(manager) = _app.try_state::<Arc<RecordingManager>>() {
+                        manager.finish_all_scopes();
+                    }
+                }
                 if let Some(manager) = _app.try_state::<Arc<McpManager>>() {
                     manager.shutdown_cleanup();
                 }

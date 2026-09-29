@@ -513,7 +513,7 @@ fn serial_session_thread(
     output.close();
 
     if let Some(ref recorder) = recording_mgr {
-        recorder.cleanup_session(&session_id);
+        recorder.disconnect_session(&session_id);
     }
 
     rt_handle.block_on(async {

@@ -1514,7 +1514,7 @@ fn pty_session_thread(
     output.close();
 
     if let Some(ref rec) = recording_mgr {
-        rec.cleanup_session(&session_id);
+        rec.disconnect_session(&session_id);
     }
 
     rt_handle.block_on(async {
