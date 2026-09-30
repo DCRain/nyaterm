@@ -96,6 +96,7 @@ import {
   collectQuickCommandCategoryAncestorIds,
   collectQuickCommandCategoryDescendantIds,
   deleteQuickCommandCategoryTree,
+  filterQuickCommandsByCategory,
   flattenVisibleQuickCommandCategoryTree,
   getQuickCommandCategoryMoveState,
   getQuickCommandUncategorizedCount,
@@ -780,19 +781,7 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
   }, [allCategories, selectedCategory]);
 
   const filteredCommands = useMemo(() => {
-    let filtered = commands;
-
-    if (selectedCategory === "uncategorized") {
-      filtered = filtered.filter((c) => !c.category_id);
-    } else if (selectedCategory !== "all") {
-      const selectedCategoryIds = collectQuickCommandCategoryDescendantIds(
-        allCategories,
-        selectedCategory,
-      );
-      filtered = filtered.filter(
-        (c) => !!c.category_id && selectedCategoryIds.has(c.category_id),
-      );
-    }
+    let filtered = filterQuickCommandsByCategory(commands, selectedCategory);
 
     if (search.trim()) {
       const q = search.trim().toLowerCase();
@@ -808,7 +797,7 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
     sorted.sort((a, b) => compareQuickCommandsByMode(a, b, sortMode));
 
     return sorted;
-  }, [allCategories, commands, search, selectedCategory, sortMode]);
+  }, [commands, search, selectedCategory, sortMode]);
 
   const searchQuery = search.trim();
   const hasActiveFilters = searchQuery.length > 0 || selectedCategory !== "all";
@@ -1989,7 +1978,7 @@ function QuickCommands({ onSend, onSendToAll, sendDisabled = false }: QuickComma
                                   : "var(--df-text-dimmed)",
                               }}
                             >
-                              {node.totalCount}
+                              {node.count}
                             </span>
                           </button>
                         </div>

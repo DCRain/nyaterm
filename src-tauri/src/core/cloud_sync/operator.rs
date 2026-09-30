@@ -57,18 +57,7 @@ impl CloudRemote {
 
     pub(super) async fn read_if_exists(&self, path: &str) -> AppResult<Option<Vec<u8>>> {
         match self {
-            Self::OpenDal(operator) => {
-                if !operator.exists(path).await.map_err(map_storage_error)? {
-                    return Ok(None);
-                }
-                Ok(Some(
-                    operator
-                        .read(path)
-                        .await
-                        .map_err(map_storage_error)?
-                        .to_vec(),
-                ))
-            }
+            Self::OpenDal(operator) => map_optional_read(operator.read(path).await),
             Self::GiteeSnippet(remote) => remote.read_if_exists(path).await,
             Self::GithubGist(remote) => remote.read_if_exists(path).await,
             #[cfg(test)]
@@ -122,6 +111,14 @@ impl CloudRemote {
             #[cfg(test)]
             Self::Memory(remote) => remote.list_files(path),
         }
+    }
+}
+
+fn map_optional_read(result: Result<Buffer, Error>) -> AppResult<Option<Vec<u8>>> {
+    match result {
+        Ok(content) => Ok(Some(content.to_vec())),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(map_storage_error(error)),
     }
 }
 
@@ -1145,6 +1142,20 @@ mod tests {
             AppError::Io(error) => assert_eq!(error.kind(), io::ErrorKind::TimedOut),
             other => panic!("expected timeout IO error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn optional_read_treats_not_found_as_missing() {
+        let result = map_optional_read(Err(Error::new(ErrorKind::NotFound, "missing")))
+            .expect("not found should not fail");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn optional_read_preserves_non_not_found_errors() {
+        let error = map_optional_read(Err(Error::new(ErrorKind::PermissionDenied, "denied")))
+            .expect_err("permission error should be preserved");
+        assert!(matches!(error, AppError::Config(_)));
     }
 
     #[test]

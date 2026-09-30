@@ -6,6 +6,7 @@ import { reactDevToolsPlus } from "react-devtools-plus/vite";
 import tailwindcss from "@tailwindcss/vite";
 import browserslist from "browserslist";
 import { browserslistToTargets } from "lightningcss";
+import { configDefaults } from "vitest/config";
 
 const host = process.env.TAURI_DEV_HOST;
 
@@ -72,6 +73,7 @@ export default defineConfig(async () => ({
   test: {
     environment: "jsdom",
     setupFiles: "./src/test/setup.ts",
+    exclude: [...configDefaults.exclude, "**/src-tauri/vendor/**"],
   },
 
   clearScreen: false,

@@ -41,6 +41,14 @@ export interface AppSupportInfo {
   os: string;
   architecture: string;
   runtime: "portable" | "installed";
+  conpty?: {
+    available: boolean;
+    activeBundled: number;
+    activeSystem: number;
+    lastUsed: "bundled" | "system" | null;
+    fallback: boolean;
+    version: string;
+  };
 }
 
 /** AI Agent command execution wrapper profile. */
@@ -685,6 +693,7 @@ export interface SavedConnection {
 
 export type RdpCertificatePolicy = "strict" | "prompt" | "accept-temporarily";
 export type RdpDisplayMode = "fit-window" | "fixed" | "native";
+export type RdpClipboardMode = "disabled" | "text-only" | "text-and-files";
 
 export interface RdpSecuritySettings {
   use_nla: boolean;
@@ -1587,11 +1596,24 @@ export interface ExternalMcpSettings {
 export type AIReasoningEffort =
   | "auto"
   | "none"
+  | "minimal"
   | "low"
   | "medium"
   | "high"
-  | "xhigh";
+  | "xhigh"
+  | "max"
+  | "ultra";
+export type AIModelReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max"
+  | "ultra";
 export type AIApiFormat = "chat_completions" | "responses";
+export type AIProviderApiProtocol = "openai_compatible" | "anthropic" | "gemini" | "ollama";
 export type AIModelSource = "rust-genai" | "manual";
 export type AIBackendKind = "genai" | "codex";
 export type CodexThreadMode = "persistent" | "ephemeral";
@@ -1618,6 +1640,7 @@ export interface AIModelConfigItem {
   enabled: boolean;
   source: AIModelSource;
   last_seen_at?: string | null;
+  supported_reasoning_efforts?: AIModelReasoningEffort[];
 }
 
 export interface CodexIntegrationSettings {
@@ -1666,6 +1689,8 @@ export interface AIProviderCredential {
   id: string;
   name: string;
   provider_kind: AIProviderKind;
+  icon_data_url?: string | null;
+  api_protocol?: AIProviderApiProtocol | null;
   api_format: AIApiFormat;
   base_url?: string | null;
   api_key?: string | null;
@@ -2029,6 +2054,7 @@ export interface FileExplorerProps {
   activeConnectionId?: string | null;
   activeSessionName?: string | null;
   terminalInputEnabled?: boolean;
+  onOpenDirectoryInNewTerminal?: (sessionId: string, path: string) => void;
 }
 
 export interface WebdavSyncSettings {

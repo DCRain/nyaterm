@@ -90,6 +90,30 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     labelKey: "settings.shortcutLabels.manageSyncGroups",
     defaultKeys: "ctrl+shift+g, meta+shift+g",
   },
+  {
+    id: "terminal.clearAll",
+    category: "terminal",
+    labelKey: "terminalCtx.clearAll",
+    defaultKeys: "ctrl+alt+shift+l, meta+alt+shift+l",
+  },
+  {
+    id: "terminal.commandNav.prev",
+    category: "terminal",
+    labelKey: "settings.shortcutLabels.commandNavPrev",
+    defaultKeys: "ctrl+shift+arrowleft, meta+shift+arrowleft",
+  },
+  {
+    id: "terminal.commandNav.next",
+    category: "terminal",
+    labelKey: "settings.shortcutLabels.commandNavNext",
+    defaultKeys: "ctrl+shift+arrowright, meta+shift+arrowright",
+  },
+  {
+    id: "terminal.commandNav.select",
+    category: "terminal",
+    labelKey: "settings.shortcutLabels.commandNavSelect",
+    defaultKeys: "ctrl+shift+/, meta+shift+/",
+  },
 
   // --- Tab / Session ---
   {
@@ -97,6 +121,12 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     category: "tab",
     labelKey: "settings.shortcutLabels.newSession",
     defaultKeys: "ctrl+shift+n, meta+shift+n",
+  },
+  {
+    id: "tab.openNewSessionMenu",
+    category: "tab",
+    labelKey: "settings.shortcutLabels.openNewSessionMenu",
+    defaultKeys: "ctrl+shift+o, meta+shift+o",
   },
   {
     id: "tab.temporarySshLink",
@@ -177,6 +207,18 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     category: "view",
     labelKey: "settings.shortcutLabels.toggleRightSidebar",
     defaultKeys: "ctrl+shift+b, meta+shift+b",
+  },
+  {
+    id: "view.togglePaneFocus",
+    category: "view",
+    labelKey: "settings.shortcutLabels.togglePaneFocus",
+    defaultKeys: "ctrl+shift+enter, meta+shift+enter",
+  },
+  {
+    id: "view.toggleNativeFullscreen",
+    category: "view",
+    labelKey: "settings.shortcutLabels.toggleNativeFullscreen",
+    defaultKeys: IS_MAC ? "ctrl+meta+f" : "f11",
   },
   {
     id: "view.zoomIn",

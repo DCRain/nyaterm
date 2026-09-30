@@ -173,6 +173,7 @@ export const SYSTEM_ICONS: Record<string, QuickIconDef> = {
   k8s: { icon: createLocalSvgIcon("/icons/os/K8s.svg"), color: "currentColor" },
   gentoo: { icon: createLocalSvgIcon("/icons/os/Gentoo.svg"), color: "currentColor" },
   raspberrypi: { icon: createLocalSvgIcon("/icons/os/Raspberrypi.svg"), color: "currentColor" },
+  openwrt: { icon: createLocalSvgIcon("/icons/os/OpenWrt.svg"), color: "currentColor" },
   "alibaba-cloud-linux": {
     icon: createLocalSvgIcon("/icons/os/AlibabaCloudLinux.svg"),
     color: "currentColor",
@@ -222,6 +223,7 @@ const CONNECTION_ICON_ALIASES: Record<string, string> = {
   "nix-os": "nixos",
   "open-euler": "openeuler",
   "open-suse": "opensuse",
+  "open-wrt": "openwrt",
   raspberry: "raspberrypi",
   "raspberry-pi": "raspberrypi",
   "rocky-linux": "rocky",
@@ -391,6 +393,7 @@ export function inferConnectionIconKeyFromRemoteSystem(
     [["linux mint", "linuxmint"], "mint"],
     [["nixos", "nix os"], "nixos"],
     [["open euler", "openeuler"], "openeuler"],
+    [["openwrt", "open-wrt"], "openwrt"],
     [["opensuse", "open suse", "sles", "suse"], "opensuse"],
     [["rocky"], "rocky"],
     [["tencent", "tlinux"], "tencentos"],

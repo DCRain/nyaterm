@@ -7,7 +7,7 @@ use tauri::AppHandle;
 
 pub const MASKED_SECRET_VALUE: &str = "__SET__";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WebdavSyncSettings {
     #[serde(default)]
     pub endpoint: String,
@@ -30,7 +30,7 @@ impl Default for WebdavSyncSettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct S3SyncSettings {
     #[serde(default)]
     pub endpoint: String,
@@ -65,7 +65,7 @@ impl Default for S3SyncSettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GiteeSnippetSyncSettings {
     #[serde(default = "default_gitee_api_endpoint")]
     pub api_endpoint: String,
@@ -85,7 +85,7 @@ impl Default for GiteeSnippetSyncSettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OAuthDriveSyncSettings {
     #[serde(default)]
     pub root: String,
@@ -111,7 +111,7 @@ impl Default for OAuthDriveSyncSettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AliyunDriveSyncSettings {
     #[serde(default)]
     pub root: String,
@@ -140,7 +140,7 @@ impl Default for AliyunDriveSyncSettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GithubGistSyncSettings {
     #[serde(default)]
     pub gist_id: String,
@@ -157,7 +157,7 @@ impl Default for GithubGistSyncSettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CloudSyncSettings {
     #[serde(default)]
     pub enabled: bool,
@@ -225,6 +225,12 @@ pub struct CloudSyncState {
     pub last_checked_at_ms: Option<u64>,
     #[serde(default)]
     pub last_synced_at_ms: Option<u64>,
+    #[serde(default)]
+    pub last_validated_remote_revision: Option<String>,
+    #[serde(default)]
+    pub last_full_validation_at_ms: Option<u64>,
+    #[serde(default)]
+    pub last_gc_attempt_at_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -323,7 +329,7 @@ fn default_device_name() -> String {
 }
 
 fn default_sync_debounce_seconds() -> u64 {
-    15
+    60
 }
 
 fn default_status_state() -> String {
@@ -565,5 +571,21 @@ mod tests {
             merged.github_gist.access_token.as_deref(),
             Some("github-token")
         );
+    }
+
+    #[test]
+    fn legacy_cloud_sync_state_defaults_new_maintenance_fields() {
+        let state: CloudSyncState = serde_json::from_value(serde_json::json!({
+            "device_id": "device",
+            "last_synced_payload_hash": "hash",
+            "last_applied_remote_revision": "revision",
+            "last_checked_at_ms": 10,
+            "last_synced_at_ms": 20
+        }))
+        .expect("legacy cloud sync state");
+
+        assert!(state.last_validated_remote_revision.is_none());
+        assert!(state.last_full_validation_at_ms.is_none());
+        assert!(state.last_gc_attempt_at_ms.is_none());
     }
 }

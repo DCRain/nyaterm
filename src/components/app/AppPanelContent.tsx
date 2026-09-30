@@ -65,6 +65,7 @@ interface AppPanelContentProps {
   onSessionDisconnect: (sessionId: string) => Promise<void> | void;
   canReconnect: (sessionId: string) => boolean;
   onCommandSend: (command: string, execute?: boolean) => void;
+  onOpenDirectoryInNewTerminal: (sessionId: string, path: string) => void;
   onToggleSessionRecording: (
     session: SessionInfo,
     mode?: RecordingMode,
@@ -103,6 +104,7 @@ export default function AppPanelContent({
   onSessionDisconnect,
   canReconnect,
   onCommandSend,
+  onOpenDirectoryInNewTerminal,
   onToggleSessionRecording,
   onSaveSessionTranscript,
 }: AppPanelContentProps) {
@@ -134,6 +136,7 @@ export default function AppPanelContent({
                 activeConnectionId={filePanelPane?.connectionId ?? null}
                 activeSessionName={liveTerminalPane?.name ?? null}
                 terminalInputEnabled={shellInputEnabled}
+                onOpenDirectoryInNewTerminal={onOpenDirectoryInNewTerminal}
               />
             </div>
             <ResizeHandle direction="vertical" onResize={onTransferResize} />

@@ -5,44 +5,39 @@ import {
   memo,
   type PointerEvent,
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type WheelEvent,
 } from "react";
+import { useHotkeys } from "react-hotkeys-hook";
 import { useTranslation } from "react-i18next";
 import {
   MdAdd,
-  MdApps,
   MdCellTower,
   MdCheck,
   MdClose,
   MdContentCopy,
-  MdDesktopWindows,
   MdDns,
   MdErrorOutline,
   MdExpandMore,
   MdFolder,
   MdHistory,
   MdLock,
-  MdOutlineStickyNote2,
-  MdSettings,
   MdTerminal,
 } from "react-icons/md";
 import { toast } from "sonner";
 import CloseAllSessionsDialog from "@/components/dialog/terminal/CloseAllSessionsDialog";
-import type {
-  LocalShellOption,
-  LocalShellSelection,
-} from "@/components/dialog/terminal/LocalShellPickerDialog";
 import TabRenameDialog from "@/components/dialog/terminal/TabRenameDialog";
 import TabStartupCommandDialog from "@/components/dialog/terminal/TabStartupCommandDialog";
+import { HOTKEY_OPTIONS } from "@/hooks/useGlobalShortcuts";
+import { resolveShortcutKeys } from "@/hooks/useShortcutMap";
 import { hasMatchingTemporaryConfig } from "@/lib/appWorkspace";
 import { useFileDocumentStates } from "@/lib/fileDocumentRegistry";
 import type { TabMouseAction } from "@/lib/interactionSettings";
 import { normalizeTabMouseAction } from "@/lib/interactionSettings";
-import { invoke } from "@/lib/invoke";
 import {
   getActiveGroupForSession,
   isSessionPausedInGroup,
@@ -89,18 +84,13 @@ interface TabBarProps {
   focusedTabId?: string | null;
   unreadTabIds?: Set<string>;
   disconnectedTabIds?: Set<string>;
-  /** Embed in the app header between menu and window controls. */
-  variant?: "default" | "header";
   sessionInfoById?: Map<string, SessionInfo> | null;
   onTabChange: (tabId: string) => void;
   onTabClose: (tab: Tab) => void | Promise<void>;
   onAddTab: () => void;
-  onOpenWorkbench: () => void;
   onConnectConnection: (connection: SavedConnection) => void | Promise<void>;
-  onSelectLocalShell: (shell: LocalShellSelection) => void;
   onDuplicateSession: (tab: Tab) => void | Promise<void>;
   onMultiplexSshSession: (tab: Tab) => void | Promise<void>;
-  onMultiplexSshSftpSession: (tab: Tab) => void | Promise<void>;
   onDuplicateSessionWithCommand: (
     tab: Tab,
     command: string,
@@ -210,7 +200,6 @@ function canSpawnSessionFromTab(tab: Tab): boolean {
   return (
     !!pane &&
     pane.paneKind === "terminal" &&
-    pane.view !== "workbench" &&
     (pane.type === "Local" || !!pane.connectionId || hasMatchingTemporaryConfig(pane))
   );
 }
@@ -335,17 +324,13 @@ function TabBar({
   focusedTabId,
   unreadTabIds,
   disconnectedTabIds,
-  variant = "default",
   sessionInfoById,
   onTabChange,
   onTabClose,
   onAddTab,
-  onOpenWorkbench,
   onConnectConnection,
-  onSelectLocalShell,
   onDuplicateSession,
   onMultiplexSshSession,
-  onMultiplexSshSftpSession,
   onDuplicateSessionWithCommand,
   onMultiplexSshSessionWithCommand,
   onReconnectSession,
@@ -376,6 +361,7 @@ function TabBar({
   const [renameTab, setRenameTab] = useState<Tab | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [closeAllDialogOpen, setCloseAllDialogOpen] = useState(false);
+  const [newSessionMenuOpen, setNewSessionMenuOpen] = useState(false);
   const [closingAllSessions, setClosingAllSessions] = useState(false);
   const [commandDialog, setCommandDialog] = useState<{
     tab: Tab;
@@ -385,9 +371,6 @@ function TabBar({
   const [commandDelayMs, setCommandDelayMs] = useState(
     appSettings.interaction.duplicate_session_command_delay_ms,
   );
-  const [localShells, setLocalShells] = useState<LocalShellOption[]>([]);
-  const [localShellsLoading, setLocalShellsLoading] = useState(false);
-  const [localShellsLoaded, setLocalShellsLoaded] = useState(false);
   const pendingOpenTabFocusRef = useRef<Tab | null>(null);
   const tabStripRef = useRef<HTMLDivElement | null>(null);
   const tabButtonRefs = useRef(new Map<string, HTMLDivElement>());
@@ -402,6 +385,17 @@ function TabBar({
   const [tabStripScroll, setTabStripScroll] = useState({
     hasOverflow: false,
   });
+
+  const isFocusedTabBar = tabs.some((tab) => tab.id === focusedTabId);
+  useEffect(() => {
+    if (!isFocusedTabBar) setNewSessionMenuOpen(false);
+  }, [isFocusedTabBar]);
+  useHotkeys(
+    resolveShortcutKeys("tab.openNewSessionMenu", appSettings.keybindings),
+    () => setNewSessionMenuOpen(true),
+    { ...HOTKEY_OPTIONS, enabled: isFocusedTabBar },
+    [isFocusedTabBar],
+  );
 
   const groupsById = useMemo(
     () => new Map(savedGroups.map((group) => [group.id, group])),
@@ -468,6 +462,14 @@ function TabBar({
     };
   }, [savedConnections, savedGroups]);
 
+  const shellConnections = useMemo(
+    () =>
+      savedConnections
+        .filter((connection) => connection.type === "local_terminal")
+        .sort(compareSortOrder),
+    [savedConnections],
+  );
+
   const recentConnections = useMemo(() => {
     const byId = new Map(
       savedConnections.map((connection) => [connection.id, connection]),
@@ -477,27 +479,6 @@ function TabBar({
       .filter((connection): connection is SavedConnection => !!connection)
       .slice(0, 10);
   }, [appSettings.ui.recent_connection_ids, savedConnections]);
-
-  const loadLocalShells = useCallback(async () => {
-    setLocalShellsLoading(true);
-    try {
-      const options = await invoke<LocalShellOption[]>("list_local_shells");
-      setLocalShells(options);
-      setLocalShellsLoaded(true);
-    } catch {
-      setLocalShells([]);
-      setLocalShellsLoaded(true);
-    } finally {
-      setLocalShellsLoading(false);
-    }
-  }, []);
-
-  const handleNewSessionMenuOpenChange = useCallback(
-    (open: boolean) => {
-      if (open) void loadLocalShells();
-    },
-    [loadLocalShells],
-  );
 
   const openTabsMenuItems = useMemo(
     () => tabs.map((tab, index) => ({ tab, index })).reverse(),
@@ -760,10 +741,6 @@ function TabBar({
       setClosingAllSessions(false);
     }
   }, [closingAllSessions, onCloseAll]);
-
-  const handleOpenWorkbench = useCallback(() => {
-    onOpenWorkbench();
-  }, [onOpenWorkbench]);
 
   useLayoutEffect(() => {
     const listener = (event: Event) => {
@@ -1150,24 +1127,6 @@ function TabBar({
       );
     }
 
-    if (pane?.view === "sftp") {
-      return <MdFolder className="text-sm shrink-0" style={{ color: "var(--df-primary)" }} />;
-    }
-
-    if (pane?.view === "workbench") {
-      return <MdApps className="text-sm shrink-0" style={{ color: "var(--df-primary)" }} />;
-    }
-
-    if (pane?.view === "settings") {
-      return <MdSettings className="text-sm shrink-0" style={{ color: "var(--df-primary)" }} />;
-    }
-
-    if (pane?.view === "note" || pane?.view === "externalMarkdown") {
-      return (
-        <MdOutlineStickyNote2 className="text-sm shrink-0" style={{ color: "var(--df-primary)" }} />
-      );
-    }
-
     const conn = pane?.connectionId
       ? savedConnections.find(
           (connection) => connection.id === pane.connectionId,
@@ -1213,8 +1172,6 @@ function TabBar({
         return "serial";
       case "rdp":
         return "rdp";
-      case "vnc":
-        return "vnc";
       default:
         return "ssh";
     }
@@ -1240,10 +1197,6 @@ function TabBar({
 
     if (connection.type === "local_terminal") {
       return <MdTerminal className="text-sm shrink-0 text-emerald-500/70" />;
-    }
-
-    if (connection.type === "rdp" || connection.type === "vnc") {
-      return <MdDesktopWindows className="text-sm shrink-0 text-sky-500/70" />;
     }
 
     return <MdDns className="text-sm shrink-0 text-emerald-500/70" />;
@@ -1394,15 +1347,13 @@ function TabBar({
         draggable={!usePointerTabDrag}
         className={`group relative flex items-center gap-2 border-r pl-3 pr-2 text-xs transition-[color,background-color,opacity] duration-200 ${
           isActive ? "font-semibold" : "font-medium df-hover"
-        } ${draggedTabId === tab.id ? "opacity-60" : ""} ${
-          variant === "header" ? "max-w-[20rem] shrink-0" : "shrink-0"
-        }`}
+        } ${draggedTabId === tab.id ? "opacity-60" : ""}`}
         style={{
           borderColor: "var(--df-border)",
           backgroundColor: isActive
             ? accentColor
-              ? `color-mix(in srgb, ${accentColor} 18%, var(--df-bg-panel))`
-              : "color-mix(in srgb, var(--df-primary) 14%, var(--df-bg-panel))"
+              ? `color-mix(in srgb, ${accentColor} 16%, var(--df-bg))`
+              : "var(--df-bg)"
             : accentColor
               ? `color-mix(in srgb, ${accentColor} 12%, var(--df-bg-panel))`
               : "transparent",
@@ -1476,6 +1427,23 @@ function TabBar({
           handleDropAtIndex(getInsertionIndex(event, index), event);
         }}
       >
+        {isActive && (
+          <div
+            className="absolute top-0 left-0 h-[2px] w-full"
+            style={{
+              backgroundColor: accentColor || "var(--df-primary)",
+              boxShadow: `0 1px 4px ${accentColor || "var(--df-primary)"}`,
+            }}
+          />
+        )}
+
+        {isActive && (
+          <div
+            className="absolute bottom-0 left-0 z-10 h-[1px] w-full"
+            style={{ backgroundColor: "var(--df-bg)" }}
+          />
+        )}
+
         {renderTabIcon(tab)}
 
         <span
@@ -1489,9 +1457,7 @@ function TabBar({
         </span>
 
         <span
-          className={`truncate whitespace-nowrap ${
-            variant === "header" ? "max-w-[16rem]" : "max-w-[160px]"
-          }`}
+          className="max-w-[160px] truncate whitespace-nowrap"
           style={{ color: tabNameColor }}
         >
           {displayName}
@@ -1571,8 +1537,9 @@ function TabBar({
           tabs={tabs}
           onDuplicateSession={onDuplicateSession}
           onMultiplexSshSession={onMultiplexSshSession}
-          onMultiplexSshSftpSession={onMultiplexSshSftpSession}
-          onDuplicateSessionWithCommand={(targetTab) => openCommandDialog(targetTab, "duplicate")}
+          onDuplicateSessionWithCommand={(targetTab) =>
+            openCommandDialog(targetTab, "duplicate")
+          }
           onMultiplexSshSessionWithCommand={(targetTab) =>
             openCommandDialog(targetTab, "multiplex")
           }
@@ -1684,29 +1651,6 @@ function TabBar({
     </DropdownMenuItem>
   );
 
-  const renderLocalShellMenuItem = (shell: LocalShellOption) => {
-    const label = shell.elevated ? `${shell.name} (${t("localShellPicker.admin")})` : shell.name;
-    return (
-      <DropdownMenuItem
-        key={shell.id}
-        className="max-w-[320px]"
-        onSelect={() =>
-          onSelectLocalShell({
-            shellPath: shell.shellPath,
-            shellArgs: shell.shellArgs,
-            name: shell.name,
-            kind: shell.kind,
-            elevated: shell.elevated,
-          })
-        }
-        title={[shell.shellPath, shell.shellArgs].filter(Boolean).join(" ")}
-      >
-        <MdTerminal className="text-sm text-muted-foreground" />
-        <span className="min-w-0 truncate">{label}</span>
-      </DropdownMenuItem>
-    );
-  };
-
   const renderEmptyMenuItem = (label: string) => (
     <DropdownMenuItem disabled className="text-muted-foreground">
       <span className="truncate">{label}</span>
@@ -1734,21 +1678,15 @@ function TabBar({
   return (
     <>
       <div
-        className={`flex ${variant === "header" ? "h-full min-w-0 max-w-full shrink" : "h-9 shrink-0"}`}
-        style={
-          variant === "header"
-            ? undefined
-            : {
-                backgroundColor: "var(--df-bg-panel)",
-                boxShadow: "inset 0 -1px 0 var(--df-border)",
-              }
-        }
+        className="flex h-9 shrink-0"
+        style={{
+          backgroundColor: "var(--df-bg-panel)",
+          boxShadow: "inset 0 -1px 0 var(--df-border)",
+        }}
       >
         <div
           ref={tabStripRef}
-          className={`tab-strip-scroll relative flex overflow-x-auto overflow-y-hidden ${
-            variant === "header" ? "min-w-0 max-w-full w-max" : "min-w-0 max-w-full shrink"
-          }`}
+          className="tab-strip-scroll relative flex min-w-0 flex-1 overflow-x-auto overflow-y-hidden"
           onScroll={handleTabStripScroll}
           onWheel={handleTabStripWheel}
         >
@@ -1760,7 +1698,7 @@ function TabBar({
           )}
 
           <div
-            className="relative w-1.5 shrink-0"
+            className="relative flex min-w-6 flex-1 shrink-0"
             onDragOver={(event) => {
               if (
                 !draggedTabId &&
@@ -1785,14 +1723,61 @@ function TabBar({
           </div>
         </div>
 
-        <DropdownMenu onOpenChange={handleNewSessionMenuOpenChange}>
+        {tabStripScroll.hasOverflow && (
+          <DropdownMenu>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex h-full w-8 shrink-0 items-center justify-center border-l transition-colors df-hover"
+                    style={{
+                      color: "var(--df-text-muted)",
+                      borderColor: "var(--df-border)",
+                    }}
+                    aria-label={t("terminal.openTabs")}
+                  >
+                    <MdExpandMore className="text-base" />
+                  </button>
+                </DropdownMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" sideOffset={6} showArrow>
+                {t("terminal.openTabs")}
+              </TooltipContent>
+            </Tooltip>
+            <DropdownMenuContent
+              align="end"
+              className="w-64 max-w-[calc(100vw-1rem)]"
+              onCloseAutoFocus={(event) => {
+                event.preventDefault();
+                const pendingTab = pendingOpenTabFocusRef.current;
+                pendingOpenTabFocusRef.current = null;
+                if (pendingTab) {
+                  focusOpenTabTerminal(pendingTab);
+                }
+              }}
+            >
+              <DropdownMenuLabel className="text-muted-foreground">
+                {t("terminal.openTabs")}
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {openTabsMenuItems.map(({ tab, index }) =>
+                renderOpenTabMenuItem(tab, index),
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+
+        <DropdownMenu open={newSessionMenuOpen} onOpenChange={setNewSessionMenuOpen}>
           <Tooltip>
             <TooltipTrigger asChild>
               <DropdownMenuTrigger asChild>
                 <button
-                  className="flex h-full w-8 shrink-0 items-center justify-center transition-colors df-hover"
+                  type="button"
+                  className="flex h-full w-9 shrink-0 items-center justify-center border-l transition-colors df-hover"
                   style={{
                     color: "var(--df-text-muted)",
+                    borderColor: "var(--df-border)",
                   }}
                   aria-label={t("terminal.newSession")}
                 >
@@ -1804,12 +1789,11 @@ function TabBar({
               {t("terminal.newSession")}
             </TooltipContent>
           </Tooltip>
-          <DropdownMenuContent align="start" className="min-w-[260px] max-w-[360px]">
+          <DropdownMenuContent
+            align="end"
+            className="min-w-[260px] max-w-[360px]"
+          >
             <DropdownMenuGroup>
-              <DropdownMenuItem onSelect={() => handleOpenWorkbench()}>
-                <MdApps className="text-sm text-muted-foreground" />
-                {t("terminal.openWorkbench")}
-              </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => onAddTab()}>
                 <MdAdd className="text-sm text-muted-foreground" />
                 {t("terminal.newSession")}
@@ -1837,20 +1821,17 @@ function TabBar({
                   )}
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger>
-                  <MdTerminal className="text-sm text-muted-foreground" />
-                  {t("app.workbenchLocalTerminal")}
-                </DropdownMenuSubTrigger>
-                <DropdownMenuSubContent className="min-w-[260px] max-w-[360px] max-h-[70vh] overflow-y-auto">
-                  {localShellsLoading && !localShellsLoaded
-                    ? renderEmptyMenuItem(t("common.loading"))
-                    : localShells.length > 0
-                      ? localShells.map((shell) => renderLocalShellMenuItem(shell))
-                      : renderEmptyMenuItem(t("localShellPicker.noShells"))}
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
             </DropdownMenuGroup>
+
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="text-muted-foreground">
+              {t("terminal.shellSessions")}
+            </DropdownMenuLabel>
+            {shellConnections.length > 0
+              ? shellConnections.map((connection) =>
+                  renderConnectionMenuItem(connection),
+                )
+              : renderEmptyMenuItem(t("terminal.noShellSessions"))}
 
             <DropdownMenuSeparator />
             <DropdownMenuLabel className="text-muted-foreground">
@@ -1869,65 +1850,6 @@ function TabBar({
               : renderEmptyMenuItem(t("terminal.noRecentSessions"))}
           </DropdownMenuContent>
         </DropdownMenu>
-
-        {tabStripScroll.hasOverflow && (
-          <DropdownMenu>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    className="flex h-full w-8 shrink-0 items-center justify-center transition-colors df-hover"
-                    style={{
-                      color: "var(--df-text-muted)",
-                    }}
-                    aria-label={t("terminal.openTabs")}
-                  >
-                    <MdExpandMore className="text-base" />
-                  </button>
-                </DropdownMenuTrigger>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" sideOffset={6} showArrow>
-                {t("terminal.openTabs")}
-              </TooltipContent>
-            </Tooltip>
-            <DropdownMenuContent
-              align="start"
-              className="w-64 max-w-[calc(100vw-1rem)]"
-              onCloseAutoFocus={(event) => {
-                event.preventDefault();
-                const pendingTab = pendingOpenTabFocusRef.current;
-                pendingOpenTabFocusRef.current = null;
-                if (pendingTab) {
-                  focusOpenTabTerminal(pendingTab);
-                }
-              }}
-            >
-              <DropdownMenuLabel className="text-muted-foreground">
-                {t("terminal.openTabs")}
-              </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              {openTabsMenuItems.map(({ tab, index }) => renderOpenTabMenuItem(tab, index))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
-
-        {variant !== "header" && (
-          <div
-            className="relative flex min-h-full min-w-8 flex-1 shrink-0"
-            data-tauri-drag-region
-            onDragOver={(event) => {
-              if (!draggedTabId && !event.dataTransfer.types.includes("application/nyaterm-tab"))
-                return;
-              event.preventDefault();
-              setDropIndex(tabs.length);
-            }}
-            onDrop={(event) => {
-              event.preventDefault();
-              handleDropAtIndex(tabs.length, event);
-            }}
-          />
-        )}
       </div>
 
       <TabRenameDialog

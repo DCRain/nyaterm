@@ -86,6 +86,10 @@ function isBackendModemTransfer(transfer: TransferItem): boolean {
   );
 }
 
+function isRestrictedBackendTransfer(transfer: TransferItem): boolean {
+  return isBackendModemTransfer(transfer) || transfer.source === "rdp";
+}
+
 function HeaderActionButton({
   label,
   icon: Icon,
@@ -155,10 +159,12 @@ function TransferRow({
   const showProgressBar = shouldShowTransferProgressBar(item);
   const indeterminateProgress = isIndeterminateTransferProgress(item);
   const isModemTransfer = isBackendModemTransfer(item);
-  const canPause = !isModemTransfer && item.status === "transferring";
-  const canPauseQueued = !isModemTransfer && item.status === "queued";
-  const canResume = !isModemTransfer && item.status === "paused";
-  const canRetry = !isModemTransfer && (item.status === "error" || item.status === "cancelled");
+  const isRestrictedTransfer = isRestrictedBackendTransfer(item);
+  const canPause = !isRestrictedTransfer && item.status === "transferring";
+  const canPauseQueued = !isRestrictedTransfer && item.status === "queued";
+  const canResume = !isRestrictedTransfer && item.status === "paused";
+  const canRetry =
+    !isRestrictedTransfer && (item.status === "error" || item.status === "cancelled");
   const canCancel =
     !isModemTransfer &&
     (item.status === "queued" || item.status === "transferring" || item.status === "paused");
@@ -185,7 +191,10 @@ function TransferRow({
     statusText = t("fileTransfer.paused");
   } else if (item.status === "completed") {
     statusColor = "#4ade80";
-    statusText = t("fileTransfer.completed");
+    statusText =
+      item.source === "rdp" && item.direction === "download"
+        ? t("fileTransfer.readyToPaste")
+        : t("fileTransfer.completed");
   } else if (item.status === "error") {
     statusColor = "#f87171";
     statusText = t("fileTransfer.error");
@@ -311,21 +320,25 @@ function TransferRow({
       <ContextMenuContent className="min-w-[180px]">
         {!isModemTransfer && (
           <>
-            <ContextMenuItem
-              onClick={() => onPause(item.id)}
-              disabled={!canPause && !canPauseQueued}
-            >
-              <MdPause className="mr-2 text-[0.875rem]" />
-              {t("fileTransfer.pause")}
-            </ContextMenuItem>
-            <ContextMenuItem onClick={() => onResume(item.id)} disabled={!canResume}>
-              <MdPlayArrow className="mr-2 text-[0.875rem]" />
-              {t("fileTransfer.resume")}
-            </ContextMenuItem>
-            <ContextMenuItem onClick={() => onRetry(item)} disabled={!canRetry}>
-              <MdRefresh className="mr-2 text-[0.875rem]" />
-              {t("fileTransfer.retry")}
-            </ContextMenuItem>
+            {item.source !== "rdp" && (
+              <>
+                <ContextMenuItem
+                  onClick={() => onPause(item.id)}
+                  disabled={!canPause && !canPauseQueued}
+                >
+                  <MdPause className="mr-2 text-[0.875rem]" />
+                  {t("fileTransfer.pause")}
+                </ContextMenuItem>
+                <ContextMenuItem onClick={() => onResume(item.id)} disabled={!canResume}>
+                  <MdPlayArrow className="mr-2 text-[0.875rem]" />
+                  {t("fileTransfer.resume")}
+                </ContextMenuItem>
+                <ContextMenuItem onClick={() => onRetry(item)} disabled={!canRetry}>
+                  <MdRefresh className="mr-2 text-[0.875rem]" />
+                  {t("fileTransfer.retry")}
+                </ContextMenuItem>
+              </>
+            )}
             <ContextMenuItem onClick={() => onCancel(item.id)} disabled={!canCancel}>
               <MdBlock className="mr-2 text-[0.875rem]" />
               {t("fileTransfer.cancel")}

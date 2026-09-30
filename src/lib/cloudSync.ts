@@ -24,7 +24,7 @@ export const DEFAULT_CLOUD_SYNC_SETTINGS: CloudSyncSettings = {
   auto_check_on_startup: true,
   auto_push_on_change: true,
   auto_pull_remote_changes: true,
-  sync_debounce_seconds: 15,
+  sync_debounce_seconds: 60,
   webdav: {
     endpoint: "",
     root: "",

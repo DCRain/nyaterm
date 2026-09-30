@@ -37,8 +37,10 @@ const CLOUD_SYNC_STARTUP_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 const CLOUD_SYNC_OPERATION_TIMEOUT: Duration = Duration::from_secs(300);
 const CLOUD_SYNC_QUICK_OPERATION_TIMEOUT: Duration = Duration::from_secs(60);
 const CLOUD_SYNC_CLEANUP_TIMEOUT: Duration = Duration::from_secs(20);
-const CLOUD_SYNC_REMOTE_CHECK_INTERVAL: Duration = Duration::from_secs(5 * 60);
-const CLOUD_SYNC_FOCUS_CHECK_THROTTLE_MS: u64 = 30_000;
+const CLOUD_SYNC_REMOTE_CHECK_INTERVAL: Duration = Duration::from_secs(15 * 60);
+const CLOUD_SYNC_FOCUS_CHECK_THROTTLE_MS: u64 = 2 * 60 * 1_000;
+const CLOUD_SYNC_FULL_VALIDATION_INTERVAL_MS: u64 = 24 * 60 * 60 * 1_000;
+const CLOUD_SYNC_GC_INTERVAL_MS: u64 = 24 * 60 * 60 * 1_000;
 const AUTOMATIC_RETRY_BACKOFF_MS: [u64; 4] = [60_000, 300_000, 900_000, 3_600_000];
 
 pub struct CloudSyncManager {
@@ -164,13 +166,24 @@ impl CloudSyncManager {
     }
 
     pub async fn replace_settings(&self, settings: CloudSyncSettings) -> AppResult<()> {
+        let previous = self.settings.lock().await.clone();
+        if previous == settings {
+            return Ok(());
+        }
+
         let enabled = settings.enabled;
         let provider = settings.provider.clone();
+        let reset_retry = cloud_sync_connection_changed(&previous, &settings);
+        let request_remote_check = cloud_sync_remote_check_required(&previous, &settings);
         *self.settings.lock().await = settings.clone();
-        self.reset_automatic_retry().await;
+        if reset_retry {
+            self.reset_automatic_retry().await;
+        }
         self.set_status_after_settings_replace(enabled, provider)
             .await;
-        self.request_runtime_remote_check();
+        if request_remote_check {
+            self.request_runtime_remote_check();
+        }
         Ok(())
     }
 
@@ -364,6 +377,7 @@ impl CloudSyncManager {
         trigger: &str,
         allow_auto_pull: bool,
     ) -> AppResult<RemoteCheckOutcome> {
+        let started = Instant::now();
         let Ok(_guard) = self.operation_lock.try_lock() else {
             self.set_status(
                 "idle",
@@ -408,23 +422,6 @@ impl CloudSyncManager {
         .await?;
         self.set_status(
             "running",
-            "Verifying cloud sync storage layout".to_string(),
-            Some(trigger.to_string()),
-            None,
-        )
-        .await;
-        trace_cloud_sync_step(trigger, "ensure_remote_layout", async {
-            ensure_remote_layout(&remote, &settings.remote_root).await
-        })
-        .await?;
-
-        let local_envelope = {
-            let state = self.state.lock().await.clone();
-            build_portable_snapshot(&self.app()?, PortableSnapshotKind::Sync, &state.device_id)?
-        };
-        let local_hash = local_envelope.payload_hash.clone();
-        self.set_status(
-            "running",
             "Reading latest cloud sync pointer".to_string(),
             Some(trigger.to_string()),
             None,
@@ -452,41 +449,53 @@ impl CloudSyncManager {
             return Ok(RemoteCheckOutcome::NoRemote);
         };
 
-        match trace_cloud_sync_step(trigger, "resolve_remote_snapshot", async {
-            resolve_remote_snapshot(&remote, &settings.remote_root, &remote_pointer).await
-        })
-        .await?
-        {
-            RemoteSnapshotResolution::Current(_) | RemoteSnapshotResolution::LegacyMigrated(_) => {}
-            RemoteSnapshotResolution::Inconsistent {
-                pointer,
-                recovery_candidate,
-            } => {
-                let conflict = remote_inconsistent_preview(
+        let state = self.state.lock().await.clone();
+        let local_envelope =
+            build_portable_snapshot(&self.app()?, PortableSnapshotKind::Sync, &state.device_id)?;
+        let local_hash = local_envelope.payload_hash.clone();
+        let validation_reason =
+            remote_validation_reason(&state, &remote_pointer, current_time_ms());
+        let mut validated_snapshot = None;
+        if let Some(reason) = validation_reason {
+            tracing::info!(
+                trigger,
+                reason,
+                revision = %remote_pointer.revision_id,
+                "Cloud sync full remote snapshot validation required"
+            );
+            match self
+                .resolve_remote_snapshot_for_check(
+                    trigger,
+                    &remote,
                     &settings,
                     &local_hash,
-                    &pointer,
-                    &recovery_candidate,
-                );
-                self.append_history(CloudSyncHistoryEntry {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    timestamp_ms: current_time_ms(),
-                    kind: "sync".to_string(),
-                    status: "conflict".to_string(),
-                    trigger: trigger.to_string(),
-                    provider: Some(settings.provider.clone()),
-                    revision: Some(pointer.revision_id.clone()),
-                    duration_ms: None,
-                    message: conflict.message.clone(),
-                })
-                .await;
-                self.set_status("conflict", conflict.message.clone(), None, Some(conflict))
+                    &remote_pointer,
+                )
+                .await?
+            {
+                Ok(snapshot) => {
+                    self.mark_remote_validated(&remote_pointer).await?;
+                    validated_snapshot = Some(snapshot);
+                }
+                Err(conflict) => {
+                    self.record_remote_check_conflict(
+                        trigger,
+                        &settings,
+                        &remote_pointer,
+                        conflict,
+                    )
                     .await;
-                return Ok(RemoteCheckOutcome::Conflict);
+                    return Ok(RemoteCheckOutcome::Conflict);
+                }
             }
+        } else {
+            tracing::info!(
+                trigger,
+                revision = %remote_pointer.revision_id,
+                "Cloud sync remote check completed with pointer metadata only"
+            );
         }
 
-        let state = self.state.lock().await.clone();
         match decide_remote_check(&state, &local_hash, &remote_pointer, allow_auto_pull) {
             RemoteCheckDecision::UpToDate => {
                 {
@@ -519,7 +528,44 @@ impl CloudSyncManager {
                 Ok(RemoteCheckOutcome::Conflict)
             }
             RemoteCheckDecision::AutoPull => {
-                self.pull_snapshot_locked("auto_pull_remote", false).await?;
+                let envelope = if let Some(snapshot) = validated_snapshot {
+                    snapshot
+                } else {
+                    match self
+                        .resolve_remote_snapshot_for_check(
+                            trigger,
+                            &remote,
+                            &settings,
+                            &local_hash,
+                            &remote_pointer,
+                        )
+                        .await?
+                    {
+                        Ok(snapshot) => {
+                            self.mark_remote_validated(&remote_pointer).await?;
+                            snapshot
+                        }
+                        Err(conflict) => {
+                            self.record_remote_check_conflict(
+                                trigger,
+                                &settings,
+                                &remote_pointer,
+                                conflict,
+                            )
+                            .await;
+                            return Ok(RemoteCheckOutcome::Conflict);
+                        }
+                    }
+                };
+                self.apply_remote_snapshot_locked(
+                    "auto_pull_remote",
+                    &settings,
+                    &remote,
+                    &remote_pointer,
+                    envelope,
+                    started,
+                )
+                .await?;
                 Ok(RemoteCheckOutcome::AutoPulled)
             }
             RemoteCheckDecision::RemoteAvailable => {
@@ -538,6 +584,63 @@ impl CloudSyncManager {
                 Ok(RemoteCheckOutcome::LocalChanged)
             }
         }
+    }
+
+    async fn resolve_remote_snapshot_for_check(
+        &self,
+        trigger: &str,
+        remote: &super::operator::CloudRemote,
+        settings: &CloudSyncSettings,
+        local_hash: &str,
+        pointer: &RemoteSyncPointer,
+    ) -> AppResult<Result<PortableSnapshot, CloudConflictPreview>> {
+        let resolution = trace_cloud_sync_step(trigger, "resolve_remote_snapshot", async {
+            resolve_remote_snapshot(remote, &settings.remote_root, pointer).await
+        })
+        .await?;
+        Ok(match resolution {
+            RemoteSnapshotResolution::Current(snapshot)
+            | RemoteSnapshotResolution::LegacyMigrated(snapshot) => Ok(snapshot),
+            RemoteSnapshotResolution::Inconsistent {
+                pointer,
+                recovery_candidate,
+            } => Err(remote_inconsistent_preview(
+                settings,
+                local_hash,
+                &pointer,
+                &recovery_candidate,
+            )),
+        })
+    }
+
+    async fn mark_remote_validated(&self, pointer: &RemoteSyncPointer) -> AppResult<()> {
+        let mut state = self.state.lock().await;
+        state.last_validated_remote_revision = Some(pointer.revision_id.clone());
+        state.last_full_validation_at_ms = Some(current_time_ms());
+        config::save_cloud_sync_state(&self.app()?, &state)
+    }
+
+    async fn record_remote_check_conflict(
+        &self,
+        trigger: &str,
+        settings: &CloudSyncSettings,
+        pointer: &RemoteSyncPointer,
+        conflict: CloudConflictPreview,
+    ) {
+        self.append_history(CloudSyncHistoryEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            timestamp_ms: current_time_ms(),
+            kind: "sync".to_string(),
+            status: "conflict".to_string(),
+            trigger: trigger.to_string(),
+            provider: Some(settings.provider.clone()),
+            revision: Some(pointer.revision_id.clone()),
+            duration_ms: None,
+            message: conflict.message.clone(),
+        })
+        .await;
+        self.set_status("conflict", conflict.message.clone(), None, Some(conflict))
+            .await;
     }
 
     async fn handle_startup_check_failure(&self, error: AppError) {
@@ -667,54 +770,32 @@ impl CloudSyncManager {
         async_runtime::spawn(async move {
             loop {
                 manager.auto_push_notify.notified().await;
+                wait_for_auto_push_debounce(&manager.settings, &manager.auto_push_notify).await;
 
                 loop {
-                    let debounce_secs = manager.settings.lock().await.sync_debounce_seconds.max(1);
-                    tokio::time::sleep(Duration::from_secs(debounce_secs)).await;
-
-                    while tokio::time::timeout(
-                        Duration::from_millis(100),
-                        manager.auto_push_notify.notified(),
-                    )
-                    .await
-                    .is_ok()
-                    {}
-
-                    loop {
-                        let settings = manager.settings.lock().await.clone();
-                        if !settings.enabled || !settings.auto_push_on_change {
-                            break;
+                    let settings = manager.settings.lock().await.clone();
+                    if !settings.enabled || !settings.auto_push_on_change {
+                        break;
+                    }
+                    match manager.automatic_retry_gate().await {
+                        AutomaticRetryGate::Run => {}
+                        AutomaticRetryGate::Wait(delay) => {
+                            tokio::time::sleep(delay).await;
+                            continue;
                         }
+                        AutomaticRetryGate::Suspended => break,
+                    }
+                    if let Err(error) = manager.sync_push_now("auto_push").await {
+                        tracing::warn!("Auto push failed: {}", error);
                         match manager.automatic_retry_gate().await {
-                            AutomaticRetryGate::Run => {}
                             AutomaticRetryGate::Wait(delay) => {
                                 tokio::time::sleep(delay).await;
                                 continue;
                             }
-                            AutomaticRetryGate::Suspended => break,
+                            AutomaticRetryGate::Suspended | AutomaticRetryGate::Run => break,
                         }
-                        if let Err(error) = manager.sync_push_now("auto_push").await {
-                            tracing::warn!("Auto push failed: {}", error);
-                            match manager.automatic_retry_gate().await {
-                                AutomaticRetryGate::Wait(delay) => {
-                                    tokio::time::sleep(delay).await;
-                                    continue;
-                                }
-                                AutomaticRetryGate::Suspended | AutomaticRetryGate::Run => break,
-                            }
-                        }
-                        break;
                     }
-
-                    let pending_more = tokio::time::timeout(
-                        Duration::from_millis(100),
-                        manager.auto_push_notify.notified(),
-                    )
-                    .await
-                    .is_ok();
-                    if !pending_more {
-                        break;
-                    }
+                    break;
                 }
             }
         });
@@ -730,6 +811,21 @@ impl CloudSyncManager {
             ));
         }
 
+        let state_snapshot = self.state.lock().await.clone();
+        let envelope = build_portable_snapshot(
+            &self.app()?,
+            PortableSnapshotKind::Sync,
+            &state_snapshot.device_id,
+        )?;
+        let local_hash = envelope.payload_hash.clone();
+        if should_skip_automatic_push(trigger, &state_snapshot, &local_hash) {
+            tracing::info!(
+                trigger,
+                "Cloud sync auto push skipped because local payload is unchanged"
+            );
+            return Ok(());
+        }
+
         self.set_status(
             "running",
             "Uploading cloud sync snapshot".to_string(),
@@ -739,7 +835,6 @@ impl CloudSyncManager {
         .await;
 
         let started = Instant::now();
-        let state_snapshot = self.state.lock().await.clone();
         self.set_status(
             "running",
             "Connecting to cloud sync storage".to_string(),
@@ -770,12 +865,6 @@ impl CloudSyncManager {
             None,
         )
         .await;
-        let envelope = build_portable_snapshot(
-            &self.app()?,
-            PortableSnapshotKind::Sync,
-            &state_snapshot.device_id,
-        )?;
-        let local_hash = envelope.payload_hash.clone();
         self.set_status(
             "running",
             "Reading latest cloud sync pointer".to_string(),
@@ -819,6 +908,8 @@ impl CloudSyncManager {
                     state.last_synced_payload_hash = Some(local_hash);
                     state.last_applied_remote_revision = Some(remote_pointer.revision_id.clone());
                     state.last_checked_at_ms = Some(current_time_ms());
+                    state.last_validated_remote_revision = Some(remote_pointer.revision_id.clone());
+                    state.last_full_validation_at_ms = Some(current_time_ms());
                     config::save_cloud_sync_state(&self.app()?, &state)?;
                 }
                 self.set_status(
@@ -929,7 +1020,8 @@ impl CloudSyncManager {
                 "Compatible current cloud sync snapshot write failed after commit"
             );
         }
-        schedule_sync_snapshot_gc(remote.clone(), settings.remote_root.clone(), Some(pointer));
+        self.schedule_sync_snapshot_gc(remote.clone(), settings.remote_root.clone(), Some(pointer))
+            .await?;
 
         {
             let mut state = self.state.lock().await;
@@ -937,6 +1029,8 @@ impl CloudSyncManager {
             state.last_applied_remote_revision = Some(envelope.revision_id.clone());
             state.last_synced_at_ms = Some(current_time_ms());
             state.last_checked_at_ms = Some(current_time_ms());
+            state.last_validated_remote_revision = Some(envelope.revision_id.clone());
+            state.last_full_validation_at_ms = Some(current_time_ms());
             config::save_cloud_sync_state(&self.app()?, &state)?;
         }
 
@@ -1002,7 +1096,8 @@ impl CloudSyncManager {
         })
         .await?;
         let pointer = pointer_from_snapshot(&envelope);
-        schedule_sync_snapshot_gc(remote.clone(), settings.remote_root.clone(), Some(pointer));
+        self.schedule_sync_snapshot_gc(remote.clone(), settings.remote_root.clone(), Some(pointer))
+            .await?;
 
         {
             let mut state = self.state.lock().await;
@@ -1010,6 +1105,8 @@ impl CloudSyncManager {
             state.last_applied_remote_revision = Some(envelope.revision_id.clone());
             state.last_synced_at_ms = Some(current_time_ms());
             state.last_checked_at_ms = Some(current_time_ms());
+            state.last_validated_remote_revision = Some(envelope.revision_id.clone());
+            state.last_full_validation_at_ms = Some(current_time_ms());
             config::save_cloud_sync_state(&self.app()?, &state)?;
         }
 
@@ -1136,6 +1233,7 @@ impl CloudSyncManager {
                     ));
                 }
             };
+        self.mark_remote_validated(&latest).await?;
 
         if latest.payload_hash == local_envelope.payload_hash {
             {
@@ -1193,14 +1291,26 @@ impl CloudSyncManager {
             ));
         }
 
-        self.set_status(
-            "running",
-            "Downloading cloud sync snapshot".to_string(),
-            Some("sync_pull".to_string()),
-            None,
+        self.apply_remote_snapshot_locked(
+            trigger,
+            &settings,
+            &remote,
+            &latest,
+            remote_envelope,
+            started,
         )
-        .await;
-        let envelope = remote_envelope;
+        .await
+    }
+
+    async fn apply_remote_snapshot_locked(
+        self: &Arc<Self>,
+        trigger: &str,
+        settings: &CloudSyncSettings,
+        remote: &super::operator::CloudRemote,
+        pointer: &RemoteSyncPointer,
+        envelope: PortableSnapshot,
+        started: Instant,
+    ) -> AppResult<()> {
         self.set_status(
             "running",
             "Applying cloud sync snapshot".to_string(),
@@ -1221,7 +1331,7 @@ impl CloudSyncManager {
         .await;
         if let Err(error) =
             trace_cloud_sync_step(trigger, "write_current_sync_snapshot_compat", async {
-                write_current_sync_snapshot_compat(&remote, &settings.remote_root, &envelope).await
+                write_current_sync_snapshot_compat(remote, &settings.remote_root, &envelope).await
             })
             .await
         {
@@ -1231,11 +1341,12 @@ impl CloudSyncManager {
                 "Compatible current cloud sync snapshot refresh failed after pull"
             );
         }
-        schedule_sync_snapshot_gc(
+        self.schedule_sync_snapshot_gc(
             remote.clone(),
             settings.remote_root.clone(),
-            Some(latest.clone()),
-        );
+            Some(pointer.clone()),
+        )
+        .await?;
 
         {
             let mut state = self.state.lock().await;
@@ -1243,6 +1354,8 @@ impl CloudSyncManager {
             state.last_applied_remote_revision = Some(envelope.revision_id.clone());
             state.last_synced_at_ms = Some(current_time_ms());
             state.last_checked_at_ms = Some(current_time_ms());
+            state.last_validated_remote_revision = Some(pointer.revision_id.clone());
+            state.last_full_validation_at_ms = Some(current_time_ms());
             config::save_cloud_sync_state(&self.app()?, &state)?;
         }
 
@@ -1265,6 +1378,45 @@ impl CloudSyncManager {
             None,
         )
         .await;
+        Ok(())
+    }
+
+    async fn schedule_sync_snapshot_gc(
+        self: &Arc<Self>,
+        remote: super::operator::CloudRemote,
+        remote_root: String,
+        latest: Option<RemoteSyncPointer>,
+    ) -> AppResult<()> {
+        let now = current_time_ms();
+        {
+            let mut state = self.state.lock().await;
+            if !maintenance_due(state.last_gc_attempt_at_ms, now, CLOUD_SYNC_GC_INTERVAL_MS) {
+                tracing::info!("Cloud sync snapshot cleanup skipped by daily throttle");
+                return Ok(());
+            }
+            state.last_gc_attempt_at_ms = Some(now);
+            config::save_cloud_sync_state(&self.app()?, &state)?;
+        }
+
+        async_runtime::spawn(async move {
+            let result = with_operation_timeout(
+                "cleanup_sync_snapshots",
+                CLOUD_SYNC_CLEANUP_TIMEOUT,
+                async {
+                    cleanup_sync_snapshots(&remote, &remote_root, latest.as_ref()).await;
+                    Ok(())
+                },
+            )
+            .await;
+
+            if let Err(error) = result {
+                tracing::warn!(
+                    error = %error,
+                    grace_hours = SYNC_SNAPSHOT_GC_GRACE_PERIOD.as_secs() / 3600,
+                    "Cloud sync snapshot cleanup did not complete"
+                );
+            }
+        });
         Ok(())
     }
 
@@ -1472,6 +1624,18 @@ impl CloudSyncManager {
     }
 }
 
+async fn wait_for_auto_push_debounce(settings: &Mutex<CloudSyncSettings>, notify: &Notify) {
+    loop {
+        let debounce_secs = settings.lock().await.sync_debounce_seconds.max(1);
+        if tokio::time::timeout(Duration::from_secs(debounce_secs), notify.notified())
+            .await
+            .is_err()
+        {
+            return;
+        }
+    }
+}
+
 async fn with_operation_timeout<T, F>(
     operation: &str,
     timeout_duration: Duration,
@@ -1591,30 +1755,65 @@ fn remote_inconsistent_preview(
     }
 }
 
-fn schedule_sync_snapshot_gc(
-    remote: super::operator::CloudRemote,
-    remote_root: String,
-    latest: Option<RemoteSyncPointer>,
-) {
-    async_runtime::spawn(async move {
-        let result = with_operation_timeout(
-            "cleanup_sync_snapshots",
-            CLOUD_SYNC_CLEANUP_TIMEOUT,
-            async {
-                cleanup_sync_snapshots(&remote, &remote_root, latest.as_ref()).await;
-                Ok(())
-            },
-        )
-        .await;
+fn remote_validation_reason(
+    state: &CloudSyncState,
+    pointer: &RemoteSyncPointer,
+    now_ms: u64,
+) -> Option<&'static str> {
+    if state.last_validated_remote_revision.as_deref() != Some(pointer.revision_id.as_str()) {
+        return Some("pointer_changed");
+    }
+    maintenance_due(
+        state.last_full_validation_at_ms,
+        now_ms,
+        CLOUD_SYNC_FULL_VALIDATION_INTERVAL_MS,
+    )
+    .then_some("scheduled_daily_validation")
+}
 
-        if let Err(error) = result {
-            tracing::warn!(
-                error = %error,
-                grace_hours = SYNC_SNAPSHOT_GC_GRACE_PERIOD.as_secs() / 3600,
-                "Cloud sync snapshot cleanup did not complete"
-            );
-        }
-    });
+fn maintenance_due(last_attempt_ms: Option<u64>, now_ms: u64, interval_ms: u64) -> bool {
+    last_attempt_ms
+        .is_none_or(|last_attempt_ms| now_ms.saturating_sub(last_attempt_ms) >= interval_ms)
+}
+
+fn should_skip_automatic_push(trigger: &str, state: &CloudSyncState, local_hash: &str) -> bool {
+    trigger == "auto_push" && state.last_synced_payload_hash.as_deref() == Some(local_hash)
+}
+
+fn cloud_sync_connection_changed(previous: &CloudSyncSettings, next: &CloudSyncSettings) -> bool {
+    previous.enabled != next.enabled
+        || previous.provider != next.provider
+        || previous.remote_root != next.remote_root
+        || selected_provider_settings_changed(previous, next)
+}
+
+fn cloud_sync_remote_check_required(
+    previous: &CloudSyncSettings,
+    next: &CloudSyncSettings,
+) -> bool {
+    next.enabled
+        && (!previous.enabled
+            || cloud_sync_connection_changed(previous, next)
+            || (!previous.auto_pull_remote_changes && next.auto_pull_remote_changes))
+}
+
+fn selected_provider_settings_changed(
+    previous: &CloudSyncSettings,
+    next: &CloudSyncSettings,
+) -> bool {
+    if previous.provider != next.provider {
+        return true;
+    }
+    match next.provider.as_str() {
+        "webdav" => previous.webdav != next.webdav,
+        "s3" => previous.s3 != next.s3,
+        "gitee_snippet" => previous.gitee_snippet != next.gitee_snippet,
+        "google_drive" => previous.google_drive != next.google_drive,
+        "onedrive" => previous.onedrive != next.onedrive,
+        "aliyun_drive" => previous.aliyun_drive != next.aliyun_drive,
+        "github_gist" => previous.github_gist != next.github_gist,
+        _ => true,
+    }
 }
 
 fn is_automatic_trigger(trigger: &str) -> bool {
@@ -1711,6 +1910,7 @@ mod tests {
             last_applied_remote_revision: Some(revision_id.to_string()),
             last_checked_at_ms: None,
             last_synced_at_ms: None,
+            ..CloudSyncState::default()
         }
     }
 
@@ -1778,6 +1978,129 @@ mod tests {
             decide_remote_check(&state, "hash-local", &remote, true),
             RemoteCheckDecision::UpToDate
         );
+    }
+
+    #[test]
+    fn remote_validation_runs_on_pointer_change_and_once_per_day() {
+        let pointer = remote_pointer("r1", "hash-1");
+        let mut state = synced_state("r1", "hash-1");
+
+        assert_eq!(
+            remote_validation_reason(&state, &pointer, 1_000),
+            Some("pointer_changed")
+        );
+
+        state.last_validated_remote_revision = Some("r1".to_string());
+        state.last_full_validation_at_ms = Some(1_000);
+        assert_eq!(
+            remote_validation_reason(
+                &state,
+                &pointer,
+                1_000 + CLOUD_SYNC_FULL_VALIDATION_INTERVAL_MS - 1,
+            ),
+            None
+        );
+        assert_eq!(
+            remote_validation_reason(
+                &state,
+                &pointer,
+                1_000 + CLOUD_SYNC_FULL_VALIDATION_INTERVAL_MS,
+            ),
+            Some("scheduled_daily_validation")
+        );
+
+        let changed = remote_pointer("r2", "hash-2");
+        assert_eq!(
+            remote_validation_reason(&state, &changed, 1_001),
+            Some("pointer_changed")
+        );
+    }
+
+    #[test]
+    fn maintenance_gate_runs_at_most_once_per_interval() {
+        assert!(maintenance_due(None, 100, CLOUD_SYNC_GC_INTERVAL_MS));
+        assert!(!maintenance_due(
+            Some(100),
+            100 + CLOUD_SYNC_GC_INTERVAL_MS - 1,
+            CLOUD_SYNC_GC_INTERVAL_MS,
+        ));
+        assert!(maintenance_due(
+            Some(100),
+            100 + CLOUD_SYNC_GC_INTERVAL_MS,
+            CLOUD_SYNC_GC_INTERVAL_MS,
+        ));
+    }
+
+    #[test]
+    fn unchanged_payload_only_skips_automatic_pushes() {
+        let state = synced_state("r1", "hash-1");
+
+        assert!(should_skip_automatic_push("auto_push", &state, "hash-1"));
+        assert!(!should_skip_automatic_push("manual_push", &state, "hash-1"));
+        assert!(!should_skip_automatic_push("auto_push", &state, "hash-2"));
+    }
+
+    #[test]
+    fn cloud_sync_settings_only_request_checks_for_remote_relevant_changes() {
+        let mut previous = CloudSyncSettings::default();
+        previous.enabled = true;
+        previous.webdav.endpoint = "https://dav.example.com".to_string();
+
+        let mut debounce_only = previous.clone();
+        debounce_only.sync_debounce_seconds = 120;
+        assert!(!cloud_sync_connection_changed(&previous, &debounce_only));
+        assert!(!cloud_sync_remote_check_required(&previous, &debounce_only));
+
+        let mut device_name_only = previous.clone();
+        device_name_only.device_name = "Another Device".to_string();
+        assert!(!cloud_sync_remote_check_required(
+            &previous,
+            &device_name_only
+        ));
+
+        let mut unused_provider = previous.clone();
+        unused_provider.s3.endpoint = "https://s3.example.com".to_string();
+        assert!(!cloud_sync_connection_changed(&previous, &unused_provider));
+
+        let mut endpoint_changed = previous.clone();
+        endpoint_changed.webdav.endpoint = "https://dav2.example.com".to_string();
+        assert!(cloud_sync_connection_changed(&previous, &endpoint_changed));
+        assert!(cloud_sync_remote_check_required(
+            &previous,
+            &endpoint_changed
+        ));
+
+        let mut auto_pull_enabled = previous.clone();
+        previous.auto_pull_remote_changes = false;
+        auto_pull_enabled.auto_pull_remote_changes = true;
+        assert!(cloud_sync_remote_check_required(
+            &previous,
+            &auto_pull_enabled
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn auto_push_debounce_waits_after_the_latest_notification() {
+        let mut settings = CloudSyncSettings::default();
+        settings.sync_debounce_seconds = 1;
+        let settings = Arc::new(Mutex::new(settings));
+        let notify = Arc::new(Notify::new());
+        let task_settings = Arc::clone(&settings);
+        let task_notify = Arc::clone(&notify);
+        let task = tokio::spawn(async move {
+            wait_for_auto_push_debounce(&task_settings, &task_notify).await;
+        });
+
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(500)).await;
+        notify.notify_one();
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(999)).await;
+        assert!(!task.is_finished());
+        tokio::time::advance(Duration::from_millis(1)).await;
+        tokio::task::yield_now().await;
+        assert!(task.is_finished());
+        task.await.expect("debounce task");
     }
 
     #[test]

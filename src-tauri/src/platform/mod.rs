@@ -3,6 +3,9 @@ mod windows_external_drop;
 #[cfg(windows)]
 mod windows_fullscreen;
 
+#[cfg(windows)]
+pub(crate) mod windows_conpty;
+
 #[cfg(any(windows, test))]
 pub(crate) mod windows_version;
 

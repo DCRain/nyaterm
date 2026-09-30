@@ -7,7 +7,7 @@ mod tests {
         calculate_payload_hash, calculate_v3_raw_payload_hash, encode_portable_snapshot,
         encode_portable_snapshot_redb, encode_v3_raw_snapshot_redb_for_test,
         normalize_backup_sessions_for_platform, preserve_device_local_sessions,
-        strip_device_local_sessions, AgentEndpointTargetPlatform,
+        strip_device_local_sessions, sync_settings_payload_changed, AgentEndpointTargetPlatform,
     };
     use crate::config::{self, ActivityBarLayout, AppSettings};
     use crate::error::AppError;
@@ -235,6 +235,35 @@ mod tests {
         assert!(portable.transfer.download_path.is_empty());
         assert!(portable.transfer.default_editor.is_empty());
         assert!(portable.transfer.recording_path.is_empty());
+    }
+
+    #[test]
+    fn sync_settings_change_detection_ignores_unsynced_fields() {
+        let current = AppSettings::default();
+
+        let mut cloud_sync_only = current.clone();
+        cloud_sync_only.cloud_sync.enabled = true;
+        assert!(!sync_settings_payload_changed(&current, &cloud_sync_only).expect("compare"));
+
+        let mut keybindings_only = current.clone();
+        keybindings_only
+            .keybindings
+            .insert("terminal.copy".to_string(), "Ctrl+Shift+C".to_string());
+        assert!(!sync_settings_payload_changed(&current, &keybindings_only).expect("compare"));
+
+        let mut device_path_only = current.clone();
+        device_path_only.appearance.background_image_path = Some(r"D:local.png".to_string());
+        device_path_only.transfer.download_path = r"D:downloads".to_string();
+        assert!(!sync_settings_payload_changed(&current, &device_path_only).expect("compare"));
+    }
+
+    #[test]
+    fn sync_settings_change_detection_tracks_portable_fields() {
+        let current = AppSettings::default();
+        let mut changed = current.clone();
+        changed.appearance.theme = "github-light".to_string();
+
+        assert!(sync_settings_payload_changed(&current, &changed).expect("compare"));
     }
 
     #[test]

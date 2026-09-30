@@ -64,6 +64,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useApp } from "@/context/AppContext";
 import { getErrorMessage, humanizeBackendError } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
+import { isWindows } from "@/lib/platform";
 import { isValidSerialBaudRate, MAX_SERIAL_BAUD_RATE, MIN_SERIAL_BAUD_RATE } from "@/lib/serial";
 import { validateSshAgentForwardingEndpoints } from "@/lib/sshAgent";
 import type {
@@ -94,7 +95,7 @@ const DEFAULT_SFTP_SHELL_DETECTION_TIMEOUT_MS = 3000;
 const MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS = 100;
 const MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS = 60_000;
 const CUSTOM_ICON_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "bmp", "gif"];
-
+const FALLBACK_LOCAL_SHELL = isWindows ? "powershell.exe" : "/bin/bash";
 const DEFAULT_SSH_ALGORITHMS: SshAlgorithmPreferences = {
   mode: "compatible",
   kex: [],
@@ -465,7 +466,8 @@ export default function NewSessionPage() {
   >("zmodem");
 
   // Local Terminal States
-  const [shellPath, setShellPath] = useState("powershell.exe");
+  const [defaultLocalShell, setDefaultLocalShell] = useState(FALLBACK_LOCAL_SHELL);
+  const [shellPath, setShellPath] = useState(FALLBACK_LOCAL_SHELL);
   const [shellArgs, setShellArgs] = useState("");
   const [workingDir, setWorkingDir] = useState("");
   const [dynamicTabTitle, setDynamicTabTitle] = useState(false);
@@ -488,6 +490,16 @@ export default function NewSessionPage() {
   );
 
   useEffect(() => {
+    invoke<string>("get_default_local_shell")
+      .then((value) => {
+        const resolvedShell = value.trim();
+        if (!resolvedShell) return;
+        setDefaultLocalShell(resolvedShell);
+        if (!editId) {
+          setShellPath((current) => (current === FALLBACK_LOCAL_SHELL ? resolvedShell : current));
+        }
+      })
+      .catch(() => undefined);
     invoke<Group[]>("get_groups")
       .then(setGroups)
       .catch((e) => setError(getErrorMessage(e)));
@@ -678,7 +690,7 @@ export default function NewSessionPage() {
           setVncReconnectEnabled(found.reconnect?.enabled ?? true);
           setVncReconnectMaxAttempts(found.reconnect?.max_attempts ?? 5);
         } else if (found.type === "local_terminal") {
-          setShellPath(found.shell_path || "powershell.exe");
+          setShellPath(found.shell_path || FALLBACK_LOCAL_SHELL);
           setShellArgs(found.shell_args || "");
           setWorkingDir(found.working_dir || "");
           setDynamicTabTitle(found.dynamic_tab_title ?? false);
@@ -729,6 +741,12 @@ export default function NewSessionPage() {
     t,
   ]);
 
+  useEffect(() => {
+    if (initialData?.type === "local_terminal" && !initialData.shell_path?.trim()) {
+      setShellPath(defaultLocalShell);
+    }
+  }, [defaultLocalShell, initialData]);
+
   const loadSerialPorts = useCallback(async () => {
     setSerialPortsLoading(true);
     setSerialPortsError("");
@@ -750,6 +768,100 @@ export default function NewSessionPage() {
       void loadSerialPorts();
     }
   }, [currentTab, loadSerialPorts]);
+
+  const resetForm = useCallback(() => {
+    setName("");
+    setGroupId("");
+    setNewGroupNamePending("");
+    setDescription("");
+    setTags([]);
+    setHost("");
+    setSshPort(22);
+    setTelnetPort(23);
+    setRdpPort(3389);
+    setVncPort(5900);
+    setUsername(currentTab === "rdp" ? DEFAULT_RDP_USERNAME : "root");
+    setRdpDomain("");
+    setAuthType("password");
+    setAccountId("");
+    setPasswordSource(currentTab === "telnet" ? "direct" : "ask");
+    setPasswordId("");
+    setPassword("");
+    setHasPassword(false);
+    setKeyId("");
+    setIconKey("");
+    setIconAutoDetect(true);
+    setProxyId("");
+    setJumpHostId("");
+    setOtpId("");
+    setAutoFillOtp(false);
+    setPostLoginEnabled(false);
+    setPostLoginCommand("");
+    setPostLoginDelayMs(DEFAULT_POST_LOGIN_DELAY_MS);
+    setSshBackspaceMode("del");
+    setX11Forwarding(false);
+    setSshAlgorithms({ ...DEFAULT_SSH_ALGORITHMS });
+    setSshProfile("standard");
+    setSshTerminalType("default");
+    setSftpSettings({ ...DEFAULT_SFTP_SETTINGS });
+    setSerialPortName("");
+    setSerialPorts([]);
+    setSerialPortsLoading(false);
+    setSerialPortsError("");
+    setBaudRate("115200");
+    setDataBits("8");
+    setParity("none");
+    setStopBits("1");
+    setSerialModemUploadProtocol("zmodem");
+    setShellPath(defaultLocalShell);
+    setShellArgs("");
+    setWorkingDir("");
+    setDynamicTabTitle(false);
+    setRemoteDynamicTabTitle(false);
+    setSerialBackspaceMode("ctrl_h");
+    setTelnetBackspaceMode("del");
+    setTelnetRawTcpCli(false);
+    setTelnetEnterMode("cr");
+    setTelnetLocalEcho(false);
+    setTelnetLocalLineEdit(false);
+    setTelnetForceCharacterAtATime(false);
+    setTelnetSendNaws(true);
+    setTelnetSendSga(true);
+    setRdpUseNla(true);
+    setRdpCertificatePolicy("prompt");
+    setRdpDisplayMode("fit-window");
+    setRdpDisplayWidth(1920);
+    setRdpDisplayHeight(1080);
+    setRdpClipboardMode("text-only");
+    setRdpReconnectEnabled(true);
+    setRdpReconnectMaxAttempts(5);
+    setVncScaleMode("fit");
+    setVncSecurityMode("auto");
+    setVncShared(true);
+    setVncViewOnly(false);
+    setVncClipboardEnabled(true);
+    setVncReconnectEnabled(true);
+    setVncReconnectMaxAttempts(5);
+    setEncoding("global");
+    setRecordingUseGlobal(true);
+    setRecordingAutoStart(appSettings.recording.auto_start);
+    setRecordingMode(appSettings.recording.default_mode);
+    setShowIconPicker(false);
+    setError("");
+    setConnecting(false);
+  }, [appSettings.recording.auto_start, appSettings.recording.default_mode, currentTab, defaultLocalShell]);
+
+  const handleTabChange = useCallback((value: string) => {
+    setCurrentTab(value);
+    if (value === "telnet") {
+      setPasswordSource((current) => (current === "ask" ? "direct" : current));
+    }
+    if (value === "rdp") {
+      setUsername((current) =>
+        !current.trim() || current === "root" ? DEFAULT_RDP_USERNAME : current,
+      );
+    }
+  }, []);
 
   const serialPortOptions: { unavailable?: boolean; value: string }[] = serialPorts.map((port) => ({
     value: port,

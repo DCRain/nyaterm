@@ -230,6 +230,17 @@ export function getVisibleActivityIds(ids: string[], ui: UiConfig): string[] {
   return ids.filter((id) => isActivityBarItemVisible(id, ui));
 }
 
+export function hasVisibleActivityBarItems({
+  items,
+  bottomItems,
+}: {
+  items: readonly unknown[];
+  bottomItems?: readonly unknown[];
+  hiddenItems?: readonly unknown[];
+}): boolean {
+  return items.length > 0 || (bottomItems?.length ?? 0) > 0;
+}
+
 export function cloneDefaultActivityBarLayout(): ActivityBarLayout {
   return {
     left_top: [...DEFAULT_ACTIVITY_BAR_LAYOUT.left_top],

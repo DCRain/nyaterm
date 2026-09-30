@@ -27,6 +27,7 @@ export type PaneConnectingUpdates = Partial<
 
 export interface PendingTabCreation {
   tabId: string;
+  paneId: string;
   createRequestId: string;
 }
 

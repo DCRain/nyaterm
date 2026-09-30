@@ -639,11 +639,6 @@ export default function SavedConnections({
 
   const allGroupIds = useMemo(() => new Set(savedGroups.map((group) => group.id)), [savedGroups]);
 
-  const allGroupsExpanded = useMemo(() => {
-    if (savedGroups.length === 0) return false;
-    return savedGroups.every((group) => expandedGroups.has(group.id));
-  }, [expandedGroups, savedGroups]);
-
   const expandAllGroups = () => {
     persistExpandedGroups(allGroupIds);
   };
@@ -1708,17 +1703,18 @@ export default function SavedConnections({
                 {savedGroups.length > 0 && (
                   <>
                     <DropdownMenuItem
-                      onClick={allGroupsExpanded ? collapseAllGroups : expandAllGroups}
+                      onClick={expandAllGroups}
                       className="cursor-pointer gap-2 py-1.5 focus:bg-[var(--df-bg-hover)]"
                     >
-                      {allGroupsExpanded ? (
-                        <MdUnfoldLess className="text-sm text-[var(--df-text-muted)]" />
-                      ) : (
-                        <MdUnfoldMore className="text-sm text-[var(--df-text-muted)]" />
-                      )}
-                      {allGroupsExpanded
-                        ? t("savedConnections.collapseAllFolders")
-                        : t("savedConnections.expandAllFolders")}
+                      <MdUnfoldMore className="text-sm text-[var(--df-text-muted)]" />
+                      {t("savedConnections.expandAllFolders")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={collapseAllGroups}
+                      className="cursor-pointer gap-2 py-1.5 focus:bg-[var(--df-bg-hover)]"
+                    >
+                      <MdUnfoldLess className="text-sm text-[var(--df-text-muted)]" />
+                      {t("savedConnections.collapseAllFolders")}
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                   </>

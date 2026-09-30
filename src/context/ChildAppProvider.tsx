@@ -433,7 +433,7 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
   const noop = useCallback(() => {}, []);
   const noopString = useCallback(() => "", []);
   const noopPendingTab = useCallback(
-    () => ({ tabId: "", createRequestId: crypto.randomUUID() }),
+    () => ({ tabId: "", paneId: "", createRequestId: crypto.randomUUID() }),
     [],
   );
   const noopPaneConnecting = useCallback(() => null, []);

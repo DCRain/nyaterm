@@ -720,6 +720,7 @@ async fn create_ssh_session_inner(
             ssh_connection.clone(),
             &config,
             false,
+            true,
         ));
     }
 

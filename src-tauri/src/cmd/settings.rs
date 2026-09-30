@@ -208,7 +208,7 @@ pub async fn persist_app_settings(
     match settings.security.master_password.as_deref() {
         Some("__SET__") => {
             master_password_action = "preserve_existing";
-            settings.security.master_password = existing.security.master_password;
+            settings.security.master_password = existing.security.master_password.clone();
         }
         Some("") => {
             log_master_password_persist_action("reject_empty", had_existing_password);
@@ -266,6 +266,8 @@ pub async fn persist_app_settings(
     settings.cloud_sync = merged_cloud_sync.clone();
     let merged_ai = config::merge_masked_ai_settings(&existing.ai, settings.ai);
     settings.ai = merged_ai.clone();
+    let should_notify_cloud_sync =
+        crate::core::portable_snapshot::sync_settings_payload_changed(&existing, &settings)?;
 
     let mut persisted_settings = settings.clone();
     persisted_settings.cloud_sync = config::encrypt_cloud_sync_settings(merged_cloud_sync.clone())?;
@@ -289,7 +291,9 @@ pub async fn persist_app_settings(
     }
 
     manager.replace_settings(merged_cloud_sync).await?;
-    schedule_cloud_sync_notify(app.clone());
+    if should_notify_cloud_sync {
+        schedule_cloud_sync_notify(app.clone());
+    }
     if should_apply_window_transparency {
         crate::app::apply_window_transparency_to_all(app);
     }

@@ -258,10 +258,25 @@ export function PasswordManagementTab({
     setIsNew(false);
   };
 
+  const invalidatePasswordCache = (id: string) => {
+    setPasswordCache((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setRevealedIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  };
+
   const handleSave = async () => {
     if (!editName.trim()) return;
     try {
-      await invoke("save_password", {
+      const savedId = await invoke<string>("save_password", {
         entry: {
           id: isNew ? "" : editingId,
           name: editName.trim(),
@@ -269,6 +284,9 @@ export function PasswordManagementTab({
           password: isNew ? editPassword : removePassword ? "" : editPassword || undefined,
         },
       });
+      // The saved ciphertext may have changed; drop any cached plaintext so the
+      // eye toggle re-fetches the current value instead of showing a stale one.
+      invalidatePasswordCache(savedId);
       resetEdit();
       await loadPasswords();
     } catch {
@@ -290,6 +308,7 @@ export function PasswordManagementTab({
     if (!deletingEntry) return;
     try {
       await invoke("delete_password", { id: deletingEntry.id });
+      invalidatePasswordCache(deletingEntry.id);
       await loadPasswords();
     } catch {
       /* ignore */

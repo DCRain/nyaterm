@@ -47,6 +47,7 @@ interface TerminalContextMenuProps {
   children: React.ReactNode;
   sessionId: string;
   sessionName?: string;
+  appLocked: boolean;
   terminalRef: React.RefObject<Terminal | null>;
   onFind: (selection?: string) => void;
   onPasteText: (text: string) => void;
@@ -61,6 +62,7 @@ export default function TerminalContextMenu({
   children,
   sessionId,
   sessionName,
+  appLocked,
   terminalRef,
   onFind,
   onPasteText,
@@ -88,6 +90,13 @@ export default function TerminalContextMenu({
     provider: "",
   });
   const suppressCloseAutoFocusRef = useRef(false);
+  const appLockedRef = useRef(appLocked);
+  appLockedRef.current = appLocked;
+  const focusTerminal = useCallback(() => {
+    if (!appLockedRef.current) {
+      terminalRef.current?.focus();
+    }
+  }, [terminalRef]);
   const pasteText = useCallback(
     (text: string) => {
       if (!text) return;
@@ -146,7 +155,7 @@ export default function TerminalContextMenu({
         /* clipboard access denied */
       }
       terminal.clearSelection();
-      terminal.focus();
+      focusTerminal();
     })();
   };
 
@@ -156,16 +165,16 @@ export default function TerminalContextMenu({
     } catch {
       /* clipboard access denied */
     }
-    terminalRef.current?.focus();
-  }, [onPasteClipboard, terminalRef]);
+    focusTerminal();
+  }, [focusTerminal, onPasteClipboard]);
 
   const doCopy = useCallback(
     (text: string) => {
       void writeClipboardText(text)
         .catch(() => {})
-        .finally(() => terminalRef.current?.focus());
+        .finally(focusTerminal);
     },
-    [terminalRef],
+    [focusTerminal],
   );
 
   const doSearchOnline = useCallback(
@@ -176,19 +185,19 @@ export default function TerminalContextMenu({
         url = engine.url_template.replace("%s", encodeURIComponent(text));
       }
       openUrl(url);
-      terminalRef.current?.focus();
+      focusTerminal();
     },
-    [terminalRef],
+    [focusTerminal],
   );
 
   const doPasteSelected = useCallback(() => {
     pasteText(ctxSelection.text);
-    terminalRef.current?.focus();
-  }, [ctxSelection.text, pasteText, terminalRef]);
+    focusTerminal();
+  }, [ctxSelection.text, focusTerminal, pasteText]);
 
   const doClearScreen = useCallback(() => {
     const terminal = terminalRef.current;
-    if (!terminal) return;
+    if (appLockedRef.current || !terminal) return;
     sendTerminalClearInput(terminal, { focus: true });
   }, [terminalRef]);
 
@@ -198,8 +207,8 @@ export default function TerminalContextMenu({
 
   const doSelectAll = useCallback(() => {
     terminalRef.current?.selectAll();
-    terminalRef.current?.focus();
-  }, [terminalRef]);
+    focusTerminal();
+  }, [focusTerminal, terminalRef]);
 
   const doFind = useCallback(
     (selection?: string) => {
@@ -212,32 +221,33 @@ export default function TerminalContextMenu({
   const toggleRecording = useCallback(
     (mode: RecordingMode = "transcript") => {
       void Promise.resolve(onToggleRecording?.(sessionId, mode)).finally(() =>
-        terminalRef.current?.focus(),
+        focusTerminal(),
       );
     },
-    [onToggleRecording, sessionId, terminalRef],
+    [focusTerminal, onToggleRecording, sessionId],
   );
 
   const saveTranscript = useCallback(() => {
     void Promise.resolve(onSaveTranscript?.(sessionId, sessionName)).finally(() =>
-      terminalRef.current?.focus(),
+      focusTerminal(),
     );
-  }, [onSaveTranscript, sessionId, sessionName, terminalRef]);
+  }, [focusTerminal, onSaveTranscript, sessionId, sessionName]);
 
   const openRecordingPath = useCallback(
     (command: "open_recording_file" | "show_recording_in_folder") => {
       if (!recordingStatus?.filePath) return;
       void invoke(command, { filePath: recordingStatus.filePath })
         .catch(() => {})
-        .finally(() => terminalRef.current?.focus());
+        .finally(focusTerminal);
     },
-    [recordingStatus?.filePath, terminalRef],
+    [focusTerminal, recordingStatus?.filePath],
   );
 
   const openRecordingSettings = useCallback(() => {
-    openSettings("terminal-general");
-    terminalRef.current?.focus();
-  }, [terminalRef]);
+    void openSettings("terminal-general")
+      .catch(() => {})
+      .finally(focusTerminal);
+  }, [focusTerminal]);
 
   return (
     <>
@@ -259,6 +269,11 @@ export default function TerminalContextMenu({
         <ContextMenuContent
           className="min-w-[200px]"
           onCloseAutoFocus={(event) => {
+            if (appLockedRef.current) {
+              event.preventDefault();
+              suppressCloseAutoFocusRef.current = false;
+              return;
+            }
             if (!suppressCloseAutoFocusRef.current) return;
 
             event.preventDefault();
@@ -422,6 +437,7 @@ export default function TerminalContextMenu({
           <ContextMenuItem onClick={doClearAll}>
             <MdDeleteSweep className="text-[0.875rem] text-muted-foreground mr-2" />
             {t("terminalCtx.clearAll")}
+            <ContextMenuShortcut>{dk("terminal.clearAll")}</ContextMenuShortcut>
           </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuSub>

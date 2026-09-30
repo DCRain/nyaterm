@@ -99,4 +99,43 @@ describe("PasswordManagementTab", () => {
       expect(invokeMock).toHaveBeenCalledWith("delete_password", { id: account.id });
     });
   });
+
+  it("re-fetches the revealed password after saving an update", async () => {
+    let storedPassword = "old-secret";
+    invokeMock.mockImplementation((command: string) => {
+      switch (command) {
+        case "get_saved_passwords":
+          return Promise.resolve([account]);
+        case "get_saved_connections":
+          return Promise.resolve([]);
+        case "get_saved_password_value":
+          return Promise.resolve(storedPassword);
+        case "save_password":
+          storedPassword = "new-secret";
+          return Promise.resolve(account.id);
+        default:
+          return Promise.reject(new Error(`Unexpected command: ${command}`));
+      }
+    });
+
+    render(<PasswordManagementTab secretsUnlocked />);
+    await screen.findByText(account.name);
+
+    fireEvent.click(screen.getByRole("button", { name: "passwordManager.showPassword" }));
+    expect(await screen.findByText("old-secret")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "common.edit" }));
+    fireEvent.change(screen.getByPlaceholderText("passwordManager.passwordUnchanged"), {
+      target: { value: "new-secret" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "common.save" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("save_password", expect.anything());
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "passwordManager.showPassword" }));
+    expect(await screen.findByText("new-secret")).toBeTruthy();
+    expect(screen.queryByText("old-secret")).toBeNull();
+  });
 });
