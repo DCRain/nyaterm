@@ -69,6 +69,8 @@ interface TabWindowsWorkspaceProps {
   onToggleSessionRecording?: (sessionId: string, mode?: RecordingMode) => Promise<void> | void;
   onSaveSessionTranscript?: (sessionId: string, sessionName?: string) => Promise<void> | void;
   workbench?: WorkbenchRenderProps;
+  focusedTabId?: string | null;
+  paneFocusMode?: boolean;
 }
 
 type LeafContentRectChange = (leafId: string, rect: LeafContentRect | null) => void;
@@ -330,6 +332,8 @@ function TerminalContentHost({
   placements,
   leafRects,
   dropState,
+  paneFocusMode,
+  focusedTabId,
   onSelectTab,
   sessionInfoById,
   onActivatePane,
@@ -349,6 +353,8 @@ function TerminalContentHost({
   placements: TabPlacement[];
   leafRects: Map<string, LeafContentRect>;
   dropState: DropState | null;
+  paneFocusMode: boolean;
+  focusedTabId?: string | null;
   onSelectTab: TabWindowsWorkspaceProps["onSelectTab"];
   sessionInfoById?: TabWindowsWorkspaceProps["sessionInfoById"];
   onActivatePane: TabWindowsWorkspaceProps["onActivatePane"];
@@ -369,7 +375,10 @@ function TerminalContentHost({
     <div className="pointer-events-none absolute inset-0 z-10">
       {placements.map(({ tab, leafId, active }) => {
         const rect = leafRects.get(leafId);
-        const visible = active && !!rect && rect.width > 0 && rect.height > 0;
+        const focused = paneFocusMode && tab.id === focusedTabId;
+        const visible = paneFocusMode
+          ? focused
+          : active && !!rect && rect.width > 0 && rect.height > 0;
         const dropZone = dropState?.leafId === leafId ? dropState.zone : null;
 
         return (
@@ -378,10 +387,10 @@ function TerminalContentHost({
             className="absolute pointer-events-auto"
             style={{
               display: visible ? "block" : "none",
-              left: rect?.left ?? 0,
-              top: rect?.top ?? 0,
-              width: rect?.width ?? 0,
-              height: rect?.height ?? 0,
+              left: focused ? 0 : (rect?.left ?? 0),
+              top: focused ? 0 : (rect?.top ?? 0),
+              width: focused ? "100%" : (rect?.width ?? 0),
+              height: focused ? "100%" : (rect?.height ?? 0),
             }}
             onDragOver={(event) => onLeafDragOver(leafId, event)}
             onDragLeave={(event) => onLeafDragLeave(leafId, event)}
@@ -390,6 +399,7 @@ function TerminalContentHost({
             <PaneWorkspace
               tab={tab}
               visible={visible}
+              paneFocusMode={paneFocusMode}
               workbench={workbench}
               sessionInfoById={sessionInfoById}
               onActivatePane={(paneId) => {
@@ -433,6 +443,8 @@ function TabWindowsWorkspace({
   onToggleSessionRecording,
   onSaveSessionTranscript,
   workbench,
+  focusedTabId,
+  paneFocusMode = false,
 }: TabWindowsWorkspaceProps) {
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const [leafRects, setLeafRects] = useState<Map<string, LeafContentRect>>(() => new Map());
@@ -600,22 +612,26 @@ function TabWindowsWorkspace({
 
   return (
     <div ref={workspaceRef} className="relative h-full w-full min-h-0 min-w-0 overflow-hidden">
-      <WindowNodeView
-        node={layout}
-        tabsById={tabsById}
-        onSelectTab={onSelectTab}
-        onUpdateWindowSplitRatio={onUpdateWindowSplitRatio}
-        workspaceRef={workspaceRef}
-        dropState={dropState}
-        onLeafContentRectChange={handleLeafContentRectChange}
-        onLeafDragOver={handleLeafDragOver}
-        onLeafDragLeave={handleLeafDragLeave}
-        onLeafDrop={handleLeafDrop}
-      />
+      <div className={paneFocusMode ? "invisible absolute inset-0" : "h-full w-full"}>
+        <WindowNodeView
+          node={layout}
+          tabsById={tabsById}
+          onSelectTab={onSelectTab}
+          onUpdateWindowSplitRatio={onUpdateWindowSplitRatio}
+          workspaceRef={workspaceRef}
+          dropState={dropState}
+          onLeafContentRectChange={handleLeafContentRectChange}
+          onLeafDragOver={handleLeafDragOver}
+          onLeafDragLeave={handleLeafDragLeave}
+          onLeafDrop={handleLeafDrop}
+        />
+      </div>
       <TerminalContentHost
         placements={placements}
         leafRects={leafRects}
         dropState={dropState}
+        paneFocusMode={paneFocusMode}
+        focusedTabId={focusedTabId}
         onSelectTab={onSelectTab}
         sessionInfoById={sessionInfoById}
         onActivatePane={onActivatePane}

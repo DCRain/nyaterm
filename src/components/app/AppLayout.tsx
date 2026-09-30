@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import FloatingPanel from "@/components/app/FloatingPanel";
+import { Minimize2 } from "lucide-react";
 import { MdChevronLeft, MdChevronRight, MdTerminal } from "react-icons/md";
 import PanelStack from "@/components/app/PanelStack";
 import AboutDialog from "@/components/dialog/app/AboutDialog";
@@ -39,6 +40,8 @@ import QuickCommands from "@/components/panel/QuickCommands";
 import SerialSendPanel from "@/components/panel/SendCommandPanel";
 import { TOGGLE_REMOTE_DESKTOP_CHROME_EVENT } from "@/components/remote-desktop/FloatingSessionChrome";
 import TabWindowsWorkspace from "@/components/terminal/TabWindowsWorkspace";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useTheme } from "@/context/ThemeContext";
 import { resolveShortcutKeys } from "@/hooks/useShortcutMap";
 import {
@@ -82,6 +85,9 @@ interface AppLayoutProps {
   uiConfig: UiConfig;
   appearance: AppearanceSettings;
   keybindings?: Record<string, string>;
+  paneFocusMode: boolean;
+  nativeFullscreen: boolean;
+  onExitPaneFocus: () => void;
   header: HeaderProps;
   leftActivityBar: ActivityBarSideProps;
   rightActivityBar: ActivityBarSideProps;
@@ -189,6 +195,9 @@ export default function AppLayout({
   uiConfig,
   appearance,
   keybindings = {},
+  paneFocusMode,
+  nativeFullscreen,
+  onExitPaneFocus,
   header,
   leftActivityBar,
   rightActivityBar,
@@ -360,11 +369,14 @@ export default function AppLayout({
     (rightActivityBar.hiddenItems?.length ?? 0) > 0;
   const leftActivityBarVisible = Boolean(leftActivityBar.visible);
   const rightActivityBarVisible = Boolean(rightActivityBar.visible);
+  const chromeHidden = terminalFullscreen || paneFocusMode;
   const leftPanelOpen =
+    !paneFocusMode &&
     hasLeftActivityItems &&
     leftActivityBarVisible &&
     (leftPanelIds.length > 0 || Boolean(leftOverlayPanelId));
   const rightPanelOpen =
+    !paneFocusMode &&
     hasRightActivityItems &&
     rightActivityBarVisible &&
     (rightPanelIds.length > 0 || Boolean(rightOverlayPanelId));
@@ -376,9 +388,9 @@ export default function AppLayout({
     serialSendVisible || serialSendRunning || serialSendEverShownRef.current;
   // When side chrome is gone, round the terminal so it doesn't cover window corners.
   const leftEdgeOccupied =
-    !terminalFullscreen && ((hasLeftActivityItems && leftActivityBarVisible) || leftPanelOpen);
+    !chromeHidden && ((hasLeftActivityItems && leftActivityBarVisible) || leftPanelOpen);
   const rightEdgeOccupied =
-    !terminalFullscreen && ((hasRightActivityItems && rightActivityBarVisible) || rightPanelOpen);
+    !chromeHidden && ((hasRightActivityItems && rightActivityBarVisible) || rightPanelOpen);
 
   return (
     <div
@@ -387,6 +399,8 @@ export default function AppLayout({
       data-window-transparency={windowTransparencyEnabled ? "true" : "false"}
       data-window-transparency-blur={windowTransparencyBlur ? "true" : "false"}
       data-terminal-fullscreen={terminalFullscreen ? "true" : "false"}
+      data-pane-focus={paneFocusMode ? "true" : "false"}
+      data-native-fullscreen={nativeFullscreen ? "true" : "false"}
       style={shellStyle}
     >
       {backgroundEnabled && (
@@ -397,10 +411,10 @@ export default function AppLayout({
         />
       )}
       <div className="relative z-10 flex h-full min-h-0 flex-col">
-        {!terminalFullscreen && <Header {...header} />}
+        {!chromeHidden && <Header {...header} />}
 
         <main className="flex-1 flex overflow-hidden relative">
-          {!terminalFullscreen && hasLeftActivityItems && leftActivityBarVisible && (
+          {!chromeHidden && hasLeftActivityItems && leftActivityBarVisible && (
             <ActivityBar
               {...leftActivityBar}
               side="left"
@@ -409,7 +423,7 @@ export default function AppLayout({
             />
           )}
 
-          {!terminalFullscreen && leftPanelOpen && (
+          {!chromeHidden && leftPanelOpen && (
             <>
               <div
                 style={{
@@ -443,14 +457,14 @@ export default function AppLayout({
               "relative flex min-w-0 flex-1 origin-top-left flex-col overflow-hidden",
               !leftEdgeOccupied && "rounded-bl-[var(--nyaterm-window-radius)]",
               !rightEdgeOccupied && "rounded-br-[var(--nyaterm-window-radius)]",
-              terminalFullscreen && "rounded-none",
+              chromeHidden && "rounded-none",
             )}
             style={{
               backgroundColor:
-                backgroundEnabled && !terminalFullscreen ? "transparent" : "var(--df-bg-terminal)",
+                backgroundEnabled && !chromeHidden ? "transparent" : "var(--df-bg-terminal)",
             }}
           >
-            {!terminalFullscreen && hasLeftActivityItems && !leftActivityBarVisible && (
+            {!chromeHidden && hasLeftActivityItems && !leftActivityBarVisible && (
               <button
                 type="button"
                 className="absolute left-0 top-1/2 z-30 flex h-12 w-3 -translate-y-1/2 cursor-pointer items-center justify-center rounded-r-sm bg-transparent text-[var(--df-text-dimmed)] transition-colors hover:bg-[color-mix(in_srgb,var(--df-text-muted)_12%,transparent)] hover:text-[var(--df-primary)]"
@@ -461,7 +475,7 @@ export default function AppLayout({
                 <MdChevronRight className="text-sm" />
               </button>
             )}
-            {!terminalFullscreen && hasRightActivityItems && !rightActivityBarVisible && (
+            {!chromeHidden && hasRightActivityItems && !rightActivityBarVisible && (
               <button
                 type="button"
                 className="absolute right-0 top-1/2 z-30 flex h-12 w-3 -translate-y-1/2 cursor-pointer items-center justify-center rounded-l-sm bg-transparent text-[var(--df-text-dimmed)] transition-colors hover:bg-[color-mix(in_srgb,var(--df-text-muted)_12%,transparent)] hover:text-[var(--df-primary)]"
@@ -508,7 +522,28 @@ export default function AppLayout({
                   </div>
                 </div>
               )}
-              {floatingPanelIds.left && (
+              {paneFocusMode && (
+                <div className="pointer-events-none absolute right-2 top-2 z-30">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="secondary"
+                        className="pointer-events-auto shadow-sm"
+                        aria-label={t("settings.shortcutLabels.togglePaneFocus")}
+                        onClick={onExitPaneFocus}
+                      >
+                        <Minimize2 className="size-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="left">
+                      {t("settings.shortcutLabels.togglePaneFocus")}
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+              )}
+              {!paneFocusMode && floatingPanelIds.left && (
                 <FloatingPanel
                   side="left"
                   panelId={floatingPanelIds.left}
@@ -520,7 +555,7 @@ export default function AppLayout({
                   {panelContent(floatingPanelIds.left)}
                 </FloatingPanel>
               )}
-              {floatingPanelIds.right && (
+              {!paneFocusMode && floatingPanelIds.right && (
                 <FloatingPanel
                   side="right"
                   panelId={floatingPanelIds.right}
@@ -534,7 +569,7 @@ export default function AppLayout({
               )}
             </div>
 
-            {bottomPanel.activePanel === "quickCmdBar" && (
+            {!paneFocusMode && bottomPanel.activePanel === "quickCmdBar" && (
               <>
                 <ResizeHandle direction="vertical" onResize={bottomPanel.onQuickCmdResize} />
                 <div
@@ -553,11 +588,11 @@ export default function AppLayout({
               </>
             )}
 
-            {serialSendVisible && (
+            {!paneFocusMode && serialSendVisible && (
               <ResizeHandle direction="vertical" onResize={bottomPanel.onSerialSendResize} />
             )}
 
-            {serialSendMounted && (
+            {!paneFocusMode && serialSendMounted && (
               <div
                 style={{
                   ...(serialSendVisible
@@ -586,7 +621,7 @@ export default function AppLayout({
             )}
           </section>
 
-          {!terminalFullscreen && hasRightActivityItems && (
+          {!chromeHidden && hasRightActivityItems && (
             <>
               {rightPanelOpen && <ResizeHandle direction="horizontal" onResize={onRightResize} />}
               <aside
@@ -617,7 +652,7 @@ export default function AppLayout({
             </>
           )}
 
-          {!terminalFullscreen && hasRightActivityItems && rightActivityBarVisible && (
+          {!chromeHidden && hasRightActivityItems && rightActivityBarVisible && (
             <ActivityBar
               {...rightActivityBar}
               side="right"

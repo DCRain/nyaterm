@@ -2036,7 +2036,7 @@ export default function Header({
         {tabBar ? (
           <>
             <div className="h-full w-3 shrink-0" data-tauri-drag-region />
-            <TabBar {...tabBar} />
+            <TabBar {...tabBar} variant="header" />
             <div className="h-full min-w-3 flex-1" data-tauri-drag-region />
           </>
         ) : (
