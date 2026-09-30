@@ -1,12 +1,32 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SavedConnection, TerminalSessionPane } from "@/types/global";
-import { createSessionForConnection, createSessionForPane } from "./appSessionFactory";
+import {
+  createSessionForConnection,
+  createSessionForPane,
+  isRdpFileTransferEnabled,
+  resolveRdpClipboardMode,
+} from "./appSessionFactory";
 
 const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
 
 vi.mock("@/lib/invoke", () => ({ invoke: invokeMock }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ emit: vi.fn() }));
+
+describe("resolveRdpClipboardMode", () => {
+  it("prefers pane display and falls back to the saved connection", () => {
+    const connection = {
+      id: "rdp-1",
+      type: "rdp",
+      clipboard: { mode: "text-and-files" },
+    } as SavedConnection;
+
+    expect(resolveRdpClipboardMode({ clipboardMode: "text-only" }, connection)).toBe("text-only");
+    expect(resolveRdpClipboardMode(undefined, connection)).toBe("text-and-files");
+    expect(isRdpFileTransferEnabled(undefined, connection)).toBe(true);
+    expect(isRdpFileTransferEnabled({ clipboardMode: "text-only" }, connection)).toBe(false);
+  });
+});
 
 describe("SSH runtime mode creation", () => {
   beforeEach(() => {

@@ -23,7 +23,9 @@ import {
   type RemoteDesktopRenderer,
 } from "@/components/remote-desktop/renderer";
 import { Button } from "@/components/ui/button";
+import { useApp } from "@/context/AppContext";
 import { useRdpFileDrop } from "@/hooks/useRdpFileDrop";
+import { isRdpFileTransferEnabled } from "@/lib/appSessionFactory";
 import { invoke } from "@/lib/invoke";
 import { decodeRdpFramePatch } from "@/lib/rdpFrame";
 import {
@@ -32,6 +34,7 @@ import {
   rdpCompositionCommitText,
   rdpInputFallbackText,
   shouldFallbackToPrintableRdpKey,
+  shouldSuppressRdpKeyRepeat,
   shouldUsePhysicalRdpKey,
 } from "@/lib/rdpIme";
 import { buildRdpKeyEvent, type RdpInputEvent } from "@/lib/rdpInput";
@@ -166,6 +169,7 @@ function RdpPaneHost({
   onConnectionError,
 }: RdpPaneHostProps) {
   const { t } = useTranslation();
+  const { savedConnections } = useApp();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const imeRef = useRef<HTMLTextAreaElement | null>(null);
@@ -540,14 +544,16 @@ function RdpPaneHost({
 
   const handleKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLElement>) => {
-      if (event.repeat) return;
-      if (pressedKeysRef.current.has(event.code)) return;
       if (!shouldUsePhysicalRdpKey(event.nativeEvent)) return;
+      if (shouldSuppressRdpKeyRepeat(event.nativeEvent)) return;
+      if (!event.repeat && pressedKeysRef.current.has(event.code)) return;
       const inputEvent = buildRdpKeyEvent(event.nativeEvent, "key-down");
       if (!inputEvent) return;
       event.preventDefault();
       event.stopPropagation();
-      pressedKeysRef.current.add(event.code);
+      if (!event.repeat) {
+        pressedKeysRef.current.add(event.code);
+      }
       void sendInputBatch([inputEvent]);
     },
     [sendInputBatch],
@@ -633,12 +639,27 @@ function RdpPaneHost({
     void sendInputBatch(events);
   };
 
+  const rdpConnection = useMemo(
+    () =>
+      pane.connectionId
+        ? (savedConnections.find(
+            (connection) => connection.id === pane.connectionId && connection.type === "rdp",
+          ) ?? null)
+        : null,
+    [pane.connectionId, savedConnections],
+  );
+
+  const fileTransferEnabled = useMemo(
+    () => isRdpFileTransferEnabled(pane.display, rdpConnection),
+    [pane.display, rdpConnection],
+  );
+
   const fileDropEnabled =
     visible &&
     state === "active" &&
     !pane.connecting &&
     !pane.connectError &&
-    pane.display?.clipboardMode === "text-and-files";
+    fileTransferEnabled;
 
   const { isExternalDropActive, offerLocalPaths } = useRdpFileDrop({
     sessionId: pane.sessionId,

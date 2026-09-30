@@ -1,14 +1,17 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RdpSessionPane } from "@/types/global";
+import type { RdpSessionPane, SavedConnection } from "@/types/global";
 import RdpPaneHost from "./RdpPaneHost";
 
-const { invokeMock, listenMock, listeners, openFileDialogMock } = vi.hoisted(() => ({
-  invokeMock: vi.fn(),
-  listenMock: vi.fn(),
-  listeners: new Map<string, (event: { payload: unknown }) => void>(),
-  openFileDialogMock: vi.fn(),
-}));
+const { invokeMock, listenMock, listeners, openFileDialogMock, savedConnectionsRef } = vi.hoisted(
+  () => ({
+    invokeMock: vi.fn(),
+    listenMock: vi.fn(),
+    listeners: new Map<string, (event: { payload: unknown }) => void>(),
+    openFileDialogMock: vi.fn(),
+    savedConnectionsRef: { current: [] as SavedConnection[] },
+  }),
+);
 
 vi.mock("@/lib/invoke", () => ({
   invoke: invokeMock,
@@ -54,6 +57,7 @@ vi.mock("@/context/AppContext", () => ({
       },
     },
     updateAppSettings: vi.fn(),
+    savedConnections: savedConnectionsRef.current,
   }),
 }));
 
@@ -63,6 +67,7 @@ vi.mock("@/components/remote-desktop/RdpShortcutPopover", () => ({
 
 describe("RdpPaneHost", () => {
   beforeEach(() => {
+    savedConnectionsRef.current = [];
     invokeMock.mockReset();
     invokeMock.mockResolvedValue(undefined);
     listenMock.mockReset();
@@ -149,7 +154,7 @@ describe("RdpPaneHost", () => {
     });
   });
 
-  it("ignores repeated keydown events while a key is held", async () => {
+  it("does not forward modifier key auto-repeat", async () => {
     render(<RdpPaneHost pane={rdpPane()} active visible />);
 
     await waitFor(() => expect(listeners.has("rdp-state-rdp-session")).toBe(true));
@@ -174,6 +179,47 @@ describe("RdpPaneHost", () => {
           scanCode: 0x2a,
           extended: false,
           repeat: false,
+        },
+      ],
+    });
+  });
+
+  it("forwards Backspace auto-repeat to the remote session", async () => {
+    render(<RdpPaneHost pane={rdpPane()} active visible />);
+
+    await waitFor(() => expect(listeners.has("rdp-state-rdp-session")).toBe(true));
+    act(() => {
+      listeners.get("rdp-state-rdp-session")?.({
+        payload: { sessionId: "rdp-session", state: "active" },
+      });
+    });
+
+    invokeMock.mockClear();
+    const inputRoot = document.querySelector('[data-rdp-input-root="true"]');
+    if (!(inputRoot instanceof HTMLElement)) throw new Error("expected RDP input root");
+    fireEvent.keyDown(inputRoot, { code: "Backspace", key: "Backspace", repeat: false });
+    fireEvent.keyDown(inputRoot, { code: "Backspace", key: "Backspace", repeat: true });
+
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "rdp_input_batch", {
+      sessionId: "rdp-session",
+      events: [
+        {
+          type: "key-down",
+          scanCode: 0x0e,
+          extended: false,
+          repeat: false,
+        },
+      ],
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "rdp_input_batch", {
+      sessionId: "rdp-session",
+      events: [
+        {
+          type: "key-down",
+          scanCode: 0x0e,
+          extended: false,
+          repeat: true,
         },
       ],
     });
@@ -206,8 +252,8 @@ describe("RdpPaneHost", () => {
     expect(screen.getByText("1920x1080")).not.toBeNull();
     expect(screen.getByTestId("rdp-shortcut-popover")).not.toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "dialog.rdpReconnect" }));
-    fireEvent.click(screen.getByRole("button", { name: "dialog.remoteDesktopChromeClose" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close session" }));
     expect(invokeMock).toHaveBeenCalledWith("rdp_reconnect", { sessionId: "rdp-session" });
     expect(onDisconnectedCloseRequested).toHaveBeenCalledOnce();
   });
@@ -251,7 +297,7 @@ describe("RdpPaneHost", () => {
     });
 
     const transferButton = await screen.findByRole("button", {
-      name: "dialog.rdpTransferFiles",
+      name: "Transfer files to remote",
     });
     fireEvent.click(transferButton);
 
@@ -362,6 +408,42 @@ describe("RdpPaneHost", () => {
     });
   });
 
+  it("shows the transfer button from saved connection clipboard mode when pane display omits it", async () => {
+    savedConnectionsRef.current = [
+      {
+        id: "rdp-connection",
+        type: "rdp",
+        name: "Windows",
+        clipboard: { mode: "text-and-files" },
+      } as SavedConnection,
+    ];
+
+    render(
+      <RdpPaneHost
+        pane={rdpPane({
+          display: {
+            remoteWidth: 1920,
+            remoteHeight: 1080,
+            scaleMode: "fit",
+          },
+        })}
+        active
+        visible
+      />,
+    );
+
+    await waitFor(() => expect(listeners.has("rdp-state-rdp-session")).toBe(true));
+    act(() => {
+      listeners.get("rdp-state-rdp-session")?.({
+        payload: { sessionId: "rdp-session", state: "active" },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Transfer files to remote" })).not.toBeNull();
+    });
+  });
+
   it("hides the transfer button when clipboard mode is not text-and-files", async () => {
     render(
       <RdpPaneHost
@@ -388,7 +470,7 @@ describe("RdpPaneHost", () => {
     await waitFor(() => {
       expect(document.querySelector('[data-floating-session-chrome="true"]')).not.toBeNull();
     });
-    expect(screen.queryByRole("button", { name: "dialog.rdpTransferFiles" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Transfer files to remote" })).toBeNull();
   });
 });
 

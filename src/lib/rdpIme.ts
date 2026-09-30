@@ -20,6 +20,25 @@ const PHYSICAL_TEXT_KEYS = new Set([
 const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta"]);
 const LOCK_KEYS = new Set(["CapsLock", "NumLock", "ScrollLock"]);
 
+const MODIFIER_KEY_CODES = new Set([
+  "ShiftLeft",
+  "ShiftRight",
+  "ControlLeft",
+  "ControlRight",
+  "AltLeft",
+  "AltRight",
+  "MetaLeft",
+  "MetaRight",
+]);
+
+const LOCK_KEY_CODES = new Set(["CapsLock", "NumLock", "ScrollLock"]);
+
+/** When true, do not forward this keydown to the remote (modifier/lock auto-repeat only). */
+export function shouldSuppressRdpKeyRepeat(event: Pick<KeyboardEvent, "repeat" | "code">): boolean {
+  if (!event.repeat) return false;
+  return MODIFIER_KEY_CODES.has(event.code) || LOCK_KEY_CODES.has(event.code);
+}
+
 export function shouldUsePhysicalRdpKey(
   event: Pick<KeyboardEvent, "key" | "ctrlKey" | "altKey" | "metaKey">,
 ) {

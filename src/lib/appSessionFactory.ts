@@ -12,6 +12,8 @@ import {
 import type { TemporaryLinkConfig } from "@/lib/temporaryLink";
 import { captureTerminalReconnectContent } from "@/lib/terminalReconnectHistory";
 import type {
+  RdpClipboardMode,
+  RemoteDesktopDisplayMetadata,
   SavedConnection,
   SessionPane,
   SessionType,
@@ -46,6 +48,29 @@ export function getConnectionSessionType(
   return connection ? CONNECTION_SESSION_TYPES[connection.type] : "SSH";
 }
 
+export function resolveRdpClipboardMode(
+  display?: RemoteDesktopDisplayMetadata | null,
+  connection?: SavedConnection | null,
+): RdpClipboardMode {
+  if (display?.clipboardMode) {
+    return display.clipboardMode;
+  }
+  if (connection?.type === "rdp") {
+    const mode = connection.clipboard?.mode;
+    if (mode === "disabled" || mode === "text-only" || mode === "text-and-files") {
+      return mode;
+    }
+  }
+  return "text-only";
+}
+
+export function isRdpFileTransferEnabled(
+  display?: RemoteDesktopDisplayMetadata | null,
+  connection?: SavedConnection | null,
+): boolean {
+  return resolveRdpClipboardMode(display, connection) === "text-and-files";
+}
+
 export function getRemoteDesktopPaneDisplay(
   connection: SavedConnection | null | undefined,
 ) {
@@ -54,7 +79,7 @@ export function getRemoteDesktopPaneDisplay(
       remoteWidth: connection.display?.width ?? 1920,
       remoteHeight: connection.display?.height ?? 1080,
       scaleMode: connection.display?.mode === "fit-window" ? "fit" : "actual",
-      clipboardMode: connection.clipboard?.mode ?? "text-only",
+      clipboardMode: resolveRdpClipboardMode(undefined, connection),
     } as const;
   }
   if (connection?.type === "vnc") {

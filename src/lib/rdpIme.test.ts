@@ -5,6 +5,7 @@ import {
   rdpCompositionCommitText,
   rdpInputFallbackText,
   shouldFallbackToPrintableRdpKey,
+  shouldSuppressRdpKeyRepeat,
   shouldUsePhysicalRdpKey,
 } from "./rdpIme";
 
@@ -78,6 +79,14 @@ describe("rdpIme", () => {
     expect(rdpInputFallbackText("abc", false)).toBe("abc");
     expect(rdpInputFallbackText("", false)).toBeNull();
     expect(rdpInputFallbackText("ni", true)).toBeNull();
+  });
+
+  it("suppresses auto-repeat only for modifier and lock keys", () => {
+    expect(shouldSuppressRdpKeyRepeat({ repeat: false, code: "Backspace" })).toBe(false);
+    expect(shouldSuppressRdpKeyRepeat({ repeat: true, code: "Backspace" })).toBe(false);
+    expect(shouldSuppressRdpKeyRepeat({ repeat: true, code: "Delete" })).toBe(false);
+    expect(shouldSuppressRdpKeyRepeat({ repeat: true, code: "ShiftLeft" })).toBe(true);
+    expect(shouldSuppressRdpKeyRepeat({ repeat: true, code: "CapsLock" })).toBe(true);
   });
 
   it("falls back to printable physical keys only for plain text keys", () => {
