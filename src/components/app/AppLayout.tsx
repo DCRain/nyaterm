@@ -1,15 +1,15 @@
-import type { TFunction } from "i18next";
+﻿import type { TFunction } from "i18next";
 import {
   type ComponentProps,
   type ReactNode,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
 import FloatingPanel from "@/components/app/FloatingPanel";
-import { Minimize2 } from "lucide-react";
-import { MdClose, MdTerminal } from "react-icons/md";
+import { MdChevronLeft, MdChevronRight, MdTerminal } from "react-icons/md";
 import PanelStack from "@/components/app/PanelStack";
 import AboutDialog from "@/components/dialog/app/AboutDialog";
 import LockScreen from "@/components/dialog/app/LockScreen";
@@ -19,12 +19,14 @@ import type { HostKeyVerifyRequest } from "@/components/dialog/connections/HostK
 import { HostKeyVerifyDialog } from "@/components/dialog/connections/HostKeyVerifyDialog";
 import type { OtpRequest } from "@/components/dialog/connections/OtpDialog";
 import { OtpDialog } from "@/components/dialog/connections/OtpDialog";
+import type { FtpCertificateVerifyRequest } from "@/components/dialog/connections/FtpCertificateVerifyDialog";
+import { FtpCertificateVerifyDialog } from "@/components/dialog/connections/FtpCertificateVerifyDialog";
 import type { RdpCertificateVerifyRequest } from "@/components/dialog/connections/RdpCertificateVerifyDialog";
 import { RdpCertificateVerifyDialog } from "@/components/dialog/connections/RdpCertificateVerifyDialog";
-import type { SshAuthRequest } from "@/components/dialog/connections/SshAuthDialog";
-import { SshAuthDialog } from "@/components/dialog/connections/SshAuthDialog";
 import type { SshAgentAuthRequest } from "@/components/dialog/connections/SshAgentAuthDialog";
 import { SshAgentAuthDialog } from "@/components/dialog/connections/SshAgentAuthDialog";
+import type { SshAuthRequest } from "@/components/dialog/connections/SshAuthDialog";
+import { SshAuthDialog } from "@/components/dialog/connections/SshAuthDialog";
 import DockerSudoPasswordDialog, {
   type DockerSudoPasswordRequest,
 } from "@/components/dialog/docker/DockerSudoPasswordDialog";
@@ -35,21 +37,29 @@ import Header from "@/components/layout/Header";
 import ResizeHandle from "@/components/layout/ResizeHandle";
 import QuickCommands from "@/components/panel/QuickCommands";
 import SerialSendPanel from "@/components/panel/SendCommandPanel";
+import { TOGGLE_REMOTE_DESKTOP_CHROME_EVENT } from "@/components/remote-desktop/FloatingSessionChrome";
 import TabWindowsWorkspace from "@/components/terminal/TabWindowsWorkspace";
-import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useTheme } from "@/context/ThemeContext";
-import { hasVisibleActivityBarItems } from "@/lib/appWorkspace";
+import { resolveShortcutKeys } from "@/hooks/useShortcutMap";
 import {
   buildBackgroundImageLayerStyle,
   buildSurfaceCssVariables,
   isWindowTransparencyEnabled,
   loadBackgroundImageDataUrl,
 } from "@/lib/backgroundImage";
-import { isMacOS, isWindows } from "@/lib/platform";
+import { isWindows } from "@/lib/platform";
 import type { SendCommandPanelDraft } from "@/lib/sendCommandPanelEvents";
+import { matchesKeyEvent } from "@/lib/shortcutRegistry";
+import {
+  exitTerminalWindowFullscreen,
+  isTerminalWindowFullscreen,
+  TERMINAL_FULLSCREEN_CHANGED_EVENT,
+  toggleTerminalWindowFullscreen,
+} from "@/lib/terminalFullscreen";
 import type { UpdateInfo } from "@/lib/updater";
+import { cn } from "@/lib/utils";
 import { bounceTopModalWindow } from "@/lib/windowManager";
+import { useWindowTransparencyDom } from "@/lib/windowTransparencyDom";
 import type {
   AppearanceSettings,
   SavedConnection,
@@ -58,6 +68,9 @@ import type {
   UiConfig,
 } from "@/types/global";
 import StartWorkspace from "./start-workspace/StartWorkspace";
+
+type StartWorkspaceProps = ComponentProps<typeof StartWorkspace>;
+export type WorkbenchPaneProps = Omit<StartWorkspaceProps, "t" | "backgroundEnabled">;
 
 type HeaderProps = ComponentProps<typeof Header>;
 type ActivityBarProps = ComponentProps<typeof ActivityBar>;
@@ -68,16 +81,8 @@ interface AppLayoutProps {
   t: TFunction;
   uiConfig: UiConfig;
   appearance: AppearanceSettings;
-  paneFocusMode: boolean;
-  nativeFullscreen: boolean;
-  onExitPaneFocus: () => void;
-  header: Omit<HeaderProps, "onToggleLeftActivityBar" | "onToggleRightActivityBar">;
-  mobile: {
-    leftOpen: boolean;
-    rightOpen: boolean;
-    setLeftOpen: (open: boolean) => void;
-    setRightOpen: (open: boolean) => void;
-  };
+  keybindings?: Record<string, string>;
+  header: HeaderProps;
   leftActivityBar: ActivityBarSideProps;
   rightActivityBar: ActivityBarSideProps;
   onLeftResize: (delta: number) => void;
@@ -169,6 +174,8 @@ interface AppLayoutProps {
     onHostKeyVerifyDone: (requestId: string) => void;
     rdpCertificateVerifyRequest: RdpCertificateVerifyRequest | null;
     onRdpCertificateVerifyDone: (requestId: string) => void;
+    ftpCertificateVerifyRequest: FtpCertificateVerifyRequest | null;
+    onFtpCertificateVerifyDone: (requestId: string) => void;
     modalChildWindowCount: number;
     locked: boolean;
     hasMasterPassword: boolean;
@@ -181,11 +188,8 @@ export default function AppLayout({
   t,
   uiConfig,
   appearance,
-  paneFocusMode,
-  nativeFullscreen,
-  onExitPaneFocus,
+  keybindings = {},
   header,
-  mobile,
   leftActivityBar,
   rightActivityBar,
   onLeftResize,
@@ -210,9 +214,95 @@ export default function AppLayout({
   const backgroundImagePath = appearance.background_image_path?.trim() ?? "";
   const [backgroundDataUrl, setBackgroundDataUrl] = useState("");
   const [serialSendRunning, setSerialSendRunning] = useState(false);
+  const [terminalFullscreen, setTerminalFullscreen] = useState(false);
   // Latch the first time the serial send panel is shown so it stays mounted
   // (but hidden) afterwards, preserving the user's input across hide/show cycles.
   const serialSendEverShownRef = useRef(false);
+
+  const toggleTerminalFullscreen = useCallback(async () => {
+    try {
+      await toggleTerminalWindowFullscreen();
+      window.setTimeout(() => {
+        window.dispatchEvent(new CustomEvent("nyaterm:refresh-terminals"));
+      }, 50);
+    } catch {
+      // State is reset via TERMINAL_FULLSCREEN_CHANGED_EVENT.
+    }
+  }, []);
+
+  useEffect(() => {
+    const onFullscreenChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ active?: boolean }>).detail;
+      setTerminalFullscreen(Boolean(detail?.active));
+    };
+    window.addEventListener(TERMINAL_FULLSCREEN_CHANGED_EVENT, onFullscreenChanged);
+    return () => {
+      window.removeEventListener(TERMINAL_FULLSCREEN_CHANGED_EVENT, onFullscreenChanged);
+    };
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat) return;
+
+      const isF11 = event.code === "F11" || event.key === "F11" || event.key === "f11";
+      const keys = resolveShortcutKeys("view.toggleFullscreen", keybindings);
+      const matchesConfigured = Boolean(keys) && matchesKeyEvent(keys, event);
+      // Always accept bare F11 even if keybindings override is empty/broken.
+      const shouldToggle =
+        matchesConfigured ||
+        (isF11 && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey);
+
+      if (event.key === "Escape" && terminalFullscreen) {
+        event.preventDefault();
+        event.stopPropagation();
+        void exitTerminalWindowFullscreen().then(() => {
+          window.dispatchEvent(new CustomEvent("nyaterm:refresh-terminals"));
+        });
+        return;
+      }
+
+      if (!shouldToggle) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void toggleTerminalFullscreen();
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [keybindings, terminalFullscreen, toggleTerminalFullscreen]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat) return;
+      const keys = resolveShortcutKeys("view.toggleRemoteDesktopToolbar", keybindings);
+      if (!keys || !matchesKeyEvent(keys, event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      window.dispatchEvent(new CustomEvent(TOGGLE_REMOTE_DESKTOP_CHROME_EVENT));
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [keybindings]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void isTerminalWindowFullscreen().then((isFullscreen) => {
+      if (!cancelled) setTerminalFullscreen(isFullscreen);
+    });
+    return () => {
+      cancelled = true;
+      // Do not auto-exit on HMR/effect cleanup — that made F11 appear broken
+      // during hot reload. Exit only when the page is actually unloading.
+    };
+  }, []);
+
+  useEffect(() => {
+    const onPageHide = () => {
+      void exitTerminalWindowFullscreen().catch(() => {});
+    };
+    window.addEventListener("pagehide", onPageHide);
+    return () => window.removeEventListener("pagehide", onPageHide);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -241,90 +331,62 @@ export default function AppLayout({
     [appearance, backgroundEnabled],
   );
   const backgroundLayerStyle = useMemo(
-    () =>
-      buildBackgroundImageLayerStyle(effectiveAppearance, backgroundDataUrl),
+    () => buildBackgroundImageLayerStyle(effectiveAppearance, backgroundDataUrl),
     [effectiveAppearance, backgroundDataUrl],
   );
-  const windowTransparencyEnabled =
-    isWindowTransparencyEnabled(effectiveAppearance);
+  const windowTransparencyEnabled = isWindowTransparencyEnabled(effectiveAppearance);
+  const windowTransparencyBlur =
+    windowTransparencyEnabled &&
+    isWindows &&
+    Boolean(effectiveAppearance.window_transparency_blur);
+  useWindowTransparencyDom(theme.colors, effectiveAppearance);
   const shellStyle = useMemo(
     () => ({
       ...buildSurfaceCssVariables(theme.colors, effectiveAppearance),
       // When native window transparency is on, the shell background must be
       // transparent so the native backdrop is visible through the webview.
-      backgroundColor: windowTransparencyEnabled
-        ? "transparent"
-        : theme.colors.bg,
+      backgroundColor: windowTransparencyEnabled ? "transparent" : theme.colors.bg,
       color: "var(--df-text)",
     }),
     [effectiveAppearance, theme.colors, windowTransparencyEnabled],
   );
-  const hasLeftActivityItems = hasVisibleActivityBarItems(leftActivityBar);
-  const hasRightActivityItems = hasVisibleActivityBarItems(rightActivityBar);
+  const hasLeftActivityItems =
+    leftActivityBar.items.length > 0 ||
+    (leftActivityBar.bottomItems?.length ?? 0) > 0 ||
+    (leftActivityBar.hiddenItems?.length ?? 0) > 0;
+  const hasRightActivityItems =
+    rightActivityBar.items.length > 0 ||
+    (rightActivityBar.bottomItems?.length ?? 0) > 0 ||
+    (rightActivityBar.hiddenItems?.length ?? 0) > 0;
+  const leftActivityBarVisible = Boolean(leftActivityBar.visible);
+  const rightActivityBarVisible = Boolean(rightActivityBar.visible);
   const leftPanelOpen =
-    !paneFocusMode &&
     hasLeftActivityItems &&
+    leftActivityBarVisible &&
     (leftPanelIds.length > 0 || Boolean(leftOverlayPanelId));
   const rightPanelOpen =
-    !paneFocusMode &&
     hasRightActivityItems &&
+    rightActivityBarVisible &&
     (rightPanelIds.length > 0 || Boolean(rightOverlayPanelId));
-  const leftMobileOpen = hasLeftActivityItems && mobile.leftOpen;
-  const rightMobileOpen = hasRightActivityItems && mobile.rightOpen;
   const serialSendVisible = bottomPanel.activePanel === "serialSend";
   if (serialSendVisible) {
     serialSendEverShownRef.current = true;
   }
   const serialSendMounted =
     serialSendVisible || serialSendRunning || serialSendEverShownRef.current;
-
-  useEffect(() => {
-    const roots = [document.documentElement, document.body];
-    for (const root of roots) {
-      if (windowTransparencyEnabled) {
-        root.dataset.windowTransparency = "true";
-      } else {
-        delete root.dataset.windowTransparency;
-      }
-    }
-
-    return () => {
-      for (const root of roots) {
-        delete root.dataset.windowTransparency;
-      }
-    };
-  }, [windowTransparencyEnabled]);
-
-  useEffect(() => {
-    if (!hasLeftActivityItems && mobile.leftOpen) {
-      mobile.setLeftOpen(false);
-    }
-    if (!hasRightActivityItems && mobile.rightOpen) {
-      mobile.setRightOpen(false);
-    }
-  }, [
-    hasLeftActivityItems,
-    hasRightActivityItems,
-    mobile.leftOpen,
-    mobile.rightOpen,
-    mobile.setLeftOpen,
-    mobile.setRightOpen,
-  ]);
+  // When side chrome is gone, round the terminal so it doesn't cover window corners.
+  const leftEdgeOccupied =
+    !terminalFullscreen && ((hasLeftActivityItems && leftActivityBarVisible) || leftPanelOpen);
+  const rightEdgeOccupied =
+    !terminalFullscreen && ((hasRightActivityItems && rightActivityBarVisible) || rightPanelOpen);
 
   return (
     <div
       className="nyaterm-wallpaper-shell font-display relative h-full min-h-0 overflow-hidden"
       data-wallpaper-enabled={backgroundEnabled ? "true" : "false"}
       data-window-transparency={windowTransparencyEnabled ? "true" : "false"}
-      data-pane-focus={paneFocusMode ? "true" : "false"}
-      data-native-fullscreen={nativeFullscreen ? "true" : "false"}
-      data-window-transparency-blur={
-        windowTransparencyEnabled &&
-        isWindows &&
-        effectiveAppearance.window_transparency_blur
-          ? "true"
-          : "false"
-      }
+      data-window-transparency-blur={windowTransparencyBlur ? "true" : "false"}
+      data-terminal-fullscreen={terminalFullscreen ? "true" : "false"}
       style={shellStyle}
     >
       {backgroundEnabled && (
@@ -335,72 +397,31 @@ export default function AppLayout({
         />
       )}
       <div className="relative z-10 flex h-full min-h-0 flex-col">
-        {!paneFocusMode && (
-          <Header
-            {...header}
-            onToggleLeftActivityBar={() => {
-              if (hasLeftActivityItems) mobile.setLeftOpen(!mobile.leftOpen);
-            }}
-            onToggleRightActivityBar={() => {
-              if (hasRightActivityItems) mobile.setRightOpen(!mobile.rightOpen);
-            }}
-          />
-        )}
+        {!terminalFullscreen && <Header {...header} />}
 
         <main className="flex-1 flex overflow-hidden relative">
-          {!isMacOS && (leftMobileOpen || rightMobileOpen) && (
-            <div
-              className="absolute inset-0 bg-black/50 z-40 lg:hidden"
-              onClick={() => {
-                mobile.setLeftOpen(false);
-                mobile.setRightOpen(false);
-              }}
-            />
-          )}
-
-          {!paneFocusMode && hasLeftActivityItems && (
+          {!terminalFullscreen && hasLeftActivityItems && leftActivityBarVisible && (
             <ActivityBar
               {...leftActivityBar}
               side="left"
               zone={{ top: "left_top", bottom: "left_bottom" }}
+              className="rounded-bl-[var(--nyaterm-window-radius)]"
             />
           )}
 
-          {leftPanelOpen && (
+          {!terminalFullscreen && leftPanelOpen && (
             <>
               <div
                 style={{
                   width: uiConfig.left_width,
                   backgroundColor: "var(--df-bg-panel)",
                 }}
-                className={
-                  isMacOS
-                    ? "relative flex flex-col"
-                    : `
-                    fixed inset-y-0 left-10 z-40 flex flex-col shadow-xl transition-transform duration-200
-                    lg:relative lg:left-0 lg:translate-x-0 lg:z-0 lg:shadow-none
-                    ${
-                      leftMobileOpen
-                        ? "translate-x-0"
-                        : "-translate-x-[calc(100%+2.5rem)] lg:translate-x-0"
-                    }
-                  `
-                }
-              >
-                {!isMacOS && (
-                  <div
-                    className="lg:hidden h-10 flex items-center justify-end px-2 border-b shrink-0"
-                    style={{ borderColor: "var(--df-border)" }}
-                  >
-                    <button
-                      onClick={() => mobile.setLeftOpen(false)}
-                      style={{ color: "var(--df-text-muted)" }}
-                    >
-                      <MdClose />
-                    </button>
-                  </div>
+                className={cn(
+                  "relative flex flex-col overflow-hidden",
+                  !(hasLeftActivityItems && leftActivityBarVisible) &&
+                    "rounded-bl-[var(--nyaterm-window-radius)]",
                 )}
-
+              >
                 <div className="flex-1 min-h-0 overflow-hidden">
                   <PanelStack
                     panelIds={leftPanelIds}
@@ -408,33 +429,49 @@ export default function AppLayout({
                     sizes={panelStackSizes}
                     renderPanel={panelContent}
                     onResizePair={(aboveId, belowId, delta, containerHeight) =>
-                      onPanelStackResize(
-                        "left",
-                        aboveId,
-                        belowId,
-                        delta,
-                        containerHeight,
-                      )
+                      onPanelStackResize("left", aboveId, belowId, delta, containerHeight)
                     }
                   />
                 </div>
               </div>
-              <ResizeHandle
-                direction="horizontal"
-                onResize={onLeftResize}
-                className={isMacOS ? "" : "hidden lg:block"}
-              />
+              <ResizeHandle direction="horizontal" onResize={onLeftResize} />
             </>
           )}
 
           <section
-            className="flex-1 flex flex-col relative min-w-0 origin-top-left"
+            className={cn(
+              "relative flex min-w-0 flex-1 origin-top-left flex-col overflow-hidden",
+              !leftEdgeOccupied && "rounded-bl-[var(--nyaterm-window-radius)]",
+              !rightEdgeOccupied && "rounded-br-[var(--nyaterm-window-radius)]",
+              terminalFullscreen && "rounded-none",
+            )}
             style={{
-              backgroundColor: backgroundEnabled
-                ? "transparent"
-                : "var(--df-bg-terminal)",
+              backgroundColor:
+                backgroundEnabled && !terminalFullscreen ? "transparent" : "var(--df-bg-terminal)",
             }}
           >
+            {!terminalFullscreen && hasLeftActivityItems && !leftActivityBarVisible && (
+              <button
+                type="button"
+                className="absolute left-0 top-1/2 z-30 flex h-12 w-3 -translate-y-1/2 cursor-pointer items-center justify-center rounded-r-sm bg-transparent text-[var(--df-text-dimmed)] transition-colors hover:bg-[color-mix(in_srgb,var(--df-text-muted)_12%,transparent)] hover:text-[var(--df-primary)]"
+                aria-label={t("activityBar.showLeft")}
+                title={t("activityBar.showLeft")}
+                onClick={() => leftActivityBar.onShow?.()}
+              >
+                <MdChevronRight className="text-sm" />
+              </button>
+            )}
+            {!terminalFullscreen && hasRightActivityItems && !rightActivityBarVisible && (
+              <button
+                type="button"
+                className="absolute right-0 top-1/2 z-30 flex h-12 w-3 -translate-y-1/2 cursor-pointer items-center justify-center rounded-l-sm bg-transparent text-[var(--df-text-dimmed)] transition-colors hover:bg-[color-mix(in_srgb,var(--df-text-muted)_12%,transparent)] hover:text-[var(--df-primary)]"
+                aria-label={t("activityBar.showRight")}
+                title={t("activityBar.showRight")}
+                onClick={() => rightActivityBar.onShow?.()}
+              >
+                <MdChevronLeft className="text-sm" />
+              </button>
+            )}
             <div className="flex-1 relative overflow-hidden">
               {tabsCount === 0 ? (
                 <StartWorkspace
@@ -455,7 +492,14 @@ export default function AppLayout({
                   onEditConnection={emptyWorkspace.onEditConnection}
                 />
               ) : workspace.layout ? (
-                <TabWindowsWorkspace {...workspace} />
+                <TabWindowsWorkspace
+                  {...workspace}
+                  workbench={{
+                    t,
+                    backgroundEnabled,
+                    ...emptyWorkspace,
+                  }}
+                />
               ) : (
                 <div className="flex items-center justify-center h-full text-slate-500">
                   <div className="text-center space-y-3">
@@ -464,28 +508,7 @@ export default function AppLayout({
                   </div>
                 </div>
               )}
-              {paneFocusMode && (
-                <div className="pointer-events-none absolute right-2 top-2 z-30">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        size="icon-sm"
-                        variant="secondary"
-                        className="pointer-events-auto shadow-sm"
-                        aria-label={t("settings.shortcutLabels.togglePaneFocus")}
-                        onClick={onExitPaneFocus}
-                      >
-                        <Minimize2 className="size-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="left">
-                      {t("settings.shortcutLabels.togglePaneFocus")}
-                    </TooltipContent>
-                  </Tooltip>
-                </div>
-              )}
-              {!paneFocusMode && floatingPanelIds.left && (
+              {floatingPanelIds.left && (
                 <FloatingPanel
                   side="left"
                   panelId={floatingPanelIds.left}
@@ -497,7 +520,7 @@ export default function AppLayout({
                   {panelContent(floatingPanelIds.left)}
                 </FloatingPanel>
               )}
-              {!paneFocusMode && floatingPanelIds.right && (
+              {floatingPanelIds.right && (
                 <FloatingPanel
                   side="right"
                   panelId={floatingPanelIds.right}
@@ -511,12 +534,9 @@ export default function AppLayout({
               )}
             </div>
 
-            {!paneFocusMode && bottomPanel.activePanel === "quickCmdBar" && (
+            {bottomPanel.activePanel === "quickCmdBar" && (
               <>
-                <ResizeHandle
-                  direction="vertical"
-                  onResize={bottomPanel.onQuickCmdResize}
-                />
+                <ResizeHandle direction="vertical" onResize={bottomPanel.onQuickCmdResize} />
                 <div
                   style={{
                     height: bottomPanel.quickCmdHeight,
@@ -533,14 +553,11 @@ export default function AppLayout({
               </>
             )}
 
-            {!paneFocusMode && serialSendVisible && (
-              <ResizeHandle
-                direction="vertical"
-                onResize={bottomPanel.onSerialSendResize}
-              />
+            {serialSendVisible && (
+              <ResizeHandle direction="vertical" onResize={bottomPanel.onSerialSendResize} />
             )}
 
-            {!paneFocusMode && serialSendMounted && (
+            {serialSendMounted && (
               <div
                 style={{
                   ...(serialSendVisible
@@ -569,50 +586,22 @@ export default function AppLayout({
             )}
           </section>
 
-          {!paneFocusMode && hasRightActivityItems && (
+          {!terminalFullscreen && hasRightActivityItems && (
             <>
-              {rightPanelOpen && (
-                <ResizeHandle
-                  direction="horizontal"
-                  onResize={onRightResize}
-                  className={isMacOS ? "" : "hidden md:block"}
-                />
-              )}
+              {rightPanelOpen && <ResizeHandle direction="horizontal" onResize={onRightResize} />}
               <aside
                 style={{
                   width: rightPanelOpen ? uiConfig.right_width : 0,
                   backgroundColor: "var(--df-bg-panel)",
                   borderColor: "var(--df-border)",
                 }}
-                className={
-                  isMacOS
-                    ? `relative flex flex-col overflow-hidden ${rightPanelOpen ? "border-l" : "hidden"}`
-                    : `
-                    fixed inset-y-0 right-10 z-50 flex flex-col overflow-hidden shadow-xl transition-transform duration-200 border-l
-                    md:relative md:right-0 md:translate-x-0 md:z-0 md:shadow-none
-                    ${
-                      rightPanelOpen && rightMobileOpen
-                        ? "translate-x-0"
-                        : "translate-x-[calc(100%+2.5rem)] md:translate-x-0"
-                    }
-                    ${rightPanelOpen ? "" : "hidden"}
-                  `
-                }
-              >
-                {!isMacOS && (
-                  <div
-                    className="md:hidden h-10 flex items-center justify-end px-2 border-b shrink-0"
-                    style={{ borderColor: "var(--df-border)" }}
-                  >
-                    <button
-                      onClick={() => mobile.setRightOpen(false)}
-                      style={{ color: "var(--df-text-muted)" }}
-                    >
-                      <MdClose />
-                    </button>
-                  </div>
+                className={cn(
+                  "relative flex flex-col overflow-hidden",
+                  rightPanelOpen ? "border-l" : "hidden",
+                  !(hasRightActivityItems && rightActivityBarVisible) &&
+                    "rounded-br-[var(--nyaterm-window-radius)]",
                 )}
-
+              >
                 <div className="flex-1 min-h-0 overflow-hidden">
                   <PanelStack
                     panelIds={rightPanelIds}
@@ -620,13 +609,7 @@ export default function AppLayout({
                     sizes={panelStackSizes}
                     renderPanel={panelContent}
                     onResizePair={(aboveId, belowId, delta, containerHeight) =>
-                      onPanelStackResize(
-                        "right",
-                        aboveId,
-                        belowId,
-                        delta,
-                        containerHeight,
-                      )
+                      onPanelStackResize("right", aboveId, belowId, delta, containerHeight)
                     }
                   />
                 </div>
@@ -634,19 +617,17 @@ export default function AppLayout({
             </>
           )}
 
-          {!paneFocusMode && hasRightActivityItems && (
+          {!terminalFullscreen && hasRightActivityItems && rightActivityBarVisible && (
             <ActivityBar
               {...rightActivityBar}
               side="right"
               zone={{ top: "right_top", bottom: "right_bottom" }}
+              className="rounded-br-[var(--nyaterm-window-radius)]"
             />
           )}
         </main>
 
-        <AboutDialog
-          open={dialogs.aboutOpen}
-          onClose={() => dialogs.onAboutOpenChange(false)}
-        />
+        <AboutDialog open={dialogs.aboutOpen} onClose={() => dialogs.onAboutOpenChange(false)} />
 
         <SyncGroupDialog
           open={dialogs.syncGroupOpen}
@@ -666,10 +647,7 @@ export default function AppLayout({
         />
 
         <OtpDialog request={dialogs.otpRequest} onDone={dialogs.onOtpDone} />
-        <SshAuthDialog
-          request={dialogs.sshAuthRequest}
-          onDone={dialogs.onSshAuthDone}
-        />
+        <SshAuthDialog request={dialogs.sshAuthRequest} onDone={dialogs.onSshAuthDone} />
         <SshAgentAuthDialog
           request={dialogs.sshAgentAuthRequest}
           onDone={dialogs.onSshAgentAuthDone}
@@ -685,6 +663,10 @@ export default function AppLayout({
         <RdpCertificateVerifyDialog
           request={dialogs.rdpCertificateVerifyRequest}
           onDone={dialogs.onRdpCertificateVerifyDone}
+        />
+        <FtpCertificateVerifyDialog
+          request={dialogs.ftpCertificateVerifyRequest}
+          onDone={dialogs.onFtpCertificateVerifyDone}
         />
         <TransferDuplicateDialog />
 

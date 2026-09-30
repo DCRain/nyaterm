@@ -1,4 +1,4 @@
-import { listen } from "@tauri-apps/api/event";
+﻿import { listen } from "@tauri-apps/api/event";
 import { downloadDir } from "@tauri-apps/api/path";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -10,14 +10,23 @@ import AppOverlayDialogs from "./components/dialog/app/AppOverlayDialogs";
 import { McpApprovalHost } from "./components/dialog/app/McpApprovalHost";
 import type { HostKeyVerifyRequest } from "./components/dialog/connections/HostKeyVerifyDialog";
 import type { OtpRequest } from "./components/dialog/connections/OtpDialog";
+import type { FtpCertificateVerifyRequest } from "./components/dialog/connections/FtpCertificateVerifyDialog";
 import type { RdpCertificateVerifyRequest } from "./components/dialog/connections/RdpCertificateVerifyDialog";
+import RemoteDesktopClientMissingDialog from "./components/dialog/connections/RemoteDesktopClientMissingDialog";
 import type { SshAgentAuthRequest } from "./components/dialog/connections/SshAgentAuthDialog";
 import type { SshAuthRequest } from "./components/dialog/connections/SshAuthDialog";
 import type { DockerSudoPasswordRequest } from "./components/dialog/docker/DockerSudoPasswordDialog";
+import LocalShellPickerDialog, {
+  type LocalShellSelection,
+} from "./components/dialog/terminal/LocalShellPickerDialog";
 import type { QuickSwitcherSession } from "./components/dialog/terminal/SessionQuickSwitcherDialog";
+import { clearDirectoryChildrenCacheForSession } from "./components/panel/file-explorer/FileExplorerPathBar";
+import { clearFileExplorerSessionCacheForSession } from "./components/panel/file-explorer/model";
+
 import { useApp } from "./context/AppContext";
 import { TransferProvider } from "./context/TransferContext";
 import { useActivityBarController } from "./hooks/useActivityBarController";
+import { useActivitySessionCapabilities } from "./hooks/useActivitySessionCapabilities";
 import { type ExternalOpenRequest, useExternalOpenRequests } from "./hooks/useExternalOpenRequests";
 import { useFileDocumentCloseGuard } from "./hooks/useFileDocumentCloseGuard";
 import { useSettingsCloseGuard } from "./hooks/useSettingsCloseGuard";
@@ -36,6 +45,31 @@ import { resolveDisplayKeys } from "./hooks/useShortcutMap";
 import { useFileEditorZoom } from "./hooks/useFileEditorZoom";
 import { useTerminalZoom } from "./hooks/useTerminalZoom";
 import { useTabStatusIndicators } from "./hooks/useUnreadTabs";
+function storageWorkspaceInvalidate(
+  sessionId: string,
+): { command: string; connectionId: string } | null {
+  if (sessionId.startsWith("webdav:")) {
+    return {
+      command: "invalidate_webdav_connection",
+      connectionId: sessionId.slice("webdav:".length),
+    };
+  }
+  if (sessionId.startsWith("ftp:")) {
+    return {
+      command: "invalidate_ftp_connection",
+      connectionId: sessionId.slice("ftp:".length),
+    };
+  }
+  if (sessionId.startsWith("s3:")) {
+    return {
+      command: "invalidate_s3_connection",
+      connectionId: sessionId.slice("s3:".length),
+    };
+  }
+  return null;
+}
+
+
 import { AI_OPEN_EVENT, type AIOpenIntent } from "./lib/aiEvents";
 import type {
   ExternalConnectionChoice,
@@ -56,8 +90,8 @@ import {
   getRemoteDesktopPaneDisplay,
   getTemporaryLinkSessionType,
   isSessionCreationCancelled,
-  type StartupCommandRequest,
   sendStartupCommandToSession,
+  type StartupCommandRequest,
 } from "./lib/appSessionFactory";
 import {
   buildDirectoryChangeCommand,
@@ -65,6 +99,11 @@ import {
   carryOverSessionCwd,
   isTerminalDirectoryPath,
 } from "./lib/terminalSessionCwd";
+import {
+  clearInapplicableFloatingPanels,
+  isSftpOnlyPane,
+  resolveActivitySessionContext,
+} from "./lib/activityBarSessionCapabilities";
 import {
   buildPanelOpenUpdate,
   canCreateSessionFromPane,
@@ -75,7 +114,6 @@ import {
   type FloatingPanelsState,
   getItemSide,
   getSideOpenPanels,
-  getSideOverlayPanel,
   getVisibleActivityIds,
   hasLiveSession,
   isActivityItemAvailable,
@@ -87,7 +125,11 @@ import {
   reduceFloatingPanelSelect,
   type TrayAction,
 } from "./lib/appWorkspace";
-import { collectFileDocumentPaneIds, removePaneFromTabs } from "./lib/appWorkspaceClose";
+import {
+  collectFileDocumentPaneIds,
+  collectSettingsPaneIds,
+  removePaneFromTabs,
+} from "./lib/appWorkspaceClose";
 import {
   type AssetMonitoringCacheEntry,
   buildAssetPatchFromGpuOverview,
@@ -105,6 +147,16 @@ import {
 import { normalizeHeaderStatusMode } from "./lib/headerStatus";
 import { invoke } from "./lib/invoke";
 import { logger } from "./lib/logger";
+import { NOTE_OPEN_EVENT, type NoteOpenDetail } from "./lib/noteEditorEvents";
+import { SETTINGS_OPEN_EVENT, type SettingsOpenDetail } from "./lib/settingsEvents";
+import { subscribeOpenSshTerminalAtPath } from "./lib/openSshTerminalAtPath";
+import { detectSystemLanguage } from "./lib/systemLanguage";
+import {
+  launchSavedRemoteDesktop,
+  type RemoteDesktopClientInstallRecommendation,
+  type RemoteDesktopProtocol,
+  shouldLaunchExternalRemoteDesktop,
+} from "./lib/remoteDesktop";
 import {
   listenOpenSendCommandPanel,
   type SendCommandPanelDraft,
@@ -120,12 +172,14 @@ import { getSessionInputPeerIds, purgeSessionFromGroups } from "./lib/syncInputG
 import {
   findTerminalWindowLeafById,
   findTerminalWindowLeafByTabId,
+  flattenLeafTabs,
   flattenTerminalWindows,
+  getFirstTerminalWindowLeaf,
   insertTabAfterInLeaf,
   insertTabIntoLeaf,
   moveTabBetweenLeaves,
   reconcileTerminalWindows,
-  reorderTabsInLeaf,
+  reorderTabsGlobally,
   restoreTerminalWindowLayout,
   type SplitEdgeDirection,
   serializeTerminalWindowLayout,
@@ -139,25 +193,29 @@ import type { TemporaryLinkConfig } from "./lib/temporaryLink";
 import { preserveTerminalReconnectContent } from "./lib/terminalReconnectHistory";
 import { setBackendTransferDuplicatePrompt } from "./lib/transferDuplicatePrompt";
 import { checkForUpdate, type UpdateInfo } from "./lib/updater";
+import { shellQuote } from "./lib/utils";
 import {
   getOwnerMainWindowLabel,
+  isPrimaryMainWindow,
   type NewSessionTarget,
   openNewSession,
   openNewSessionWithTarget,
-  openSettings,
   setOwnerMainWindowLabel,
 } from "./lib/windowManager";
 import {
   collectSessionPanes,
   findPaneBySessionId,
   findSessionPaneById,
-  findSessionPaneBySessionId,
   findTabBySessionId,
   getActivePane,
   getActiveSessionTabDisplayName,
   getReleasedSessionIds,
 } from "./lib/workspaceTabs";
-import { getDynamicTitle, startDynamicTitles, useDynamicTitles } from "./lib/dynamicTabTitles";
+import {
+  getDynamicTitle,
+  startDynamicTitles,
+  useDynamicTitles,
+} from "./lib/dynamicTabTitles";
 import type {
   AppSettings,
   AssetMetadata,
@@ -175,19 +233,19 @@ import type {
   WorkspaceSessionType,
 } from "./types/global";
 
-function safeRecordingName(name: string) {
-  return name.normalize("NFC").replace(/[^\p{L}\p{M}\p{N}._-]+/gu, "_") || "session";
-}
-
-const TERMINAL_SESSION_TYPES: ReadonlySet<SessionType> = new Set([
-  "SSH",
-  "Local",
-  "Telnet",
-  "Serial",
+const STARTUP_OPEN_CONNECTION_TYPES = new Set<SavedConnection["type"]>([
+  "ssh",
+  "local_terminal",
+  "telnet",
+  "serial",
 ]);
 
-function asTerminalSessionType(type: WorkspaceSessionType): SessionType | null {
-  return TERMINAL_SESSION_TYPES.has(type as SessionType) ? (type as SessionType) : null;
+function isStartupOpenConnection(connection: SavedConnection) {
+  return Boolean(connection.open_on_startup) && STARTUP_OPEN_CONNECTION_TYPES.has(connection.type);
+}
+
+function safeRecordingName(name: string) {
+  return name.normalize("NFC").replace(/[^\p{L}\p{M}\p{N}._-]+/gu, "_") || "session";
 }
 
 function joinPath(dir: string, fileName: string) {
@@ -196,18 +254,6 @@ function joinPath(dir: string, fileName: string) {
 
 function eventTargetsCurrentWindow(targetWindowLabel?: string | null) {
   return !targetWindowLabel || targetWindowLabel === getOwnerMainWindowLabel();
-}
-
-function isSftpOnlyPane(
-  pane: SessionPane | null | undefined,
-  sessionsById: Map<string, SessionInfo> | null | undefined,
-) {
-  return (
-    pane?.paneKind === "terminal" &&
-    pane.type === "SSH" &&
-    (pane.sshRuntimeMode === "sftp" ||
-      sessionsById?.get(pane.sessionId)?.ssh_runtime_mode === "sftp")
-  );
 }
 
 function isSftpOnlySession(
@@ -234,6 +280,10 @@ function App() {
     setActivePane,
     addTab,
     addPendingTab,
+    openWorkbenchTab,
+    openNoteTab,
+    openExternalMarkdownTab,
+    openSettingsTab,
     updateTabSession,
     markTabConnectionFailed,
     updatePaneSession,
@@ -252,6 +302,7 @@ function App() {
     closeTabs,
     savedConnections,
     savedGroups,
+    connectionsLoaded,
     recordRecentConnection,
     syncGroups,
     setSyncGroups,
@@ -283,24 +334,47 @@ function App() {
 
   useEffect(() => {
     if (!settingsLoaded) return;
-    import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
+
+    let cancelled = false;
+
+    const waitForPaint = () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => resolve());
+        });
+      });
+
+    void (async () => {
+      // Paint the shell chrome first; don't wait for session restore (that was
+      // making startup feel like a 1s blank pause before anything appeared).
+      await waitForPaint();
+      if (cancelled) return;
+
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      if (cancelled) return;
+
       const currentWindow = getCurrentWindow();
       setOwnerMainWindowLabel(currentWindow.label);
-      currentWindow.show();
-    });
+      try {
+        await invoke("reveal_main_window");
+      } catch {
+        await currentWindow.show().catch(() => {});
+        await currentWindow.setFocus().catch(() => {});
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [settingsLoaded]);
 
   useEffect(() => {
-    if (appSettings.ui.language && appSettings.ui.language !== i18n.language) {
-      i18n.changeLanguage(appSettings.ui.language);
+    const nextLanguage = appSettings.ui.language?.trim() || detectSystemLanguage();
+    if (nextLanguage !== i18n.language) {
+      void i18n.changeLanguage(nextLanguage);
     }
   }, [appSettings.ui.language, i18n]);
 
-  // Mobile state
-  const [mobileLeftOpen, setMobileLeftOpen] = useState(false);
-  const [mobileRightOpen, setMobileRightOpen] = useState(false);
-  const [paneFocusMode, setPaneFocusMode] = useState(false);
-  const [nativeFullscreen, setNativeFullscreen] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [showUpdateDialog, setShowUpdateDialog] = useState(false);
   const [showSyncGroupDialog, setShowSyncGroupDialog] = useState(false);
@@ -322,6 +396,7 @@ function App() {
   const {
     pendingSettingsPaneClose,
     savingSettingsPanes,
+    requestSettingsPaneClose,
     handleSaveSettingsPanesAndClose,
     handleDiscardSettingsPanesAndClose,
     handlePendingSettingsPaneCloseOpenChange,
@@ -331,11 +406,16 @@ function App() {
   const [sendCommandDraft, setSendCommandDraft] = useState<SendCommandPanelDraft | null>(null);
   const [showSessionQuickSwitcher, setShowSessionQuickSwitcher] = useState(false);
   const [sessionSwitcherScope, setSessionSwitcherScope] = useState<"all" | "connections">("all");
+  const [showLocalShellPicker, setShowLocalShellPicker] = useState(false);
   const [showTemporarySshLink, setShowTemporarySshLink] = useState(false);
   const [externalMatchDialog, setExternalMatchDialog] = useState<ExternalMatchDialogState | null>(
     null,
   );
   const [postLoginConfirm, setPostLoginConfirm] = useState<PostLoginConfirmState | null>(null);
+  const [remoteDesktopMissing, setRemoteDesktopMissing] = useState<{
+    protocol: RemoteDesktopProtocol;
+    recommendations: RemoteDesktopClientInstallRecommendation[];
+  } | null>(null);
   const allowProgrammaticWindowCloseRef = useRef(false);
 
   const handleSendCommandDraftConsumed = useCallback(() => {
@@ -371,6 +451,9 @@ function App() {
     useState<DockerSudoPasswordRequest | null>(null);
   const [rdpCertificateRequests, setRdpCertificateRequests] = useState<
     RdpCertificateVerifyRequest[]
+  >([]);
+  const [ftpCertificateRequests, setFtpCertificateRequests] = useState<
+    FtpCertificateVerifyRequest[]
   >([]);
   const lastCloudConflictRevisionRef = useRef<string | null>(null);
   const modalChildWindowCount = useModalChildWindows();
@@ -631,6 +714,16 @@ function App() {
     );
 
     unsubs.push(
+      listen<FtpCertificateVerifyRequest>("ftp-certificate-verify", (event) => {
+        if (!eventTargetsCurrentWindow(event.payload.targetWindowLabel)) return;
+        setFtpCertificateRequests((current) => {
+          if (current.some((item) => item.requestId === event.payload.requestId)) return current;
+          return [...current, event.payload];
+        });
+      }),
+    );
+
+    unsubs.push(
       listen<{
         requestId: string;
         sessionId: string;
@@ -673,6 +766,32 @@ function App() {
         try {
           const conns = await invoke<SavedConnection[]>("get_saved_connections");
           const conn = conns.find((c) => c.id === connectionId);
+          if (conn && shouldLaunchExternalRemoteDesktop(conn)) {
+            try {
+              const result = await launchSavedRemoteDesktop(conn);
+              if (result.status === "missing_client") {
+                setRemoteDesktopMissing({
+                  protocol: result.protocol,
+                  recommendations: result.recommendations,
+                });
+                return;
+              }
+              recordRecentConnection(conn.id);
+              updateUi({ saved_connections_last_opened_connection_id: conn.id });
+              toast.success(
+                t("remoteDesktop.launched", {
+                  name: conn.name,
+                  client: result.client_name,
+                  defaultValue: "Opened {{name}} with {{client}}",
+                }),
+              );
+            } catch (error) {
+              toast.error(
+                t("savedConnections.connectionFailed", { error: getErrorMessage(error) }),
+              );
+            }
+            return;
+          }
           const connName = conn?.name ?? connectionId;
           const sessionType = getConnectionSessionType(conn);
           const sourceTab = sourceTabId
@@ -695,6 +814,7 @@ function App() {
               name: connName,
               type: sessionType,
               connectionId,
+              view: undefined,
               display: getRemoteDesktopPaneDisplay(conn),
             });
           } else {
@@ -707,7 +827,6 @@ function App() {
               { display: getRemoteDesktopPaneDisplay(conn) },
             );
             tabId = pending.tabId;
-            paneId = pending.paneId;
             createRequestId = pending.createRequestId;
             if (targetLeafId) {
               setTerminalWindows((current) =>
@@ -728,21 +847,18 @@ function App() {
                 sessionId = await invoke<string>("create_local_session", {
                   connectionId,
                   createRequestId,
-                  recordingScopeId: paneId,
                 });
                 break;
               case "telnet":
                 sessionId = await invoke<string>("create_telnet_session", {
                   connectionId,
                   createRequestId,
-                  recordingScopeId: paneId,
                 });
                 break;
               case "serial":
                 sessionId = await invoke<string>("create_serial_session", {
                   connectionId,
                   createRequestId,
-                  recordingScopeId: paneId,
                 });
                 break;
               case "rdp":
@@ -755,7 +871,6 @@ function App() {
                 sessionId = await invoke<string>("create_ssh_session", {
                   connectionId,
                   createRequestId,
-                  recordingScopeId: paneId,
                 });
                 break;
             }
@@ -815,9 +930,11 @@ function App() {
     removeSecurityPrompt,
     setActivePane,
     setActiveTabId,
+    t,
     updateAutoIconForSessionStart,
     updatePaneSession,
     updateTabSession,
+    updateUi,
     replaceAppSettings,
   ]);
 
@@ -855,57 +972,6 @@ function App() {
   const activeConnection = activePane?.connectionId
     ? (savedConnections.find((connection) => connection.id === activePane.connectionId) ?? null)
     : null;
-
-  useEffect(() => {
-    if (paneFocusMode && !activePane) {
-      setPaneFocusMode(false);
-    }
-  }, [activePane, paneFocusMode]);
-
-  useEffect(() => {
-    if (!paneFocusMode) return;
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
-      event.preventDefault();
-      event.stopPropagation();
-      setPaneFocusMode(false);
-    };
-    window.addEventListener("keydown", handleEscape, true);
-    return () => window.removeEventListener("keydown", handleEscape, true);
-  }, [paneFocusMode]);
-
-  useEffect(() => {
-    const frame = requestAnimationFrame(() => {
-      window.dispatchEvent(
-        new CustomEvent("nyaterm:refresh-terminals", {
-          detail: { nativeFullscreen, paneFocusMode },
-        }),
-      );
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [paneFocusMode, nativeFullscreen]);
-
-  useEffect(() => {
-    let disposed = false;
-    let unlistenResize: (() => void) | undefined;
-    let unlistenFocus: (() => void) | undefined;
-    void import("@tauri-apps/api/window").then(async ({ getCurrentWindow }) => {
-      if (disposed) return;
-      const currentWindow = getCurrentWindow();
-      const syncFullscreen = async () => {
-        const fullscreen = await currentWindow.isFullscreen().catch(() => false);
-        if (!disposed) setNativeFullscreen(fullscreen);
-      };
-      await syncFullscreen();
-      unlistenResize = await currentWindow.onResized(() => void syncFullscreen());
-      unlistenFocus = await currentWindow.onFocusChanged(() => void syncFullscreen());
-    });
-    return () => {
-      disposed = true;
-      unlistenResize?.();
-      unlistenFocus?.();
-    };
-  }, []);
   const [aiIntent, setAiIntent] = useState<AIOpenIntent | null>(null);
   const [terminalWindows, setTerminalWindows] = useState<TerminalWindowNode | null>(null);
   const previousActiveTabIdRef = useRef<string | null>(null);
@@ -1018,6 +1084,61 @@ function App() {
     tabsRef.current = tabs;
   }, [tabs]);
 
+  const getActiveWorkbenchTarget = useCallback(() => {
+    if (!activeTabId) return null;
+    const tab = tabsRef.current.find((item) => item.id === activeTabId);
+    if (!tab) return null;
+    const pane = getActivePane(tab);
+    if (!pane || pane.view !== "workbench") return null;
+    return { tabId: tab.id, paneId: pane.id };
+  }, [activeTabId]);
+
+  const beginPendingSession = useCallback(
+    (
+      name: string,
+      type: WorkspaceSessionType,
+      connectionId?: string,
+      options?: { view?: SessionPane["view"] },
+      paneOverrides?: Partial<SessionPane> & {
+        display?: Extract<SessionPane, { paneKind: "remote-desktop" }>["display"];
+      },
+    ): { tabId: string; paneId?: string; createRequestId: string } => {
+      const workbench = getActiveWorkbenchTarget();
+      if (workbench) {
+        const createRequestId = markPaneConnecting(workbench.tabId, workbench.paneId, {
+          name,
+          type,
+          connectionId,
+          view: options?.view,
+          temporaryConfig: paneOverrides?.temporaryConfig,
+          sshRuntimeMode: paneOverrides?.sshRuntimeMode,
+          display: paneOverrides?.display,
+        });
+        if (createRequestId) {
+          return {
+            tabId: workbench.tabId,
+            paneId: workbench.paneId,
+            createRequestId,
+          };
+        }
+      }
+
+      const pending = addPendingTab(
+        name,
+        type,
+        connectionId,
+        undefined,
+        options?.view ? { view: options.view } : undefined,
+        paneOverrides,
+      );
+      return {
+        tabId: pending.tabId,
+        createRequestId: pending.createRequestId,
+      };
+    },
+    [addPendingTab, getActiveWorkbenchTarget, markPaneConnecting],
+  );
+
   useEffect(() => {
     terminalWindowsRef.current = terminalWindows;
   }, [terminalWindows]);
@@ -1044,19 +1165,33 @@ function App() {
     };
   }, [windowTitle]);
 
-  const handleNewSession = useCallback((parentGroupId?: string) => {
-    openNewSession(
-      undefined,
-      undefined,
-      parentGroupId ? { initialGroupId: parentGroupId } : undefined,
-    );
-  }, []);
+  const handleNewSession = useCallback(
+    (parentGroupId?: string) => {
+      const workbench = getActiveWorkbenchTarget();
+      openNewSession(undefined, undefined, {
+        ...(parentGroupId ? { initialGroupId: parentGroupId } : {}),
+        ...(workbench ? { sourceTabId: workbench.tabId, sourcePaneId: workbench.paneId } : {}),
+      });
+    },
+    [getActiveWorkbenchTarget],
+  );
+
+  const handleOpenWorkbench = useCallback(() => {
+    updateUi({ start_workspace_mode: "workbench" });
+    openWorkbenchTab(t("terminal.openWorkbench"));
+  }, [openWorkbenchTab, t, updateUi]);
 
   const handleEditConnection = useCallback(
     (conn: SavedConnection, autoConnect?: boolean, target?: NewSessionTarget) => {
-      openNewSession(conn.id, autoConnect, target);
+      const workbench = getActiveWorkbenchTarget();
+      openNewSession(conn.id, autoConnect, {
+        ...target,
+        ...(workbench && !target?.sourceTabId
+          ? { sourceTabId: workbench.tabId, sourcePaneId: workbench.paneId }
+          : {}),
+      });
     },
-    [],
+    [getActiveWorkbenchTarget],
   );
 
   const maybePromptConnectionEdit = useCallback(
@@ -1074,6 +1209,204 @@ function App() {
     [savedConnections],
   );
 
+  const openS3Workspace = useCallback(
+    (connection: SavedConnection) => {
+      if (connection.type !== "s3") {
+        toast.error(t("savedConnections.openS3Only"));
+        return;
+      }
+
+      const existing = tabsRef.current.find((tab) =>
+        collectSessionPanes(tab.root).some(
+          (pane) => pane.view === "s3" && pane.connectionId === connection.id,
+        ),
+      );
+      if (existing) {
+        setActiveTabId(existing.id);
+        recordRecentConnection(connection.id);
+        updateUi({ saved_connections_last_opened_connection_id: connection.id });
+        return;
+      }
+
+      const tabName = t("s3Workspace.tabTitle", { name: connection.name });
+      addPendingTab(
+        tabName,
+        "S3",
+        connection.id,
+        undefined,
+        { view: "s3" },
+        {
+          connecting: false,
+          sessionId: `s3:${connection.id}`,
+        },
+      );
+      recordRecentConnection(connection.id);
+      updateUi({ saved_connections_last_opened_connection_id: connection.id });
+    },
+    [addPendingTab, recordRecentConnection, setActiveTabId, t, updateUi],
+  );
+
+  const openFtpWorkspace = useCallback(
+    (connection: SavedConnection) => {
+      if (connection.type !== "ftp") {
+        toast.error(t("savedConnections.openFtpOnly"));
+        return;
+      }
+
+      const existing = tabsRef.current.find((tab) =>
+        collectSessionPanes(tab.root).some(
+          (pane) => pane.view === "ftp" && pane.connectionId === connection.id,
+        ),
+      );
+      if (existing) {
+        void invoke("invalidate_ftp_connection", { connection_id: connection.id });
+        setActiveTabId(existing.id);
+        recordRecentConnection(connection.id);
+        updateUi({ saved_connections_last_opened_connection_id: connection.id });
+        return;
+      }
+
+      const tabName = t("ftpWorkspace.tabTitle", { name: connection.name });
+      addPendingTab(
+        tabName,
+        "FTP",
+        connection.id,
+        undefined,
+        { view: "ftp" },
+        {
+          connecting: false,
+          sessionId: `ftp:${connection.id}`,
+        },
+      );
+      recordRecentConnection(connection.id);
+      updateUi({ saved_connections_last_opened_connection_id: connection.id });
+    },
+    [addPendingTab, invoke, recordRecentConnection, setActiveTabId, t, updateUi],
+  );
+
+  const openWebDavWorkspace = useCallback(
+    (connection: SavedConnection) => {
+      if (connection.type !== "webdav") {
+        toast.error(t("savedConnections.openWebDavOnly"));
+        return;
+      }
+
+      const existing = tabsRef.current.find((tab) =>
+        collectSessionPanes(tab.root).some(
+          (pane) => pane.view === "webdav" && pane.connectionId === connection.id,
+        ),
+      );
+      if (existing) {
+        clearFileExplorerSessionCacheForSession(`webdav:${connection.id}`);
+        clearDirectoryChildrenCacheForSession(`webdav:${connection.id}`);
+        void invoke("invalidate_webdav_connection", { connection_id: connection.id });
+        setActiveTabId(existing.id);
+        recordRecentConnection(connection.id);
+        updateUi({ saved_connections_last_opened_connection_id: connection.id });
+        return;
+      }
+
+      const tabName = t("webdavWorkspace.tabTitle", { name: connection.name });
+      addPendingTab(
+        tabName,
+        "WebDAV",
+        connection.id,
+        undefined,
+        { view: "webdav" },
+        {
+          connecting: false,
+          sessionId: `webdav:${connection.id}`,
+        },
+      );
+      recordRecentConnection(connection.id);
+      updateUi({ saved_connections_last_opened_connection_id: connection.id });
+    },
+    [addPendingTab, invoke, recordRecentConnection, setActiveTabId, t, updateUi],
+  );
+
+  const openSftpWorkspace = useCallback(
+    async (connection: SavedConnection) => {
+      if (connection.type !== "ssh" && connection.type !== "sftp") {
+        toast.error(t("savedConnections.openSftpSshOnly"));
+        return;
+      }
+      if (connection.type === "ssh" && connection.sftp?.enabled === false) {
+        toast.error(t("savedConnections.openSftpDisabled"));
+        return;
+      }
+
+      const tabName = t("sftpWorkspace.tabTitle", { name: connection.name });
+      const pending = beginPendingSession(
+        tabName,
+        "SSH",
+        connection.id,
+        { view: "sftp" },
+        { sshRuntimeMode: "sftp" },
+      );
+      const { tabId, paneId, createRequestId } = pending;
+
+      try {
+        const sessionId = await createSessionForConnection(
+          connection,
+          createRequestId,
+          undefined,
+          "sftp",
+        );
+        if (paneId ? !hasPane(tabId, paneId) : !hasTab(tabId)) {
+          await closeStaleCreatedSession(sessionId);
+          return;
+        }
+        if (paneId) {
+          updatePaneSession(tabId, paneId, sessionId);
+        } else {
+          updateTabSession(tabId, sessionId);
+        }
+        recordRecentConnection(connection.id);
+        updateUi({ saved_connections_last_opened_connection_id: connection.id });
+        updateAutoIconForSessionStart(connection.id, sessionId);
+      } catch (error) {
+        if (
+          isSessionCreationCancelled(error) ||
+          (paneId ? !hasPane(tabId, paneId) : !hasTab(tabId))
+        ) {
+          return;
+        }
+        const errorMessage = getErrorMessage(error);
+        logger.error({
+          domain: "session.lifecycle",
+          event: "sftp_workspace.open_failed",
+          message: "Open SFTP workspace failed",
+          ids: { connection_id: connection.id },
+          error,
+        });
+        if (paneId) {
+          markPaneConnectionFailed(tabId, paneId, errorMessage);
+        } else {
+          markTabConnectionFailed(tabId, errorMessage);
+        }
+        maybePromptConnectionEdit(connection.id, errorMessage, {
+          sourceTabId: tabId,
+          sourcePaneId: paneId,
+        });
+        toast.error(t("savedConnections.connectionFailed", { error: errorMessage }));
+      }
+    },
+    [
+      beginPendingSession,
+      hasPane,
+      hasTab,
+      markPaneConnectionFailed,
+      markTabConnectionFailed,
+      maybePromptConnectionEdit,
+      recordRecentConnection,
+      t,
+      updateAutoIconForSessionStart,
+      updatePaneSession,
+      updateTabSession,
+      updateUi,
+    ],
+  );
+
   const connectSavedConnection = useCallback(
     async (
       connection: SavedConnection,
@@ -1085,18 +1418,71 @@ function App() {
         onSuccess?: (sessionId: string) => void;
       },
     ) => {
-      const pending = addPendingTab(
+      if (connection.type === "s3") {
+        openS3Workspace(connection);
+        return;
+      }
+
+      if (connection.type === "ftp") {
+        openFtpWorkspace(connection);
+        return;
+      }
+
+      if (connection.type === "webdav") {
+        openWebDavWorkspace(connection);
+        return;
+      }
+
+      if (connection.type === "sftp") {
+        void openSftpWorkspace(connection);
+        return;
+      }
+
+      if (shouldLaunchExternalRemoteDesktop(connection)) {
+        try {
+          const result = await launchSavedRemoteDesktop(connection);
+          if (result.status === "missing_client") {
+            setRemoteDesktopMissing({
+              protocol: result.protocol,
+              recommendations: result.recommendations,
+            });
+            return;
+          }
+          recordRecentConnection(connection.id);
+          updateUi({ saved_connections_last_opened_connection_id: connection.id });
+          toast.success(
+            t("remoteDesktop.launched", {
+              name: connection.name,
+              client: result.client_name,
+              defaultValue: "Opened {{name}} with {{client}}",
+            }),
+          );
+        } catch (error) {
+          const errorMessage = getErrorMessage(error);
+          logger.error({
+            domain: "session.lifecycle",
+            event: "remote_desktop.open_failed",
+            message: options?.failureContext ?? "Remote desktop launch failed",
+            ids: { connection_id: connection.id },
+            error,
+          });
+          toast.error(t("savedConnections.connectionFailed", { error: errorMessage }));
+        }
+        return;
+      }
+
+      const pending = beginPendingSession(
+
         connection.name,
         getConnectionSessionType(connection),
         connection.id,
-        undefined,
         undefined,
         {
           display: getRemoteDesktopPaneDisplay(connection),
           sshRuntimeMode: options?.runtimeModeOverride,
         },
       );
-      const { tabId, createRequestId } = pending;
+      const { tabId, paneId, createRequestId } = pending;
       options?.onPending?.({ tabId, createRequestId });
 
       try {
@@ -1105,19 +1491,26 @@ function App() {
           createRequestId,
           undefined,
           options?.runtimeModeOverride,
-          pending.paneId,
         );
-        if (!hasTab(tabId)) {
+        if (paneId ? !hasPane(tabId, paneId) : !hasTab(tabId)) {
+
           await closeStaleCreatedSession(sessionId);
           return;
         }
-        updateTabSession(tabId, sessionId);
+        if (paneId) {
+          updatePaneSession(tabId, paneId, sessionId);
+        } else {
+          updateTabSession(tabId, sessionId);
+        }
         focusTerminalSession(sessionId);
         recordRecentConnection(connection.id);
         updateAutoIconForSessionStart(connection.id, sessionId);
         options?.onSuccess?.(sessionId);
       } catch (error) {
-        if (isSessionCreationCancelled(error) || !hasTab(tabId)) {
+        if (
+          isSessionCreationCancelled(error) ||
+          (paneId ? !hasPane(tabId, paneId) : !hasTab(tabId))
+        ) {
           if (options?.propagateError) throw error;
           return;
         }
@@ -1129,34 +1522,108 @@ function App() {
           ids: { connection_id: connection.id },
           error,
         });
-        markTabConnectionFailed(tabId, errorMessage);
+        if (paneId) {
+          markPaneConnectionFailed(tabId, paneId, errorMessage);
+        } else {
+          markTabConnectionFailed(tabId, errorMessage);
+        }
         maybePromptConnectionEdit(connection.id, errorMessage, {
           sourceTabId: tabId,
+          sourcePaneId: paneId,
         });
         toast.error(t("savedConnections.connectionFailed", { error: errorMessage }));
         if (options?.propagateError) throw error;
       }
     },
     [
-      addPendingTab,
+      beginPendingSession,
+      hasPane,
       hasTab,
+      markPaneConnectionFailed,
       markTabConnectionFailed,
       maybePromptConnectionEdit,
+      openS3Workspace,
+      openFtpWorkspace,
+      openWebDavWorkspace,
+      openSftpWorkspace,
       recordRecentConnection,
       t,
       updateAutoIconForSessionStart,
+      updatePaneSession,
       updateTabSession,
+      updateUi,
     ],
   );
 
-  const openSavedConnectionWithSftp = useCallback(
-    (connection: SavedConnection) =>
-      connectSavedConnection(connection, {
-        runtimeModeOverride: "sftp",
-        failureContext: "SFTP-only connection failed",
-      }),
-    [connectSavedConnection],
+  const openSshTerminalAtRemotePath = useCallback(
+    async (connectionId: string, path: string) => {
+      const connection = savedConnections.find((item) => item.id === connectionId);
+      if (!connection || (connection.type !== "ssh" && connection.type !== "sftp")) {
+        toast.error(t("savedConnections.openSftpSshOnly"));
+        return;
+      }
+
+      const directoryPath = path.trim();
+      if (!directoryPath) return;
+
+      const startupCommand = {
+        command: `cd ${shellQuote(directoryPath)}`,
+        delayMs: 800,
+      };
+      const pending = addPendingTab(connection.name, "SSH", connection.id);
+      const { tabId, createRequestId } = pending;
+
+      try {
+        const sessionId = await createSessionForConnection(
+          connection,
+          createRequestId,
+          startupCommand,
+          connection.type === "sftp" ? "standard" : undefined,
+        );
+        if (!hasTab(tabId)) {
+          await closeStaleCreatedSession(sessionId);
+          return;
+        }
+        updateTabSession(tabId, sessionId);
+        focusTerminalSession(sessionId);
+        recordRecentConnection(connection.id);
+        updateUi({ saved_connections_last_opened_connection_id: connection.id });
+        updateAutoIconForSessionStart(connection.id, sessionId);
+      } catch (error) {
+        if (isSessionCreationCancelled(error) || !hasTab(tabId)) {
+          return;
+        }
+        const errorMessage = getErrorMessage(error);
+        logger.error({
+          domain: "session.lifecycle",
+          event: "sftp_open_terminal_here_failed",
+          message: "Open SSH terminal at path failed",
+          ids: { connection_id: connection.id },
+          error,
+        });
+        markTabConnectionFailed(tabId, errorMessage);
+        toast.error(t("savedConnections.connectionFailed", { error: errorMessage }));
+      }
+    },
+    [
+      addPendingTab,
+      hasTab,
+      markTabConnectionFailed,
+      recordRecentConnection,
+      savedConnections,
+      t,
+      updateAutoIconForSessionStart,
+      updateTabSession,
+      updateUi,
+    ],
   );
+
+  useEffect(() => {
+    return subscribeOpenSshTerminalAtPath((detail) => {
+      void openSshTerminalAtRemotePath(detail.connectionId, detail.path);
+    });
+  }, [openSshTerminalAtRemotePath]);
+
 
   const mcpSessionOpenRequestsRef = useRef(
     new Map<string, { tabId: string; createRequestId: string }>(),
@@ -1243,31 +1710,32 @@ function App() {
 
   const connectTemporaryConnection = useCallback(
     async (config: TemporaryLinkConfig) => {
-      const pending = addPendingTab(
+      const pending = beginPendingSession(
         config.name,
         getTemporaryLinkSessionType(config),
         undefined,
         undefined,
-        undefined,
         { temporaryConfig: config },
       );
-      const { tabId, createRequestId } = pending;
+      const { tabId, paneId, createRequestId } = pending;
 
       try {
-        const sessionId = await createTemporarySession(
-          config,
-          createRequestId,
-          undefined,
-          pending.paneId,
-        );
-        if (!hasTab(tabId)) {
+        const sessionId = await createTemporarySession(config, createRequestId);
+        if (paneId ? !hasPane(tabId, paneId) : !hasTab(tabId)) {
           await closeStaleCreatedSession(sessionId);
           return;
         }
-        updateTabSession(tabId, sessionId);
+        if (paneId) {
+          updatePaneSession(tabId, paneId, sessionId);
+        } else {
+          updateTabSession(tabId, sessionId);
+        }
         focusTerminalSession(sessionId);
       } catch (error) {
-        if (isSessionCreationCancelled(error) || !hasTab(tabId)) {
+        if (
+          isSessionCreationCancelled(error) ||
+          (paneId ? !hasPane(tabId, paneId) : !hasTab(tabId))
+        ) {
           return;
         }
         const errorMessage = getErrorMessage(error);
@@ -1277,11 +1745,24 @@ function App() {
           message: "Temporary connection failed",
           error,
         });
-        markTabConnectionFailed(tabId, errorMessage);
+        if (paneId) {
+          markPaneConnectionFailed(tabId, paneId, errorMessage);
+        } else {
+          markTabConnectionFailed(tabId, errorMessage);
+        }
         toast.error(t("savedConnections.connectionFailed", { error: errorMessage }));
       }
     },
-    [addPendingTab, hasTab, markTabConnectionFailed, t, updateTabSession],
+    [
+      beginPendingSession,
+      hasPane,
+      hasTab,
+      markPaneConnectionFailed,
+      markTabConnectionFailed,
+      t,
+      updatePaneSession,
+      updateTabSession,
+    ],
   );
 
   const connectExternalLocalSession = useCallback(
@@ -1290,11 +1771,7 @@ function App() {
       const { tabId, createRequestId } = pending;
 
       try {
-        const sessionId = await createExternalLocalSession(
-          workingDir,
-          createRequestId,
-          pending.paneId,
-        );
+        const sessionId = await createExternalLocalSession(workingDir, createRequestId);
         if (!hasTab(tabId)) {
           await closeStaleCreatedSession(sessionId);
           return;
@@ -1351,8 +1828,14 @@ function App() {
         data: {
           source: request.source,
           target_window_label: request.targetWindowLabel,
+          kind: request.kind,
         },
       });
+
+      if (request.kind === "markdownFile") {
+        openExternalMarkdownTab(request.rawUrl);
+        return;
+      }
 
       const parsed = parseExternalOpenUrl(request.rawUrl);
       if (!parsed.ok) {
@@ -1463,6 +1946,7 @@ function App() {
       connectExternalLocalSession,
       connectSavedConnection,
       connectTemporaryConnection,
+      openExternalMarkdownTab,
       t,
     ],
   );
@@ -1471,6 +1955,68 @@ function App() {
     ready: settingsLoaded && startupRestoreComplete && !isLocked,
     onRequest: handleExternalOpenRequest,
   });
+
+  const hasOpenedStartupConnectionsRef = useRef(false);
+
+  useEffect(() => {
+    if (
+      !settingsLoaded ||
+      !startupRestoreComplete ||
+      !connectionsLoaded ||
+      isLocked ||
+      !isPrimaryMainWindow()
+    ) {
+      return;
+    }
+    if (hasOpenedStartupConnectionsRef.current) return;
+    hasOpenedStartupConnectionsRef.current = true;
+
+    const existingConnectionIds = new Set<string>();
+    for (const tab of tabs) {
+      for (const pane of collectSessionPanes(tab.root)) {
+        if (pane.connectionId) existingConnectionIds.add(pane.connectionId);
+      }
+    }
+
+    const toOpen = savedConnections
+      .filter(
+        (connection) =>
+          isStartupOpenConnection(connection) && !existingConnectionIds.has(connection.id),
+      )
+      .sort((a, b) => {
+        const orderDiff = (a.sort_order ?? 0) - (b.sort_order ?? 0);
+        if (orderDiff !== 0) return orderDiff;
+        return a.name.localeCompare(b.name);
+      });
+
+    if (toOpen.length === 0) return;
+
+    void (async () => {
+      for (const connection of toOpen) {
+        try {
+          await connectSavedConnection(connection, {
+            failureContext: "Connection failed from startup open",
+          });
+        } catch (error) {
+          logger.error({
+            domain: "session.lifecycle",
+            event: "session.startup_open_failed",
+            message: "Failed to open startup connection",
+            ids: { connection_id: connection.id },
+            error,
+          });
+        }
+      }
+    })();
+  }, [
+    connectSavedConnection,
+    connectionsLoaded,
+    isLocked,
+    savedConnections,
+    settingsLoaded,
+    startupRestoreComplete,
+    tabs,
+  ]);
 
   const persistTerminalWindowLayout = useCallback(
     (layout: TerminalWindowNode | null, nextTabs: Tab[] = tabsRef.current) => {
@@ -1567,6 +2113,25 @@ function App() {
     return () => window.removeEventListener(AI_OPEN_EVENT, handler);
   }, [openPanel]);
 
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<NoteOpenDetail>).detail;
+      if (!detail?.noteId) return;
+      openNoteTab(detail.noteId, detail.title);
+    };
+    window.addEventListener(NOTE_OPEN_EVENT, handler);
+    return () => window.removeEventListener(NOTE_OPEN_EVENT, handler);
+  }, [openNoteTab]);
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<SettingsOpenDetail>).detail;
+      openSettingsTab(detail?.section);
+    };
+    window.addEventListener(SETTINGS_OPEN_EVENT, handler);
+    return () => window.removeEventListener(SETTINGS_OPEN_EVENT, handler);
+  }, [openSettingsTab]);
+
   const { unreadTabIds, disconnectedTabIds } = useTabStatusIndicators(tabs, activeTabId);
 
   const handleSelectLeafTab = useCallback(
@@ -1600,6 +2165,11 @@ function App() {
 
   const handleConnectConnectionFromLeaf = useCallback(
     async (leafId: string, connection: SavedConnection) => {
+      if (shouldLaunchExternalRemoteDesktop(connection)) {
+        await connectSavedConnection(connection);
+        return;
+      }
+
       const targetLeaf = terminalWindows
         ? findTerminalWindowLeafById(terminalWindows, leafId)
         : null;
@@ -1632,13 +2202,7 @@ function App() {
       }
 
       try {
-        const sessionId = await createSessionForConnection(
-          connection,
-          createRequestId,
-          undefined,
-          undefined,
-          pending.paneId,
-        );
+        const sessionId = await createSessionForConnection(connection, createRequestId);
         if (!hasTab(tabId)) {
           await closeStaleCreatedSession(sessionId);
           return;
@@ -1667,6 +2231,7 @@ function App() {
     },
     [
       addPendingTab,
+      connectSavedConnection,
       hasTab,
       handleSelectLeafTab,
       markTabConnectionFailed,
@@ -1679,13 +2244,54 @@ function App() {
     ],
   );
 
-  const handleReorderTabsInLeaf = useCallback((_: string, fromTabId: string, toIndex: number) => {
+  const handleReorderHeaderTabs = useCallback((fromTabId: string, toIndex: number) => {
     preserveRestoredLeafActiveTabsRef.current = false;
     restoredGlobalActiveTabIdRef.current = null;
     setTerminalWindows((current) =>
-      current ? reorderTabsInLeaf(current, fromTabId, toIndex) : current,
+      current ? reorderTabsGlobally(current, fromTabId, toIndex) : current,
     );
   }, []);
+
+  const handleSelectHeaderTab = useCallback(
+    (tabId: string) => {
+      if (!terminalWindows) {
+        setActiveTabId(tabId);
+        return;
+      }
+      const leaf = findTerminalWindowLeafByTabId(terminalWindows, tabId);
+      if (leaf) {
+        handleSelectLeafTab(leaf.id, tabId);
+        return;
+      }
+      setActiveTabId(tabId);
+    },
+    [handleSelectLeafTab, setActiveTabId, terminalWindows],
+  );
+
+  const handleAddHeaderTab = useCallback(() => {
+    if (!terminalWindows) {
+      openNewSessionWithTarget();
+      return;
+    }
+    const leaf =
+      (activeTabId ? findTerminalWindowLeafByTabId(terminalWindows, activeTabId) : null) ??
+      getFirstTerminalWindowLeaf(terminalWindows);
+    handleAddTabFromLeaf(leaf.id);
+  }, [activeTabId, handleAddTabFromLeaf, openNewSessionWithTarget, terminalWindows]);
+
+  const handleConnectConnectionFromHeader = useCallback(
+    async (connection: SavedConnection) => {
+      if (!terminalWindows) {
+        await connectSavedConnection(connection);
+        return;
+      }
+      const leaf =
+        (activeTabId ? findTerminalWindowLeafByTabId(terminalWindows, activeTabId) : null) ??
+        getFirstTerminalWindowLeaf(terminalWindows);
+      await handleConnectConnectionFromLeaf(leaf.id, connection);
+    },
+    [activeTabId, connectSavedConnection, handleConnectConnectionFromLeaf, terminalWindows],
+  );
 
   const handleMoveTabToLeaf = useCallback(
     (fromTabId: string, targetLeafId: string, toIndex: number) => {
@@ -1760,10 +2366,38 @@ function App() {
     async (
       pane: Pick<
         SessionPane,
-        "connecting" | "connectError" | "sessionId" | "createRequestId" | "type"
+        "connecting" | "connectError" | "sessionId" | "createRequestId" | "type" | "view"
       >,
     ) => {
+      const storageInvalidate = storageWorkspaceInvalidate(pane.sessionId);
+      if (
+        storageInvalidate ||
+        pane.view === "s3" ||
+        pane.view === "ftp" ||
+        pane.view === "webdav" ||
+        pane.type === "S3" ||
+        pane.type === "FTP" ||
+        pane.type === "WebDAV"
+      ) {
+        if (storageInvalidate) {
+          clearFileExplorerSessionCacheForSession(pane.sessionId);
+          clearDirectoryChildrenCacheForSession(pane.sessionId);
+          await invoke(storageInvalidate.command, {
+            connection_id: storageInvalidate.connectionId,
+          }).catch(() => {});
+        }
+        return true;
+      }
+
       if (pane.connecting) {
+        if (
+          pane.view === "workbench" ||
+          pane.view === "note" ||
+          pane.view === "externalMarkdown" ||
+          pane.view === "settings"
+        ) {
+          return true;
+        }
         if (pane.type === "RDP") {
           await invoke("close_rdp_session", {
             sessionId: pane.sessionId,
@@ -1798,6 +2432,15 @@ function App() {
         return true;
       }
 
+      if (
+        pane.view === "workbench" ||
+        pane.view === "note" ||
+        pane.view === "externalMarkdown" ||
+        pane.view === "settings"
+      ) {
+        return true;
+      }
+
       try {
         if (pane.type === "RDP") {
           await invoke("close_rdp_session", { sessionId: pane.sessionId });
@@ -1829,12 +2472,6 @@ function App() {
 
   const closeReleasedSessions = useCallback(
     async (previousTabs: Tab[], nextTabs: Tab[]) => {
-      const retainedPaneIds = new Set(
-        nextTabs.flatMap((tab) => collectSessionPanes(tab.root).map((pane) => pane.id)),
-      );
-      const releasedPanes = previousTabs
-        .flatMap((tab) => collectSessionPanes(tab.root))
-        .filter((pane) => !retainedPaneIds.has(pane.id));
       const releasedSessionIds = getReleasedSessionIds(previousTabs, nextTabs);
       const results = await Promise.all(
         releasedSessionIds.map((sessionId) => {
@@ -1844,13 +2481,7 @@ function App() {
           return pane ? closePaneBackendSession(pane) : Promise.resolve(true);
         }),
       );
-      if (!results.every(Boolean)) return false;
-      await Promise.all(
-        releasedPanes
-          .filter((pane) => pane.paneKind !== "file")
-          .map((pane) => invoke("finish_recording_scope", { scopeId: pane.id })),
-      );
-      return true;
+      return results.every(Boolean);
     },
     [closePaneBackendSession],
   );
@@ -1896,10 +2527,15 @@ function App() {
   const requestCloseTabs = useCallback(
     async (tabsToClose: Tab[], options?: { nextActiveTabId?: string | null }) => {
       const tabIds = tabsToClose.map((tab) => tab.id);
-      const paneIds = collectFileDocumentPaneIds(tabsToClose);
-      await requestFileDocumentClose(paneIds, () => executeCloseTabs(tabIds, options));
+      const filePaneIds = collectFileDocumentPaneIds(tabsToClose);
+      const settingsPaneIds = collectSettingsPaneIds(tabsToClose);
+      await requestFileDocumentClose(filePaneIds, async () => {
+        await requestSettingsPaneClose(settingsPaneIds, async () => {
+          await executeCloseTabs(tabIds, options);
+        });
+      });
     },
-    [executeCloseTabs, requestFileDocumentClose],
+    [executeCloseTabs, requestFileDocumentClose, requestSettingsPaneClose],
   );
 
   const executeClosePane = useCallback(
@@ -1918,10 +2554,15 @@ function App() {
 
   const requestClosePane = useCallback(
     async (tab: Tab, pane: SessionPane) => {
-      const paneIds = pane.paneKind === "file" ? [pane.id] : [];
-      await requestFileDocumentClose(paneIds, () => executeClosePane(tab.id, pane.id));
+      const filePaneIds = pane.paneKind === "file" ? [pane.id] : [];
+      const settingsPaneIds = pane.view === "settings" ? [pane.id] : [];
+      await requestFileDocumentClose(filePaneIds, async () => {
+        await requestSettingsPaneClose(settingsPaneIds, async () => {
+          await executeClosePane(tab.id, pane.id);
+        });
+      });
     },
-    [executeClosePane, requestFileDocumentClose],
+    [executeClosePane, requestFileDocumentClose, requestSettingsPaneClose],
   );
 
   const handleCloseWorkspaceTab = useCallback(
@@ -2054,29 +2695,10 @@ function App() {
   // --- Shortcut callbacks ---
 
   const handleNewLocalTerminal = useCallback(() => {
-    const pending = addPendingTab(t("menu.newLocalTerminal"), "Local");
-    invoke<string>("create_local_session", {
-      recordingScopeId: pending.paneId,
-      createRequestId: pending.createRequestId,
-    })
-      .then((sessionId) => {
-        if (!hasTab(pending.tabId)) {
-          void closeStaleCreatedSession(sessionId);
-          return;
-        }
-        updateTabSession(pending.tabId, sessionId);
-      })
-      .catch((e) => {
-        logger.error({
-          domain: "session.lifecycle",
-          event: "session.create_failed",
-          message: "Failed to create local session",
-          data: { session_type: "Local" },
-          error: e,
-        });
-        markTabConnectionFailed(pending.tabId, getErrorMessage(e));
-      });
-  }, [addPendingTab, hasTab, markTabConnectionFailed, t, updateTabSession]);
+    if (!isLocked) {
+      setShowLocalShellPicker(true);
+    }
+  }, [isLocked]);
 
   const handleCloseActiveTab = useCallback(() => {
     if (!activeTab) return;
@@ -2136,6 +2758,38 @@ function App() {
       return;
     }
     updateUi((prev) => {
+      const activityBarHidden = !prev.activity_bar_layout.show_left;
+      if (activityBarHidden) {
+        const first = getVisibleActivityIds(
+          [...prev.activity_bar_layout.left_top, ...prev.activity_bar_layout.left_bottom],
+          prev,
+        ).find((id) => !NON_PANEL_IDS.has(id));
+        if (prev.active_left_panel || (prev.left_open_panels?.length ?? 0) > 0) {
+          return {
+            activity_bar_layout: {
+              ...prev.activity_bar_layout,
+              show_left: true,
+            },
+          };
+        }
+        if (!first) {
+          return {
+            activity_bar_layout: {
+              ...prev.activity_bar_layout,
+              show_left: true,
+            },
+          };
+        }
+        return {
+          activity_bar_layout: {
+            ...prev.activity_bar_layout,
+            show_left: true,
+          },
+          ...(EXCLUSIVE_PANEL_IDS.has(first)
+            ? { active_left_panel: first }
+            : { left_open_panels: [first], active_left_panel: first }),
+        };
+      }
       if (multiPanelOpen) {
         if ((prev.left_open_panels?.length ?? 0) > 0 || prev.active_left_panel) {
           return { left_open_panels: [], active_left_panel: null };
@@ -2180,6 +2834,38 @@ function App() {
       return;
     }
     updateUi((prev) => {
+      const activityBarHidden = !prev.activity_bar_layout.show_right;
+      if (activityBarHidden) {
+        const first = getVisibleActivityIds(
+          [...prev.activity_bar_layout.right_top, ...prev.activity_bar_layout.right_bottom],
+          prev,
+        ).find((id) => !NON_PANEL_IDS.has(id));
+        if (prev.active_right_panel || (prev.right_open_panels?.length ?? 0) > 0) {
+          return {
+            activity_bar_layout: {
+              ...prev.activity_bar_layout,
+              show_right: true,
+            },
+          };
+        }
+        if (!first) {
+          return {
+            activity_bar_layout: {
+              ...prev.activity_bar_layout,
+              show_right: true,
+            },
+          };
+        }
+        return {
+          activity_bar_layout: {
+            ...prev.activity_bar_layout,
+            show_right: true,
+          },
+          ...(EXCLUSIVE_PANEL_IDS.has(first)
+            ? { active_right_panel: first }
+            : { right_open_panels: [first], active_right_panel: first }),
+        };
+      }
       if (multiPanelOpen) {
         if ((prev.right_open_panels?.length ?? 0) > 0 || prev.active_right_panel) {
           return { right_open_panels: [], active_right_panel: null };
@@ -2219,8 +2905,8 @@ function App() {
   useFileEditorZoom(updateAppSettings);
 
   const handleOpenSettings = useCallback(() => {
-    openSettings();
-  }, []);
+    openSettingsTab();
+  }, [openSettingsTab]);
 
   const handleLockScreen = useCallback(() => {
     if (appSettings.security.enable_startup_lock || appSettings.security.enable_idle_lock) {
@@ -2257,17 +2943,19 @@ function App() {
   const handleQuitApplication = useCallback(() => {
     setShowQuitConfirm(false);
     void requestFileDocumentClose(collectFileDocumentPaneIds(tabs), async () => {
-      await persistWorkspaceLayoutNow().catch((error) => {
-        logger.error({
-          domain: "settings.persistence",
-          event: "workspace_layout.persist_before_quit_failed",
-          message: "Failed to persist workspace layout before quit",
-          error,
+      await requestSettingsPaneClose(collectSettingsPaneIds(tabs), async () => {
+        await persistWorkspaceLayoutNow().catch((error) => {
+          logger.error({
+            domain: "settings.persistence",
+            event: "workspace_layout.persist_before_quit_failed",
+            message: "Failed to persist workspace layout before quit",
+            error,
+          });
         });
+        await invoke<void>("quit_application");
       });
-      await invoke<void>("quit_application");
     });
-  }, [persistWorkspaceLayoutNow, requestFileDocumentClose, tabs]);
+  }, [persistWorkspaceLayoutNow, requestFileDocumentClose, requestSettingsPaneClose, tabs]);
 
   useEffect(() => {
     if (!settingsLoaded) return;
@@ -2300,21 +2988,23 @@ function App() {
           }
 
           await requestFileDocumentClose(collectFileDocumentPaneIds(tabs), async () => {
-            await persistWorkspaceLayoutNow().catch((error) => {
-              logger.error({
-                domain: "settings.persistence",
-                event: "workspace_layout.persist_before_close_failed",
-                message: "Failed to persist workspace layout before close",
-                error,
+            await requestSettingsPaneClose(collectSettingsPaneIds(tabs), async () => {
+              await persistWorkspaceLayoutNow().catch((error) => {
+                logger.error({
+                  domain: "settings.persistence",
+                  event: "workspace_layout.persist_before_close_failed",
+                  message: "Failed to persist workspace layout before close",
+                  error,
+                });
               });
+              allowProgrammaticWindowCloseRef.current = true;
+              await currentWindow.close().catch(() => {
+                allowProgrammaticWindowCloseRef.current = false;
+              });
+              window.setTimeout(() => {
+                allowProgrammaticWindowCloseRef.current = false;
+              }, 1000);
             });
-            allowProgrammaticWindowCloseRef.current = true;
-            await currentWindow.close().catch(() => {
-              allowProgrammaticWindowCloseRef.current = false;
-            });
-            window.setTimeout(() => {
-              allowProgrammaticWindowCloseRef.current = false;
-            }, 1000);
           });
         });
       })
@@ -2331,6 +3021,7 @@ function App() {
     appSettings.general.minimize_to_tray,
     persistWorkspaceLayoutNow,
     requestFileDocumentClose,
+    requestSettingsPaneClose,
     settingsLoaded,
     tabs,
   ]);
@@ -2435,7 +3126,7 @@ function App() {
         );
         try {
           const sessionId = await createSessionForPane(
-            { ...pane, id: pending.paneId },
+            pane,
             createRequestId,
             startupCommand,
             workingDir,
@@ -2580,17 +3271,22 @@ function App() {
     ],
   );
 
+  const handleDuplicateSessionWithCommand = useCallback(
+    (tab: Tab, command: string, delayMs: number) =>
+      handleDuplicateSession(tab, { command, delayMs }),
+    [handleDuplicateSession],
+  );
+
+  const handleMultiplexSshSessionWithCommand = useCallback(
+    (tab: Tab, command: string, delayMs: number) =>
+      handleMultiplexSshSession(tab, { command, delayMs }),
+    [handleMultiplexSshSession],
+  );
+
   const handleMultiplexSshSftpSession = useCallback(
     async (tab: Tab) => {
       const pane = getActivePane(tab);
-      if (
-        !pane ||
-        pane.paneKind !== "terminal" ||
-        pane.type !== "SSH" ||
-        pane.connecting ||
-        pane.connectError ||
-        !pane.sessionId
-      ) {
+      if (!pane || pane.type !== "SSH" || pane.connecting || pane.connectError || !pane.sessionId) {
         return;
       }
 
@@ -2660,18 +3356,6 @@ function App() {
       updateAutoIconForSessionStart,
       updateTabSession,
     ],
-  );
-
-  const handleDuplicateSessionWithCommand = useCallback(
-    (tab: Tab, command: string, delayMs: number) =>
-      handleDuplicateSession(tab, { command, delayMs }),
-    [handleDuplicateSession],
-  );
-
-  const handleMultiplexSshSessionWithCommand = useCallback(
-    (tab: Tab, command: string, delayMs: number) =>
-      handleMultiplexSshSession(tab, { command, delayMs }),
-    [handleMultiplexSshSession],
   );
 
   const getActiveTab = useCallback(
@@ -2920,8 +3604,12 @@ function App() {
   const handleSplitSession = useCallback(
     async (tab: Tab, direction: PaneSplitDirection) => {
       const pane = getActivePane(tab);
-      if (!pane || pane.paneKind === "file" || !canCreateSessionFromPane(pane)) return;
-      const leaf = terminalWindows ? findTerminalWindowLeafByTabId(terminalWindows, tab.id) : null;
+      if (!pane || pane.view === "sftp" || pane.paneKind === "file" || !canCreateSessionFromPane(pane))
+        return;
+      const leaf = terminalWindows
+        ? findTerminalWindowLeafByTabId(terminalWindows, tab.id)
+        : null;
+
       if (!leaf) {
         toast.error(t("tabCtx.splitFailed"));
         return;
@@ -2951,10 +3639,7 @@ function App() {
         setTerminalWindows((current) =>
           current ? splitTerminalWindowForTab(current, tab.id, direction, newTabId) : current,
         );
-        const sessionId = await createSessionForPane(
-          { ...pane, id: pending.paneId },
-          pending.createRequestId,
-        );
+        const sessionId = await createSessionForPane(pane, pending.createRequestId);
         if (newTabId) {
           if (!hasTab(newTabId)) {
             await closeStaleCreatedSession(sessionId);
@@ -3171,12 +3856,11 @@ function App() {
 
   const handleCloseInactiveTabs = useCallback(
     async (keepTabId: string) => {
-      const leaf = terminalWindows
-        ? findTerminalWindowLeafByTabId(terminalWindows, keepTabId)
-        : null;
-      const targetTabs = leaf?.tabIds ?? tabs.map((tab) => tab.id);
+      const tabOrder = terminalWindows
+        ? flattenLeafTabs(terminalWindows, tabsById).map((tab) => tab.id)
+        : tabs.map((tab) => tab.id);
       const targetTabsToClose = tabs.filter(
-        (tab) => targetTabs.includes(tab.id) && tab.id !== keepTabId,
+        (tab) => tabOrder.includes(tab.id) && tab.id !== keepTabId,
       );
       const tabsToClose = targetTabsToClose.filter((tab) => !tab.locked);
       const skippedLockedCount = targetTabsToClose.length - tabsToClose.length;
@@ -3189,13 +3873,14 @@ function App() {
 
       if (skippedLockedCount > 0) toast.info(t("tabCtx.lockedTabsSkipped"));
     },
-    [activeTabId, requestCloseTabs, setActiveTabId, t, tabs, terminalWindows],
+    [activeTabId, requestCloseTabs, setActiveTabId, t, tabs, tabsById, terminalWindows],
   );
 
   const handleCloseRightTabs = useCallback(
     async (tabId: string) => {
-      const leaf = terminalWindows ? findTerminalWindowLeafByTabId(terminalWindows, tabId) : null;
-      const tabOrder = leaf?.tabIds ?? tabs.map((tab) => tab.id);
+      const tabOrder = terminalWindows
+        ? flattenLeafTabs(terminalWindows, tabsById).map((tab) => tab.id)
+        : tabs.map((tab) => tab.id);
       const idx = tabOrder.indexOf(tabId);
       if (idx === -1) return;
 
@@ -3207,7 +3892,7 @@ function App() {
       if (tabsToClose.length > 0) await requestCloseTabs(tabsToClose);
       if (skippedLockedCount > 0) toast.info(t("tabCtx.lockedTabsSkipped"));
     },
-    [requestCloseTabs, t, tabs, terminalWindows],
+    [requestCloseTabs, t, tabs, tabsById, terminalWindows],
   );
 
   const handleSessionInfo = useCallback((tab: Tab) => {
@@ -3331,18 +4016,56 @@ function App() {
   }, [activePane, handleToggleSessionRecordingById, isLocked]);
 
   const handleTogglePaneFocus = useCallback(() => {
-    if (!activePane) return;
-    setPaneFocusMode((current) => !current);
-  }, [activePane]);
+    // Pane focus mode UI is provided by main; dev shell uses header tab strip without focus mode yet.
+  }, []);
 
   const handleToggleNativeFullscreen = useCallback(() => {
     void import("@tauri-apps/api/window").then(async ({ getCurrentWindow }) => {
       const currentWindow = getCurrentWindow();
       const fullscreen = await currentWindow.isFullscreen();
       await currentWindow.setFullscreen(!fullscreen);
-      setNativeFullscreen(!fullscreen);
     });
   }, []);
+
+  const handleOpenDirectoryInNewTerminal = useCallback(
+    (sessionId: string, path: string) => {
+      const source = tabs
+        .map((tab) => ({
+          tab,
+          pane: findPaneBySessionId(tab, sessionId),
+        }))
+        .find(({ pane }) => pane?.paneKind === "terminal");
+      const tab = source?.tab;
+      const pane = source?.pane;
+      const session = liveSessionsById?.get(sessionId);
+      if (
+        !tab ||
+        !pane ||
+        pane.paneKind !== "terminal" ||
+        !session?.connected ||
+        isSftpOnlyPane(pane, liveSessionsById) ||
+        (pane.type !== "SSH" && pane.type !== "Local")
+      ) {
+        toast.error(t("fileExplorer.directoryTerminalUnavailable"));
+        return;
+      }
+      if (pane.type === "Local") {
+        if (!isTerminalDirectoryPath(path)) {
+          toast.error(t("fileExplorer.directoryTerminalInvalidPath"));
+          return;
+        }
+        void handleDuplicateSession(tab, undefined, pane, path);
+        return;
+      }
+      const command = buildDirectoryChangeCommand(path, "posix");
+      if (!command) {
+        toast.error(t("fileExplorer.directoryTerminalInvalidPath"));
+        return;
+      }
+      void handleDuplicateSession(tab, { command, delayMs: 0 }, pane);
+    },
+    [handleDuplicateSession, liveSessionsById, t, tabs],
+  );
 
   useGlobalShortcuts(
     {
@@ -3436,7 +4159,7 @@ function App() {
   const handleLeftResize = useCallback(
     (delta: number) => {
       updateUi((prev) => ({
-        left_width: Math.max(160, Math.min(720, (prev.left_width || 256) + delta)),
+        left_width: Math.max(160, Math.min(720, (prev.left_width || 306) + delta)),
       }));
     },
     [updateUi],
@@ -3445,7 +4168,7 @@ function App() {
   const handleRightResize = useCallback(
     (delta: number) => {
       updateUi((prev) => ({
-        right_width: Math.max(200, Math.min(720, (prev.right_width || 288) - delta)),
+        right_width: Math.max(200, Math.min(720, (prev.right_width || 306) - delta)),
       }));
     },
     [updateUi],
@@ -3470,29 +4193,53 @@ function App() {
   );
 
   const {
+    isApplicable,
+    isVisibleOnBar,
+    leftPanelIds,
+    rightPanelIds,
+    leftOverlayPanelId,
+    rightOverlayPanelId,
+    effectiveFloatingPanels,
+    stickyPatch,
+  } = useActivitySessionCapabilities({
+    activePane,
+    liveSessionsById,
+    uiConfig,
+    multiPanelOpen,
+    floatingPanels,
+  });
+
+  const {
     leftTopItems,
     leftBottomItems,
     rightTopItems,
     rightBottomItems,
-    leftHiddenItems,
-    rightHiddenItems,
     showLabelsLeft,
     showLabelsRight,
+    showLeft: showLeftActivityBar,
+    showRight: showRightActivityBar,
+    leftHiddenItems,
+    rightHiddenItems,
     toggleActiveIds,
     handleItemSelect,
     handleReorder,
     handleMoveItem,
     handleToggleLabel,
+    handleToggleVisibility,
+    handleSetVisibility,
     handleHideItem,
     handleShowItem,
     handleToggleItemVisibility,
     handleResetActivityBarLayout,
+
   } = useActivityBarController({
     uiConfig,
     activeSessionId,
     recordingSessions,
     multiPanelOpen,
     panelOpenMode,
+    isItemVisibleOnBar: isVisibleOnBar,
+    isItemApplicable: isApplicable,
     onFloatingPanelSelect: handleFloatingPanelSelect,
     onFloatingPanelMove: handleFloatingPanelMove,
     updateUi,
@@ -3531,59 +4278,9 @@ function App() {
     activeRemoteStatsEnabled,
     uiConfig.remote_stats_interval ?? 3,
   );
-  const networkHistoryStore = useNetworkHistory(remoteStats.sessionId, remoteStats.stats);
-
-  const handleOpenDirectoryInNewTerminal = useCallback(
-    (sessionId: string, path: string) => {
-      const source = tabs
-        .map((tab) => ({
-          tab,
-          pane: findSessionPaneBySessionId(tab.root, sessionId),
-        }))
-        .find(({ pane }) => pane?.paneKind === "terminal");
-      const tab = source?.tab;
-      const pane = source?.pane;
-      const session = liveSessionsById?.get(sessionId);
-      if (
-        !tab ||
-        !pane ||
-        pane.paneKind !== "terminal" ||
-        !session?.connected ||
-        isSftpOnlyPane(pane, liveSessionsById) ||
-        (pane.type !== "SSH" && pane.type !== "Local")
-      ) {
-        toast.error(t("fileExplorer.directoryTerminalUnavailable"));
-        return;
-      }
-      if (pane.type === "Local") {
-        if (!isTerminalDirectoryPath(path)) {
-          toast.error(t("fileExplorer.directoryTerminalInvalidPath"));
-          return;
-        }
-        void handleDuplicateSession(tab, undefined, pane, path);
-        return;
-      }
-      const command = buildDirectoryChangeCommand(path, "posix");
-      if (!command) {
-        toast.error(t("fileExplorer.directoryTerminalInvalidPath"));
-        return;
-      }
-      void handleDuplicateSession(
-        tab,
-        {
-          command,
-          delayMs: appSettings.interaction.duplicate_session_command_delay_ms,
-        },
-        pane,
-      );
-    },
-    [
-      appSettings.interaction.duplicate_session_command_delay_ms,
-      handleDuplicateSession,
-      liveSessionsById,
-      t,
-      tabs,
-    ],
+  const networkHistoryStore = useNetworkHistory(
+    remoteStats.sessionId,
+    remoteStats.stats,
   );
   const headerStatusMode = normalizeHeaderStatusMode(uiConfig.header_status_mode);
   const headerStatusVisible = uiConfig.header_status_visible !== false;
@@ -3699,6 +4396,7 @@ function App() {
           visit(node.first);
           visit(node.second);
           return;
+
         }
 
         for (const tabId of node.tabIds) {
@@ -3708,13 +4406,16 @@ function App() {
           for (const pane of collectSessionPanes(tab.root)) {
             if (
               pane.paneKind !== "terminal" ||
+              pane.type === "S3" ||
+              pane.type === "FTP" ||
+              pane.type === "WebDAV" ||
+              pane.view === "s3" ||
+              pane.view === "ftp" ||
+              pane.view === "webdav" ||
               !hasLiveSession(pane) ||
-              isSftpOnlyPane(pane, liveSessionsById)
-            ) {
+              isSftpOnlyPane(pane, liveSessionsById)            ) {
               continue;
             }
-            const sessionType = asTerminalSessionType(pane.type);
-            if (!sessionType) continue;
             targetsById.set(pane.sessionId, {
               id: pane.sessionId,
               name: pane.name,
@@ -3723,7 +4424,7 @@ function App() {
                 (sessionId) =>
                   dynamicTitles.get(sessionId ?? "")?.effectiveTitle ?? null,
               ),
-              type: sessionType,
+              type: pane.type,
               ownerWindowLabel: currentWindowLabel,
             });
           }
@@ -3749,11 +4450,12 @@ function App() {
     return [...targetsById.values()];
   }, [liveSessionsById, tabsById, terminalWindows, dynamicTitles]);
 
-  const activeBottomPanel = uiConfig.show_serial_send_panel
-    ? "serialSend"
-    : uiConfig.show_quick_cmd_bar
-      ? "quickCmdBar"
-      : null;
+  const activeBottomPanel =
+    uiConfig.show_serial_send_panel && isApplicable("serialSend")
+      ? "serialSend"
+      : uiConfig.show_quick_cmd_bar && isApplicable("quickCmdBar")
+        ? "quickCmdBar"
+        : null;
   const temporarySshShortcut = resolveDisplayKeys("tab.temporarySshLink", appSettings.keybindings);
   const openChatShortcut = resolveDisplayKeys("view.openChat", appSettings.keybindings);
   const showCommandsShortcut = resolveDisplayKeys("view.showAllCommands", appSettings.keybindings);
@@ -3766,14 +4468,12 @@ function App() {
     const sessions: QuickSwitcherSession[] = [];
     for (const tab of tabs) {
       for (const pane of collectSessionPanes(tab.root)) {
-        if (pane.paneKind !== "terminal") continue;
-        const sessionType = asTerminalSessionType(pane.type);
-        if (!sessionType) continue;
+        if (pane.paneKind !== "terminal" || pane.type === "S3" || pane.type === "FTP" || pane.type === "WebDAV" || pane.view === "s3" || pane.view === "ftp" || pane.view === "webdav") continue;
         const connection = pane.connectionId ? connectionsById.get(pane.connectionId) : undefined;
         sessions.push({
           id: pane.sessionId,
           name: pane.name,
-          sessionType,
+          sessionType: pane.type,
           connectionName: connection?.name,
           tabName: getActiveSessionTabDisplayName(
             tab,
@@ -3790,13 +4490,80 @@ function App() {
 
   const handleCloseSessionQuickSwitcher = useCallback(() => {
     setShowSessionQuickSwitcher(false);
+    setSessionSwitcherScope("all");
     focusTerminalSession(activeSessionId);
   }, [activeSessionId]);
+
+  const handleCloseLocalShellPicker = useCallback(() => {
+    setShowLocalShellPicker(false);
+    focusTerminalSession(activeSessionId);
+  }, [activeSessionId]);
+
+  const handleSelectLocalShell = useCallback(
+    (shell: LocalShellSelection) => {
+      setShowLocalShellPicker(false);
+      const tabName = shell.elevated
+        ? `${shell.name} (${t("localShellPicker.admin")})`
+        : shell.name || t("menu.newLocalTerminal");
+      const pending = beginPendingSession(tabName, "Local");
+      const { tabId, paneId, createRequestId } = pending;
+
+      invoke<string>("create_local_session", {
+        shellPath: shell.shellPath,
+        shellArgs: shell.shellArgs,
+        name: tabName,
+        elevated: shell.elevated,
+        createRequestId,
+      })
+        .then(async (sessionId) => {
+          if (paneId ? !hasPane(tabId, paneId) : !hasTab(tabId)) {
+            await closeStaleCreatedSession(sessionId);
+            return;
+          }
+          if (paneId) {
+            updatePaneSession(tabId, paneId, sessionId);
+          } else {
+            updateTabSession(tabId, sessionId);
+          }
+          focusTerminalSession(sessionId);
+        })
+        .catch((e) => {
+          if (isSessionCreationCancelled(e)) return;
+          if (paneId) {
+            markPaneConnectionFailed(tabId, paneId, getErrorMessage(e));
+          } else if (hasTab(tabId)) {
+            markTabConnectionFailed(tabId, getErrorMessage(e));
+          }
+          logger.error({
+            domain: "session.lifecycle",
+            event: "session.create_failed",
+            message: "Failed to create local session",
+            data: {
+              session_type: "Local",
+              shell_path: shell.shellPath,
+              elevated: shell.elevated,
+            },
+            error: e,
+          });
+        });
+    },
+    [
+      beginPendingSession,
+      hasPane,
+      hasTab,
+      markPaneConnectionFailed,
+      markTabConnectionFailed,
+      t,
+      updatePaneSession,
+      updateTabSession,
+    ],
+  );
 
   const handleQuickSwitchSession = useCallback(
     (sessionId: string) => {
       handleSessionClick(sessionId);
       setShowSessionQuickSwitcher(false);
+      setSessionSwitcherScope("all");
       focusTerminalSession(sessionId);
     },
     [handleSessionClick],
@@ -3805,6 +4572,7 @@ function App() {
   const handleQuickOpenConnection = useCallback(
     async (connection: SavedConnection) => {
       setShowSessionQuickSwitcher(false);
+      setSessionSwitcherScope("all");
       await connectSavedConnection(connection, {
         failureContext: "Connection failed from quick switcher",
       });
@@ -3814,6 +4582,7 @@ function App() {
 
   const handleQuickSwitcherNewSshSession = useCallback(() => {
     setShowSessionQuickSwitcher(false);
+    setSessionSwitcherScope("all");
     openNewSession(undefined, true);
   }, []);
 
@@ -3826,22 +4595,6 @@ function App() {
     [updateUi],
   );
 
-  const leftPanelIds = useMemo(
-    () => getSideOpenPanels(uiConfig, "left", multiPanelOpen),
-    [multiPanelOpen, uiConfig],
-  );
-  const rightPanelIds = useMemo(
-    () => getSideOpenPanels(uiConfig, "right", multiPanelOpen),
-    [multiPanelOpen, uiConfig],
-  );
-  const leftOverlayPanelId = useMemo(
-    () => getSideOverlayPanel(uiConfig, "left", multiPanelOpen),
-    [multiPanelOpen, uiConfig],
-  );
-  const rightOverlayPanelId = useMemo(
-    () => getSideOverlayPanel(uiConfig, "right", multiPanelOpen),
-    [multiPanelOpen, uiConfig],
-  );
   const leftActiveIds = useMemo(
     () => (multiPanelOpen ? new Set(leftPanelIds) : undefined),
     [leftPanelIds, multiPanelOpen],
@@ -3855,26 +4608,37 @@ function App() {
   const dockedLeftOverlayPanelId = panelOpenMode === "floating" ? null : leftOverlayPanelId;
   const dockedRightOverlayPanelId = panelOpenMode === "floating" ? null : rightOverlayPanelId;
   const visibleFloatingPanels =
-    panelOpenMode === "floating" ? floatingPanels : { left: null, right: null };
+    panelOpenMode === "floating" ? effectiveFloatingPanels : { left: null, right: null };
   const leftActivityActiveIds = useMemo(() => {
     if (panelOpenMode !== "floating") return leftActiveIds;
-    return floatingPanels.left ? new Set([floatingPanels.left]) : undefined;
-  }, [floatingPanels.left, leftActiveIds, panelOpenMode]);
+    return effectiveFloatingPanels.left ? new Set([effectiveFloatingPanels.left]) : undefined;
+  }, [effectiveFloatingPanels.left, leftActiveIds, panelOpenMode]);
   const rightActivityActiveIds = useMemo(() => {
     if (panelOpenMode !== "floating") return rightActiveIds;
-    return floatingPanels.right ? new Set([floatingPanels.right]) : undefined;
-  }, [floatingPanels.right, panelOpenMode, rightActiveIds]);
+    return effectiveFloatingPanels.right ? new Set([effectiveFloatingPanels.right]) : undefined;
+  }, [effectiveFloatingPanels.right, panelOpenMode, rightActiveIds]);
 
+  // Sticky sync: prune floating panels that UI flags or session context make unavailable.
   useEffect(() => {
     if (panelOpenMode !== "floating") return;
-    const next = clearUnavailableFloatingPanels(floatingPanels, uiConfig);
-    if (next === floatingPanels) return;
-    setFloatingPanels(next);
+    const context = resolveActivitySessionContext(activePane, liveSessionsById);
+    const merged = clearInapplicableFloatingPanels(
+      clearUnavailableFloatingPanels(floatingPanels, uiConfig),
+      context,
+    );
+    if (merged.left === floatingPanels.left && merged.right === floatingPanels.right) return;
+    setFloatingPanels(merged);
     setLastFloatingSide((current) => {
-      if (current && next[current]) return current;
-      return next.right ? "right" : next.left ? "left" : null;
+      if (current && merged[current]) return current;
+      return merged.right ? "right" : merged.left ? "left" : null;
     });
-  }, [floatingPanels, panelOpenMode, uiConfig]);
+  }, [activePane, floatingPanels, liveSessionsById, panelOpenMode, uiConfig]);
+
+  // Sticky sync: turn off bottom bars that no longer apply to the active session.
+  useEffect(() => {
+    if (!stickyPatch) return;
+    updateUi(stickyPatch);
+  }, [stickyPatch, updateUi]);
 
   useEffect(() => {
     if (panelOpenMode !== "floating") return;
@@ -3892,7 +4656,6 @@ function App() {
         Boolean(externalMatchDialog) ||
         Boolean(postLoginConfirm) ||
         Boolean(pendingFileDocumentClose) ||
-        Boolean(pendingSettingsPaneClose) ||
         Boolean(activeHostKeyRequest) ||
         Boolean(activeSshAgentRequest) ||
         Boolean(activeOtpRequest) ||
@@ -3932,7 +4695,6 @@ function App() {
     modalChildWindowCount,
     panelOpenMode,
     pendingFileDocumentClose,
-    pendingSettingsPaneClose,
     postLoginConfirm,
     rdpCertificateRequests.length,
     showAbout,
@@ -4037,7 +4799,10 @@ function App() {
         onNewConnection={handleNewSession}
         onEditConnection={handleEditConnection}
         onConnectConnection={connectSavedConnection}
-        onOpenSftp={openSavedConnectionWithSftp}
+        onOpenSftp={openSftpWorkspace}
+        onOpenS3={openS3Workspace}
+        onOpenFtp={openFtpWorkspace}
+        onOpenWebDav={openWebDavWorkspace}
         onSessionClick={handleSessionClick}
         onSessionReconnect={handleReconnectSessionById}
         onSessionDisconnect={handleDisconnectSessionById}
@@ -4073,7 +4838,10 @@ function App() {
       handleToggleSessionRecording,
       handleTransferResize,
       connectSavedConnection,
-      openSavedConnectionWithSftp,
+      openSftpWorkspace,
+      openS3Workspace,
+      openFtpWorkspace,
+      openWebDavWorkspace,
       recordingStatuses,
       uiConfig.show_ascend_npu_monitor,
       uiConfig.show_gpu_monitor,
@@ -4128,9 +4896,7 @@ function App() {
         t={t}
         uiConfig={uiConfig}
         appearance={appSettings.appearance}
-        paneFocusMode={paneFocusMode}
-        nativeFullscreen={nativeFullscreen}
-        onExitPaneFocus={() => setPaneFocusMode(false)}
+        keybindings={appSettings.keybindings}
         header={{
           onNewSession: () => handleNewSession(),
           onAbout: () => setShowAbout(true),
@@ -4138,6 +4904,39 @@ function App() {
           hasUpdate: updateInfo !== null,
           showUpdateDot: helpDotVisible,
           onHelpMenuOpen: () => setHelpDotVisible(false),
+          leftActivityBarVisible: showLeftActivityBar,
+          rightActivityBarVisible: showRightActivityBar,
+          onToggleLeftActivityBar: () => handleToggleVisibility("left"),
+          onToggleRightActivityBar: () => handleToggleVisibility("right"),
+          tabBar: {
+            tabs: terminalWindows ? flattenLeafTabs(terminalWindows, tabsById) : tabs,
+            activeTabId,
+            focusedTabId: activeTabId,
+            unreadTabIds,
+            disconnectedTabIds,
+            sessionInfoById: liveSessionsById,
+            onTabChange: handleSelectHeaderTab,
+            onTabClose: handleCloseWorkspaceTab,
+            onAddTab: handleAddHeaderTab,
+            onOpenWorkbench: handleOpenWorkbench,
+            onConnectConnection: handleConnectConnectionFromHeader,
+            onSelectLocalShell: handleSelectLocalShell,
+            onDuplicateSession: handleDuplicateSession,
+            onMultiplexSshSession: handleMultiplexSshSession,
+            onMultiplexSshSftpSession: handleMultiplexSshSftpSession,
+            onDuplicateSessionWithCommand: handleDuplicateSessionWithCommand,
+            onMultiplexSshSessionWithCommand: handleMultiplexSshSessionWithCommand,
+            onReconnectSession: handleReconnectSession,
+            onDisconnectSession: handleDisconnectSession,
+            onSplitSession: handleSplitSession,
+            onUnsplit: handleUnsplit,
+            onCloseSession: handleCloseSession,
+            onCloseAll: handleCloseAllTabs,
+            onCloseInactive: handleCloseInactiveTabs,
+            onCloseRight: handleCloseRightTabs,
+            onSessionInfo: handleSessionInfo,
+            onReorderTabs: handleReorderHeaderTabs,
+          },
           activeTab,
           savedConnections,
           remoteStatsEnabled: activeRemoteStatsEnabled,
@@ -4160,17 +4959,16 @@ function App() {
           onRequestActivityBarReset: () => setShowActivityBarResetConfirm(true),
           onPanelOpenModeChange: handlePanelOpenModeChange,
         }}
-        mobile={{
-          leftOpen: mobileLeftOpen,
-          rightOpen: mobileRightOpen,
-          setLeftOpen: setMobileLeftOpen,
-          setRightOpen: setMobileRightOpen,
-        }}
         leftActivityBar={{
           items: leftTopItems,
           bottomItems: leftBottomItems,
           hiddenItems: leftHiddenItems,
-          activeId: panelOpenMode === "floating" ? null : uiConfig.active_left_panel,
+          activeId:
+            panelOpenMode === "floating"
+              ? null
+              : uiConfig.active_left_panel && isApplicable(uiConfig.active_left_panel)
+                ? uiConfig.active_left_panel
+                : null,
           activeIds: leftActivityActiveIds,
           activeBottomIds: toggleActiveIds,
           onSelect: handleItemSelect,
@@ -4178,17 +4976,26 @@ function App() {
           onMoveItem: handleMoveItem,
           onHideItem: handleHideItem,
           onShowItem: handleShowItem,
-          onToggleLabel: () => handleToggleLabel("left"),
           onRequestResetLayout: () => setShowActivityBarResetConfirm(true),
           panelOpenMode,
           onPanelOpenModeChange: handlePanelOpenModeChange,
+          onToggleLabel: () => handleToggleLabel("left"),
+          onHide: () => handleSetVisibility("left", false),
+          onShow: () => handleSetVisibility("left", true),
           showLabels: showLabelsLeft,
+          visible: showLeftActivityBar,
+
         }}
         rightActivityBar={{
           items: rightTopItems,
           bottomItems: rightBottomItems,
           hiddenItems: rightHiddenItems,
-          activeId: panelOpenMode === "floating" ? null : uiConfig.active_right_panel,
+          activeId:
+            panelOpenMode === "floating"
+              ? null
+              : uiConfig.active_right_panel && isApplicable(uiConfig.active_right_panel)
+                ? uiConfig.active_right_panel
+                : null,
           activeIds: rightActivityActiveIds,
           activeBottomIds: toggleActiveIds,
           onSelect: handleItemSelect,
@@ -4196,11 +5003,15 @@ function App() {
           onMoveItem: handleMoveItem,
           onHideItem: handleHideItem,
           onShowItem: handleShowItem,
-          onToggleLabel: () => handleToggleLabel("right"),
           onRequestResetLayout: () => setShowActivityBarResetConfirm(true),
           panelOpenMode,
           onPanelOpenModeChange: handlePanelOpenModeChange,
+          onToggleLabel: () => handleToggleLabel("right"),
+          onHide: () => handleSetVisibility("right", false),
+          onShow: () => handleSetVisibility("right", true),
           showLabels: showLabelsRight,
+          visible: showRightActivityBar,
+
         }}
         onLeftResize={handleLeftResize}
         onRightResize={handleRightResize}
@@ -4217,30 +5028,7 @@ function App() {
         workspace={{
           layout: terminalWindows,
           tabsById,
-          focusedTabId: activeTabId,
-          paneFocusMode,
-          unreadTabIds,
-          disconnectedTabIds,
-          sessionInfoById: liveSessionsById,
-          onSelectTab: handleSelectLeafTab,
-          onAddTab: handleAddTabFromLeaf,
-          onConnectConnection: handleConnectConnectionFromLeaf,
-          onTabClose: handleCloseWorkspaceTab,
-          onDuplicateSession: handleDuplicateSession,
-          onMultiplexSshSession: handleMultiplexSshSession,
-          onMultiplexSshSftpSession: handleMultiplexSshSftpSession,
-          onDuplicateSessionWithCommand: handleDuplicateSessionWithCommand,
-          onMultiplexSshSessionWithCommand: handleMultiplexSshSessionWithCommand,
-          onReconnectSession: handleReconnectSession,
-          onDisconnectSession: handleDisconnectSession,
-          onSplitSession: handleSplitSession,
-          onUnsplit: handleUnsplit,
-          onCloseSession: handleCloseSession,
-          onCloseAll: handleCloseAllTabs,
-          onCloseInactive: handleCloseInactiveTabs,
-          onCloseRight: handleCloseRightTabs,
-          onSessionInfo: handleSessionInfo,
-          onReorderTabs: handleReorderTabsInLeaf,
+          sessionInfoById: liveSessionsById,          onSelectTab: handleSelectLeafTab,
           onMoveTabToLeaf: handleMoveTabToLeaf,
           onSplitTabToLeaf: handleSplitTabToLeaf,
           onActivatePane: handleActivatePane,
@@ -4319,6 +5107,11 @@ function App() {
             setRdpCertificateRequests((current) =>
               current.filter((item) => item.requestId !== requestId),
             ),
+          ftpCertificateVerifyRequest: ftpCertificateRequests[0] ?? null,
+          onFtpCertificateVerifyDone: (requestId) =>
+            setFtpCertificateRequests((current) =>
+              current.filter((item) => item.requestId !== requestId),
+            ),
           modalChildWindowCount,
           locked: isLocked,
           hasMasterPassword: !!appSettings.security.master_password,
@@ -4333,6 +5126,7 @@ function App() {
         sessionSwitcherScope={sessionSwitcherScope}
         activeSessionId={activeSessionId}
         quickSwitcherSessions={quickSwitcherSessions}
+
         savedConnections={savedConnections}
         onCloseSessionQuickSwitcher={handleCloseSessionQuickSwitcher}
         onQuickSwitchSession={handleQuickSwitchSession}
@@ -4360,6 +5154,17 @@ function App() {
         onPostLoginConfirmOpenChange={handlePostLoginConfirmOpenChange}
         onPostLoginContinue={handlePostLoginContinue}
       />
+      <LocalShellPickerDialog
+        open={showLocalShellPicker}
+        onClose={handleCloseLocalShellPicker}
+        onSelect={handleSelectLocalShell}
+      />
+      <RemoteDesktopClientMissingDialog
+        open={remoteDesktopMissing !== null}
+        protocol={remoteDesktopMissing?.protocol ?? null}
+        recommendations={remoteDesktopMissing?.recommendations ?? []}
+        onClose={() => setRemoteDesktopMissing(null)}
+      />
       <ActivityBarResetDialog
         t={t}
         open={showActivityBarResetConfirm}
@@ -4367,6 +5172,7 @@ function App() {
         onConfirm={() => {
           setShowActivityBarResetConfirm(false);
           handleResetActivityBarLayout();
+
         }}
       />
     </TransferProvider>

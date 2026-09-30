@@ -9,7 +9,7 @@ use base64::Engine;
 use base64::engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD};
 use opendal::layers::{RetryLayer, TimeoutLayer, TracingLayer};
 use opendal::services::{AliyunDrive, Gdrive, Onedrive, S3};
-use opendal::{EntryMode, ErrorKind, Operator};
+use opendal::{Buffer, EntryMode, Error, ErrorKind, Operator};
 
 use crate::config::CloudSyncSettings;
 use crate::error::{AppError, AppResult};

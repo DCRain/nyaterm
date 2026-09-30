@@ -150,6 +150,35 @@ impl RdpClipboardBridge {
         }
     }
 
+    pub(crate) fn offer_local_files(
+        &self,
+        paths: Vec<String>,
+        _auto_paste: bool,
+    ) -> Result<usize, String> {
+        if !self.file_enabled {
+            return Err("RDP file clipboard is disabled".to_string());
+        }
+        if !self.file_transfer_available.load(Ordering::SeqCst) {
+            return Err("RDP file clipboard is not ready yet".to_string());
+        }
+        let path_bufs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+        let snapshot = build_local_snapshot(&path_bufs)?;
+        let count = snapshot.descriptors.len();
+        if count == 0 {
+            return Err("no files to offer".to_string());
+        }
+        let snapshot = Arc::new(snapshot);
+        if let Ok(mut current) = self.current_snapshot.lock() {
+            *current = Some(snapshot.clone());
+        }
+        let hash = file_list_fingerprint(&path_bufs);
+        if let Ok(mut last) = self.last_file_hash.lock() {
+            *last = Some(hash);
+        }
+        self.send(ClipboardMessage::SendInitiateFileCopy(snapshot.descriptors.clone()));
+        Ok(count)
+    }
+
     pub(crate) fn notify_text_available(&self) -> Result<(), String> {
         if read_clipboard_text_blocking()
             .filter(|text| !text.is_empty() && clipboard_text_within_limit(text))

@@ -382,6 +382,31 @@ impl RdpSessionManager {
         self.engine.set_clipboard_text(session, text).await
     }
 
+    pub async fn offer_local_files(
+        &self,
+        session_id: &str,
+        paths: Vec<String>,
+        auto_paste: bool,
+    ) -> AppResult<usize> {
+        let session = self.get(session_id).await?;
+        if session.config.clipboard_mode != "text-and-files" {
+            return Err(AppError::Config(
+                "RDP file clipboard requires mode text-and-files".to_string(),
+            ));
+        }
+        let bridge = session
+            .clipboard_bridge
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| {
+                AppError::SessionNotFound("RDP clipboard bridge is not available".to_string())
+            })?;
+        bridge
+            .offer_local_files(paths, auto_paste)
+            .map_err(AppError::Channel)
+    }
+
     pub async fn reconnect(&self, app: AppHandle, session_id: &str) -> AppResult<()> {
         let session = self.get(session_id).await?;
         cancel_reconnect_task(&session).await;
