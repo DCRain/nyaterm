@@ -71,7 +71,7 @@ interface AppLayoutProps {
   paneFocusMode: boolean;
   nativeFullscreen: boolean;
   onExitPaneFocus: () => void;
-  header: Omit<HeaderProps, "onToggleLeft" | "onToggleRight">;
+  header: Omit<HeaderProps, "onToggleLeftActivityBar" | "onToggleRightActivityBar">;
   mobile: {
     leftOpen: boolean;
     rightOpen: boolean;
@@ -110,6 +110,9 @@ interface AppLayoutProps {
     openChatShortcut: string;
     showCommandsShortcut: string;
     switchTerminalShortcut: string;
+    onNewConnection: () => void;
+    onNewLocalTerminal: () => void;
+    onQuickOpenConnection: () => void;
     onTemporarySshLink: () => void;
     onOpenChat: () => void;
     onShowCommands: () => void;
@@ -335,10 +338,10 @@ export default function AppLayout({
         {!paneFocusMode && (
           <Header
             {...header}
-            onToggleLeft={() => {
+            onToggleLeftActivityBar={() => {
               if (hasLeftActivityItems) mobile.setLeftOpen(!mobile.leftOpen);
             }}
-            onToggleRight={() => {
+            onToggleRightActivityBar={() => {
               if (hasRightActivityItems) mobile.setRightOpen(!mobile.rightOpen);
             }}
           />
@@ -441,6 +444,9 @@ export default function AppLayout({
                   openChatShortcut={emptyWorkspace.openChatShortcut}
                   showCommandsShortcut={emptyWorkspace.showCommandsShortcut}
                   switchTerminalShortcut={emptyWorkspace.switchTerminalShortcut}
+                  onNewConnection={emptyWorkspace.onNewConnection}
+                  onNewLocalTerminal={emptyWorkspace.onNewLocalTerminal}
+                  onQuickOpenConnection={emptyWorkspace.onQuickOpenConnection}
                   onTemporarySshLink={emptyWorkspace.onTemporarySshLink}
                   onOpenChat={emptyWorkspace.onOpenChat}
                   onShowCommands={emptyWorkspace.onShowCommands}

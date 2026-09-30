@@ -66,7 +66,7 @@ function SplitView({
   tab,
   visible,
   workbench,
-  paneFocusMode,
+  paneFocusMode = false,
   sessionInfoById,
   onActivatePane,
   onUpdateSplitRatio,
@@ -773,7 +773,6 @@ function PaneWorkspace({
         sessionInfoById={sessionInfoById}
         showChrome={!paneFocusMode && isSplitPane(tab.root)}
         workbench={workbench}
-        paneFocusMode={paneFocusMode}
         onActivatePane={onActivatePane}
         onUpdateSplitRatio={onUpdateSplitRatio}
         onReconnectPane={onReconnectPane}

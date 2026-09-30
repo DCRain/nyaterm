@@ -3890,7 +3890,7 @@ dependencies = [
 name = "ironrdp-rdcleanpath"
 version = "0.2.2"
 dependencies = [
- "der 0.8.1",
+ "der 0.8.2",
 ]
 
 [[package]]
@@ -4949,7 +4949,7 @@ checksum = "e4e98dc3b890f6c23a0f9d3d491a2823d0dea0fa656302a13dd225fa924112a8"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -10853,7 +10853,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "105ef4642d9cb137ef83d623d0e4bf08b8adf69e9918ca904a174adb6d3d038b"
 dependencies = [
  "const-oid 0.10.2",
- "der 0.8.1",
+ "der 0.8.2",
  "spki 0.8.0",
  "tls_codec",
 ]

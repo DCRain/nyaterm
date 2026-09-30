@@ -20,6 +20,7 @@ import { TransferProvider } from "./context/TransferContext";
 import { useActivityBarController } from "./hooks/useActivityBarController";
 import { type ExternalOpenRequest, useExternalOpenRequests } from "./hooks/useExternalOpenRequests";
 import { useFileDocumentCloseGuard } from "./hooks/useFileDocumentCloseGuard";
+import { useSettingsCloseGuard } from "./hooks/useSettingsCloseGuard";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts";
 import { useIdleLock } from "./hooks/useIdleLock";
 import { useMacSelectionGuard } from "./hooks/useMacSelectionGuard";
@@ -178,6 +179,17 @@ function safeRecordingName(name: string) {
   return name.normalize("NFC").replace(/[^\p{L}\p{M}\p{N}._-]+/gu, "_") || "session";
 }
 
+const TERMINAL_SESSION_TYPES: ReadonlySet<SessionType> = new Set([
+  "SSH",
+  "Local",
+  "Telnet",
+  "Serial",
+]);
+
+function asTerminalSessionType(type: WorkspaceSessionType): SessionType | null {
+  return TERMINAL_SESSION_TYPES.has(type as SessionType) ? (type as SessionType) : null;
+}
+
 function joinPath(dir: string, fileName: string) {
   return `${dir}${dir.endsWith("\\") || dir.endsWith("/") ? "" : "/"}${fileName}`;
 }
@@ -307,10 +319,18 @@ function App() {
     handleDiscardFileDocumentsAndClose,
     handlePendingFileDocumentCloseOpenChange,
   } = useFileDocumentCloseGuard();
+  const {
+    pendingSettingsPaneClose,
+    savingSettingsPanes,
+    handleSaveSettingsPanesAndClose,
+    handleDiscardSettingsPanesAndClose,
+    handlePendingSettingsPaneCloseOpenChange,
+  } = useSettingsCloseGuard();
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [helpDotVisible, setHelpDotVisible] = useState(false);
   const [sendCommandDraft, setSendCommandDraft] = useState<SendCommandPanelDraft | null>(null);
   const [showSessionQuickSwitcher, setShowSessionQuickSwitcher] = useState(false);
+  const [sessionSwitcherScope, setSessionSwitcherScope] = useState<"all" | "connections">("all");
   const [showTemporarySshLink, setShowTemporarySshLink] = useState(false);
   const [externalMatchDialog, setExternalMatchDialog] = useState<ExternalMatchDialogState | null>(
     null,
@@ -2560,6 +2580,88 @@ function App() {
     ],
   );
 
+  const handleMultiplexSshSftpSession = useCallback(
+    async (tab: Tab) => {
+      const pane = getActivePane(tab);
+      if (
+        !pane ||
+        pane.paneKind !== "terminal" ||
+        pane.type !== "SSH" ||
+        pane.connecting ||
+        pane.connectError ||
+        !pane.sessionId
+      ) {
+        return;
+      }
+
+      if (pane.connectionId) {
+        const connection = savedConnections.find((item) => item.id === pane.connectionId);
+        if (connection?.sftp?.enabled === false) {
+          toast.error(t("savedConnections.openSftpDisabled"));
+          return;
+        }
+      }
+
+      let tabId: string | undefined;
+
+      try {
+        const tabName = t("sftpWorkspace.tabTitle", { name: pane.name });
+        const pending = addPendingTab(
+          tabName,
+          pane.type,
+          pane.connectionId,
+          { tabColor: tab.tabColor },
+          { afterTabId: tab.id, view: "sftp" },
+        );
+        tabId = pending.tabId;
+        setTerminalWindows((current) =>
+          current && tabId ? insertTabAfterInLeaf(current, tab.id, tabId, tabId) : current,
+        );
+
+        const sessionId = await invoke<string>("create_multiplexed_ssh_session", {
+          sourceSessionId: pane.sessionId,
+        });
+        if (!hasTab(tabId)) {
+          await closeStaleCreatedSession(sessionId);
+          return;
+        }
+        updateTabSession(tabId, sessionId);
+        if (pane.connectionId) {
+          recordRecentConnection(pane.connectionId);
+          updateAutoIconForSessionStart(pane.connectionId, sessionId);
+        }
+      } catch (error) {
+        if ((tabId && !hasTab(tabId)) || isSessionCreationCancelled(error)) {
+          return;
+        }
+        const errorMessage = getErrorMessage(error);
+        logger.error({
+          domain: "session.lifecycle",
+          event: "session.multiplex_sftp_failed",
+          message: "Failed to create multiplexed SFTP session",
+          ids: pane.connectionId
+            ? { connection_id: pane.connectionId, session_id: pane.sessionId }
+            : { session_id: pane.sessionId },
+          error,
+        });
+        if (tabId) {
+          markTabConnectionFailed(tabId, errorMessage);
+        }
+        toast.error(t("tabCtx.multiplexSshSftpFailed"));
+      }
+    },
+    [
+      addPendingTab,
+      hasTab,
+      markTabConnectionFailed,
+      recordRecentConnection,
+      savedConnections,
+      t,
+      updateAutoIconForSessionStart,
+      updateTabSession,
+    ],
+  );
+
   const handleDuplicateSessionWithCommand = useCallback(
     (tab: Tab, command: string, delayMs: number) =>
       handleDuplicateSession(tab, { command, delayMs }),
@@ -3132,6 +3234,14 @@ function App() {
 
   const handleOpenSessionSwitcher = useCallback(() => {
     if (!isLocked) {
+      setSessionSwitcherScope("all");
+      setShowSessionQuickSwitcher(true);
+    }
+  }, [isLocked]);
+
+  const handleOpenConnectionQuickOpen = useCallback(() => {
+    if (!isLocked) {
+      setSessionSwitcherScope("connections");
       setShowSessionQuickSwitcher(true);
     }
   }, [isLocked]);
@@ -3366,7 +3476,8 @@ function App() {
     rightBottomItems,
     leftHiddenItems,
     rightHiddenItems,
-    showLabels,
+    showLabelsLeft,
+    showLabelsRight,
     toggleActiveIds,
     handleItemSelect,
     handleReorder,
@@ -3602,6 +3713,8 @@ function App() {
             ) {
               continue;
             }
+            const sessionType = asTerminalSessionType(pane.type);
+            if (!sessionType) continue;
             targetsById.set(pane.sessionId, {
               id: pane.sessionId,
               name: pane.name,
@@ -3610,7 +3723,7 @@ function App() {
                 (sessionId) =>
                   dynamicTitles.get(sessionId ?? "")?.effectiveTitle ?? null,
               ),
-              type: pane.type,
+              type: sessionType,
               ownerWindowLabel: currentWindowLabel,
             });
           }
@@ -3654,11 +3767,13 @@ function App() {
     for (const tab of tabs) {
       for (const pane of collectSessionPanes(tab.root)) {
         if (pane.paneKind !== "terminal") continue;
+        const sessionType = asTerminalSessionType(pane.type);
+        if (!sessionType) continue;
         const connection = pane.connectionId ? connectionsById.get(pane.connectionId) : undefined;
         sessions.push({
           id: pane.sessionId,
           name: pane.name,
-          sessionType: pane.type,
+          sessionType,
           connectionName: connection?.name,
           tabName: getActiveSessionTabDisplayName(
             tab,
@@ -3777,6 +3892,7 @@ function App() {
         Boolean(externalMatchDialog) ||
         Boolean(postLoginConfirm) ||
         Boolean(pendingFileDocumentClose) ||
+        Boolean(pendingSettingsPaneClose) ||
         Boolean(activeHostKeyRequest) ||
         Boolean(activeSshAgentRequest) ||
         Boolean(activeOtpRequest) ||
@@ -3816,6 +3932,7 @@ function App() {
     modalChildWindowCount,
     panelOpenMode,
     pendingFileDocumentClose,
+    pendingSettingsPaneClose,
     postLoginConfirm,
     rdpCertificateRequests.length,
     showAbout,
@@ -3920,7 +4037,7 @@ function App() {
         onNewConnection={handleNewSession}
         onEditConnection={handleEditConnection}
         onConnectConnection={connectSavedConnection}
-        onOpenSftpConnection={openSavedConnectionWithSftp}
+        onOpenSftp={openSavedConnectionWithSftp}
         onSessionClick={handleSessionClick}
         onSessionReconnect={handleReconnectSessionById}
         onSessionDisconnect={handleDisconnectSessionById}
@@ -4061,11 +4178,11 @@ function App() {
           onMoveItem: handleMoveItem,
           onHideItem: handleHideItem,
           onShowItem: handleShowItem,
-          onToggleLabel: handleToggleLabel,
+          onToggleLabel: () => handleToggleLabel("left"),
           onRequestResetLayout: () => setShowActivityBarResetConfirm(true),
           panelOpenMode,
           onPanelOpenModeChange: handlePanelOpenModeChange,
-          showLabels,
+          showLabels: showLabelsLeft,
         }}
         rightActivityBar={{
           items: rightTopItems,
@@ -4079,11 +4196,11 @@ function App() {
           onMoveItem: handleMoveItem,
           onHideItem: handleHideItem,
           onShowItem: handleShowItem,
-          onToggleLabel: handleToggleLabel,
+          onToggleLabel: () => handleToggleLabel("right"),
           onRequestResetLayout: () => setShowActivityBarResetConfirm(true),
           panelOpenMode,
           onPanelOpenModeChange: handlePanelOpenModeChange,
-          showLabels,
+          showLabels: showLabelsRight,
         }}
         onLeftResize={handleLeftResize}
         onRightResize={handleRightResize}
@@ -4111,6 +4228,7 @@ function App() {
           onTabClose: handleCloseWorkspaceTab,
           onDuplicateSession: handleDuplicateSession,
           onMultiplexSshSession: handleMultiplexSshSession,
+          onMultiplexSshSftpSession: handleMultiplexSshSftpSession,
           onDuplicateSessionWithCommand: handleDuplicateSessionWithCommand,
           onMultiplexSshSessionWithCommand: handleMultiplexSshSessionWithCommand,
           onReconnectSession: handleReconnectSession,
@@ -4142,6 +4260,9 @@ function App() {
           openChatShortcut,
           showCommandsShortcut,
           switchTerminalShortcut,
+          onNewConnection: () => handleNewSession(),
+          onNewLocalTerminal: handleNewLocalTerminal,
+          onQuickOpenConnection: handleOpenConnectionQuickOpen,
           onTemporarySshLink: handleOpenTemporarySshLink,
           onOpenChat: handleOpenChat,
           onShowCommands: handleShowAllCommands,
@@ -4209,6 +4330,7 @@ function App() {
       <AppOverlayDialogs
         t={t}
         showSessionQuickSwitcher={showSessionQuickSwitcher}
+        sessionSwitcherScope={sessionSwitcherScope}
         activeSessionId={activeSessionId}
         quickSwitcherSessions={quickSwitcherSessions}
         savedConnections={savedConnections}
@@ -4229,6 +4351,11 @@ function App() {
         onPendingFileDocumentCloseOpenChange={handlePendingFileDocumentCloseOpenChange}
         onSaveFileDocumentsAndClose={handleSaveFileDocumentsAndClose}
         onDiscardFileDocumentsAndClose={handleDiscardFileDocumentsAndClose}
+        pendingSettingsPaneClose={pendingSettingsPaneClose}
+        savingSettingsPanes={savingSettingsPanes}
+        onPendingSettingsPaneCloseOpenChange={handlePendingSettingsPaneCloseOpenChange}
+        onSaveSettingsPanesAndClose={handleSaveSettingsPanesAndClose}
+        onDiscardSettingsPanesAndClose={handleDiscardSettingsPanesAndClose}
         postLoginConfirm={postLoginConfirm}
         onPostLoginConfirmOpenChange={handlePostLoginConfirmOpenChange}
         onPostLoginContinue={handlePostLoginContinue}

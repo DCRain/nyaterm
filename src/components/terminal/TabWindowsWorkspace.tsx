@@ -60,6 +60,7 @@ interface TabWindowsWorkspaceProps {
   onTabClose: (tab: Tab) => void | Promise<void>;
   onDuplicateSession: (tab: Tab) => void | Promise<void>;
   onMultiplexSshSession: (tab: Tab) => void | Promise<void>;
+  onMultiplexSshSftpSession: (tab: Tab) => void | Promise<void>;
   onDuplicateSessionWithCommand: (
     tab: Tab,
     command: string,
@@ -232,6 +233,7 @@ function LeafWindow({
   onTabClose,
   onDuplicateSession,
   onMultiplexSshSession,
+  onMultiplexSshSftpSession,
   onDuplicateSessionWithCommand,
   onMultiplexSshSessionWithCommand,
   onReconnectSession,
@@ -337,6 +339,7 @@ function LeafWindow({
         onConnectConnection={(connection) => onConnectConnection(leaf.id, connection)}
         onDuplicateSession={onDuplicateSession}
         onMultiplexSshSession={onMultiplexSshSession}
+        onMultiplexSshSftpSession={onMultiplexSshSftpSession}
         onDuplicateSessionWithCommand={onDuplicateSessionWithCommand}
         onMultiplexSshSessionWithCommand={onMultiplexSshSessionWithCommand}
         onReconnectSession={onReconnectSession}
@@ -381,6 +384,7 @@ function WindowNodeView({
   onTabClose,
   onDuplicateSession,
   onMultiplexSshSession,
+  onMultiplexSshSftpSession,
   onDuplicateSessionWithCommand,
   onMultiplexSshSessionWithCommand,
   onReconnectSession,
@@ -418,6 +422,7 @@ function WindowNodeView({
         onTabClose={onTabClose}
         onDuplicateSession={onDuplicateSession}
         onMultiplexSshSession={onMultiplexSshSession}
+        onMultiplexSshSftpSession={onMultiplexSshSftpSession}
         onDuplicateSessionWithCommand={onDuplicateSessionWithCommand}
         onMultiplexSshSessionWithCommand={onMultiplexSshSessionWithCommand}
         onReconnectSession={onReconnectSession}
@@ -455,6 +460,7 @@ function WindowNodeView({
       onTabClose={onTabClose}
       onDuplicateSession={onDuplicateSession}
       onMultiplexSshSession={onMultiplexSshSession}
+      onMultiplexSshSftpSession={onMultiplexSshSftpSession}
       onDuplicateSessionWithCommand={onDuplicateSessionWithCommand}
       onMultiplexSshSessionWithCommand={onMultiplexSshSessionWithCommand}
       onReconnectSession={onReconnectSession}

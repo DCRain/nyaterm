@@ -15,6 +15,10 @@ const defaultProps = {
   onOpenChat: vi.fn(),
   onShowCommands: vi.fn(),
   onSwitchTerminal: vi.fn(),
+  onNewConnection: vi.fn(),
+  onNewLocalTerminal: vi.fn(),
+  onQuickOpenConnection: vi.fn(),
+  onConnectConnection: vi.fn(),
 };
 
 describe("WorkbenchView", () => {
