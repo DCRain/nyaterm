@@ -209,7 +209,7 @@ export default function AssetTable({
             return (
               <tr
                 key={connection.id}
-                className="group h-14 outline-none transition-colors hover:bg-[var(--df-bg-hover)]"
+                className="group h-14 outline-none"
                 style={{
                   color: "var(--df-text)",
                 }}
@@ -347,12 +347,9 @@ function SortableHeaderCell({
 function BodyCell({ children, className = "" }: { children: React.ReactNode; className?: string }) {
   return (
     <td
-      className={`border-b px-3 py-2 align-middle ${className}`}
+      className={`border-b px-3 py-2 align-middle transition-colors group-hover:bg-[var(--df-bg-hover)] ${className}`}
       style={{
         borderColor: "color-mix(in srgb, var(--df-border) 50%, transparent)",
-        backgroundColor: className.includes("asset-col-actions")
-          ? "var(--nyaterm-asset-sticky-bg, var(--df-bg-terminal))"
-          : undefined,
       }}
     >
       <div className="truncate">{children}</div>
@@ -374,11 +371,10 @@ function ActionButton({
       type="button"
       aria-label={label}
       title={label}
-      className="inline-flex size-7 cursor-pointer items-center justify-center rounded border transition-colors hover:bg-[var(--df-bg-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--df-primary)]"
+      className="inline-flex size-7 cursor-pointer items-center justify-center rounded border bg-transparent transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--df-primary)]"
       style={{
         borderColor: "color-mix(in srgb, var(--df-border) 78%, transparent)",
         color: "var(--df-text-muted)",
-        backgroundColor: "color-mix(in srgb, var(--df-bg-panel) 50%, transparent)",
       }}
       onClick={onClick}
     >

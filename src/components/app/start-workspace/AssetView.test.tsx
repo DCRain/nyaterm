@@ -80,6 +80,12 @@ describe("start workspace asset view", () => {
     expect(assetSurface.style.getPropertyValue("--nyaterm-asset-sticky-bg")).toBe(
       "var(--df-bg-terminal-solid)",
     );
+    const actionHeader = document.querySelector("th.asset-col-actions") as HTMLElement;
+    const actionCell = document.querySelector("td.asset-col-actions") as HTMLElement;
+    expect(actionHeader.style.backgroundColor).toBe(
+      "var(--nyaterm-asset-sticky-bg, var(--df-bg-terminal))",
+    );
+    expect(actionCell.style.backgroundColor).toBe("");
   });
 
   it("does not render status or favorite actions in the asset surface", () => {
