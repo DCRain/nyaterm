@@ -247,8 +247,7 @@ pub fn change_folder_password(
     old_password: String,
     new_password: String,
 ) -> AppResult<NoteFolder> {
-    let folder =
-        crate::storage::change_folder_password(&folder_id, &old_password, &new_password)?;
+    let folder = crate::storage::change_folder_password(&folder_id, &old_password, &new_password)?;
     emit_notes_changed(
         &app,
         "updated",
@@ -327,8 +326,7 @@ pub fn delete_note_node(
     node_id: String,
     password: Option<String>,
 ) -> AppResult<DeleteNoteNodeResult> {
-    let result =
-        crate::storage::delete_note_node(&node_kind, &node_id, password.as_deref())?;
+    let result = crate::storage::delete_note_node(&node_kind, &node_id, password.as_deref())?;
     if result.folder_count > 0 || result.note_count > 0 {
         emit_notes_changed(
             &app,

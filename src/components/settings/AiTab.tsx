@@ -1,6 +1,9 @@
-import { listen } from "@tauri-apps/api/event";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { randomUUID } from "@/lib/uuid";
+import { runtime } from "@/lib/backend/runtime";
+import { pickBrowserImage } from "@/lib/backend/browserArtifacts";
+import { listen } from "@/lib/backend/api";
+import { open as openDialog } from "@/lib/backend/platform/dialog";
+import { openUrl } from "@/lib/backend/platform/opener";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -46,6 +49,7 @@ import {
   aiModelIdForCredential,
   aiModelIdForProvider,
   BUILTIN_PROVIDERS,
+  DEFAULT_AI_SETTINGS,
   DEFAULT_MODEL_REASONING_EFFORTS,
   getCustomProviderBaseUrlPlaceholder,
   getProviderLabel,
@@ -65,6 +69,7 @@ import type {
   AIProviderApiProtocol,
   AIProviderCredential,
   AIProviderKind,
+  AIProxySettings,
   AISettings,
   ClaudeCodeIntegrationSettings,
   CodexIntegrationSettings,
@@ -95,7 +100,7 @@ function updateDefaultModelId(ai: AISettings, models: AIModelConfigItem[]) {
 
 function newCredential(): AIProviderCredential {
   return {
-    id: `credential-${crypto.randomUUID()}`,
+    id: `credential-${randomUUID()}`,
     name: "",
     provider_kind: "openai_compatible",
     api_protocol: null,
@@ -167,7 +172,7 @@ function providerProtocolSelectValue(credential: AIProviderCredential): string {
 
 function newAction(prefix: string): AICustomActionConfig {
   return {
-    id: `${prefix}-${crypto.randomUUID()}`,
+    id: `${prefix}-${randomUUID()}`,
     name: "自定义 AI 功能",
     prompt: "",
     enabled: true,
@@ -310,6 +315,9 @@ export function AiGeneralTab() {
   const { appSettings, updateAppSettings } = useApp();
   const ai = appSettings.ai;
   const update = (patch: Partial<AISettings>) => updateAppSettings({ ai: { ...ai, ...patch } });
+  const proxy = { ...DEFAULT_AI_SETTINGS.proxy, ...ai.proxy };
+  const updateProxy = (patch: Partial<AIProxySettings>) =>
+    update({ proxy: { ...proxy, ...patch } });
 
   return (
     <div className="space-y-5">
@@ -360,6 +368,83 @@ export function AiGeneralTab() {
             onChange={(timeout_ms) => update({ timeout_ms })}
           />
         </SettingFieldGrid>
+      </SettingSection>
+
+      <SettingSection title={t("ai.proxyTitle")} desc={t("ai.proxyDescription")}>
+        <SettingSelect
+          label={t("ai.proxyMode")}
+          value={proxy.mode}
+          onValueChange={(mode) => updateProxy({ mode: mode as AIProxySettings["mode"] })}
+        >
+          <SelectItem value="system">{t("ai.proxySystem")}</SelectItem>
+          <SelectItem value="direct">{t("ai.proxyDirect")}</SelectItem>
+          <SelectItem value="custom">{t("ai.proxyCustom")}</SelectItem>
+        </SettingSelect>
+        {proxy.mode === "custom" && (
+          <>
+            <SettingSelect
+              label={t("settings.proxyProtocol")}
+              value={proxy.protocol}
+              onValueChange={(protocol) =>
+                updateProxy({
+                  protocol: protocol as AIProxySettings["protocol"],
+                })
+              }
+            >
+              <SelectItem value="http">HTTP</SelectItem>
+              <SelectItem value="socks5">SOCKS5</SelectItem>
+            </SettingSelect>
+            <SettingFieldGrid>
+              <SettingInput
+                label={t("settings.proxyHost")}
+                aria-label={t("settings.proxyHost")}
+                placeholder="127.0.0.1"
+                value={proxy.host}
+                onChange={(event) => updateProxy({ host: event.target.value })}
+              />
+              <SettingNumberInput
+                label={t("settings.proxyPort")}
+                min={1}
+                max={65535}
+                value={proxy.port}
+                onChange={(port) => updateProxy({ port })}
+              />
+              <SettingInput
+                label={t("ai.proxyUsername")}
+                aria-label={t("ai.proxyUsername")}
+                autoComplete="off"
+                value={proxy.username ?? ""}
+                onChange={(event) => updateProxy({ username: event.target.value })}
+              />
+            </SettingFieldGrid>
+            <SettingRow label={t("ai.proxyPassword")} desc={t("ai.proxyPasswordDescription")}>
+              <Input
+                type="password"
+                aria-label={t("ai.proxyPassword")}
+                autoComplete="new-password"
+                value={secretInputValue(proxy.password)}
+                placeholder={secretPlaceholder(proxy.password, t("ai.proxyPassword"))}
+                onChange={(event) => updateProxy({ password: event.target.value })}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!proxy.password}
+                onClick={() => updateProxy({ password: "" })}
+              >
+                {t("ai.proxyClearPassword")}
+              </Button>
+            </SettingRow>
+            <SettingInput
+              label={t("ai.proxyBypass")}
+              aria-label={t("ai.proxyBypass")}
+              desc={t("ai.proxyBypassDescription")}
+              value={proxy.no_proxy}
+              onChange={(event) => updateProxy({ no_proxy: event.target.value })}
+            />
+          </>
+        )}
+        <p className="text-xs text-muted-foreground">{t("ai.proxyTestHint")}</p>
       </SettingSection>
 
       <SettingSection title={t("ai.agentSettings")}>
@@ -433,6 +518,7 @@ export function AiAgentsTab() {
     enabled: false,
     permission_mode: "confirm",
     session_scope: "current_window",
+    terminal_display_mode: "inline",
   };
   const [mcpStatus, setMcpStatus] = useState<McpRuntimeStatus | null>(null);
   const [cliStatus, setCliStatus] = useState<CodexCliStatus | null>(null);
@@ -1093,6 +1179,23 @@ export function AiAgentsTab() {
             <SelectItem value="current_window">{t("ai.externalMcpCurrentWindow")}</SelectItem>
             <SelectItem value="all_sessions">{t("ai.externalMcpAllSessions")}</SelectItem>
           </SettingSelect>
+          <SettingSelect
+            label={t("ai.externalMcpTerminalDisplay")}
+            value={externalMcp.terminal_display_mode ?? "inline"}
+            onValueChange={(terminal_display_mode) =>
+              updateExternalMcp({
+                terminal_display_mode:
+                  terminal_display_mode as ExternalMcpSettings["terminal_display_mode"],
+              })
+            }
+          >
+            <SelectItem value="inline">
+              {t("ai.externalMcpTerminalInline")}
+            </SelectItem>
+            <SelectItem value="silent">
+              {t("ai.externalMcpTerminalSilent")}
+            </SelectItem>
+          </SettingSelect>
         </SettingFieldGrid>
         <div className="text-xs text-muted-foreground">
           {t("ai.externalMcpRuntimeSummary", {
@@ -1219,26 +1322,6 @@ export function AiModelsTab() {
     null,
   );
   const [showProviderChoices, setShowProviderChoices] = useState(false);
-  const [providerListScrolling, setProviderListScrolling] = useState(false);
-  const providerListScrollTimer = useRef<number | null>(null);
-  useEffect(
-    () => () => {
-      if (providerListScrollTimer.current !== null) {
-        window.clearTimeout(providerListScrollTimer.current);
-      }
-    },
-    [],
-  );
-  const showProviderListScrollbar = () => {
-    setProviderListScrolling(true);
-    if (providerListScrollTimer.current !== null) {
-      window.clearTimeout(providerListScrollTimer.current);
-    }
-    providerListScrollTimer.current = window.setTimeout(() => {
-      setProviderListScrolling(false);
-      providerListScrollTimer.current = null;
-    }, 1000);
-  };
   const [providerDraft, setProviderDraft] = useState<{
     credential: AIProviderCredential;
     isAutomatic?: boolean;
@@ -1280,6 +1363,7 @@ export function AiModelsTab() {
   const [testingModelId, setTestingModelId] = useState<string | null>(null);
   const [modelTestResults, setModelTestResults] = useState<Record<string, "success" | "error">>({});
   const modelTestGeneration = useRef(0);
+  const proxySignature = JSON.stringify(ai.proxy);
   const cancelProviderConnectionTest = () => {
     providerConnectionTestGeneration.current += 1;
     setTestingProviderId(null);
@@ -1314,7 +1398,20 @@ export function AiModelsTab() {
     ai.default_reasoning_effort,
     ai.request_user_agent,
     ai.timeout_ms,
+    proxySignature,
   ]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Proxy changes invalidate all pending provider requests and results.
+  useEffect(() => {
+    providerConnectionTestGeneration.current += 1;
+    providerListRefreshGeneration.current += 1;
+    setTestingProviderId(null);
+    setRefreshingCurrentModels(false);
+    setRefreshing(false);
+    setProviderStatuses({});
+    setProviderConnectionStatus("idle");
+    setProviderModelCount(null);
+    setTestedDraftModels(null);
+  }, [proxySignature]);
   const update = (patch: Partial<AISettings>) => updateAppSettings({ ai: { ...ai, ...patch } });
 
   const enabledCredentials = useMemo(
@@ -1505,12 +1602,18 @@ export function AiModelsTab() {
               credentialId: credential.id,
             });
             if (providerListRefreshGeneration.current === generation) {
-              setProviderStatuses((current) => ({ ...current, [credential.id]: "success" }));
+              setProviderStatuses((current) => ({
+                ...current,
+                [credential.id]: "success",
+              }));
             }
             return { credential, names };
           } catch {
             if (providerListRefreshGeneration.current === generation) {
-              setProviderStatuses((current) => ({ ...current, [credential.id]: "error" }));
+              setProviderStatuses((current) => ({
+                ...current,
+                [credential.id]: "error",
+              }));
             }
             return null;
           }
@@ -1557,9 +1660,15 @@ export function AiModelsTab() {
       return next;
     });
     try {
-      await invoke("test_ai_model_connection", { aiSettings: ai, modelId: model.id });
+      await invoke("test_ai_model_connection", {
+        aiSettings: ai,
+        modelId: model.id,
+      });
       if (modelTestGeneration.current !== generation) return;
-      setModelTestResults((previous) => ({ ...previous, [model.id]: "success" }));
+      setModelTestResults((previous) => ({
+        ...previous,
+        [model.id]: "success",
+      }));
       toast.success(t("ai.modelTestSucceeded", { model: model.name }));
     } catch (error) {
       if (modelTestGeneration.current !== generation) return;
@@ -1587,9 +1696,7 @@ export function AiModelsTab() {
   };
 
   const toggleModelReasoningEffort = (model: AIModelConfigItem, effort: AIModelReasoningEffort) => {
-    const selected = new Set(
-      model.supported_reasoning_efforts ?? DEFAULT_MODEL_REASONING_EFFORTS,
-    );
+    const selected = new Set(model.supported_reasoning_efforts ?? DEFAULT_MODEL_REASONING_EFFORTS);
     if (selected.has(effort)) selected.delete(effort);
     else selected.add(effort);
     updateModel(model.id, {
@@ -1758,7 +1865,11 @@ export function AiModelsTab() {
     }
     setProviderDraft((current) =>
       current?.credential.id === id
-        ? { ...current, isAutomatic: false, credential: { ...current.credential, ...patch } }
+        ? {
+            ...current,
+            isAutomatic: false,
+            credential: { ...current.credential, ...patch },
+          }
         : current,
     );
   };
@@ -1768,6 +1879,14 @@ export function AiModelsTab() {
     if (!credential || credential.provider_kind !== "openai_compatible") return;
 
     try {
+      if (runtime === "web") {
+        const image = await pickBrowserImage();
+        if (image)
+          updateSelectedProviderCredential(credential.id, {
+            icon_data_url: image.dataUrl,
+          });
+        return;
+      }
       const selectedPath = await openDialog({
         directory: false,
         multiple: false,
@@ -1781,8 +1900,12 @@ export function AiModelsTab() {
       });
       if (typeof selectedPath !== "string" || !selectedPath) return;
 
-      const iconDataUrl = await invoke<string>("import_ai_provider_icon", { path: selectedPath });
-      updateSelectedProviderCredential(credential.id, { icon_data_url: iconDataUrl });
+      const iconDataUrl = await invoke<string>("import_ai_provider_icon", {
+        path: selectedPath,
+      });
+      updateSelectedProviderCredential(credential.id, {
+        icon_data_url: iconDataUrl,
+      });
     } catch (error) {
       toast.error(getErrorMessage(error));
     }
@@ -1791,15 +1914,22 @@ export function AiModelsTab() {
   const changeSelectedProviderName = (value: string) => {
     if (!selectedProviderCredential) return;
     if (providerDraft) {
-      updateSelectedProviderCredential(selectedProviderCredential.id, { name: value });
+      updateSelectedProviderCredential(selectedProviderCredential.id, {
+        name: value,
+      });
       return;
     }
-    setProviderNameInput({ credentialId: selectedProviderCredential.id, value });
+    setProviderNameInput({
+      credentialId: selectedProviderCredential.id,
+      value,
+    });
     if (
       value.trim() &&
       !providerNameTaken(value, enabledCredentials, selectedProviderCredential.id)
     ) {
-      updateSelectedProviderCredential(selectedProviderCredential.id, { name: value });
+      updateSelectedProviderCredential(selectedProviderCredential.id, {
+        name: value,
+      });
     }
   };
 
@@ -1875,7 +2005,7 @@ export function AiModelsTab() {
     } else {
       credential = {
         ...newCredential(),
-        id: providerInfo && !existingBuiltin ? providerKind : `credential-${crypto.randomUUID()}`,
+        id: providerInfo && !existingBuiltin ? providerKind : `credential-${randomUUID()}`,
         name: availableProviderName(providerLabel, enabledCredentials),
         provider_kind: providerKind,
         base_url: providerInfo ? providerInfo.defaultBaseUrl : "",
@@ -2016,7 +2146,10 @@ export function AiModelsTab() {
     setProviderModelCount(null);
     setProviderConnectionStatus("testing");
     if (!providerDraft) {
-      setProviderStatuses((current) => ({ ...current, [credentialId]: "testing" }));
+      setProviderStatuses((current) => ({
+        ...current,
+        [credentialId]: "testing",
+      }));
     }
     try {
       const aiSettings = providerDraft
@@ -2033,7 +2166,10 @@ export function AiModelsTab() {
         setProviderModelCount(modelNames.length);
         setProviderConnectionStatus("success");
         if (!providerDraft) {
-          setProviderStatuses((current) => ({ ...current, [credentialId]: "success" }));
+          setProviderStatuses((current) => ({
+            ...current,
+            [credentialId]: "success",
+          }));
         }
         if (providerDraft) {
           setTestedDraftModels({ credentialId, names: modelNames });
@@ -2059,7 +2195,10 @@ export function AiModelsTab() {
       if (providerConnectionTestGeneration.current === requestGeneration) {
         setProviderConnectionStatus("error");
         if (!providerDraft) {
-          setProviderStatuses((current) => ({ ...current, [credentialId]: "error" }));
+          setProviderStatuses((current) => ({
+            ...current,
+            [credentialId]: "error",
+          }));
         }
         toast.error(getErrorMessage(error));
       }
@@ -2285,15 +2424,17 @@ export function AiModelsTab() {
 
   return (
     <div className="space-y-5">
-      <SettingSection title={t("ai.providerList")}>
-        <div className="space-y-3">
-          <div
-            className={`provider-list-scroll flex min-w-0 items-center gap-2 overflow-x-auto overflow-y-hidden px-0.5 py-1 ${providerListScrolling ? "is-scrolling" : ""}`}
-            onScroll={showProviderListScrollbar}
-          >
+      <SettingSection
+        title={t("ai.providerList")}
+        headerRowClassName="flex-row flex-wrap items-center justify-between sm:items-center"
+        contentClassName={
+          enabledCredentials.length === 0 && !showProviderChoices ? "hidden" : undefined
+        }
+        action={
+          <div className="flex items-center gap-2">
             <Button
               type="button"
-              size="icon-lg"
+              size="icon-sm"
               variant="outline"
               className="rounded-lg border-border/70"
               disabled={refreshing || testingProviderId !== null || enabledCredentials.length === 0}
@@ -2306,7 +2447,8 @@ export function AiModelsTab() {
             <Button
               type="button"
               variant="outline"
-              className="h-10 rounded-lg border-border/70 px-3 text-sm"
+              size="sm"
+              className="rounded-lg border-border/70"
               aria-expanded={showProviderChoices}
               onClick={() => {
                 setShowProviderChoices(true);
@@ -2316,18 +2458,24 @@ export function AiModelsTab() {
               <MdAdd />
               {t("ai.addProvider")}
             </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3">
+          <div className="flex min-w-0 flex-wrap items-center gap-2 px-0.5 py-1">
             {enabledCredentials.map((credential) => (
               <Button
                 key={credential.id}
                 type="button"
                 size="default"
                 variant="outline"
-                className={`h-10 rounded-lg px-3 text-sm font-normal ${
+                className={`h-10 min-w-0 max-w-full rounded-lg px-3 text-sm font-normal ${
                   selectedProviderCredential?.id === credential.id
                     ? "border-primary bg-primary/5 ring-1 ring-primary/20"
                     : "border-border/70"
                 }`}
                 aria-pressed={selectedProviderCredential?.id === credential.id}
+                title={credential.name.trim() || getProviderLabel(credential.provider_kind)}
                 onClick={() => {
                   cancelProviderConnectionTest();
                   setProviderDraft(null);
@@ -2592,7 +2740,9 @@ export function AiModelsTab() {
                 <div className="flex items-center justify-end gap-2">
                   {providerModelCount !== null ? (
                     <span className="text-xs text-muted-foreground">
-                      {t("ai.connectionModelCount", { count: providerModelCount })}
+                      {t("ai.connectionModelCount", {
+                        count: providerModelCount,
+                      })}
                     </span>
                   ) : null}
                   <span

@@ -8,15 +8,16 @@ pub mod backup;
 pub mod capabilities;
 pub mod capture;
 pub mod cloud_sync;
+pub mod ftp;
 pub mod history;
 pub mod importer;
 pub(crate) mod input;
 pub mod mcp;
 pub mod monitoring;
 pub mod network;
-pub mod note_crypto;
 pub mod note_export;
 mod output;
+pub mod plugins;
 pub mod portable_snapshot;
 mod quick_commands;
 pub mod rdp;
@@ -27,17 +28,16 @@ mod recording;
 pub mod remote_desktop;
 pub mod remote_exec;
 pub mod s3;
-pub mod ftp;
-mod storage_transfer;
-pub mod webdav;
 mod session;
 pub mod sftp;
 pub mod ssh;
 pub mod ssh_config;
+mod storage_transfer;
 pub(crate) mod terminal_session;
 pub mod translate;
 pub mod vnc;
 pub mod watcher;
+pub mod webdav;
 pub mod zmodem;
 
 pub use cloud_sync::CloudSyncManager;
@@ -48,7 +48,7 @@ pub use quick_commands::{
 pub use rdp::RdpSessionManager;
 pub use recording::{
     ExistingFileBehavior, InputOrigin, InputSensitivity, RecordingContext, RecordingManager,
-    RecordingMode, RecordingProfile, RecordingStatus, RotationPolicy, TerminalHistorySearchRequest,
+    RecordingMode, RecordingProfile, RecordingStatus, TerminalHistorySearchRequest,
     TerminalHistorySearchResponse,
 };
 pub use session::{

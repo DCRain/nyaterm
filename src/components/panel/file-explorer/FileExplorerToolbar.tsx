@@ -1,3 +1,4 @@
+import { supports } from "@/lib/backend/runtime";
 import type { ComponentProps, RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -59,6 +60,7 @@ function ToolbarDivider() {
 interface FileExplorerToolbarProps {
   isTreeView: boolean;
   selectedCount: number;
+  selectionHasDirectory?: boolean;
   isFileSearchActive: boolean;
   isFileSearchExpanded: boolean;
   showHiddenFiles: boolean;
@@ -89,6 +91,7 @@ interface FileExplorerToolbarProps {
 export function FileExplorerToolbar({
   isTreeView,
   selectedCount,
+  selectionHasDirectory = false,
   isFileSearchActive,
   isFileSearchExpanded,
   showHiddenFiles,
@@ -117,15 +120,15 @@ export function FileExplorerToolbar({
 }: FileExplorerToolbarProps) {
   const { t } = useTranslation();
   const { appSettings } = useApp();
-  const refreshShortcut = resolveDisplayKeys(
-    "fileExplorer.refresh",
-    appSettings.keybindings,
-  );
+  const refreshShortcut = resolveDisplayKeys("fileExplorer.refresh", appSettings.keybindings);
 
   return (
     <div
       className="nyaterm-wallpaper-transparent-surface relative flex items-center px-1.5 py-1 border-b gap-0.5"
-      style={{ backgroundColor: "var(--df-bg-panel)", borderColor: "var(--df-border)" }}
+      style={{
+        backgroundColor: "var(--df-bg-panel)",
+        borderColor: "var(--df-border)",
+      }}
     >
       <ToolbarIconButton
         label={t("fileExplorer.newFile")}
@@ -172,14 +175,18 @@ export function FileExplorerToolbar({
                 <MdUpload className="mr-2 h-4 w-4" />
                 {t("fileExplorer.upload")}
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={onUploadFolder}>
-                <MdDriveFolderUpload className="mr-2 h-4 w-4" />
-                {t("fileExplorer.uploadFolder")}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={onUploadFolderContents}>
-                <MdDriveFolderUpload className="mr-2 h-4 w-4" />
-                {t("fileExplorer.uploadFolderContents")}
-              </DropdownMenuItem>
+              {supports("recursiveTransfers") && (
+                <>
+                  <DropdownMenuItem onClick={onUploadFolder}>
+                    <MdDriveFolderUpload className="mr-2 h-4 w-4" />
+                    {t("fileExplorer.uploadFolder")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={onUploadFolderContents}>
+                    <MdDriveFolderUpload className="mr-2 h-4 w-4" />
+                    {t("fileExplorer.uploadFolderContents")}
+                  </DropdownMenuItem>
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
           <ToolbarIconButton
@@ -188,7 +195,9 @@ export function FileExplorerToolbar({
             size="icon"
             className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
             onClick={onDownloadSelected}
-            disabled={selectedCount === 0}
+            disabled={
+              selectedCount === 0 || (!supports("recursiveTransfers") && selectionHasDirectory)
+            }
           >
             <MdDownload className="h-4 w-4" />
           </ToolbarIconButton>
@@ -233,11 +242,7 @@ export function FileExplorerToolbar({
         <>
           <ToolbarDivider />
           <ToolbarIconButton
-            label={
-              canLocatePath
-                ? locateLabel
-                : t("fileExplorer.cwdTrackingUnavailable")
-            }
+            label={canLocatePath ? locateLabel : t("fileExplorer.cwdTrackingUnavailable")}
             variant="ghost"
             size="icon"
             className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground disabled:opacity-40"
@@ -254,9 +259,7 @@ export function FileExplorerToolbar({
       <div className="ml-auto flex shrink-0 items-center gap-0.5">
         <ToolbarIconButton
           label={
-            isTreeView
-              ? t("fileExplorer.switchToListView")
-              : t("fileExplorer.switchToTreeView")
+            isTreeView ? t("fileExplorer.switchToListView") : t("fileExplorer.switchToTreeView")
           }
           variant="ghost"
           size="icon"

@@ -1,4 +1,5 @@
-import { downloadDir } from "@tauri-apps/api/path";
+import { supports } from "@/lib/backend/runtime";
+import { downloadDir } from "@/lib/backend/platform/path";
 import {
   type ElementType,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -160,12 +161,24 @@ function TransferRow({
   const indeterminateProgress = isIndeterminateTransferProgress(item);
   const isModemTransfer = isBackendModemTransfer(item);
   const isRestrictedTransfer = isRestrictedBackendTransfer(item);
-  const canPause = !isRestrictedTransfer && item.status === "transferring";
-  const canPauseQueued = !isRestrictedTransfer && item.status === "queued";
-  const canResume = !isRestrictedTransfer && item.status === "paused";
+  const canPause =
+    supports("transferControl") &&
+    !isRestrictedTransfer &&
+    item.status === "transferring";
+  const canPauseQueued =
+    supports("transferControl") &&
+    !isRestrictedTransfer &&
+    item.status === "queued";
+  const canResume =
+    supports("transferControl") &&
+    !isRestrictedTransfer &&
+    item.status === "paused";
   const canRetry =
-    !isRestrictedTransfer && (item.status === "error" || item.status === "cancelled");
+    supports("transferControl") &&
+    !isRestrictedTransfer &&
+    (item.status === "error" || item.status === "cancelled");
   const canCancel =
+    supports("transferControl") &&
     !isModemTransfer &&
     (item.status === "queued" || item.status === "transferring" || item.status === "paused");
   const canDelete = isModemTransfer
@@ -253,7 +266,8 @@ function TransferRow({
                   <>
                     <span className="shrink-0">·</span>
                     <span className="truncate">
-                      {formatSize(item.bytesTransferred)} / {formatSize(item.totalSize)}
+                      {formatSize(item.bytesTransferred)} /{" "}
+                      {formatSize(item.totalSize)}
                     </span>
                   </>
                 ) : item.bytesTransferred > 0 ? (
@@ -433,10 +447,14 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
       return transfer.status !== "transferring";
     }
     const canCancel =
-      transfer.status === "queued" ||
+      (supports("transferControl") && transfer.status === "queued") ||
       transfer.status === "transferring" ||
       transfer.status === "paused";
-    return !canCancel || transfer.status === "queued" || transfer.queueState === "pending";
+    return (
+      !canCancel ||
+      transfer.status === "queued" ||
+      transfer.queueState === "pending"
+    );
   }, []);
 
   const requestDeleteTransfer = useCallback(
@@ -598,19 +616,19 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
               label={t("fileTransfer.pauseAll")}
               icon={MdPause}
               onClick={handlePauseAll}
-              disabled={!hasRunning}
+              disabled={!supports("transferControl") || !hasRunning}
             />
             <HeaderActionButton
               label={t("fileTransfer.resumeAll")}
               icon={MdPlayArrow}
               onClick={handleResumeAll}
-              disabled={!hasPaused}
+              disabled={!supports("transferControl") || !hasPaused}
             />
             <HeaderActionButton
               label={t("fileTransfer.cancelAll")}
               icon={MdBlock}
               onClick={handleCancelAll}
-              disabled={!hasActive}
+              disabled={!supports("transferControl") || !hasActive}
             />
             <HeaderActionButton
               label={t("fileTransfer.clearCompleted")}

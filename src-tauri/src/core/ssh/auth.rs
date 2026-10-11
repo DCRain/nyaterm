@@ -8,8 +8,8 @@ use russh::{MethodKind, MethodSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
 use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager};
@@ -478,9 +478,7 @@ pub(crate) fn build_test_ssh_config(
         .filter(|value| !value.is_empty())
         .map(crate::utils::crypto::encrypt)
         .transpose()?;
-    let mut password_id = input
-        .password_id
-        .filter(|value| !value.is_empty());
+    let mut password_id = input.password_id.filter(|value| !value.is_empty());
 
     let mut account_id = None;
     let mut password_source = None;
@@ -576,13 +574,7 @@ pub(crate) fn build_test_ssh_config(
     if let Some(connection_id) = input.connection_id.as_ref() {
         visited.insert(connection_id.clone());
     }
-    let mut config = resolve_saved_ssh_config(
-        app,
-        &conn,
-        input.connection_id,
-        true,
-        &mut visited,
-    )?;
+    let mut config = resolve_saved_ssh_config(app, &conn, input.connection_id, true, &mut visited)?;
     disable_interactive_auth(&mut config);
     Ok(config)
 }
@@ -627,10 +619,7 @@ fn resolve_saved_ssh_config(
         .unwrap_or_default();
 
     let encoding = crate::config::resolve_connection_encoding(app, conn);
-    let is_sftp_connection = matches!(
-        &conn.config,
-        crate::config::ConnectionType::Sftp { .. }
-    );
+    let is_sftp_connection = matches!(&conn.config, crate::config::ConnectionType::Sftp { .. });
     // Dedicated SFTP connections never run a shell, so skip post-login / cd injection.
     let post_login = if is_sftp_connection {
         None
@@ -750,10 +739,7 @@ fn remote_shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn build_initial_remote_dir_command(
-    path: &str,
-    ssh_profile: &crate::config::SshProfile,
-) -> String {
+fn build_initial_remote_dir_command(path: &str, ssh_profile: &crate::config::SshProfile) -> String {
     let cd = format!("cd {}", remote_shell_quote(path));
     match ssh_profile {
         // Network devices often lack clear/printf; only change directory.
@@ -856,8 +842,7 @@ fn resolve_auth(
     }
 }
 
-const DEFAULT_OPENSSH_IDENTITY_NAMES: &[&str] =
-    &["id_ed25519", "id_rsa", "id_ecdsa", "id_dsa"];
+const DEFAULT_OPENSSH_IDENTITY_NAMES: &[&str] = &["id_ed25519", "id_rsa", "id_ecdsa", "id_dsa"];
 
 fn default_openssh_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join(".ssh"))
@@ -972,22 +957,7 @@ fn resolve_proxy(
         return Ok(None);
     };
 
-    let proxy_cfg = crate::config::load_proxy_by_id(app, proxy_id)?
-        .ok_or_else(|| AppError::Config(format!("Proxy '{}' not found", proxy_id)))?;
-    let password = proxy_cfg
-        .password
-        .as_ref()
-        .and_then(|ciphertext| crate::utils::crypto::decrypt(ciphertext).ok());
-
-    Ok(Some(crate::config::ProxySettings {
-        enabled: true,
-        protocol: proxy_cfg.protocol,
-        host: proxy_cfg.host,
-        port: proxy_cfg.port,
-        command: proxy_cfg.command,
-        username: proxy_cfg.username,
-        password,
-    }))
+    Ok(Some(nyaterm_core::network::resolve_proxy(app, proxy_id)?))
 }
 
 pub(super) async fn authenticate_handle(
@@ -1504,10 +1474,10 @@ async fn authenticate_password_with_runtime_prompt(
         let Some(current_password) = password.as_deref() else {
             continue;
         };
-        let authenticated = handle
-            .authenticate_password(&config.username, current_password)
-            .await
-            .map_err(|error| AppError::Auth(format!("Authentication failed: {}", error)))?;
+        let authenticated =
+            nyaterm_core::ssh::protocol::password(handle, &config.username, current_password)
+                .await
+                .map_err(|error| AppError::Auth(format!("Authentication failed: {}", error)))?;
 
         match try_keyboard_interactive_after_partial(
             handle,
@@ -2478,6 +2448,7 @@ fn upsert_runtime_saved_password(
         .map(|password| password.username.clone())
         .unwrap_or_else(|| username.to_string());
     let entry = crate::config::SavedPassword {
+        sort_order: crate::config::password_sort_order(&cfg, &target_id),
         id: target_id.clone(),
         name: entry_name,
         username: entry_username,
@@ -2630,11 +2601,7 @@ fn resolve_otp_info(app: &AppHandle, connection_id: &str) -> Option<OtpAutoFillI
 }
 
 fn resolve_otp_info_for_config(app: &AppHandle, config: &SshConfig) -> Option<OtpAutoFillInfo> {
-    if let Some(otp_id) = config
-        .otp_id
-        .as_deref()
-        .filter(|otp_id| !otp_id.is_empty())
-    {
+    if let Some(otp_id) = config.otp_id.as_deref().filter(|otp_id| !otp_id.is_empty()) {
         return Some(OtpAutoFillInfo {
             otp_id: otp_id.to_string(),
             auto_fill: config.auto_fill_otp,
@@ -3498,6 +3465,7 @@ mod tests {
 
     fn test_account(username: &str, password: Option<&str>) -> SavedPassword {
         SavedPassword {
+            sort_order: 0,
             id: "account-1".to_string(),
             name: "Account".to_string(),
             username: username.to_string(),
@@ -3657,10 +3625,8 @@ mod tests {
 
     #[test]
     fn loads_default_openssh_identity_preferring_ed25519() {
-        let dir = std::env::temp_dir().join(format!(
-            "nyaterm-ssh-default-key-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("nyaterm-ssh-default-key-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("mkdir");
         std::fs::write(dir.join("id_rsa"), "RSA_PRIVATE_KEY").expect("write rsa");
@@ -3805,10 +3771,7 @@ mod tests {
     fn resolve_post_login_synthesizes_cd_clear_and_scrollback_clear() {
         let conn = sample_ssh_connection(Some("/opt/app"), None);
         let resolved = super::resolve_post_login(&conn).expect("post login");
-        assert_eq!(
-            resolved.command,
-            "cd '/opt/app'\nclear; printf '\\033[3J'"
-        );
+        assert_eq!(resolved.command, "cd '/opt/app'\nclear; printf '\\033[3J'");
         assert_eq!(resolved.delay_ms, 0);
     }
 

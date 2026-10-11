@@ -1,4 +1,5 @@
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { supports } from "@/lib/backend/runtime";
+import { getCurrentWindow } from "@/lib/backend/platform/window";
 import { ChevronsUpDownIcon, Eye, EyeOff } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -878,7 +879,7 @@ export function SshForm({
             <TabsTrigger value="key" className="text-xs">
               {t("dialog.privateKey")}
             </TabsTrigger>
-            <TabsTrigger value="agent" className="text-xs">
+            <TabsTrigger disabled={!supports("sshAgent")} value="agent" className="text-xs">
               {t("dialog.sshAgent", "SSH Agent")}
             </TabsTrigger>
           </TabsList>
@@ -1175,21 +1176,24 @@ export function SshForm({
           <span>{t("dialog.advancedConfig")}</span>
         </CollapsibleTrigger>
         <CollapsibleContent className="mt-3 space-y-3">
-          <Tabs defaultValue="network" className="w-full">
+          <Tabs
+            defaultValue={supports("networkProxy") ? "network" : "two-factor"}
+            className="w-full"
+          >
             <TabsList
               className={cn(
                 "grid h-8 w-full pointer-events-auto",
                 isSftpOnly ? "grid-cols-2" : "grid-cols-3",
               )}
             >
-              <TabsTrigger value="network" className="text-xs">
+              <TabsTrigger disabled={!supports("networkProxy")} value="network" className="text-xs">
                 {t("dialog.proxySelect")}
               </TabsTrigger>
               <TabsTrigger value="two-factor" className="text-xs">
                 {t("dialog.twoFactorAuth")}
               </TabsTrigger>
               {!isSftpOnly ? (
-                <TabsTrigger value="agent" className="text-xs">
+                <TabsTrigger disabled={!supports("sshAgent")} value="agent" className="text-xs">
                   {t("dialog.sshAgent", "SSH Agent")}
                 </TabsTrigger>
               ) : null}
@@ -1207,344 +1211,344 @@ export function SshForm({
             </TabsContent>
 
             {!isSftpOnly ? (
-            <TabsContent value="agent" className="mt-3 border-0 outline-none">
-              <div className="space-y-3 rounded-lg border bg-accent/25 p-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-xs font-medium">
-                      {t("dialog.sshAgentForwarding", "Allow agent forwarding")}
-                    </div>
-                    <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
-                      {t(
-                        "dialog.sshAgentForwardingDesc",
-                        "Allow remote processes to use signing capabilities from the selected forwarding sources.",
-                      )}
-                    </p>
-                  </div>
-                  <Switch
-                    checked={agentForwardingConfig.enabled}
-                    onCheckedChange={(enabled) =>
-                      setAgentForwardingConfig({ ...agentForwardingConfig, enabled })
-                    }
-                  />
-                </div>
-                {agentForwardingConfig.enabled && (
-                  <>
-                    <div className="space-y-2 border-t pt-3">
+              <TabsContent value="agent" className="mt-3 border-0 outline-none">
+                <div className="space-y-3 rounded-lg border bg-accent/25 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
                       <div className="text-xs font-medium">
-                        {t("dialog.sshAgentForwardingSources", "Forwarding sources")}
+                        {t("dialog.sshAgentForwarding", "Allow agent forwarding")}
                       </div>
-                      <label className="flex items-center justify-between gap-3 text-xs">
-                        <span>
-                          {t("dialog.sshAgentExternalSource", "External SSH Agent")}
-                          {t("dialog.sshAgentEndpointList", " (custom endpoints)")}
-                        </span>
-                        <Switch
-                          checked={agentForwardingConfig.sources.external_agent}
-                          onCheckedChange={(external_agent) =>
-                            setAgentForwardingConfig({
-                              ...agentForwardingConfig,
-                              sources: {
-                                ...agentForwardingConfig.sources,
-                                external_agent,
-                                external_agent_endpoints:
-                                  external_agent &&
-                                  agentForwardingConfig.sources.external_agent_endpoints.length ===
-                                    0
-                                    ? [defaultForwardingEndpoint()]
-                                    : agentForwardingConfig.sources.external_agent_endpoints,
-                              },
-                            })
-                          }
-                        />
-                      </label>
-                      {agentForwardingConfig.sources.external_agent && (
-                        <div className="space-y-2 rounded-md border border-dashed p-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[0.6875rem] text-muted-foreground">
-                              {t(
-                                "dialog.sshAgentEndpointListDesc",
-                                "Use more than one local Agent endpoint; identities are merged in this order.",
-                              )}
-                              <span className="mt-0.5 block">
+                      <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+                        {t(
+                          "dialog.sshAgentForwardingDesc",
+                          "Allow remote processes to use signing capabilities from the selected forwarding sources.",
+                        )}
+                      </p>
+                    </div>
+                    <Switch
+                      checked={agentForwardingConfig.enabled}
+                      onCheckedChange={(enabled) =>
+                        setAgentForwardingConfig({ ...agentForwardingConfig, enabled })
+                      }
+                    />
+                  </div>
+                  {agentForwardingConfig.enabled && (
+                    <>
+                      <div className="space-y-2 border-t pt-3">
+                        <div className="text-xs font-medium">
+                          {t("dialog.sshAgentForwardingSources", "Forwarding sources")}
+                        </div>
+                        <label className="flex items-center justify-between gap-3 text-xs">
+                          <span>
+                            {t("dialog.sshAgentExternalSource", "External SSH Agent")}
+                            {t("dialog.sshAgentEndpointList", " (custom endpoints)")}
+                          </span>
+                          <Switch
+                            checked={agentForwardingConfig.sources.external_agent}
+                            onCheckedChange={(external_agent) =>
+                              setAgentForwardingConfig({
+                                ...agentForwardingConfig,
+                                sources: {
+                                  ...agentForwardingConfig.sources,
+                                  external_agent,
+                                  external_agent_endpoints:
+                                    external_agent &&
+                                    agentForwardingConfig.sources.external_agent_endpoints
+                                      .length === 0
+                                      ? [defaultForwardingEndpoint()]
+                                      : agentForwardingConfig.sources.external_agent_endpoints,
+                                },
+                              })
+                            }
+                          />
+                        </label>
+                        {agentForwardingConfig.sources.external_agent && (
+                          <div className="space-y-2 rounded-md border border-dashed p-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[0.6875rem] text-muted-foreground">
                                 {t(
-                                  "dialog.sshAgentEndpointGpgHint",
-                                  "For gpg-agent, use its SSH-compatible socket, not a regular GPG Assuan socket.",
+                                  "dialog.sshAgentEndpointListDesc",
+                                  "Use more than one local Agent endpoint; identities are merged in this order.",
                                 )}
+                                <span className="mt-0.5 block">
+                                  {t(
+                                    "dialog.sshAgentEndpointGpgHint",
+                                    "For gpg-agent, use its SSH-compatible socket, not a regular GPG Assuan socket.",
+                                  )}
+                                </span>
                               </span>
-                            </span>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-7 shrink-0 px-2 text-xs"
+                                disabled={
+                                  agentForwardingConfig.sources.external_agent_endpoints.length >=
+                                    MAX_SSH_AGENT_FORWARDING_ENDPOINTS ||
+                                  !!agentForwardingEndpointError ||
+                                  !canAddForwardingEndpoint
+                                }
+                                title={
+                                  agentForwardingEndpointError ||
+                                  (agentForwardingConfig.sources.external_agent_endpoints.length >=
+                                  MAX_SSH_AGENT_FORWARDING_ENDPOINTS
+                                    ? t(
+                                        "dialog.sshAgentEndpointLimit",
+                                        "A maximum of 16 custom endpoints is supported.",
+                                      )
+                                    : undefined)
+                                }
+                                onClick={addForwardingEndpoint}
+                              >
+                                <MdAdd className="mr-1 text-sm" />
+                                {t("dialog.sshAgentAddEndpoint", "Add endpoint")}
+                              </Button>
+                            </div>
+                            {agentForwardingConfig.sources.external_agent_endpoints.length === 0 ? (
+                              <div className="rounded border border-dashed px-2 py-2 text-[0.6875rem] text-muted-foreground">
+                                {t(
+                                  "dialog.sshAgentEndpointListEmpty",
+                                  "No custom endpoints are configured.",
+                                )}
+                              </div>
+                            ) : (
+                              agentForwardingConfig.sources.external_agent_endpoints.map(
+                                (endpoint, index) => (
+                                  <div
+                                    key={`${index}-${endpoint.type}`}
+                                    className="space-y-2 rounded-md border bg-background/40 p-2"
+                                  >
+                                    <div className="flex items-center gap-1.5">
+                                      <Select
+                                        value={endpoint.type}
+                                        onValueChange={(type) => {
+                                          if (type === "auto") {
+                                            updateForwardingEndpoint(index, { type: "auto" });
+                                          } else if (type === "environment") {
+                                            updateForwardingEndpoint(index, {
+                                              type: "environment",
+                                              variable: "SSH_AUTH_SOCK",
+                                            });
+                                          } else if (type === "unix_socket") {
+                                            updateForwardingEndpoint(index, {
+                                              type: "unix_socket",
+                                              path: "",
+                                            });
+                                          } else if (type === "pageant") {
+                                            updateForwardingEndpoint(index, { type: "pageant" });
+                                          } else if (type === "windows_open_ssh") {
+                                            updateForwardingEndpoint(index, {
+                                              type: "windows_open_ssh",
+                                            });
+                                          }
+                                        }}
+                                      >
+                                        <SelectTrigger className="h-8 min-w-0 flex-1 text-xs font-normal">
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          {availableAgentEndpointTypes.includes("auto") && (
+                                            <SelectItem value="auto">
+                                              {t("dialog.sshAgentAuto", "Automatic")}
+                                            </SelectItem>
+                                          )}
+                                          {availableForwardingEndpointTypes.includes(
+                                            "environment",
+                                          ) && (
+                                            <SelectItem value="environment">
+                                              {t(
+                                                "dialog.sshAgentEnvironment",
+                                                "Environment variable",
+                                              )}
+                                            </SelectItem>
+                                          )}
+                                          {availableForwardingEndpointTypes.includes(
+                                            "unix_socket",
+                                          ) && (
+                                            <SelectItem value="unix_socket">
+                                              {t("dialog.sshAgentUnixSocket", "Unix domain socket")}
+                                            </SelectItem>
+                                          )}
+                                          {availableForwardingEndpointTypes.includes("pageant") && (
+                                            <SelectItem value="pageant">
+                                              {t("dialog.sshAgentPageant", "Pageant")}
+                                            </SelectItem>
+                                          )}
+                                          {availableForwardingEndpointTypes.includes(
+                                            "windows_open_ssh",
+                                          ) && (
+                                            <SelectItem value="windows_open_ssh">
+                                              {t(
+                                                "dialog.sshAgentWindowsOpenSsh",
+                                                "Windows OpenSSH Agent",
+                                              )}
+                                            </SelectItem>
+                                          )}
+                                        </SelectContent>
+                                      </Select>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-7 w-7"
+                                        disabled={index === 0}
+                                        onClick={() => moveForwardingEndpoint(index, -1)}
+                                        aria-label={t(
+                                          "dialog.sshAgentMoveEndpointUp",
+                                          "Move endpoint up",
+                                        )}
+                                      >
+                                        <MdKeyboardArrowUp className="text-base" />
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-7 w-7"
+                                        disabled={
+                                          index ===
+                                          agentForwardingConfig.sources.external_agent_endpoints
+                                            .length -
+                                            1
+                                        }
+                                        onClick={() => moveForwardingEndpoint(index, 1)}
+                                        aria-label={t(
+                                          "dialog.sshAgentMoveEndpointDown",
+                                          "Move endpoint down",
+                                        )}
+                                      >
+                                        <MdKeyboardArrowDown className="text-base" />
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-7 w-7 text-destructive hover:text-destructive"
+                                        onClick={() => removeForwardingEndpoint(index)}
+                                        aria-label={t(
+                                          "dialog.sshAgentRemoveEndpoint",
+                                          "Remove endpoint",
+                                        )}
+                                      >
+                                        <MdDeleteOutline className="text-base" />
+                                      </Button>
+                                    </div>
+                                    {endpoint.type === "environment" && (
+                                      <Input
+                                        value={endpoint.variable}
+                                        onChange={(event) =>
+                                          updateForwardingEndpoint(index, {
+                                            type: "environment",
+                                            variable: event.target.value,
+                                          })
+                                        }
+                                        placeholder="SSH_AUTH_SOCK"
+                                        className="h-8 text-xs"
+                                      />
+                                    )}
+                                    {endpoint.type === "unix_socket" && (
+                                      <Input
+                                        value={endpoint.path}
+                                        onChange={(event) =>
+                                          updateForwardingEndpoint(index, {
+                                            type: "unix_socket",
+                                            path: event.target.value,
+                                          })
+                                        }
+                                        placeholder="/tmp/ssh-XXXXXX/agent.YYYY"
+                                        className="h-8 text-xs"
+                                      />
+                                    )}
+                                  </div>
+                                ),
+                              )
+                            )}
+                          </div>
+                        )}
+                        {agentForwardingEndpointError && (
+                          <p className="text-[0.6875rem] text-destructive" role="alert">
+                            {agentForwardingEndpointError}
+                          </p>
+                        )}
+                        <label className="flex items-center justify-between gap-3 text-xs">
+                          <span>{t("dialog.sshAgentStoredKeysSource", "NyaTerm stored keys")}</span>
+                          <Switch
+                            checked={agentForwardingConfig.sources.stored_keys}
+                            onCheckedChange={(stored_keys) =>
+                              updateForwardingSources({ stored_keys })
+                            }
+                          />
+                        </label>
+                      </div>
+                      <div className="space-y-2 border-t pt-3">
+                        <Label className="text-xs font-medium text-foreground/80">
+                          {t("dialog.sshAgentForwardingPolicy", "Identity policy")}
+                        </Label>
+                        <Select
+                          value={agentForwardingConfig.policy.mode}
+                          onValueChange={(mode) => {
+                            if (mode === "allowlist") {
+                              setAgentForwardingConfig({
+                                ...agentForwardingConfig,
+                                policy: { mode: "allowlist", fingerprints: [] },
+                              });
+                            }
+                            if (mode === "all") {
+                              setShowAgentAllowAllWarning(true);
+                            }
+                          }}
+                        >
+                          <SelectTrigger className="h-8 text-xs font-normal">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="allowlist">
+                              {t("dialog.sshAgentAllowlist", "Allowlist")}
+                            </SelectItem>
+                            <SelectItem value="all">
+                              {t("dialog.sshAgentAllowAll", "Allow all identities")}
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                        {agentForwardingConfig.policy.mode === "allowlist" && (
+                          <div className="space-y-2">
+                            <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+                              {agentForwardingConfig.policy.fingerprints.length === 0
+                                ? t(
+                                    "dialog.sshAgentAllowlistEmpty",
+                                    "The allowlist is empty. Forwarding remains enabled but exposes no identities until you authorize fingerprints.",
+                                  )
+                                : t("dialog.sshAgentAllowlistCount", {
+                                    count: agentForwardingConfig.policy.fingerprints.length,
+                                    defaultValue: `${agentForwardingConfig.policy.fingerprints.length} identities are authorized.`,
+                                  })}
+                            </p>
                             <Button
                               type="button"
                               variant="outline"
                               size="sm"
-                              className="h-7 shrink-0 px-2 text-xs"
                               disabled={
-                                agentForwardingConfig.sources.external_agent_endpoints.length >=
-                                  MAX_SSH_AGENT_FORWARDING_ENDPOINTS ||
-                                !!agentForwardingEndpointError ||
-                                !canAddForwardingEndpoint
+                                !agentForwardingConfig.sources.external_agent &&
+                                !agentForwardingConfig.sources.stored_keys
                               }
-                              title={
-                                agentForwardingEndpointError ||
-                                (agentForwardingConfig.sources.external_agent_endpoints.length >=
-                                MAX_SSH_AGENT_FORWARDING_ENDPOINTS
-                                  ? t(
-                                      "dialog.sshAgentEndpointLimit",
-                                      "A maximum of 16 custom endpoints is supported.",
-                                    )
-                                  : undefined)
-                              }
-                              onClick={addForwardingEndpoint}
+                              onClick={() => setShowAgentIdentityPicker(true)}
                             >
-                              <MdAdd className="mr-1 text-sm" />
-                              {t("dialog.sshAgentAddEndpoint", "Add endpoint")}
+                              <MdSettings className="mr-1.5 text-sm" />
+                              {t("dialog.sshAgentManageAllowlist", "Choose identities")}
                             </Button>
                           </div>
-                          {agentForwardingConfig.sources.external_agent_endpoints.length === 0 ? (
-                            <div className="rounded border border-dashed px-2 py-2 text-[0.6875rem] text-muted-foreground">
-                              {t(
-                                "dialog.sshAgentEndpointListEmpty",
-                                "No custom endpoints are configured.",
-                              )}
-                            </div>
-                          ) : (
-                            agentForwardingConfig.sources.external_agent_endpoints.map(
-                              (endpoint, index) => (
-                                <div
-                                  key={`${index}-${endpoint.type}`}
-                                  className="space-y-2 rounded-md border bg-background/40 p-2"
-                                >
-                                  <div className="flex items-center gap-1.5">
-                                    <Select
-                                      value={endpoint.type}
-                                      onValueChange={(type) => {
-                                        if (type === "auto") {
-                                          updateForwardingEndpoint(index, { type: "auto" });
-                                        } else if (type === "environment") {
-                                          updateForwardingEndpoint(index, {
-                                            type: "environment",
-                                            variable: "SSH_AUTH_SOCK",
-                                          });
-                                        } else if (type === "unix_socket") {
-                                          updateForwardingEndpoint(index, {
-                                            type: "unix_socket",
-                                            path: "",
-                                          });
-                                        } else if (type === "pageant") {
-                                          updateForwardingEndpoint(index, { type: "pageant" });
-                                        } else if (type === "windows_open_ssh") {
-                                          updateForwardingEndpoint(index, {
-                                            type: "windows_open_ssh",
-                                          });
-                                        }
-                                      }}
-                                    >
-                                      <SelectTrigger className="h-8 min-w-0 flex-1 text-xs font-normal">
-                                        <SelectValue />
-                                      </SelectTrigger>
-                                      <SelectContent>
-                                        {availableAgentEndpointTypes.includes("auto") && (
-                                          <SelectItem value="auto">
-                                            {t("dialog.sshAgentAuto", "Automatic")}
-                                          </SelectItem>
-                                        )}
-                                        {availableForwardingEndpointTypes.includes(
-                                          "environment",
-                                        ) && (
-                                          <SelectItem value="environment">
-                                            {t(
-                                              "dialog.sshAgentEnvironment",
-                                              "Environment variable",
-                                            )}
-                                          </SelectItem>
-                                        )}
-                                        {availableForwardingEndpointTypes.includes(
-                                          "unix_socket",
-                                        ) && (
-                                          <SelectItem value="unix_socket">
-                                            {t("dialog.sshAgentUnixSocket", "Unix domain socket")}
-                                          </SelectItem>
-                                        )}
-                                        {availableForwardingEndpointTypes.includes("pageant") && (
-                                          <SelectItem value="pageant">
-                                            {t("dialog.sshAgentPageant", "Pageant")}
-                                          </SelectItem>
-                                        )}
-                                        {availableForwardingEndpointTypes.includes(
-                                          "windows_open_ssh",
-                                        ) && (
-                                          <SelectItem value="windows_open_ssh">
-                                            {t(
-                                              "dialog.sshAgentWindowsOpenSsh",
-                                              "Windows OpenSSH Agent",
-                                            )}
-                                          </SelectItem>
-                                        )}
-                                      </SelectContent>
-                                    </Select>
-                                    <Button
-                                      type="button"
-                                      variant="ghost"
-                                      size="icon"
-                                      className="h-7 w-7"
-                                      disabled={index === 0}
-                                      onClick={() => moveForwardingEndpoint(index, -1)}
-                                      aria-label={t(
-                                        "dialog.sshAgentMoveEndpointUp",
-                                        "Move endpoint up",
-                                      )}
-                                    >
-                                      <MdKeyboardArrowUp className="text-base" />
-                                    </Button>
-                                    <Button
-                                      type="button"
-                                      variant="ghost"
-                                      size="icon"
-                                      className="h-7 w-7"
-                                      disabled={
-                                        index ===
-                                        agentForwardingConfig.sources.external_agent_endpoints
-                                          .length -
-                                          1
-                                      }
-                                      onClick={() => moveForwardingEndpoint(index, 1)}
-                                      aria-label={t(
-                                        "dialog.sshAgentMoveEndpointDown",
-                                        "Move endpoint down",
-                                      )}
-                                    >
-                                      <MdKeyboardArrowDown className="text-base" />
-                                    </Button>
-                                    <Button
-                                      type="button"
-                                      variant="ghost"
-                                      size="icon"
-                                      className="h-7 w-7 text-destructive hover:text-destructive"
-                                      onClick={() => removeForwardingEndpoint(index)}
-                                      aria-label={t(
-                                        "dialog.sshAgentRemoveEndpoint",
-                                        "Remove endpoint",
-                                      )}
-                                    >
-                                      <MdDeleteOutline className="text-base" />
-                                    </Button>
-                                  </div>
-                                  {endpoint.type === "environment" && (
-                                    <Input
-                                      value={endpoint.variable}
-                                      onChange={(event) =>
-                                        updateForwardingEndpoint(index, {
-                                          type: "environment",
-                                          variable: event.target.value,
-                                        })
-                                      }
-                                      placeholder="SSH_AUTH_SOCK"
-                                      className="h-8 text-xs"
-                                    />
-                                  )}
-                                  {endpoint.type === "unix_socket" && (
-                                    <Input
-                                      value={endpoint.path}
-                                      onChange={(event) =>
-                                        updateForwardingEndpoint(index, {
-                                          type: "unix_socket",
-                                          path: event.target.value,
-                                        })
-                                      }
-                                      placeholder="/tmp/ssh-XXXXXX/agent.YYYY"
-                                      className="h-8 text-xs"
-                                    />
-                                  )}
-                                </div>
-                              ),
-                            )
-                          )}
-                        </div>
-                      )}
-                      {agentForwardingEndpointError && (
-                        <p className="text-[0.6875rem] text-destructive" role="alert">
-                          {agentForwardingEndpointError}
-                        </p>
-                      )}
-                      <label className="flex items-center justify-between gap-3 text-xs">
-                        <span>{t("dialog.sshAgentStoredKeysSource", "NyaTerm stored keys")}</span>
-                        <Switch
-                          checked={agentForwardingConfig.sources.stored_keys}
-                          onCheckedChange={(stored_keys) =>
-                            updateForwardingSources({ stored_keys })
-                          }
-                        />
-                      </label>
-                    </div>
-                    <div className="space-y-2 border-t pt-3">
-                      <Label className="text-xs font-medium text-foreground/80">
-                        {t("dialog.sshAgentForwardingPolicy", "Identity policy")}
-                      </Label>
-                      <Select
-                        value={agentForwardingConfig.policy.mode}
-                        onValueChange={(mode) => {
-                          if (mode === "allowlist") {
-                            setAgentForwardingConfig({
-                              ...agentForwardingConfig,
-                              policy: { mode: "allowlist", fingerprints: [] },
-                            });
-                          }
-                          if (mode === "all") {
-                            setShowAgentAllowAllWarning(true);
-                          }
-                        }}
-                      >
-                        <SelectTrigger className="h-8 text-xs font-normal">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="allowlist">
-                            {t("dialog.sshAgentAllowlist", "Allowlist")}
-                          </SelectItem>
-                          <SelectItem value="all">
-                            {t("dialog.sshAgentAllowAll", "Allow all identities")}
-                          </SelectItem>
-                        </SelectContent>
-                      </Select>
-                      {agentForwardingConfig.policy.mode === "allowlist" && (
-                        <div className="space-y-2">
-                          <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
-                            {agentForwardingConfig.policy.fingerprints.length === 0
-                              ? t(
-                                  "dialog.sshAgentAllowlistEmpty",
-                                  "The allowlist is empty. Forwarding remains enabled but exposes no identities until you authorize fingerprints.",
-                                )
-                              : t("dialog.sshAgentAllowlistCount", {
-                                  count: agentForwardingConfig.policy.fingerprints.length,
-                                  defaultValue: `${agentForwardingConfig.policy.fingerprints.length} identities are authorized.`,
-                                })}
-                          </p>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            disabled={
-                              !agentForwardingConfig.sources.external_agent &&
-                              !agentForwardingConfig.sources.stored_keys
-                            }
-                            onClick={() => setShowAgentIdentityPicker(true)}
-                          >
-                            <MdSettings className="mr-1.5 text-sm" />
-                            {t("dialog.sshAgentManageAllowlist", "Choose identities")}
-                          </Button>
-                        </div>
-                      )}
-                    </div>
-                  </>
-                )}
-                <p className="mt-2 text-[0.6875rem] leading-relaxed text-amber-600 dark:text-amber-300">
-                  {t(
-                    "dialog.sshAgentForwardingWarning",
-                    "Agent forwarding exposes signing capability from the selected local Agent endpoints and NyaTerm stored keys to remote processes. Enable it only for trusted servers. Private key material is never sent to the remote server; endpoint and forwarding policy remain device-local.",
+                        )}
+                      </div>
+                    </>
                   )}
-                </p>
-              </div>
-            </TabsContent>
+                  <p className="mt-2 text-[0.6875rem] leading-relaxed text-amber-600 dark:text-amber-300">
+                    {t(
+                      "dialog.sshAgentForwardingWarning",
+                      "Agent forwarding exposes signing capability from the selected local Agent endpoints and NyaTerm stored keys to remote processes. Enable it only for trusted servers. Private key material is never sent to the remote server; endpoint and forwarding policy remain device-local.",
+                    )}
+                  </p>
+                </div>
+              </TabsContent>
             ) : null}
 
             <TabsContent value="two-factor" className="mt-3 border-0 outline-none">
@@ -1602,7 +1606,11 @@ export function SshForm({
                   {t("dialog.initialRemoteDir")}
                 </TabsTrigger>
               ) : (
-                <TabsTrigger value="post-login" className="text-xs">
+                <TabsTrigger
+                  disabled={!supports("nativeFiles")}
+                  value="post-login"
+                  className="text-xs"
+                >
                   {t("dialog.commandExecution")}
                 </TabsTrigger>
               )}
@@ -1615,7 +1623,7 @@ export function SshForm({
                 {t("dialog.sftpTransferSettings", "Transfer")}
               </TabsTrigger>
               {!isSftpOnly ? (
-                <TabsTrigger value="x11" className="text-xs">
+                <TabsTrigger disabled={!supports("nativeFiles")} value="x11" className="text-xs">
                   {t("dialog.x11Forwarding")}
                 </TabsTrigger>
               ) : null}
@@ -1723,7 +1731,7 @@ export function SshForm({
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="standard">{t("dialog.sshProfileStandard")}</SelectItem>
-                        <SelectItem value="network_device">
+                        <SelectItem disabled={!supports("sshExtensions")} value="network_device">
                           {t("dialog.sshProfileNetworkDevice")}
                         </SelectItem>
                       </SelectContent>
@@ -1782,9 +1790,15 @@ export function SshForm({
                     <SelectContent>
                       <SelectItem value="global">{t("connection.encodingFollowGlobal")}</SelectItem>
                       <SelectItem value="UTF-8">UTF-8</SelectItem>
-                      <SelectItem value="GBK">GBK</SelectItem>
-                      <SelectItem value="GB2312">GB2312</SelectItem>
-                      <SelectItem value="GB18030">GB18030</SelectItem>
+                      <SelectItem disabled={!supports("legacyEncoding")} value="GBK">
+                        GBK
+                      </SelectItem>
+                      <SelectItem disabled={!supports("legacyEncoding")} value="GB2312">
+                        GB2312
+                      </SelectItem>
+                      <SelectItem disabled={!supports("legacyEncoding")} value="GB18030">
+                        GB18030
+                      </SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -1799,12 +1813,13 @@ export function SshForm({
                     <Switch
                       className="mt-0.5"
                       size="sm"
+                      disabled={!supports("shellIntegration")}
                       checked={remoteDynamicTabTitle}
                       onCheckedChange={setRemoteDynamicTabTitle}
                     />
                   </div>
                 ) : null}
-                {!isSftpOnly ? (
+                {!isSftpOnly && supports("recording") ? (
                   <ConnectionRecordingSettings
                     useGlobal={recordingUseGlobal}
                     onUseGlobalChange={setRecordingUseGlobal}
@@ -1857,7 +1872,7 @@ export function SshForm({
                   <Switch
                     className="mt-0.5 shrink-0"
                     checked={sftpSettings.compatibility_mode}
-                    disabled={sftpDisabled}
+                    disabled={sftpDisabled || !supports("sshExtensions")}
                     onCheckedChange={(compatibility_mode) =>
                       setSftpSettings({
                         ...sftpSettings,
@@ -1888,10 +1903,15 @@ export function SshForm({
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="off">{t("dialog.sftpCwdFollowOff")}</SelectItem>
-                          <SelectItem value="shell_integration">
+                          <SelectItem
+                            disabled={!supports("shellIntegration")}
+                            value="shell_integration"
+                          >
                             {t("dialog.sftpCwdFollowShellIntegration")}
                           </SelectItem>
-                          <SelectItem value="rc_file">{t("dialog.sftpCwdFollowRcFile")}</SelectItem>
+                          <SelectItem disabled={!supports("shellIntegration")} value="rc_file">
+                            {t("dialog.sftpCwdFollowRcFile")}
+                          </SelectItem>
                         </SelectContent>
                       </Select>
                       <p className="mt-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
@@ -1922,7 +1942,11 @@ export function SshForm({
                           min={MIN_SFTP_SHELL_DETECTION_TIMEOUT_MS}
                           max={MAX_SFTP_SHELL_DETECTION_TIMEOUT_MS}
                           step={100}
-                          disabled={sftpDisabled || sftpSettings.cwd_follow_mode === "off"}
+                          disabled={
+                            sftpDisabled ||
+                            !supports("shellIntegration") ||
+                            sftpSettings.cwd_follow_mode === "off"
+                          }
                         />
                         <span className="shrink-0 text-[0.625rem] text-muted-foreground">ms</span>
                       </div>
@@ -1961,9 +1985,15 @@ export function SshForm({
                         </SelectItem>
                       ) : null}
                       <SelectItem value="UTF-8">UTF-8</SelectItem>
-                      <SelectItem value="GBK">GBK</SelectItem>
-                      <SelectItem value="GB2312">GB2312</SelectItem>
-                      <SelectItem value="GB18030">GB18030</SelectItem>
+                      <SelectItem disabled={!supports("legacyEncoding")} value="GBK">
+                        GBK
+                      </SelectItem>
+                      <SelectItem disabled={!supports("legacyEncoding")} value="GB2312">
+                        GB2312
+                      </SelectItem>
+                      <SelectItem disabled={!supports("legacyEncoding")} value="GB18030">
+                        GB18030
+                      </SelectItem>
                     </SelectContent>
                   </Select>
                   <p className="mt-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
@@ -2004,24 +2034,24 @@ export function SshForm({
             </TabsContent>
 
             {!isSftpOnly ? (
-            <TabsContent value="x11" className="mt-3 border-0 outline-none">
-              <div className="rounded-lg border bg-accent/25 p-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0 space-y-0.5">
-                    <div className="text-xs font-medium">{t("dialog.x11Forwarding")}</div>
-                    <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
-                      {t("dialog.x11ForwardingDesc")}
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <Switch checked={x11Forwarding} onCheckedChange={setX11Forwarding} />
-                    <span className="text-xs text-muted-foreground">
-                      {t("dialog.enabled", "Enabled")}
-                    </span>
+              <TabsContent value="x11" className="mt-3 border-0 outline-none">
+                <div className="rounded-lg border bg-accent/25 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 space-y-0.5">
+                      <div className="text-xs font-medium">{t("dialog.x11Forwarding")}</div>
+                      <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+                        {t("dialog.x11ForwardingDesc")}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Switch checked={x11Forwarding} onCheckedChange={setX11Forwarding} />
+                      <span className="text-xs text-muted-foreground">
+                        {t("dialog.enabled", "Enabled")}
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </TabsContent>
+              </TabsContent>
             ) : null}
 
             {!isSftpOnly ? (
@@ -2044,7 +2074,9 @@ export function SshForm({
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="del">{t("dialog.backspaceDel", "DEL (0x7F)")}</SelectItem>
+                        <SelectItem value="del">
+                          {t("dialog.backspaceDel", "DEL (0x7F)")}
+                        </SelectItem>
                         <SelectItem value="ctrl_h">
                           {t("dialog.backspaceCtrlH", "Ctrl+H (BS)")}
                         </SelectItem>
@@ -2056,92 +2088,94 @@ export function SshForm({
             ) : null}
           </Tabs>
           {!isSftpOnly ? (
-          <div className="rounded-lg border bg-accent/25 p-3">
-            <div className="space-y-0.5">
-              <div className="text-xs font-medium">{t("dialog.sshAlgorithms")}</div>
-              <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
-                {t("dialog.sshAlgorithmsDesc")}
-              </p>
-            </div>
-            <div className="mt-3 max-w-xs">
-              <Label className="text-xs font-medium text-foreground/80">
-                {t("dialog.algorithmMode")}
-              </Label>
-              <Select
-                value={sshAlgorithms.mode}
-                onValueChange={(value) =>
-                  setAlgorithmMode(value as SshAlgorithmPreferences["mode"])
-                }
-              >
-                <SelectTrigger className="mt-1 h-8 text-xs font-normal">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="compatible">{t("dialog.algorithmModeCompatible")}</SelectItem>
-                  <SelectItem value="secure">{t("dialog.algorithmModeSecure")}</SelectItem>
-                  <SelectItem value="custom">{t("dialog.algorithmModeCustom")}</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <p className="mt-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
-              {sshAlgorithms.mode === "secure"
-                ? t("dialog.algorithmModeSecureDesc")
-                : sshAlgorithms.mode === "custom"
-                  ? t("dialog.algorithmModeCustomDesc")
-                  : t("dialog.algorithmModeCompatibleDesc")}
-            </p>
-            {sshAlgorithms.mode === "custom" && supportedAlgorithms && (
-              <Tabs defaultValue="kex" className="mt-3 w-full">
-                <TabsList className="grid h-8 w-full grid-cols-4 pointer-events-auto">
-                  <TabsTrigger value="kex" className="min-w-0 px-1 text-[0.6875rem]">
-                    <span className="truncate">{t("dialog.algorithmKexTab")}</span>
-                  </TabsTrigger>
-                  <TabsTrigger value="ciphers" className="min-w-0 px-1 text-[0.6875rem]">
-                    <span className="truncate">{t("dialog.algorithmCiphersTab")}</span>
-                  </TabsTrigger>
-                  <TabsTrigger value="macs" className="min-w-0 px-1 text-[0.6875rem]">
-                    <span className="truncate">{t("dialog.algorithmMacsTab")}</span>
-                  </TabsTrigger>
-                  <TabsTrigger value="host-keys" className="min-w-0 px-1 text-[0.6875rem]">
-                    <span className="truncate">{t("dialog.algorithmHostKeysTab")}</span>
-                  </TabsTrigger>
-                </TabsList>
-                <TabsContent value="kex" className="mt-1 border-0 outline-none">
-                  <AlgorithmOrderList
-                    options={supportedAlgorithms.kex}
-                    value={sshAlgorithms.kex}
-                    onChange={(value) => setAlgorithmList("kex", value)}
-                  />
-                </TabsContent>
-                <TabsContent value="ciphers" className="mt-1 border-0 outline-none">
-                  <AlgorithmOrderList
-                    options={supportedAlgorithms.ciphers}
-                    value={sshAlgorithms.ciphers}
-                    onChange={(value) => setAlgorithmList("ciphers", value)}
-                  />
-                </TabsContent>
-                <TabsContent value="macs" className="mt-1 border-0 outline-none">
-                  <AlgorithmOrderList
-                    options={supportedAlgorithms.macs}
-                    value={sshAlgorithms.macs}
-                    onChange={(value) => setAlgorithmList("macs", value)}
-                  />
-                </TabsContent>
-                <TabsContent value="host-keys" className="mt-1 border-0 outline-none">
-                  <AlgorithmOrderList
-                    options={supportedAlgorithms.host_keys}
-                    value={sshAlgorithms.host_keys}
-                    onChange={(value) => setAlgorithmList("host_keys", value)}
-                  />
-                </TabsContent>
-              </Tabs>
-            )}
-            {sshAlgorithms.mode === "custom" && !supportedAlgorithms && (
-              <div className="mt-3 rounded-md border border-dashed bg-background/70 px-3 py-2 text-[0.6875rem] text-muted-foreground">
-                {t("dialog.algorithmLoading")}
+            <div className="rounded-lg border bg-accent/25 p-3">
+              <div className="space-y-0.5">
+                <div className="text-xs font-medium">{t("dialog.sshAlgorithms")}</div>
+                <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+                  {t("dialog.sshAlgorithmsDesc")}
+                </p>
               </div>
-            )}
-          </div>
+              <div className="mt-3 max-w-xs">
+                <Label className="text-xs font-medium text-foreground/80">
+                  {t("dialog.algorithmMode")}
+                </Label>
+                <Select
+                  value={sshAlgorithms.mode}
+                  onValueChange={(value) =>
+                    setAlgorithmMode(value as SshAlgorithmPreferences["mode"])
+                  }
+                >
+                  <SelectTrigger className="mt-1 h-8 text-xs font-normal">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="compatible">
+                      {t("dialog.algorithmModeCompatible")}
+                    </SelectItem>
+                    <SelectItem value="secure">{t("dialog.algorithmModeSecure")}</SelectItem>
+                    <SelectItem value="custom">{t("dialog.algorithmModeCustom")}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <p className="mt-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
+                {sshAlgorithms.mode === "secure"
+                  ? t("dialog.algorithmModeSecureDesc")
+                  : sshAlgorithms.mode === "custom"
+                    ? t("dialog.algorithmModeCustomDesc")
+                    : t("dialog.algorithmModeCompatibleDesc")}
+              </p>
+              {sshAlgorithms.mode === "custom" && supportedAlgorithms && (
+                <Tabs defaultValue="kex" className="mt-3 w-full">
+                  <TabsList className="grid h-8 w-full grid-cols-4 pointer-events-auto">
+                    <TabsTrigger value="kex" className="min-w-0 px-1 text-[0.6875rem]">
+                      <span className="truncate">{t("dialog.algorithmKexTab")}</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="ciphers" className="min-w-0 px-1 text-[0.6875rem]">
+                      <span className="truncate">{t("dialog.algorithmCiphersTab")}</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="macs" className="min-w-0 px-1 text-[0.6875rem]">
+                      <span className="truncate">{t("dialog.algorithmMacsTab")}</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="host-keys" className="min-w-0 px-1 text-[0.6875rem]">
+                      <span className="truncate">{t("dialog.algorithmHostKeysTab")}</span>
+                    </TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="kex" className="mt-1 border-0 outline-none">
+                    <AlgorithmOrderList
+                      options={supportedAlgorithms.kex}
+                      value={sshAlgorithms.kex}
+                      onChange={(value) => setAlgorithmList("kex", value)}
+                    />
+                  </TabsContent>
+                  <TabsContent value="ciphers" className="mt-1 border-0 outline-none">
+                    <AlgorithmOrderList
+                      options={supportedAlgorithms.ciphers}
+                      value={sshAlgorithms.ciphers}
+                      onChange={(value) => setAlgorithmList("ciphers", value)}
+                    />
+                  </TabsContent>
+                  <TabsContent value="macs" className="mt-1 border-0 outline-none">
+                    <AlgorithmOrderList
+                      options={supportedAlgorithms.macs}
+                      value={sshAlgorithms.macs}
+                      onChange={(value) => setAlgorithmList("macs", value)}
+                    />
+                  </TabsContent>
+                  <TabsContent value="host-keys" className="mt-1 border-0 outline-none">
+                    <AlgorithmOrderList
+                      options={supportedAlgorithms.host_keys}
+                      value={sshAlgorithms.host_keys}
+                      onChange={(value) => setAlgorithmList("host_keys", value)}
+                    />
+                  </TabsContent>
+                </Tabs>
+              )}
+              {sshAlgorithms.mode === "custom" && !supportedAlgorithms && (
+                <div className="mt-3 rounded-md border border-dashed bg-background/70 px-3 py-2 text-[0.6875rem] text-muted-foreground">
+                  {t("dialog.algorithmLoading")}
+                </div>
+              )}
+            </div>
           ) : null}
         </CollapsibleContent>
       </Collapsible>

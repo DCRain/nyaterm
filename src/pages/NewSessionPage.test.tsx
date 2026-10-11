@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SavedAccount, SavedConnection } from "@/types/global";
+import type { SavedAccount, SavedConnection, SerialFlowControl } from "@/types/global";
 import NewSessionPage from "./NewSessionPage";
 
 const {
@@ -9,19 +9,23 @@ const {
   invokeMock,
   localTerminalMock,
   rdpFormMock,
+  vncFormMock,
   serialFormMock,
   sshFormMock,
   telnetFormMock,
   translateMock,
+  supportsMock,
 } = vi.hoisted(() => ({
   closeMock: vi.fn(),
   emitMock: vi.fn(),
   invokeMock: vi.fn(),
   localTerminalMock: vi.fn(),
   rdpFormMock: vi.fn(),
+  vncFormMock: vi.fn(),
   serialFormMock: vi.fn(),
   sshFormMock: vi.fn(),
   telnetFormMock: vi.fn(),
+  supportsMock: vi.fn(() => true),
   translateMock: (key: string, fallback?: unknown) =>
     typeof fallback === "string" ? fallback : key,
 }));
@@ -29,6 +33,7 @@ const {
 vi.mock("@/context/AppContext", () => ({
   useApp: () => ({
     appSettings: {
+      general: { rdp_client_mode: "builtin" },
       recording: {
         auto_start: false,
         default_mode: "transcript",
@@ -41,6 +46,10 @@ vi.mock("@/context/AppContext", () => ({
 }));
 
 vi.mock("@/lib/invoke", () => ({ invoke: invokeMock }));
+vi.mock("@/lib/backend/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/backend/runtime")>()),
+  supports: supportsMock,
+}));
 vi.mock("@tauri-apps/api/event", () => ({ emit: emitMock }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ close: closeMock }),
@@ -57,14 +66,27 @@ vi.mock("@/components/sessions/SerialForm", () => ({
   SerialForm: (props: Record<string, unknown>) => {
     serialFormMock(props);
     return (
-      <button
-        type="button"
-        onClick={() =>
-          (props.setModemUploadProtocol as ((value: "xmodem") => void) | undefined)?.("xmodem")
-        }
-      >
-        choose-xmodem
-      </button>
+      <>
+        {(["none", "software", "hardware"] as const).map((flowControl) => (
+          <button
+            key={flowControl}
+            type="button"
+            onClick={() =>
+              (props.setFlowControl as (value: SerialFlowControl) => void)(flowControl)
+            }
+          >
+            choose-{flowControl}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() =>
+            (props.setModemUploadProtocol as ((value: "xmodem") => void) | undefined)?.("xmodem")
+          }
+        >
+          choose-xmodem
+        </button>
+      </>
     );
   },
 }));
@@ -127,7 +149,12 @@ vi.mock("@/components/sessions/TelnetForm", () => ({
     );
   },
 }));
-vi.mock("@/components/sessions/VncForm", () => ({ VncForm: () => null }));
+vi.mock("@/components/sessions/VncForm", () => ({
+  VncForm: (props: Record<string, unknown>) => {
+    vncFormMock(props);
+    return null;
+  },
+}));
 vi.mock("@/components/sessions/RdpForm", () => ({
   RdpForm: (props: Record<string, unknown>) => {
     rdpFormMock(props);
@@ -151,6 +178,7 @@ const jumpHost: SavedConnection = {
 };
 
 const account: SavedAccount = {
+  sort_order: 0,
   id: "account-1",
   name: "Production",
   username: "admin",
@@ -194,6 +222,7 @@ const telnetConnection: SavedConnection = {
 const rdpConnection: SavedConnection = {
   id: "rdp-1",
   name: "RDP desktop",
+  rdp_client_mode: "windows",
   type: "rdp",
   host: "rdp.example.com",
   port: 3389,
@@ -231,8 +260,26 @@ const serialConnection: SavedConnection = {
   modem_upload_protocol: "ymodem",
 };
 
+const vncConnection: SavedConnection = {
+  id: "vnc-1",
+  name: "Raspberry Pi",
+  type: "vnc",
+  host: "pi.local",
+  port: 5900,
+  username: "pi",
+  auth: { mode: "password", has_password: true },
+  security: { mode: "auto" },
+  display: { scale_mode: "fit" },
+  clipboard: { enabled: true },
+  reconnect: { enabled: true, max_attempts: 5 },
+  shared: true,
+  view_only: false,
+};
+
 describe("NewSessionPage", () => {
   beforeEach(() => {
+    supportsMock.mockReset();
+    supportsMock.mockReturnValue(true);
     window.history.replaceState({}, "", `/?edit=${rdpConnection.id}`);
     closeMock.mockReset();
     closeMock.mockResolvedValue(undefined);
@@ -250,6 +297,7 @@ describe("NewSessionPage", () => {
           return Promise.resolve([account]);
         case "get_saved_connections":
           return Promise.resolve([
+            vncConnection,
             rdpConnection,
             serialConnection,
             jumpHost,
@@ -270,6 +318,7 @@ describe("NewSessionPage", () => {
     });
     localTerminalMock.mockReset();
     rdpFormMock.mockReset();
+    vncFormMock.mockReset();
     serialFormMock.mockReset();
     sshFormMock.mockReset();
     telnetFormMock.mockReset();
@@ -289,6 +338,40 @@ describe("NewSessionPage", () => {
         expect.objectContaining({ shellPath: "/bin/zsh" }),
       );
     });
+  });
+
+  it.each([
+    "/",
+    `/?edit=${sshConnection.id}`,
+    `/?edit=${telnetConnection.id}`,
+    `/?edit=${vncConnection.id}`,
+  ])("only shows supported session tabs in Web mode at %s", async (url) => {
+    window.history.replaceState({}, "", url);
+    supportsMock.mockImplementation((capability?: string) =>
+      ["ssh", "telnet", "vnc", "networkProxy"].includes(capability ?? ""),
+    );
+    render(<NewSessionPage />);
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("get_saved_connections"));
+    const editedConnection = [sshConnection, telnetConnection, vncConnection].find(
+      (connection) => url === `/?edit=${connection.id}`,
+    );
+    if (editedConnection) await screen.findByDisplayValue(editedConnection.name);
+    expect(invokeMock).not.toHaveBeenCalledWith("get_default_local_shell");
+    expect(screen.queryByText("web.sessionTypesHint")).toBeNull();
+    expect(screen.getAllByRole("tab")).toHaveLength(3);
+    const sshTab = screen.getByRole("tab", { name: "SSH" });
+    expect((sshTab as HTMLButtonElement).disabled).toBe(false);
+    for (const name of ["dialog.localTerminal", "dialog.serial", "RDP"]) {
+      expect(screen.queryByRole("tab", { name })).toBeNull();
+    }
+    for (const name of ["Telnet", "VNC"]) {
+      const tab = screen.getByRole("tab", { name });
+      expect((tab as HTMLButtonElement).disabled).toBe(false);
+      fireEvent.mouseDown(tab, { button: 0, ctrlKey: false });
+      await waitFor(() => expect(tab.getAttribute("aria-selected")).toBe("true"));
+    }
+    expect(invokeMock).not.toHaveBeenCalledWith("list_serial_ports");
   });
 
   it("restores an RDP jump host and keeps it when saving without changes", async () => {
@@ -328,6 +411,52 @@ describe("NewSessionPage", () => {
     });
   });
 
+  it("defaults a new RDP connection to following the global client", async () => {
+    window.history.replaceState({}, "", "/");
+    render(<NewSessionPage />);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "RDP" }), {
+      button: 0,
+    });
+    await waitFor(() =>
+      expect(rdpFormMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          clientMode: "default",
+          defaultClientMode: "builtin",
+        }),
+      ),
+    );
+  });
+
+  it.each(["builtin", "windows", "default"] as const)(
+    "saves RDP client choice %s while preserving connection parameters",
+    async (mode) => {
+      render(<NewSessionPage />);
+      await waitFor(() =>
+        expect(rdpFormMock).toHaveBeenLastCalledWith(
+          expect.objectContaining({ clientMode: "windows" }),
+        ),
+      );
+      const props = rdpFormMock.mock.lastCall?.[0];
+      act(() => props.setClientMode(mode));
+      fireEvent.click(screen.getByRole("button", { name: "dialog.save" }));
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith(
+          "save_connection",
+          expect.anything(),
+        ),
+      );
+      const saved = invokeMock.mock.calls.find(
+        ([command]) => command === "save_connection",
+      )?.[1].connection;
+      if (mode === "default")
+        expect(saved).not.toHaveProperty("rdp_client_mode");
+      else expect(saved.rdp_client_mode).toBe(mode);
+      expect(saved.network).toEqual(rdpConnection.network);
+      expect(saved.security).toEqual(rdpConnection.security);
+      expect(saved.display).toEqual(rdpConnection.display);
+    },
+  );
+
   it("loads, edits, and saves connection tags", async () => {
     render(<NewSessionPage />);
 
@@ -343,6 +472,66 @@ describe("NewSessionPage", () => {
         "save_connection",
         expect.objectContaining({
           connection: expect.objectContaining({ tags: ["gpu"] }),
+        }),
+      );
+    });
+  });
+
+  it("defaults new Serial connections to no flow control and saves the selected mode", async () => {
+    window.history.replaceState({}, "", "/");
+    render(<NewSessionPage />);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "dialog.serial" }), { button: 0 });
+    await waitFor(() => {
+      expect(serialFormMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ flowControl: "none" }),
+      );
+    });
+    const form = serialFormMock.mock.lastCall?.[0];
+    act(() => form.setSerialPortName("COM3"));
+    fireEvent.click(screen.getByRole("button", { name: "choose-hardware" }));
+    fireEvent.click(screen.getByRole("button", { name: "dialog.save" }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "save_connection",
+        expect.objectContaining({
+          connection: expect.objectContaining({
+            type: "serial",
+            port_name: "COM3",
+            flow_control: "hardware",
+          }),
+        }),
+      );
+    });
+  });
+
+  it.each([
+    [undefined, "hardware"],
+    ["none", "software"],
+    ["software", "none"],
+    ["hardware", "hardware"],
+  ] as const)("restores Serial flow control %s and saves %s", async (initial, selected) => {
+    const baseInvoke = invokeMock.getMockImplementation();
+    invokeMock.mockImplementation((command: string, ...args: unknown[]) => {
+      if (command === "get_saved_connections") {
+        return Promise.resolve([{ ...serialConnection, flow_control: initial }]);
+      }
+      return baseInvoke?.(command, ...args);
+    });
+    window.history.replaceState({}, "", `/?edit=${serialConnection.id}`);
+    render(<NewSessionPage />);
+
+    await waitFor(() => {
+      expect(serialFormMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ flowControl: initial ?? "none" }),
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: `choose-${selected}` }));
+    fireEvent.click(screen.getByRole("button", { name: "dialog.save" }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "save_connection",
+        expect.objectContaining({
+          connection: expect.objectContaining({ type: "serial", flow_control: selected }),
         }),
       );
     });
@@ -568,5 +757,28 @@ describe("NewSessionPage", () => {
 
     expect(invokeMock).not.toHaveBeenCalledWith("save_connection", expect.anything());
     expect(closeMock).not.toHaveBeenCalled();
+  });
+  it("restores and saves the optional VNC username", async () => {
+    window.history.replaceState({}, "", `/?edit=${vncConnection.id}`);
+    render(<NewSessionPage />);
+
+    await waitFor(() => {
+      expect(vncFormMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ username: "pi", securityMode: "auto" }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "dialog.save" }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "save_connection",
+        expect.objectContaining({
+          connection: expect.objectContaining({
+            type: "vnc",
+            username: "pi",
+          }),
+        }),
+      );
+    });
   });
 });

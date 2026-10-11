@@ -1,3 +1,4 @@
+import { canUseWindowsRdpClient, supportsSettingsTab } from "@/lib/backend/runtime";
 import {
   type ComponentType,
   useCallback,
@@ -31,6 +32,7 @@ import { toast } from "sonner";
 import { AiAgentsTab, AiGeneralTab, AiModelsTab, AiRulesTab } from "@/components/settings/AiTab";
 import { AppearanceTab } from "@/components/settings/AppearanceTab";
 import { GeneralTab } from "@/components/settings/GeneralTab";
+import { RemoteDesktopTab } from "@/components/settings/RemoteDesktopTab";
 import { InteractionTab } from "@/components/settings/InteractionTab";
 import { KeyboardShortcutsTab } from "@/components/settings/KeyboardShortcutsTab";
 import { SearchTab } from "@/components/settings/SearchTab";
@@ -96,7 +98,9 @@ export default function SettingsPanel({ paneId, tabId, settingsSection }: Settin
 
   const ownerWindowLabel = getOwnerMainWindowLabel();
   const initialTab = normalizeSettingsSection(settingsSection || "general");
-  const [activeTab, setActiveTab] = useState(initialTab);
+  const [activeTab, setActiveTab] = useState(
+    supportsSettingsTab(initialTab) ? initialTab : "general",
+  );
   const { draftSettings, isDirty, updateDraftSettings, acceptSavedSettings, discardDraftSettings } =
     useSettingsDraftState<AppSettings>(committedSettings);
   const [isSaving, setIsSaving] = useState(false);
@@ -114,7 +118,8 @@ export default function SettingsPanel({ paneId, tabId, settingsSection }: Settin
 
   useEffect(() => {
     if (!settingsSection) return;
-    setActiveTab(normalizeSettingsSection(settingsSection));
+    const tab = normalizeSettingsSection(settingsSection);
+    if (supportsSettingsTab(tab)) setActiveTab(tab);
   }, [settingsSection]);
 
   type SettingsCategory = {
@@ -132,6 +137,16 @@ export default function SettingsPanel({ paneId, tabId, settingsSection }: Settin
         icon: "dashboard",
         items: ["general", "appearance", "interaction", "keybindings"],
       },
+      ...(canUseWindowsRdpClient()
+        ? [
+            {
+              id: "connections",
+              label: t("settings.groupConnections"),
+              icon: "dns",
+              items: ["remote-desktop"],
+            },
+          ]
+        : []),
       {
         id: "terminal_session",
         label: t("settings.groupTerminalSession"),
@@ -197,6 +212,12 @@ export default function SettingsPanel({ paneId, tabId, settingsSection }: Settin
   );
 
   const tabs: SettingsTabConfig[] = [
+    {
+      id: "remote-desktop",
+      label: t("settings.remoteDesktop"),
+      icon: "dns",
+      Component: RemoteDesktopTab,
+    },
     { id: "general", label: t("settings.general"), icon: "settings", Component: GeneralTab },
     {
       id: "appearance",
@@ -443,7 +464,7 @@ export default function SettingsPanel({ paneId, tabId, settingsSection }: Settin
                 <div className="flex flex-col gap-2">
                   {categories.map((category) => {
                     const isExpanded = expandedGroups[category.id];
-                    const hasMultiple = category.items.length > 1;
+                    const hasMultiple = category.items.length > 1 || category.id === "connections";
 
                     if (!hasMultiple) {
                       const tabId = category.items[0];
@@ -454,6 +475,7 @@ export default function SettingsPanel({ paneId, tabId, settingsSection }: Settin
                         <Button
                           key={tabId}
                           variant="ghost"
+                          disabled={!supportsSettingsTab(tabId)}
                           onClick={() => setActiveTab(tabId)}
                           title={category.label}
                           className={`h-auto w-full justify-center gap-3 rounded-xl border px-2 py-2.5 text-sm font-semibold transition-colors sm:justify-start sm:px-3 ${
@@ -515,6 +537,7 @@ export default function SettingsPanel({ paneId, tabId, settingsSection }: Settin
                               <Button
                                 key={tabId}
                                 variant="ghost"
+                                disabled={!supportsSettingsTab(tabId)}
                                 onClick={() => setActiveTab(tabId)}
                                 title={tabItem.label}
                                 className={`h-auto w-full justify-center gap-3 rounded-lg border px-2 py-2 text-[0.85rem] font-medium transition-colors sm:justify-start sm:px-3 ${

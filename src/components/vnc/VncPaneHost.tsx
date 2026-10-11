@@ -1,5 +1,3 @@
-import { Channel } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { Eye, ShieldAlert } from "lucide-react";
 import {
   memo,
@@ -12,6 +10,8 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { FloatingSessionChrome } from "@/components/remote-desktop/FloatingSessionChrome";
+import { listen } from "@/lib/backend/api";
+import { runtime } from "@/lib/backend/runtime";
 import {
   RemoteDesktopSurface,
   type RemoteDesktopSurfaceHandle,
@@ -19,6 +19,7 @@ import {
 import { readClipboardText, writeClipboardText } from "@/lib/clipboard";
 import { invoke } from "@/lib/invoke";
 import { decodeRemoteDesktopFramePatch } from "@/lib/remoteDesktopFrame";
+import { subscribeVncFrames } from "@/lib/vncFrames";
 import {
   buildVncCompositionKeyEvents,
   mapKeyboardEventToVncKeysym,
@@ -106,11 +107,16 @@ function VncPaneHost({
 }: VncPaneHostProps) {
   const { t } = useTranslation();
   const boundsRef = useRef<HTMLDivElement | null>(null);
+  const [clipboardUnavailable, setClipboardUnavailable] = useState(false);
   const surfaceRef = useRef<RemoteDesktopSurfaceHandle | null>(null);
   const imeRef = useRef<HTMLTextAreaElement | null>(null);
   const pressedKeysRef = useRef(new Set<number>());
   const pointerButtonsRef = useRef(new Set<number>());
-  const pendingPointerRef = useRef<{ x: number; y: number; buttonMask: number } | null>(null);
+  const pendingPointerRef = useRef<{
+    x: number;
+    y: number;
+    buttonMask: number;
+  } | null>(null);
   const pointerRafRef = useRef<number | null>(null);
   const composingRef = useRef(false);
   const lastLocalSentRef = useRef<string | null>(null);
@@ -151,18 +157,41 @@ function VncPaneHost({
   }, [pane.sessionId]);
 
   useEffect(() => {
-    const channel = new Channel<ArrayBuffer>((frame) => {
+    let disposed = false;
+    const controller = new AbortController();
+    let unsubscribe: (() => void) | undefined;
+    const onFrame = (frame: ArrayBuffer) => {
+      if (disposed) return;
       const patch = decodeRemoteDesktopFramePatch(frame);
       setDesktopSize({ width: patch.desktopWidth, height: patch.desktopHeight });
       surfaceRef.current?.drawFrame(patch);
-    });
+    };
 
     if (!pane.connecting && !pane.connectError) {
-      void invoke("vnc_attach_frame_channel", {
-        sessionId: pane.sessionId,
-        frameChannel: channel,
-      }).catch(() => {});
+      void subscribeVncFrames(
+        pane.sessionId,
+        onFrame,
+        (error) => {
+          if (!disposed) setMessage(error.message);
+        },
+        controller.signal,
+      )
+        .then((stop) => {
+          if (disposed) stop();
+          else unsubscribe = stop;
+        })
+        .catch((error: Error) => {
+          if (!disposed) {
+            setState("failed");
+            setMessage(error.message);
+          }
+        });
     }
+    return () => {
+      disposed = true;
+      controller.abort();
+      unsubscribe?.();
+    };
   }, [pane.connectError, pane.connecting, pane.sessionId]);
 
   useEffect(() => {
@@ -183,7 +212,9 @@ function VncPaneHost({
     const unlisten = listen<VncClipboardPayload>(`vnc-clipboard-${pane.sessionId}`, (event) => {
       const text = event.payload.text;
       lastRemoteReceivedRef.current = text;
-      void writeClipboardText(text).catch(() => {});
+      void writeClipboardText(text).catch(() => {
+        if (runtime === "web") setClipboardUnavailable(true);
+      });
     });
     return () => {
       void unlisten.then((dispose) => dispose());
@@ -211,7 +242,7 @@ function VncPaneHost({
           );
         }
       } catch {
-        /* clipboard access can be denied while the pane remains usable */
+        if (runtime === "web") setClipboardUnavailable(true);
       } finally {
         polling = false;
       }
@@ -399,6 +430,11 @@ function VncPaneHost({
             ) : null
           }
         />
+        {clipboardUnavailable && (
+          <output className="pointer-events-none absolute bottom-2 left-2 z-10 rounded border border-white/15 bg-black/65 px-2 py-1 text-xs text-white">
+            {t("web.clipboardUnavailable")}
+          </output>
+        )}
 
         {state !== "active" ? (
           <div className="absolute inset-0 flex items-center justify-center bg-black/45 text-white">

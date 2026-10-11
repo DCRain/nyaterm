@@ -288,42 +288,7 @@ async fn install_remote_shell_integration<H: client::Handler>(
         .map(|_| ())
 }
 
-const CHANNEL_REQUEST_REPLY_TIMEOUT_MS: u64 = 10_000;
-
-async fn wait_channel_request_reply(
-    channel: &mut russh::Channel<client::Msg>,
-    request_name: &str,
-) -> AppResult<()> {
-    let reply = timeout(
-        Duration::from_millis(CHANNEL_REQUEST_REPLY_TIMEOUT_MS),
-        async {
-            loop {
-                match channel.wait().await {
-                    Some(ChannelMsg::Success) => return Ok(()),
-                    Some(ChannelMsg::Failure) => {
-                        return Err(AppError::Channel(format!(
-                            "{request_name} request rejected by server"
-                        )));
-                    }
-                    Some(ChannelMsg::Close | ChannelMsg::Eof) | None => {
-                        return Err(AppError::Channel(format!(
-                            "SSH channel closed before {request_name} request completed"
-                        )));
-                    }
-                    Some(_) => {}
-                }
-            }
-        },
-    )
-    .await;
-
-    match reply {
-        Ok(result) => result,
-        Err(_) => Err(AppError::Channel(format!(
-            "{request_name} request timed out"
-        ))),
-    }
-}
+use nyaterm_core::ssh::protocol::wait_channel_request_reply;
 
 async fn close_failed_interactive_channel(
     channel: &russh::Channel<client::Msg>,
@@ -1360,10 +1325,10 @@ pub(super) async fn ssh_io_loop(
                         if phase == IoPhase::Suppressing {
                             suppression_diagnostics.record_pre_ready_write(send_data.len());
                         }
-                        let _ = channel.data(&send_data[..]).await;
+                        let _ = nyaterm_core::ssh::terminal::write(&channel, &send_data[..]).await;
                     }
                     Some(SessionCommand::Resize { cols, rows }) => {
-                        let _ = channel.window_change(cols, rows, 0, 0).await;
+                        let _ = nyaterm_core::ssh::terminal::resize(&channel, cols, rows).await;
                     }
                     Some(SessionCommand::PauseOutput) => {
                         output_paused = true;
@@ -1374,7 +1339,7 @@ pub(super) async fn ssh_io_loop(
                     Some(SessionCommand::AckOutput { bytes }) => {
                         output.ack(bytes);
                     }
-                    Some(SessionCommand::CaptureExec { marker_id, wrapped_command, result_tx }) => {
+                    Some(SessionCommand::CaptureExec { marker_id, wrapped_command, result_tx, execution }) => {
                         handle_input_before_initial_injection(
                             &mut phase,
                             &mut pending_script,
@@ -1385,9 +1350,9 @@ pub(super) async fn ssh_io_loop(
                             &mut post_login_deadline,
                         )
                         .await;
-                        capture_processor.register(marker_id, result_tx);
+                        if !capture_processor.register_execution(marker_id.clone(), result_tx, Some(execution)) { continue; }
                         let send_command = encode_terminal_input(&wrapped_command, &encoding);
-                        let _ = channel.data(&send_command[..]).await;
+                        if channel.data(&send_command[..]).await.is_err() { capture_processor.abort(&marker_id); }
                     }
                     Some(SessionCommand::CancelCapture { marker_id }) => {
                         capture_processor.cancel(&marker_id);
@@ -1565,6 +1530,9 @@ pub(super) async fn ssh_io_loop(
 
                                     if capture_processor.has_active() {
                                         result.visible = capture_processor.process(&result.visible);
+                                        if result.ready {
+                                            capture_processor.finish_abandoned_at_prompt();
+                                        }
                                     }
 
                                     handle_osc_result(
@@ -2400,6 +2368,10 @@ mod tests {
                     marker_id: "capture".to_string(),
                     wrapped_command: b"echo blocked".to_vec(),
                     result_tx: capture_tx,
+                    execution: manager
+                        .begin_terminal_execution(&session_id, "capture")
+                        .await
+                        .unwrap(),
                 },
             )
             .await

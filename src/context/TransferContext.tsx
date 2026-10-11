@@ -1,4 +1,4 @@
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "@/lib/backend/api";
 import {
   createContext,
   type ReactNode,
@@ -622,9 +622,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
         try {
           if (request.direction === "copy") {
             if (!request.sourceEndpoint || !request.targetEndpoint) {
-              throw new Error(
-                "Copy transfer is missing source or target endpoint",
-              );
+              throw new Error("Copy transfer is missing source or target endpoint");
             }
             if (
               request.sourceEndpoint.kind === "remote" &&
@@ -807,9 +805,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
         } catch (error) {
           if (request.moveSource) {
             toast.error(String(error));
-            window.dispatchEvent(
-              new CustomEvent("file-explorer-paste-finished"),
-            );
+            window.dispatchEvent(new CustomEvent("file-explorer-paste-finished"));
           }
           setTransferMap((prev) => {
             const existing = prev.get(nextQueued.id);
@@ -1061,10 +1057,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
       sourceStartedAt: item.sourceStartedAt,
       targetStartedAt: item.targetStartedAt,
       sourceEndpoint:
-        item.direction === "copy" &&
-        item.sourceSessionId &&
-        item.sourceKind &&
-        item.sourcePath
+        item.direction === "copy" && item.sourceSessionId && item.sourceKind && item.sourcePath
           ? {
               sessionId: item.sourceSessionId,
               kind: item.sourceKind,
@@ -1330,11 +1323,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
     ],
   );
 
-  return (
-    <TransferContext.Provider value={contextValue}>
-      {children}
-    </TransferContext.Provider>
-  );
+  return <TransferContext.Provider value={contextValue}>{children}</TransferContext.Provider>;
 }
 
 export function useTransfer(): TransferContextValue {

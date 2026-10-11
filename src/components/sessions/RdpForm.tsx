@@ -18,10 +18,12 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { invoke } from "@/lib/invoke";
+import { canUseWindowsRdpClient } from "@/lib/backend/runtime";
 import { listRemoteDesktopClients, type RemoteDesktopClientInfo } from "@/lib/remoteDesktop";
 import type {
   ProxyConfig,
   RdpCertificatePolicy,
+  RdpClientMode,
   RdpClipboardMode,
   RdpDisplayMode,
   SavedPassword,
@@ -57,6 +59,9 @@ export interface RdpRedirectSettings {
 }
 
 interface RdpFormProps {
+  rdpClientModeOverride?: RdpClientMode | "default";
+  setRdpClientModeOverride?: (value: RdpClientMode | "default") => void;
+  defaultRdpClientMode?: RdpClientMode;
   host: string;
   setHost: (value: string) => void;
   port: number;
@@ -223,6 +228,9 @@ export function rdpRedirectSettingsFromSaved(connection: {
 }
 
 export function RdpForm({
+  rdpClientModeOverride = "default",
+  setRdpClientModeOverride,
+  defaultRdpClientMode = "builtin",
   host,
   setHost,
   port,
@@ -433,6 +441,43 @@ export function RdpForm({
         </div>
       </div>
 
+      {clientMode === "builtin" && setRdpClientModeOverride && canUseWindowsRdpClient() && (
+        <div>
+          <Label className="text-xs font-medium text-foreground/80">
+            {t("dialog.rdpOpenWith")}
+          </Label>
+          <Select
+            value={rdpClientModeOverride}
+            onValueChange={(value) =>
+              setRdpClientModeOverride?.(value as RdpClientMode | "default")
+            }
+          >
+            <SelectTrigger className="mt-1 h-8 text-xs" aria-label={t("dialog.rdpOpenWith")}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="default">
+                {t("dialog.rdpFollowDefault")} (
+                {t(
+                  defaultRdpClientMode === "windows"
+                    ? "settings.rdpClientWindows"
+                    : "settings.rdpClientBuiltin",
+                )}
+                )
+              </SelectItem>
+              <SelectItem value="builtin">{t("settings.rdpClientBuiltin")}</SelectItem>
+              <SelectItem value="windows">{t("settings.rdpClientWindows")}</SelectItem>
+            </SelectContent>
+          </Select>
+          {(rdpClientModeOverride === "windows" ||
+            (rdpClientModeOverride === "default" && defaultRdpClientMode === "windows")) && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t("settings.rdpSystemClientDesc")}
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="grid gap-3 sm:grid-cols-2">
         <div>
           <Label className="text-xs font-medium text-foreground/80">
@@ -488,7 +533,9 @@ export function RdpForm({
             </TabsList>
 
             <TabsContent value="direct" className="mt-3 border-0 outline-none">
-              <Label className="text-xs font-medium text-foreground/80">{t("dialog.password")}</Label>
+              <Label className="text-xs font-medium text-foreground/80">
+                {t("dialog.password")}
+              </Label>
               <div className="relative mt-1">
                 <Input
                   className="h-8 pr-16 text-xs"

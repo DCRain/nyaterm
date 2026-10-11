@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use time::format_description::well_known::Rfc3339;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 
@@ -30,6 +30,8 @@ const COMMAND_QUEUE_HIGH_THRESHOLD: usize = 100;
 const COMMAND_QUEUE_CRITICAL_THRESHOLD: usize = 1000;
 const COMMAND_QUEUE_HIGH_RESET_THRESHOLD: usize = 50;
 const COMMAND_QUEUE_CRITICAL_RESET_THRESHOLD: usize = 500;
+
+include!("session_execution.rs");
 
 /// Safe, backend-resolved cwd values used by the dynamic-title UI.
 ///
@@ -265,6 +267,7 @@ pub enum SessionCommand {
         marker_id: String,
         wrapped_command: Vec<u8>,
         result_tx: oneshot::Sender<CapturedOutput>,
+        execution: TerminalExecutionGuard,
     },
     /// AI capture: cancel a marker-wrapped command capture that no longer has a caller.
     CancelCapture { marker_id: String },
@@ -317,18 +320,8 @@ impl SessionCommandQueueMetrics {
     }
 
     fn reserve_enqueue(&self) -> usize {
-        self.queued_commands
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-                Some(value.saturating_add(1))
-            })
-            .unwrap_or(u64::MAX);
-        let previous = self
-            .current_pending
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-                Some(value.saturating_add(1))
-            })
-            .unwrap_or(usize::MAX);
-        previous.saturating_add(1)
+        saturating_atomic_add_u64(&self.queued_commands, 1);
+        saturating_atomic_add_usize(&self.current_pending, 1)
     }
 
     fn commit_enqueue(&self, pending: usize) {
@@ -354,11 +347,7 @@ impl SessionCommandQueueMetrics {
     }
 
     fn mark_processed(&self) {
-        self.processed_commands
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-                Some(value.saturating_add(1))
-            })
-            .ok();
+        saturating_atomic_add_u64(&self.processed_commands, 1);
         let pending = saturating_atomic_sub_usize(&self.current_pending, 1);
         self.relax_pressure_tier(pending);
     }
@@ -427,22 +416,49 @@ impl SessionCommandQueueMetrics {
     }
 }
 
+// Use compare-exchange loops to retain Rust 1.94 compatibility: try_update is newer.
+fn saturating_atomic_add_usize(value: &AtomicUsize, amount: usize) -> usize {
+    let mut current = value.load(Ordering::Relaxed);
+    loop {
+        let next = current.saturating_add(amount);
+        match value.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return next,
+            Err(actual) => current = actual,
+        }
+    }
+}
+
+fn saturating_atomic_add_u64(value: &AtomicU64, amount: u64) -> u64 {
+    let mut current = value.load(Ordering::Relaxed);
+    loop {
+        let next = current.saturating_add(amount);
+        match value.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return next,
+            Err(actual) => current = actual,
+        }
+    }
+}
+
 fn saturating_atomic_sub_usize(value: &AtomicUsize, amount: usize) -> usize {
-    value
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-            Some(current.saturating_sub(amount))
-        })
-        .map(|previous| previous.saturating_sub(amount))
-        .unwrap_or(0)
+    let mut current = value.load(Ordering::Relaxed);
+    loop {
+        let next = current.saturating_sub(amount);
+        match value.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return next,
+            Err(actual) => current = actual,
+        }
+    }
 }
 
 fn saturating_atomic_sub_u64(value: &AtomicU64, amount: u64) -> u64 {
-    value
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-            Some(current.saturating_sub(amount))
-        })
-        .map(|previous| previous.saturating_sub(amount))
-        .unwrap_or(0)
+    let mut current = value.load(Ordering::Relaxed);
+    loop {
+        let next = current.saturating_sub(amount);
+        match value.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return next,
+            Err(actual) => current = actual,
+        }
+    }
 }
 
 pub struct SessionCommandSender {
@@ -730,6 +746,9 @@ pub struct SessionManager {
     app_handle: OnceLock<tauri::AppHandle>,
     recording_manager: OnceLock<Arc<RecordingManager>>,
     recent_output: Arc<RecentOutputStore>,
+    terminal_executions: StdMutex<HashMap<String, ExecutionEntry>>,
+    pub(crate) powershell_dispatch:
+        StdMutex<HashMap<String, Arc<super::capture::PowershellDispatch>>>,
 }
 
 impl SessionManager {
@@ -748,6 +767,8 @@ impl SessionManager {
             app_handle: OnceLock::new(),
             recording_manager: OnceLock::new(),
             recent_output: Arc::new(RecentOutputStore::default()),
+            terminal_executions: StdMutex::new(HashMap::new()),
+            powershell_dispatch: StdMutex::new(HashMap::new()),
         }
     }
 
@@ -841,6 +862,9 @@ impl SessionManager {
     pub async fn remove_session(&self, id: &str) -> bool {
         let removed = self.sessions.lock().await.remove(id).is_some();
         if removed {
+            self.terminal_executions.lock().unwrap().remove(id);
+            self.powershell_dispatch.lock().unwrap().remove(id);
+            self.emit_execution_state(id, TerminalExecutionState::Idle);
             self.recent_output.remove(id);
             self.flush_pending_submission(id).await;
             self.command_submissions.lock().await.remove(id);
@@ -848,6 +872,9 @@ impl SessionManager {
         }
         if removed {
             if let Some(app) = self.app_handle.get() {
+                if let Some(plugins) = app.try_state::<Arc<super::plugins::PluginManager>>() {
+                    plugins.revoke_session(id).await;
+                }
                 let _ = app.emit("sessions-changed", ());
                 crate::tray::schedule_refresh(app);
             }
@@ -888,6 +915,16 @@ impl SessionManager {
     pub async fn send_command(&self, id: &str, cmd: SessionCommand) -> AppResult<()> {
         let sessions = self.sessions.lock().await;
         if let Some(handle) = sessions.get(id) {
+            if let SessionCommand::Write { data, origin, .. } = &cmd {
+                if self.terminal_executions.lock().unwrap().contains_key(id)
+                    && *origin != InputOrigin::TerminalResponse
+                    && data.as_slice() != [3]
+                {
+                    return Err(AppError::SessionBusy(
+                        "This session is executing an automated command.".into(),
+                    ));
+                }
+            }
             if matches!(cmd, SessionCommand::Write { .. })
                 && handle.info.ssh_runtime_mode == Some(SshRuntimeMode::Sftp)
             {
@@ -1487,6 +1524,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn automated_execution_blocks_other_input_but_allows_interrupts_and_terminal_responses() {
+        let manager = Arc::new(SessionManager::new());
+        let (tx, mut rx) = session_command_channel("busy");
+        manager
+            .add_session(test_handle_with_sender(
+                "busy",
+                SessionType::Local,
+                false,
+                tx,
+            ))
+            .await;
+        let guard = manager
+            .begin_terminal_execution("busy", "first")
+            .await
+            .unwrap();
+        for origin in [InputOrigin::Keyboard, InputOrigin::AiAgent] {
+            let result = manager
+                .send_command(
+                    "busy",
+                    SessionCommand::Write {
+                        data: b"echo other\r".to_vec(),
+                        raw: false,
+                        automated: false,
+                        origin,
+                        sensitivity: super::InputSensitivity::Normal,
+                    },
+                )
+                .await;
+            assert!(matches!(
+                result,
+                Err(crate::error::AppError::SessionBusy(_))
+            ));
+        }
+        for (data, origin) in [
+            (vec![3], InputOrigin::Keyboard),
+            (b"\x1b[1;1R".to_vec(), InputOrigin::TerminalResponse),
+        ] {
+            manager
+                .send_command(
+                    "busy",
+                    SessionCommand::Write {
+                        data,
+                        raw: true,
+                        automated: false,
+                        origin,
+                        sensitivity: super::InputSensitivity::Normal,
+                    },
+                )
+                .await
+                .unwrap();
+            assert!(matches!(
+                rx.recv().await,
+                Some(SessionCommand::Write { .. })
+            ));
+        }
+        manager.remove_session("busy").await;
+        let newer = manager
+            .begin_terminal_execution("busy", "newer")
+            .await
+            .unwrap();
+        drop(guard);
+        assert!(
+            manager
+                .begin_terminal_execution("busy", "third")
+                .await
+                .is_err()
+        );
+        drop(newer);
+        assert!(
+            manager
+                .begin_terminal_execution("busy", "third")
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
     async fn sftp_only_session_rejects_terminal_input() {
         let manager = SessionManager::new();
         let mut handle = test_handle("sftp-only", SessionType::SSH, false);
@@ -1842,6 +1956,36 @@ mod tests {
                 max_pending_observed: 1001,
             }
         );
+    }
+
+    #[test]
+    fn command_queue_metrics_saturate_at_counter_limits() {
+        let metrics = super::SessionCommandQueueMetrics::new("queue-limits".to_string());
+        metrics
+            .queued_commands
+            .store(u64::MAX - 1, Ordering::Relaxed);
+        metrics
+            .processed_commands
+            .store(u64::MAX - 1, Ordering::Relaxed);
+        metrics
+            .current_pending
+            .store(usize::MAX - 1, Ordering::Relaxed);
+
+        assert_eq!(metrics.reserve_enqueue(), usize::MAX);
+        assert_eq!(metrics.reserve_enqueue(), usize::MAX);
+        assert_eq!(metrics.snapshot().queued_commands, u64::MAX);
+        metrics.mark_processed();
+        metrics.mark_processed();
+        assert_eq!(metrics.snapshot().processed_commands, u64::MAX);
+        assert_eq!(metrics.snapshot().current_pending, usize::MAX - 2);
+
+        metrics.queued_commands.store(1, Ordering::Relaxed);
+        metrics.current_pending.store(1, Ordering::Relaxed);
+        metrics.rollback_enqueue();
+        metrics.rollback_enqueue();
+        metrics.mark_processed();
+        assert_eq!(metrics.snapshot().queued_commands, 0);
+        assert_eq!(metrics.snapshot().current_pending, 0);
     }
 
     #[test]

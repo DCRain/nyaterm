@@ -1,6 +1,3 @@
-﻿import { emit } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { type ComponentType, useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -28,10 +25,8 @@ import {
 import ChildWindowHeader from "@/components/layout/ChildWindowHeader";
 import { buildGroupPath, type ConnectionOption, sortLabel } from "@/components/network/shared";
 import { ConnectionTagsField } from "@/components/sessions/ConnectionTagsField";
-import { LocalTerminal } from "@/components/sessions/LocalTerminal";
-import { S3Form } from "@/components/sessions/S3Form";
 import { FtpForm } from "@/components/sessions/FtpForm";
-import { WebDavForm } from "@/components/sessions/WebDavForm";
+import { LocalTerminal } from "@/components/sessions/LocalTerminal";
 import {
   DEFAULT_RDP_HEIGHT,
   DEFAULT_RDP_USERNAME,
@@ -48,10 +43,12 @@ import {
   resolveRdpResolutionPreset,
   starOrOffToStored,
 } from "@/components/sessions/RdpForm";
+import { S3Form } from "@/components/sessions/S3Form";
 import { SerialForm } from "@/components/sessions/SerialForm";
 import { type SshAuthMode, SshForm } from "@/components/sessions/SshForm";
 import { TelnetForm } from "@/components/sessions/TelnetForm";
 import { VncForm, type VncScaleMode, type VncSecurityMode } from "@/components/sessions/VncForm";
+import { WebDavForm } from "@/components/sessions/WebDavForm";
 import { ActionButton, ActionFooter } from "@/components/ui/action-footer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -62,6 +59,11 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useApp } from "@/context/AppContext";
+import { emit } from "@/lib/backend/api";
+import { pickBrowserImage } from "@/lib/backend/browserArtifacts";
+import { open as openDialog } from "@/lib/backend/platform/dialog";
+import { getCurrentWindow } from "@/lib/backend/platform/window";
+import { type Capability, runtime, supports } from "@/lib/backend/runtime";
 import { getErrorMessage, humanizeBackendError } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import { isWindows } from "@/lib/platform";
@@ -74,11 +76,13 @@ import type {
   OtpEntry,
   ProxyConfig,
   RdpCertificatePolicy,
+  RdpClientMode,
   RdpClipboardMode,
   RdpDisplayMode,
   RecordingMode,
   SavedAccount,
   SavedConnection,
+  SerialFlowControl,
   SftpSettings,
   SshAgentEndpoint,
   SshAgentForwardingConfig,
@@ -112,8 +116,21 @@ const DEFAULT_SFTP_SETTINGS: SftpSettings = {
 };
 const DEFAULT_SSH_AGENT_FORWARDING_CONFIG: SshAgentForwardingConfig = {
   enabled: false,
-  sources: { external_agent: false, external_agent_endpoints: [], stored_keys: true },
+  sources: {
+    external_agent: false,
+    external_agent_endpoints: [],
+    stored_keys: true,
+  },
   policy: { mode: "allowlist", fingerprints: [] },
+};
+const PROTOCOL_CAPABILITIES: Partial<Record<ProtocolTab, Capability>> = {
+  ssh: "ssh",
+  sftp: "sftp",
+  local: "localShell",
+  telnet: "telnet",
+  serial: "serial",
+  rdp: "remoteDesktop",
+  vnc: "vnc",
 };
 
 function resolveInitialPasswordSource(
@@ -172,7 +189,10 @@ function normalizeSshAgentForwardingConfig(
       policy:
         value.policy?.mode === "all"
           ? { mode: "all" }
-          : { mode: "allowlist", fingerprints: value.policy?.fingerprints ?? [] },
+          : {
+              mode: "allowlist",
+              fingerprints: value.policy?.fingerprints ?? [],
+            },
     };
   }
 
@@ -318,6 +338,10 @@ function sftpConnectionNameFromSsh(name: string): string {
 export default function NewSessionPage() {
   const { t } = useTranslation();
   const { appSettings } = useApp();
+  const protocolOptions = PROTOCOL_OPTIONS.filter(({ id }) => {
+    const capability = PROTOCOL_CAPABILITIES[id];
+    return !capability || supports(capability);
+  });
   const params = new URLSearchParams(window.location.search);
   const editId = params.get("edit") ?? undefined;
   const fromSshId = editId ? undefined : (params.get("fromSsh") ?? undefined);
@@ -341,8 +365,12 @@ export default function NewSessionPage() {
   const [telnetPort, setTelnetPort] = useState(23);
   const [rdpPort, setRdpPort] = useState(3389);
   const [vncPort, setVncPort] = useState(5900);
+  const [vncUsername, setVncUsername] = useState("");
   const [rdpDomain, setRdpDomain] = useState("");
   const [rdpClientMode, setRdpClientMode] = useState<"external" | "builtin">("external");
+  const [rdpClientModeOverride, setRdpClientModeOverride] = useState<RdpClientMode | "default">(
+    "default",
+  );
   const [rdpExternalDisplayMode, setRdpExternalDisplayMode] =
     useState<RdpExternalDisplayMode>("fullscreen");
   const [rdpResolutionPreset, setRdpResolutionPreset] = useState<RdpResolutionPreset>("1920x1080");
@@ -382,9 +410,7 @@ export default function NewSessionPage() {
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupParentId, setNewGroupParentId] = useState("");
   const [currentTab, setCurrentTab] = useState<ProtocolTab>(fromSshId ? "sftp" : "ssh");
-  const [wizardStep, setWizardStep] = useState<WizardStep>(
-    editId || fromSshId ? "form" : "pick",
-  );
+  const [wizardStep, setWizardStep] = useState<WizardStep>(editId || fromSshId ? "form" : "pick");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{
     ok: boolean;
@@ -441,7 +467,9 @@ export default function NewSessionPage() {
   const [initialRemoteDir, setInitialRemoteDir] = useState("");
   const [sshBackspaceMode, setSshBackspaceMode] = useState("del");
   const [x11Forwarding, setX11Forwarding] = useState(false);
-  const [authAgentEndpoint, setAuthAgentEndpoint] = useState<SshAgentEndpoint>({ type: "auto" });
+  const [authAgentEndpoint, setAuthAgentEndpoint] = useState<SshAgentEndpoint>({
+    type: "auto",
+  });
   const [agentForwardingConfig, setAgentForwardingConfig] = useState<SshAgentForwardingConfig>(
     DEFAULT_SSH_AGENT_FORWARDING_CONFIG,
   );
@@ -461,6 +489,7 @@ export default function NewSessionPage() {
   const [dataBits, setDataBits] = useState("8");
   const [parity, setParity] = useState("none");
   const [stopBits, setStopBits] = useState("1");
+  const [serialFlowControl, setSerialFlowControl] = useState<SerialFlowControl>("none");
   const [serialModemUploadProtocol, setSerialModemUploadProtocol] = useState<
     "xmodem" | "ymodem" | "zmodem"
   >("zmodem");
@@ -490,16 +519,18 @@ export default function NewSessionPage() {
   );
 
   useEffect(() => {
-    invoke<string>("get_default_local_shell")
-      .then((value) => {
-        const resolvedShell = value.trim();
-        if (!resolvedShell) return;
-        setDefaultLocalShell(resolvedShell);
-        if (!editId) {
-          setShellPath((current) => (current === FALLBACK_LOCAL_SHELL ? resolvedShell : current));
-        }
-      })
-      .catch(() => undefined);
+    if (supports("localShell")) {
+      invoke<string>("get_default_local_shell")
+        .then((value) => {
+          const resolvedShell = value.trim();
+          if (!resolvedShell) return;
+          setDefaultLocalShell(resolvedShell);
+          if (!editId) {
+            setShellPath((current) => (current === FALLBACK_LOCAL_SHELL ? resolvedShell : current));
+          }
+        })
+        .catch(() => undefined);
+    }
     invoke<Group[]>("get_groups")
       .then(setGroups)
       .catch((e) => setError(getErrorMessage(e)));
@@ -633,6 +664,8 @@ export default function NewSessionPage() {
             setRemoteDynamicTabTitle(found.dynamic_tab_title ?? false);
           }
         } else if (found.type === "telnet") {
+          setProxyId(found.network?.proxy_id || "");
+          setJumpHostId(found.network?.proxy_jump_id || "");
           setHost(found.host || "");
           setTelnetPort(found.port || 23);
           setUsername(found.username || "");
@@ -657,6 +690,7 @@ export default function NewSessionPage() {
           setPasswordId(found.auth?.password_id || "");
           setHasPassword(found.auth?.has_password || false);
           setRdpClientMode(found.client_mode ?? "external");
+          setRdpClientModeOverride(found.rdp_client_mode ?? "default");
           setProxyId(found.network?.proxy_id || "");
           setJumpHostId(found.network?.proxy_jump_id || "");
           setRdpUseNla(found.security?.use_nla ?? true);
@@ -680,6 +714,7 @@ export default function NewSessionPage() {
         } else if (found.type === "vnc") {
           setHost(found.host || "");
           setVncPort(found.port || 5900);
+          setVncUsername(found.username || "");
           setPasswordId(found.auth?.password_id || "");
           setHasPassword(found.auth?.has_password || false);
           setVncSecurityMode(found.security?.mode ?? "auto");
@@ -702,6 +737,7 @@ export default function NewSessionPage() {
           setStopBits(found.stop_bits || "1");
           setSerialBackspaceMode(found.backspace_mode || "ctrl_h");
           setSerialModemUploadProtocol(found.modem_upload_protocol || "zmodem");
+          setSerialFlowControl(found.flow_control ?? "none");
         } else if (found.type === "s3") {
           setS3Endpoint(found.endpoint || "");
           setS3Bucket(found.bucket || "");
@@ -800,24 +836,30 @@ export default function NewSessionPage() {
 
   const handleImportCustomIcon = useCallback(async () => {
     try {
-      const selected = await openDialog({
-        directory: false,
-        multiple: false,
-        filters: [
-          {
-            name: t("dialog.connectionIconFiles"),
-            extensions: CUSTOM_ICON_EXTENSIONS,
-          },
-        ],
-        title: t("dialog.selectConnectionIcon"),
-      });
+      const browserImage = runtime === "web" ? await pickBrowserImage() : null;
+      if (runtime === "web" && !browserImage) return;
+      const selected =
+        browserImage?.name ??
+        (await openDialog({
+          directory: false,
+          multiple: false,
+          filters: [
+            {
+              name: t("dialog.connectionIconFiles"),
+              extensions: CUSTOM_ICON_EXTENSIONS,
+            },
+          ],
+          title: t("dialog.selectConnectionIcon"),
+        }));
       const selectedPath = Array.isArray(selected) ? selected[0] : selected;
       if (typeof selectedPath !== "string" || !selectedPath) {
         return;
       }
 
       const importedIcon = await invoke<ConnectionCustomIcon>("import_connection_icon", {
-        path: selectedPath,
+        ...(browserImage
+          ? { dataUrl: browserImage.dataUrl, name: browserImage.name }
+          : { path: selectedPath }),
       });
       setCustomIcons((icons) => {
         const next = icons.filter((icon) => icon.id !== importedIcon.id);
@@ -842,7 +884,6 @@ export default function NewSessionPage() {
       setError(getErrorMessage(e));
     }
   }, []);
-
 
   const newGroupParentLabel = useMemo(() => {
     if (!groupId || groupId === "new") {
@@ -1046,9 +1087,7 @@ export default function NewSessionPage() {
         }
         if (
           rdpDisplayMode === "fixed" &&
-          (!Number.isInteger(rdpDisplayHeight) ||
-            rdpDisplayHeight < 480 ||
-            rdpDisplayHeight > 4320)
+          (!Number.isInteger(rdpDisplayHeight) || rdpDisplayHeight < 480 || rdpDisplayHeight > 4320)
         ) {
           return t("dialog.rdpDisplayHeightInvalid");
         }
@@ -1239,6 +1278,7 @@ export default function NewSessionPage() {
       const network =
         currentTab === "ssh" ||
         currentTab === "sftp" ||
+        currentTab === "telnet" ||
         currentTab === "rdp" ||
         currentTab === "vnc"
           ? (() => {
@@ -1392,8 +1432,7 @@ export default function NewSessionPage() {
             : openOnStartup,
         icon: iconKey || undefined,
         icon_auto_detect: currentTab === "ssh" ? iconAutoDetect : false,
-        encoding:
-          currentTab === "sftp" ? undefined : encoding === "global" ? undefined : encoding,
+        encoding: currentTab === "sftp" ? undefined : encoding === "global" ? undefined : encoding,
         recording,
         ...(currentTab === "ssh"
           ? {
@@ -1446,6 +1485,7 @@ export default function NewSessionPage() {
               port: telnetPort,
               username: normalizedUsername,
               auth,
+              network,
               backspace_mode: telnetBackspaceMode,
               raw_tcp_cli: telnetRawTcpCli,
               enter_mode: telnetEnterMode,
@@ -1466,7 +1506,11 @@ export default function NewSessionPage() {
                 username: normalizedUsername || DEFAULT_RDP_USERNAME,
                 domain: rdpDomain.trim() || undefined,
                 client_mode: rdpClientMode,
+                ...(rdpClientModeOverride !== "default"
+                  ? { rdp_client_mode: rdpClientModeOverride }
+                  : {}),
                 auth,
+                network,
                 security: {
                   use_nla: rdpUseNla,
                   certificate_policy: rdpCertificatePolicy,
@@ -1508,7 +1552,9 @@ export default function NewSessionPage() {
           ? {
               host: normalizedHost,
               port: vncPort,
+              username: vncUsername,
               auth,
+              network,
               security: { mode: vncSecurityMode },
               display: { scale_mode: vncScaleMode },
               clipboard: { enabled: vncClipboardEnabled },
@@ -1537,6 +1583,7 @@ export default function NewSessionPage() {
               stop_bits: stopBits,
               backspace_mode: serialBackspaceMode,
               modem_upload_protocol: serialModemUploadProtocol,
+              flow_control: serialFlowControl,
             }
           : {}),
         ...(currentTab === "s3"
@@ -1561,7 +1608,6 @@ export default function NewSessionPage() {
                   ? "__SET__"
                   : undefined,
               virtual_host_style: s3VirtualHostStyle,
-
             }
           : {}),
         ...(currentTab === "ftp"
@@ -1569,16 +1615,8 @@ export default function NewSessionPage() {
               host: ftpHost.trim(),
               port: ftpPort,
               root: ftpRoot.trim() || "/",
-              username: ftpUsername.trim()
-                ? ftpUsername.trim()
-                : editId
-                  ? "__SET__"
-                  : undefined,
-              password: ftpPassword
-                ? ftpPassword
-                : ftpHasPassword
-                  ? "__SET__"
-                  : "",
+              username: ftpUsername.trim() ? ftpUsername.trim() : editId ? "__SET__" : undefined,
+              password: ftpPassword ? ftpPassword : ftpHasPassword ? "__SET__" : "",
               use_tls: ftpUseTls,
             }
           : {}),
@@ -1591,12 +1629,7 @@ export default function NewSessionPage() {
                 : editId
                   ? "__SET__"
                   : undefined,
-              password: webdavPassword
-                ? webdavPassword
-                : webdavHasPassword
-                  ? "__SET__"
-                  : "",
-
+              password: webdavPassword ? webdavPassword : webdavHasPassword ? "__SET__" : "",
             }
           : {}),
       };
@@ -1739,16 +1772,15 @@ export default function NewSessionPage() {
         request: {
           protocol,
           host: host.trim() || undefined,
-          port:
-            isSshLike
-              ? sshPort
-              : currentTab === "telnet"
-                ? telnetPort
-                : currentTab === "rdp"
-                  ? rdpPort
-                  : currentTab === "vnc"
-                    ? vncPort
-                    : undefined,
+          port: isSshLike
+            ? sshPort
+            : currentTab === "telnet"
+              ? telnetPort
+              : currentTab === "rdp"
+                ? rdpPort
+                : currentTab === "vnc"
+                  ? vncPort
+                  : undefined,
           shellPath: shellPath.trim() || undefined,
           portName: serialPortName.trim() || undefined,
           baudRate: Number(baudRate) || undefined,
@@ -1757,10 +1789,8 @@ export default function NewSessionPage() {
           stopBits,
           username: isSshLike ? username.trim() || undefined : undefined,
           authMode: isSshLike ? authType : undefined,
-          password:
-            isSshLike && authType === "password" && password.trim() ? password : undefined,
-          passwordId:
-            isSshLike && authType === "password" && passwordId ? passwordId : undefined,
+          password: isSshLike && authType === "password" && password.trim() ? password : undefined,
+          passwordId: isSshLike && authType === "password" && passwordId ? passwordId : undefined,
           keyId: isSshLike && authType === "key" ? keyId || undefined : undefined,
           otpId: isSshLike ? otpId || undefined : undefined,
           autoFillOtp: isSshLike ? Boolean(otpId && autoFillOtp) : undefined,
@@ -1853,7 +1883,7 @@ export default function NewSessionPage() {
             {t("dialog.chooseProtocol", "Choose a connection type to continue")}
           </p>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {PROTOCOL_OPTIONS.map((option) => {
+            {protocolOptions.map((option) => {
               const Icon = option.icon;
               return (
                 <button
@@ -1896,7 +1926,6 @@ export default function NewSessionPage() {
                 onClick={() => {
                   setWizardStep("pick");
                   setTestResult(null);
-
                 }}
               >
                 <MdChevronLeft className="size-4" />
@@ -2476,6 +2505,8 @@ export default function NewSessionPage() {
                 setBackspaceMode={setSerialBackspaceMode}
                 modemUploadProtocol={serialModemUploadProtocol}
                 setModemUploadProtocol={setSerialModemUploadProtocol}
+                flowControl={serialFlowControl}
+                setFlowControl={setSerialFlowControl}
                 recordingUseGlobal={recordingUseGlobal}
                 setRecordingUseGlobal={setRecordingUseGlobal}
                 recordingAutoStart={recordingAutoStart}
@@ -2499,6 +2530,9 @@ export default function NewSessionPage() {
                 setDomain={setRdpDomain}
                 clientMode={rdpClientMode}
                 setClientMode={setRdpClientMode}
+                rdpClientModeOverride={rdpClientModeOverride}
+                setRdpClientModeOverride={setRdpClientModeOverride}
+                defaultRdpClientMode="builtin"
                 passwordId={passwordId}
                 setPasswordId={setPasswordId}
                 password={password}
@@ -2549,6 +2583,8 @@ export default function NewSessionPage() {
                 setHost={setHost}
                 port={vncPort}
                 setPort={setVncPort}
+                username={vncUsername}
+                setUsername={setVncUsername}
                 passwordId={passwordId}
                 setPasswordId={setPasswordId}
                 password={password}

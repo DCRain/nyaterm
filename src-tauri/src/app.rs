@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -483,6 +483,18 @@ pub fn quit_application(app: &tauri::AppHandle) {
 }
 
 pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
+    if matches!(event, tauri::WindowEvent::Destroyed) {
+        if let Some(manager) = window
+            .app_handle()
+            .try_state::<Arc<crate::core::plugins::PluginManager>>()
+        {
+            let manager = manager.inner().clone();
+            let label = window.label().to_string();
+            tauri::async_runtime::spawn(async move {
+                manager.revoke_window(&label).await;
+            });
+        }
+    }
     if crate::window_state::is_main_window_label(window.label()) {
         match event {
             tauri::WindowEvent::Moved(_)

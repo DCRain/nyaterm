@@ -84,8 +84,7 @@ pub fn open_devtools(window: tauri::WebviewWindow) -> AppResult<()> {
 
 #[tauri::command]
 pub fn set_terminal_fullscreen(window: tauri::WebviewWindow, enable: bool) -> AppResult<()> {
-    crate::platform::set_terminal_fullscreen(&window, enable)
-        .map_err(AppError::Config)?;
+    crate::platform::set_terminal_fullscreen(&window, enable).map_err(AppError::Config)?;
     Ok(())
 }
 
@@ -134,17 +133,19 @@ pub struct AppSupportInfo {
     os: String,
     architecture: String,
     runtime: String,
+    package_manager: Option<String>,
     #[cfg(windows)]
     conpty: crate::platform::windows_conpty::LocalConptyInfo,
 }
 
 #[tauri::command]
 pub fn get_support_info(state: tauri::State<'_, crate::runtime::AppRuntime>) -> AppSupportInfo {
-    let runtime = state.info().mode;
+    let info = state.info();
     AppSupportInfo {
         os: operating_system_label(),
         architecture: std::env::consts::ARCH.to_string(),
-        runtime,
+        runtime: info.mode,
+        package_manager: info.package_manager,
         #[cfg(windows)]
         conpty: crate::platform::windows_conpty::support_info(),
     }
@@ -429,6 +430,12 @@ pub fn set_app_lock_state(
             AppLockStateChangedPayload { locked },
         );
         if locked {
+            if let Some(manager) = app.try_state::<Arc<crate::core::plugins::PluginManager>>() {
+                let manager = manager.inner().clone();
+                tauri::async_runtime::spawn(async move {
+                    manager.revoke_all().await;
+                });
+            }
             if let Some(manager) = app.try_state::<Arc<crate::core::mcp::McpManager>>() {
                 let manager = manager.inner().clone();
                 tauri::async_runtime::spawn(async move {

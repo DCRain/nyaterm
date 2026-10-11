@@ -612,8 +612,14 @@ fn strip_cli_flag<'a>(arg: &'a str, flags: &[&str]) -> Option<&'a str> {
             && arg.len() > flag.len()
             && arg[..flag.len()].eq_ignore_ascii_case(flag)
             && !arg[flag.len()..].starts_with('=')
-            && flag.chars().last().is_some_and(|ch| ch.is_ascii_alphabetic())
-            && arg.as_bytes().get(flag.len()).is_some_and(|b| b.is_ascii_digit())
+            && flag
+                .chars()
+                .last()
+                .is_some_and(|ch| ch.is_ascii_alphabetic())
+            && arg
+                .as_bytes()
+                .get(flag.len())
+                .is_some_and(|b| b.is_ascii_digit())
         {
             let value = arg[flag.len()..].trim();
             return (!value.is_empty()).then_some(value);
@@ -1088,7 +1094,11 @@ mod tests {
         ];
         let extracted = extract_external_open_candidates(args);
         assert_eq!(extracted.len(), 3);
-        assert!(extracted.iter().all(|item| item.kind == ExternalOpenKind::MarkdownFile));
+        assert!(
+            extracted
+                .iter()
+                .all(|item| item.kind == ExternalOpenKind::MarkdownFile)
+        );
         assert_eq!(extracted[0].value, "C:\\Users\\user\\notes\\readme.md");
         assert_eq!(extracted[1].value, "/tmp/doc.markdown");
         assert!(extracted[2].value.to_ascii_lowercase().ends_with("todo.md"));

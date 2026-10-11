@@ -63,6 +63,7 @@ interface FileListItemProps {
   onOpenExternal: (entry: FileEntry) => void;
   onRefresh: () => void;
   showTransferActions: boolean;
+  downloadDisabled?: boolean;
   onUpload: () => void;
   onUploadFolder: () => void;
   onDownload: (entry: FileEntry) => void;
@@ -140,6 +141,7 @@ export function FileListItem({
   onOpenExternal,
   onRefresh,
   showTransferActions,
+  downloadDisabled,
   onUpload,
   onUploadFolder,
   onDownload,
@@ -353,7 +355,9 @@ export function FileListItem({
           <div className="flex min-w-0 items-center gap-2 px-2">
             <entryIcon.icon
               className="shrink-0 text-base"
-              style={{ color: isSelected ? "var(--df-primary)" : entryIcon.color }}
+              style={{
+                color: isSelected ? "var(--df-primary)" : entryIcon.color,
+              }}
             />
             {isRenaming ? (
               <input
@@ -403,10 +407,7 @@ export function FileListItem({
                 ) : (
                   <HoverCard openDelay={800} closeDelay={100}>
                     <HoverCardTrigger asChild>
-                      <span
-                        className="min-w-0 flex-1 truncate text-xs"
-                        onClick={handleNameClick}
-                      >
+                      <span className="min-w-0 flex-1 truncate text-xs" onClick={handleNameClick}>
                         {entry.name}
                       </span>
                     </HoverCardTrigger>
@@ -423,7 +424,9 @@ export function FileListItem({
                         <span className="min-w-0 break-words font-mono">{modifiedTime}</span>
                         <span className="text-muted-foreground">{t("fileExplorer.size")}</span>
                         <span className="min-w-0 break-words">{fileSize}</span>
-                        <span className="text-muted-foreground">{t("fileExplorer.permissions")}</span>
+                        <span className="text-muted-foreground">
+                          {t("fileExplorer.permissions")}
+                        </span>
                         <span className="min-w-0 break-all font-mono">{permissions}</span>
                         <span className="text-muted-foreground">{t("fileExplorer.owner")}</span>
                         <span className="min-w-0 break-all">{owner}</span>
@@ -498,7 +501,9 @@ export function FileListItem({
       >
         {isParentDirectoryEntry ? (
           <>
-            {onPaste && <FileExplorerContextMenuActionBar onPaste={onPaste} canPaste={!!canPaste} />}
+            {onPaste && (
+              <FileExplorerContextMenuActionBar onPaste={onPaste} canPaste={!!canPaste} />
+            )}
             <ContextMenuItem onClick={() => onItemClick(entry)}>
               <MdFileOpen className="text-[0.875rem] text-muted-foreground mr-2" />
               {t("fileExplorer.goUp")}
@@ -593,7 +598,7 @@ export function FileListItem({
                     </ContextMenuItem>
                   </ContextMenuSubContent>
                 </ContextMenuSub>
-                <ContextMenuItem onClick={() => onDownload(entry)}>
+                <ContextMenuItem disabled={downloadDisabled} onClick={() => onDownload(entry)}>
                   <MdDownload className="text-[0.875rem] text-muted-foreground mr-2" />
                   {t("fileExplorer.cmDownload")}
                 </ContextMenuItem>

@@ -71,12 +71,12 @@ pub(super) enum ClientKind {
     /// Windows App / Microsoft Remote Desktop (`msrdc.exe`), including Store installs.
     Msrdc,
     /// macOS application bundle by path.
-    MacApp {
-        paths: &'static [&'static str],
-    },
+    MacApp { paths: &'static [&'static str] },
 }
 
-pub fn list_remote_desktop_clients(protocol: RemoteDesktopProtocol) -> Vec<RemoteDesktopClientInfo> {
+pub fn list_remote_desktop_clients(
+    protocol: RemoteDesktopProtocol,
+) -> Vec<RemoteDesktopClientInfo> {
     candidate_specs(protocol)
         .into_iter()
         .map(|spec| {
@@ -102,7 +102,9 @@ pub fn list_remote_desktop_clients(protocol: RemoteDesktopProtocol) -> Vec<Remot
         .collect()
 }
 
-pub fn install_recommendations(protocol: RemoteDesktopProtocol) -> Vec<ClientInstallRecommendation> {
+pub fn install_recommendations(
+    protocol: RemoteDesktopProtocol,
+) -> Vec<ClientInstallRecommendation> {
     candidate_specs(protocol)
         .into_iter()
         .filter(|spec| !matches!(spec.kind, ClientKind::Builtin))
@@ -166,18 +168,12 @@ pub(super) fn candidate_specs(protocol: RemoteDesktopProtocol) -> Vec<ClientCand
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn primary_rdp_client_id() -> &'static str {
-    rdp_candidates()
-        .first()
-        .map(|c| c.id)
-        .unwrap_or("unknown")
+    rdp_candidates().first().map(|c| c.id).unwrap_or("unknown")
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn primary_vnc_client_id() -> &'static str {
-    vnc_candidates()
-        .first()
-        .map(|c| c.id)
-        .unwrap_or("unknown")
+    vnc_candidates().first().map(|c| c.id).unwrap_or("unknown")
 }
 
 fn rdp_candidates() -> Vec<ClientCandidateSpec> {
@@ -195,7 +191,9 @@ fn rdp_candidates() -> Vec<ClientCandidateSpec> {
                     ],
                 },
                 install_hint: "Windows includes mstsc.exe. If missing, repair Remote Desktop Connection via Optional Features.",
-                download_url: Some("https://learn.microsoft.com/windows-server/remote/remote-desktop-services/clients/remote-desktop-clients"),
+                download_url: Some(
+                    "https://learn.microsoft.com/windows-server/remote/remote-desktop-services/clients/remote-desktop-clients",
+                ),
             },
             ClientCandidateSpec {
                 id: "windows-app",
@@ -218,7 +216,9 @@ fn rdp_candidates() -> Vec<ClientCandidateSpec> {
                 name: "Microsoft Remote Desktop / open",
                 kind: ClientKind::Builtin,
                 install_hint: "Install Microsoft Remote Desktop from the Mac App Store, or: brew install --cask microsoft-remote-desktop",
-                download_url: Some("https://apps.apple.com/app/microsoft-remote-desktop/id1295203466"),
+                download_url: Some(
+                    "https://apps.apple.com/app/microsoft-remote-desktop/id1295203466",
+                ),
             },
             freerdp_candidate("xfreerdp"),
         ]
@@ -243,7 +243,11 @@ fn rdp_candidates() -> Vec<ClientCandidateSpec> {
         ]
     }
 
-    #[cfg(not(any(target_os = "windows", target_os = "macos", all(unix, not(target_os = "macos")))))]
+    #[cfg(not(any(
+        target_os = "windows",
+        target_os = "macos",
+        all(unix, not(target_os = "macos"))
+    )))]
     {
         vec![freerdp_candidate("xfreerdp")]
     }
@@ -279,27 +283,25 @@ fn vnc_candidates() -> Vec<ClientCandidateSpec> {
 
     #[cfg(target_os = "windows")]
     {
-        vec![
-            ClientCandidateSpec {
-                id: "vncviewer",
-                name: "VNC Viewer",
-                kind: ClientKind::Executable {
-                    names: &["vncviewer.exe", "vncviewer", "tvnviewer.exe"],
-                    absolute_paths: &[
-                        r"C:\Program Files\TigerVNC\vncviewer.exe",
-                        r"C:\Program Files (x86)\TigerVNC\vncviewer.exe",
-                        r"C:\Program Files\UltraVNC\vncviewer.exe",
-                        r"C:\Program Files (x86)\UltraVNC\vncviewer.exe",
-                        r"C:\Program Files\TightVNC\tvnviewer.exe",
-                        r"C:\Program Files (x86)\TightVNC\tvnviewer.exe",
-                        r"C:\Program Files\RealVNC\VNC Viewer\vncviewer.exe",
-                        r"C:\Program Files (x86)\RealVNC\VNC Viewer\vncviewer.exe",
-                    ],
-                },
-                install_hint: "winget install TigerVNC.TigerVNC",
-                download_url: Some("https://tigervnc.org/"),
+        vec![ClientCandidateSpec {
+            id: "vncviewer",
+            name: "VNC Viewer",
+            kind: ClientKind::Executable {
+                names: &["vncviewer.exe", "vncviewer", "tvnviewer.exe"],
+                absolute_paths: &[
+                    r"C:\Program Files\TigerVNC\vncviewer.exe",
+                    r"C:\Program Files (x86)\TigerVNC\vncviewer.exe",
+                    r"C:\Program Files\UltraVNC\vncviewer.exe",
+                    r"C:\Program Files (x86)\UltraVNC\vncviewer.exe",
+                    r"C:\Program Files\TightVNC\tvnviewer.exe",
+                    r"C:\Program Files (x86)\TightVNC\tvnviewer.exe",
+                    r"C:\Program Files\RealVNC\VNC Viewer\vncviewer.exe",
+                    r"C:\Program Files (x86)\RealVNC\VNC Viewer\vncviewer.exe",
+                ],
             },
-        ]
+            install_hint: "winget install TigerVNC.TigerVNC",
+            download_url: Some("https://tigervnc.org/"),
+        }]
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -311,10 +313,7 @@ fn vnc_candidates() -> Vec<ClientCandidateSpec> {
                 name: "TigerVNC Viewer (xtigervncviewer)",
                 kind: ClientKind::Executable {
                     names: &["xtigervncviewer"],
-                    absolute_paths: &[
-                        "/usr/bin/xtigervncviewer",
-                        "/usr/local/bin/xtigervncviewer",
-                    ],
+                    absolute_paths: &["/usr/bin/xtigervncviewer", "/usr/local/bin/xtigervncviewer"],
                 },
                 install_hint: "sudo apt install tigervnc-viewer  # or: sudo dnf install tigervnc",
                 download_url: Some("https://tigervnc.org/"),
@@ -332,7 +331,11 @@ fn vnc_candidates() -> Vec<ClientCandidateSpec> {
         ]
     }
 
-    #[cfg(not(any(target_os = "windows", target_os = "macos", all(unix, not(target_os = "macos")))))]
+    #[cfg(not(any(
+        target_os = "windows",
+        target_os = "macos",
+        all(unix, not(target_os = "macos"))
+    )))]
     {
         vec![vncviewer_candidate()]
     }
@@ -383,9 +386,16 @@ fn freerdp_install_meta() -> (&'static str, &'static str) {
             "https://www.freerdp.com/",
         )
     }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", all(unix, not(target_os = "macos")))))]
+    #[cfg(not(any(
+        target_os = "windows",
+        target_os = "macos",
+        all(unix, not(target_os = "macos"))
+    )))]
     {
-        ("Install FreeRDP for your platform", "https://www.freerdp.com/")
+        (
+            "Install FreeRDP for your platform",
+            "https://www.freerdp.com/",
+        )
     }
 }
 
@@ -423,10 +433,7 @@ fn resolve_candidate(spec: &ClientCandidateSpec) -> Option<PathBuf> {
     match &spec.kind {
         ClientKind::Builtin => None,
         ClientKind::Msrdc => find_msrdc_path(),
-        ClientKind::MacApp { paths } => paths
-            .iter()
-            .map(PathBuf::from)
-            .find(|path| path.exists()),
+        ClientKind::MacApp { paths } => paths.iter().map(PathBuf::from).find(|path| path.exists()),
         ClientKind::Executable {
             names,
             absolute_paths,
@@ -621,12 +628,15 @@ fn find_msrdc_in_windows_apps() -> Option<PathBuf> {
         .map(|entry| entry.path())
         .filter(|path| {
             path.is_dir()
-                && path.file_name().and_then(|n| n.to_str()).is_some_and(|name| {
-                    name.starts_with("MicrosoftCorporationII.Windows365")
-                        || name.starts_with("MicrosoftCorporationII.MicrosoftRemoteDesktop")
-                        || name.starts_with("Microsoft.RemoteDesktop")
-                        || name.starts_with("Microsoft.Windows365")
-                })
+                && path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|name| {
+                        name.starts_with("MicrosoftCorporationII.Windows365")
+                            || name.starts_with("MicrosoftCorporationII.MicrosoftRemoteDesktop")
+                            || name.starts_with("Microsoft.RemoteDesktop")
+                            || name.starts_with("Microsoft.Windows365")
+                    })
         })
         .collect();
     // Prefer newer package folders when names include version segments.

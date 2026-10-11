@@ -1,7 +1,8 @@
-﻿import type { ComponentProps } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { FolderOpen } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";import { useTranslation } from "react-i18next";
+import type { ComponentProps } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { listen } from "@/lib/backend/api";
 import { MdErrorOutline } from "react-icons/md";
 import StartWorkspace from "@/components/app/start-workspace/StartWorkspace";
 import ResizeHandle from "@/components/layout/ResizeHandle";
@@ -36,7 +37,8 @@ import type {
   RecordingMode,
   RecordingStatus,
   SessionInfo,
-  SessionType,  SplitPane,
+  SessionType,
+  SplitPane,
   Tab,
   TerminalSessionPane,
 } from "@/types/global";
@@ -328,11 +330,7 @@ function PaneNodeView({
         }}
         onMouseDown={() => onActivatePane(node.id)}
       >
-        <SettingsPanel
-          paneId={node.id}
-          tabId={tab.id}
-          settingsSection={node.settingsSection}
-        />
+        <SettingsPanel paneId={node.id} tabId={tab.id} settingsSection={node.settingsSection} />
       </div>
     );
   }
@@ -467,9 +465,7 @@ function PaneNodeView({
               d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
             />
           </svg>
-          <span className="max-w-[16rem] truncate px-4 text-center">
-            {node.name}
-          </span>
+          <span className="max-w-[16rem] truncate px-4 text-center">{node.name}</span>
         </div>
       ) : node.connectError ? (
         <div
@@ -501,20 +497,13 @@ function PaneNodeView({
               />
             </svg>
           ) : (
-            <MdErrorOutline
-              className="h-8 w-8"
-              style={{ color: "var(--destructive, #ef4444)" }}
-            />
+            <MdErrorOutline className="h-8 w-8" style={{ color: "var(--destructive, #ef4444)" }} />
           )}
-          <div
-            className={`space-y-1 ${isReconnectPending ? "animate-pulse" : ""}`}
-          >
+          <div className={`space-y-1 ${isReconnectPending ? "animate-pulse" : ""}`}>
             <div className="font-medium" style={{ color: "var(--df-text)" }}>
               {statusTitle}
             </div>
-            <div className="max-w-[20rem] break-words text-xs">
-              {statusMessage}
-            </div>
+            <div className="max-w-[20rem] break-words text-xs">{statusMessage}</div>
           </div>
           {showReconnectAction ? (
             <Button
@@ -554,7 +543,9 @@ function PaneNodeView({
             }
           />
         )
-      ) : node.type === "S3" || node.type === "FTP" || node.type === "WebDAV" ? null : isSftpOnly ? (
+      ) : node.type === "S3" ||
+        node.type === "FTP" ||
+        node.type === "WebDAV" ? null : isSftpOnly ? (
         <div
           className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center text-sm"
           style={{ color: "var(--df-text-dimmed)" }}
@@ -568,12 +559,8 @@ function PaneNodeView({
                 ? t("sftpRuntime.disconnected")
                 : t("sftpRuntime.title")}
             </div>
-            <div className="max-w-[24rem] text-xs">
-              {t("sftpRuntime.openedWithoutShell")}
-            </div>
-            <div className="max-w-[24rem] text-xs">
-              {t("sftpRuntime.useFileExplorer")}
-            </div>
+            <div className="max-w-[24rem] text-xs">{t("sftpRuntime.openedWithoutShell")}</div>
+            <div className="max-w-[24rem] text-xs">{t("sftpRuntime.useFileExplorer")}</div>
           </div>
           {closedSftpSessionId === node.sessionId && showReconnectAction ? (
             <Button
@@ -587,7 +574,8 @@ function PaneNodeView({
             </Button>
           ) : null}
         </div>
-      ) : (        <PaneXTerminal
+      ) : (
+        <PaneXTerminal
           sessionId={node.sessionId}
           sessionName={node.name}
           active={isActive}
@@ -596,9 +584,7 @@ function PaneNodeView({
           connectionId={node.connectionId}
           temporaryConfig={node.temporaryConfig}
           onReconnected={onReconnected}
-          onDisconnectedCloseRequested={() =>
-            void onDisconnectedCloseRequested?.(tab.id, node.id)
-          }
+          onDisconnectedCloseRequested={() => void onDisconnectedCloseRequested?.(tab.id, node.id)}
           onConnectionError={(sessionId, error) =>
             onConnectionError?.(tab.id, node.id, sessionId, error)
           }
@@ -668,8 +654,7 @@ function PaneXTerminal({
   );
 
   const isPaused = useMemo(
-    () =>
-      activeGroup ? isSessionPausedInGroup(activeGroup, sessionId) : false,
+    () => (activeGroup ? isSessionPausedInGroup(activeGroup, sessionId) : false),
     [activeGroup, sessionId],
   );
 
@@ -689,9 +674,7 @@ function PaneXTerminal({
   const handleLeaveGroup = useCallback(() => {
     if (!activeGroup) return;
     setSyncGroups((prev) =>
-      prev.map((g) =>
-        g.id === activeGroup.id ? removeSessionFromGroup(g, sessionId) : g,
-      ),
+      prev.map((g) => (g.id === activeGroup.id ? removeSessionFromGroup(g, sessionId) : g)),
     );
   }, [activeGroup, sessionId, setSyncGroups]);
 
@@ -761,10 +744,7 @@ function PaneWorkspace({
   onSaveSessionTranscript,
 }: PaneWorkspaceProps) {
   return (
-    <div
-      className="absolute inset-0"
-      style={{ display: visible ? "block" : "none" }}
-    >
+    <div className="absolute inset-0" style={{ display: visible ? "block" : "none" }}>
       <PaneNodeView
         node={tab.root}
         tab={tab}

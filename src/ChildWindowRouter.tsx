@@ -1,6 +1,6 @@
-import { emit, listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { lazy, type ReactNode, Suspense, useEffect, useState } from "react";
+import { emit, listen } from "@/lib/backend/api";
+import { getCurrentWindow } from "@/lib/backend/platform/window";
 import {
   FtpCertificateVerifyDialog,
   type FtpCertificateVerifyRequest,
@@ -134,9 +134,7 @@ export default function ChildWindowRouter({ windowType }: { windowType: string }
       <FtpCertificateVerifyDialog
         request={ftpCertificateRequest}
         onDone={(requestId) =>
-          setFtpCertificateRequest((current) =>
-            current?.requestId === requestId ? null : current,
-          )
+          setFtpCertificateRequest((current) => (current?.requestId === requestId ? null : current))
         }
       />
     </ReadyContent>

@@ -1,9 +1,12 @@
-import { invoke as tauriInvoke } from "@tauri-apps/api/core";
-import { emit } from "@tauri-apps/api/event";
+import { invoke as tauriInvoke } from "@/lib/backend/api";
+import { emit } from "@/lib/backend/api";
 import { assertMatchingTemporaryConfig } from "@/lib/appWorkspace";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
+import { getOwnerMainWindowLabel } from "@/lib/windowManager";
 import { logger } from "@/lib/logger";
+import { isWindows } from "@/lib/platform";
+import { runtime } from "@/lib/backend/runtime";
 import {
   buildTerminalCommandInput,
   clearSessionCommandHistory,
@@ -12,6 +15,8 @@ import {
 import type { TemporaryLinkConfig } from "@/lib/temporaryLink";
 import { captureTerminalReconnectContent } from "@/lib/terminalReconnectHistory";
 import type {
+  GeneralSettings,
+  RdpClientMode,
   RdpClipboardMode,
   RemoteDesktopDisplayMetadata,
   SavedConnection,
@@ -26,10 +31,7 @@ export type StartupCommandRequest = {
   delayMs: number;
 };
 
-const CONNECTION_SESSION_TYPES: Record<
-  SavedConnection["type"],
-  WorkspaceSessionType
-> = {
+const CONNECTION_SESSION_TYPES: Record<SavedConnection["type"], WorkspaceSessionType> = {
   ssh: "SSH",
   sftp: "SSH",
   local_terminal: "Local",
@@ -71,9 +73,7 @@ export function isRdpFileTransferEnabled(
   return resolveRdpClipboardMode(display, connection) === "text-and-files";
 }
 
-export function getRemoteDesktopPaneDisplay(
-  connection: SavedConnection | null | undefined,
-) {
+export function getRemoteDesktopPaneDisplay(connection: SavedConnection | null | undefined) {
   if (connection?.type === "rdp") {
     return {
       remoteWidth: connection.display?.width ?? 1920,
@@ -92,10 +92,50 @@ export function getRemoteDesktopPaneDisplay(
   return undefined;
 }
 
+export type SavedConnectionOpenOptions = {
+  rdpClientModeOverride?: RdpClientMode;
+};
+
+type RdpClientResolutionOptions = SavedConnectionOpenOptions & {
+  windows?: boolean;
+  desktop?: boolean;
+};
+
+export function resolveRdpClientMode(
+  connection: Pick<SavedConnection, "type" | "rdp_client_mode"> | null | undefined,
+  mode: GeneralSettings["rdp_client_mode"] | undefined,
+  {
+    rdpClientModeOverride,
+    windows = isWindows,
+    desktop = runtime === "desktop",
+  }: RdpClientResolutionOptions = {},
+): RdpClientMode {
+  if (!desktop || !windows || connection?.type !== "rdp") return "builtin";
+  return rdpClientModeOverride ?? connection.rdp_client_mode ?? mode ?? "builtin";
+}
+
+export function shouldLaunchSavedRdpWithSystemClient(
+  connection: Pick<SavedConnection, "type" | "rdp_client_mode"> | null | undefined,
+  mode: GeneralSettings["rdp_client_mode"] | undefined,
+  options?: RdpClientResolutionOptions,
+) {
+  return resolveRdpClientMode(connection, mode, options) === "windows";
+}
+
+export async function launchSavedRdpWithSystemClient(
+  connection: Pick<SavedConnection, "id" | "type" | "rdp_client_mode">,
+  mode: GeneralSettings["rdp_client_mode"] | undefined,
+  options?: RdpClientResolutionOptions,
+) {
+  if (!shouldLaunchSavedRdpWithSystemClient(connection, mode, options)) {
+    return false;
+  }
+  await invoke("launch_windows_rdp", { connectionId: connection.id });
+  return true;
+}
+
 export function isSessionCreationCancelled(error: unknown) {
-  return getErrorMessage(error)
-    .toLowerCase()
-    .includes("session creation cancelled");
+  return getErrorMessage(error).toLowerCase().includes("session creation cancelled");
 }
 
 export async function attachSessionBeforeClose(sessionId: string) {
@@ -156,8 +196,10 @@ export async function createSessionForConnection(
       });
     case "vnc":
       return invoke<string>("create_vnc_session", {
+        ownerWindowLabel: getOwnerMainWindowLabel(),
         connectionId: connection.id,
         createRequestId,
+        recordingScopeId,
       });
     case "rdp":
       return invoke<string>("create_rdp_session", {
@@ -195,6 +237,8 @@ export async function createTemporarySession(
         host: config.host,
         port: config.port,
         name: config.name,
+        ...(config.network ? { network: config.network } : {}),
+        ...(config.encoding ? { encoding: config.encoding } : {}),
         createRequestId,
         recordingScopeId,
         startupCommand: buildStartupCommandPayload(startupCommand),
@@ -234,10 +278,7 @@ export async function createExternalLocalSession(
 }
 
 export function createSessionForPane(
-  pane: Pick<
-    SessionPane,
-    "id" | "type" | "connectionId" | "temporaryConfig" | "sshRuntimeMode"
-  >,
+  pane: Pick<SessionPane, "id" | "type" | "connectionId" | "temporaryConfig" | "sshRuntimeMode">,
   createRequestId?: string,
   startupCommand?: StartupCommandRequest,
   workingDir?: string,
@@ -267,6 +308,8 @@ export function createSessionForPane(
           host: pane.temporaryConfig.host,
           port: pane.temporaryConfig.port,
           name: pane.temporaryConfig.name,
+          ...(pane.temporaryConfig.network ? { network: pane.temporaryConfig.network } : {}),
+          ...(pane.temporaryConfig.encoding ? { encoding: pane.temporaryConfig.encoding } : {}),
           createRequestId,
           recordingScopeId: pane.id,
           startupCommand: buildStartupCommandPayload(startupCommand),
@@ -296,8 +339,10 @@ export function createSessionForPane(
     case "VNC":
       if (!pane.connectionId) throw new Error("Missing VNC connection id");
       return invoke<string>("create_vnc_session", {
+        ownerWindowLabel: getOwnerMainWindowLabel(),
         connectionId: pane.connectionId,
         createRequestId,
+        recordingScopeId: pane.id,
       });
     case "RDP":
       if (!pane.connectionId) throw new Error("Missing RDP connection id");
@@ -329,9 +374,7 @@ export function createSessionForPane(
   }
 }
 
-export function getTemporaryLinkSessionType(
-  config: TemporaryLinkConfig,
-): SessionType {
+export function getTemporaryLinkSessionType(config: TemporaryLinkConfig): SessionType {
   switch (config.protocol) {
     case "telnet":
       return "Telnet";
@@ -342,9 +385,7 @@ export function getTemporaryLinkSessionType(
   }
 }
 
-export function buildStartupCommandPayload(
-  startupCommand?: StartupCommandRequest,
-) {
+export function buildStartupCommandPayload(startupCommand?: StartupCommandRequest) {
   if (!startupCommand || !startupCommand.command.trim()) return null;
   return {
     command: startupCommand.command,
@@ -356,22 +397,15 @@ export async function sendStartupCommandToSession(
   sessionId: string,
   startupCommand: StartupCommandRequest,
 ) {
-  const delayMs = Math.max(
-    0,
-    Math.min(60000, Math.round(startupCommand.delayMs)),
-  );
+  const delayMs = Math.max(0, Math.min(60000, Math.round(startupCommand.delayMs)));
   if (delayMs > 0) {
     await new Promise((resolve) => window.setTimeout(resolve, delayMs));
   }
-  await sendSessionInput(
-    sessionId,
-    buildTerminalCommandInput(startupCommand.command),
-    {
-      preview: { kind: "reset" },
-      registerSubmission: startupCommand.command,
-      origin: "startup_command",
-    },
-  );
+  await sendSessionInput(sessionId, buildTerminalCommandInput(startupCommand.command), {
+    preview: { kind: "reset" },
+    registerSubmission: startupCommand.command,
+    origin: "startup_command",
+  });
 }
 
 export function focusTerminalSession(sessionId?: string | null) {

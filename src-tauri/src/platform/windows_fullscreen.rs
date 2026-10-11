@@ -10,15 +10,15 @@ use std::sync::{LazyLock, Mutex};
 use tauri::WebviewWindow;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Dwm::{
-    DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DEFAULT, DWMWCP_DONOTROUND,
-    DWM_WINDOW_CORNER_PREFERENCE,
+    DWM_WINDOW_CORNER_PREFERENCE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DEFAULT,
+    DWMWCP_DONOTROUND, DwmSetWindowAttribute,
 };
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowPlacement, SetWindowPlacement, SetWindowPos, HWND_TOP, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_SHOWWINDOW, WINDOWPLACEMENT,
+    GetWindowPlacement, HWND_TOP, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_SHOWWINDOW,
+    SetWindowPlacement, SetWindowPos, WINDOWPLACEMENT,
 };
 
 struct SavedFullscreenState {
@@ -102,10 +102,7 @@ pub fn set_terminal_fullscreen(window: &WebviewWindow, enable: bool) -> Result<(
         return Ok(());
     }
 
-    let saved = SAVED
-        .lock()
-        .ok()
-        .and_then(|mut guard| guard.remove(&label));
+    let saved = SAVED.lock().ok().and_then(|mut guard| guard.remove(&label));
 
     let _ = window.set_fullscreen(false);
     let _ = window.set_shadow(true);

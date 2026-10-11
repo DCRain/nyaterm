@@ -4,8 +4,8 @@
 //! detects a suitable desktop client and spawns it.
 
 mod detect;
-mod launch;
 pub mod frame;
+mod launch;
 
 pub use detect::{RemoteDesktopClientInfo, RemoteDesktopProtocol, list_remote_desktop_clients};
 pub use launch::{LaunchRemoteDesktopRequest, LaunchRemoteDesktopResult, launch_remote_desktop};
@@ -33,6 +33,7 @@ mod tests {
     fn protocol_from_connection_type() {
         assert_eq!(
             RemoteDesktopProtocol::try_from(&ConnectionType::Rdp {
+                rdp_client_mode: None,
                 host: "h".into(),
                 port: 3389,
                 username: String::new(),
@@ -64,6 +65,7 @@ mod tests {
             RemoteDesktopProtocol::try_from(&ConnectionType::Vnc {
                 host: "h".into(),
                 port: 5900,
+                username: String::new(),
                 security: Default::default(),
                 display: Default::default(),
                 clipboard: Default::default(),
@@ -166,8 +168,7 @@ mod tests {
 
     #[test]
     fn freerdp_args_windowed_without_fullscreen_flag() {
-        let args =
-            launch::build_freerdp_args("host", 3389, None, &options_windowed(1600, 900));
+        let args = launch::build_freerdp_args("host", 3389, None, &options_windowed(1600, 900));
         assert!(args.contains(&"/w:1600".to_string()));
         assert!(args.contains(&"/h:900".to_string()));
         assert!(!args.iter().any(|arg| arg == "/f"));
@@ -177,7 +178,10 @@ mod tests {
 
     #[test]
     fn normalize_rdp_username_defaults() {
-        assert_eq!(launch::normalize_rdp_username(String::new()), "administrator");
+        assert_eq!(
+            launch::normalize_rdp_username(String::new()),
+            "administrator"
+        );
         assert_eq!(launch::normalize_rdp_username("  ".into()), "administrator");
         assert_eq!(launch::normalize_rdp_username(" alice ".into()), "alice");
     }
@@ -187,8 +191,7 @@ mod tests {
         let mut options = options_fullscreen();
         options.width = 0;
         options.height = 0;
-        let content =
-            launch::build_rdp_file_contents("host", 3389, None, &options, (1920, 1080));
+        let content = launch::build_rdp_file_contents("host", 3389, None, &options, (1920, 1080));
         assert!(content.contains("desktopwidth:i:1920"));
         assert!(content.contains("desktopheight:i:1080"));
     }

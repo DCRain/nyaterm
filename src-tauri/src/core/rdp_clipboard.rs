@@ -175,7 +175,9 @@ impl RdpClipboardBridge {
         if let Ok(mut last) = self.last_file_hash.lock() {
             *last = Some(hash);
         }
-        self.send(ClipboardMessage::SendInitiateFileCopy(snapshot.descriptors.clone()));
+        self.send(ClipboardMessage::SendInitiateFileCopy(
+            snapshot.descriptors.clone(),
+        ));
         Ok(count)
     }
 

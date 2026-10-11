@@ -59,37 +59,58 @@ export default defineConfig(async () => ({
     deferReactDevtoolsPlusOverlay(),
     tailwindcss(),
   ] as any,
+  base: process.env.NYATERM_WEB_BASE_PATH || "/",
+  define: {
+    __APP_VERSION__: JSON.stringify(
+      process.env.npm_package_version || "1.2.12",
+    ),
+  },
+
+  optimizeDeps: {
+    entries: ["index.html"],
+  },
+
   css: {
     transformer: "lightningcss",
     lightningcss: {
-      targets: browserslistToTargets(browserslist("safari >= 14, chrome >= 105")),
+      targets: browserslistToTargets(
+        browserslist("safari >= 14, chrome >= 105"),
+      ),
     },
   },
+
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },
   },
+
   test: {
     environment: "jsdom",
     setupFiles: "./src/test/setup.ts",
-    exclude: [...configDefaults.exclude, "**/src-tauri/vendor/**"],
+    exclude: [
+      ...configDefaults.exclude,
+      "**/src-tauri/vendor/**",
+      "**/temp/**",
+      "**/e2e/**",
+    ],
   },
 
   clearScreen: false,
+
   server: {
     port: 1420,
     strictPort: true,
     host: host || false,
     hmr: host
       ? {
-        protocol: "ws",
-        host,
-        port: 1421,
-      }
+          protocol: "ws",
+          host,
+          port: 1421,
+        }
       : undefined,
     watch: {
-      ignored: ["**/src-tauri/**"],
+      ignored: ["**/src-tauri/**", "**/temp/**"],
     },
   },
 

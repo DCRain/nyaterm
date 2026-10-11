@@ -1,7 +1,7 @@
 import { Channel } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { ShieldAlert, Upload } from "lucide-react";
+import { listen } from "@/lib/backend/api";
 import {
   memo,
   type FocusEvent as ReactFocusEvent,
@@ -655,11 +655,7 @@ function RdpPaneHost({
   );
 
   const fileDropEnabled =
-    visible &&
-    state === "active" &&
-    !pane.connecting &&
-    !pane.connectError &&
-    fileTransferEnabled;
+    visible && state === "active" && !pane.connecting && !pane.connectError && fileTransferEnabled;
 
   const { isExternalDropActive, offerLocalPaths } = useRdpFileDrop({
     sessionId: pane.sessionId,

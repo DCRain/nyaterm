@@ -319,6 +319,8 @@ pub async fn create_telnet_session(
     create_request_id: Option<String>,
     recording_scope_id: Option<String>,
     startup_command: Option<StartupCommandPayload>,
+    network: Option<config::ConnectionNetwork>,
+    encoding: Option<String>,
 ) -> AppResult<String> {
     let pending_creation = state.begin_session_creation(create_request_id).await;
     let (guard, cancel_rx) = match pending_creation {
@@ -363,6 +365,7 @@ pub async fn create_telnet_session(
                 name: conn.name.clone(),
                 username: config::resolve_account_username(account.as_ref(), &username),
                 password: telnet_password,
+                network: conn.network.clone(),
                 backspace_mode,
                 raw_tcp_cli,
                 enter_mode: core::TelnetEnterMode::from_config_value(&enter_mode),
@@ -385,6 +388,8 @@ pub async fn create_telnet_session(
             host: host.ok_or_else(|| AppError::Config("host is required".to_string()))?,
             port: port.unwrap_or(23),
             name: name.unwrap_or_else(|| "Telnet".to_string()),
+            network,
+            encoding: encoding.unwrap_or_else(|| "UTF-8".into()),
             ..Default::default()
         }
     };
@@ -446,6 +451,7 @@ pub async fn create_serial_session(
     data_bits: Option<u8>,
     parity: Option<String>,
     stop_bits: Option<String>,
+    flow_control: Option<config::SerialFlowControl>,
     name: Option<String>,
     create_request_id: Option<String>,
     recording_scope_id: Option<String>,
@@ -467,6 +473,7 @@ pub async fn create_serial_session(
                 stop_bits,
                 backspace_mode,
                 modem_upload_protocol,
+                flow_control,
                 ..
             } => core::SerialConfig {
                 port_name,
@@ -477,6 +484,7 @@ pub async fn create_serial_session(
                 name: conn.name,
                 backspace_mode,
                 modem_upload_protocol,
+                flow_control,
                 encoding,
             },
             _ => {
@@ -496,6 +504,7 @@ pub async fn create_serial_session(
             data_bits: data_bits.unwrap_or(8),
             parity: parity.unwrap_or_else(|| "none".to_string()),
             stop_bits: stop_bits.unwrap_or_else(|| "1".to_string()),
+            flow_control: flow_control.unwrap_or_default(),
             name: name.unwrap_or_else(|| "Serial".to_string()),
             backspace_mode: "ctrl_h".to_string(),
             modem_upload_protocol: config::SerialModemUploadProtocol::Zmodem,
@@ -710,7 +719,9 @@ fn build_recording_context(
         Some(config::ConnectionType::Vnc { host, port, .. }) => {
             ("vnc".to_string(), Some(host.clone()), Some(*port), None)
         }
-        Some(config::ConnectionType::S3 { endpoint, bucket, .. }) => (
+        Some(config::ConnectionType::S3 {
+            endpoint, bucket, ..
+        }) => (
             "s3".to_string(),
             Some(if endpoint.is_empty() {
                 bucket.clone()
@@ -909,6 +920,7 @@ mod tests {
             ..ConnectionAuth::default()
         };
         let account = config::SavedPassword {
+            sort_order: 0,
             id: "saved-1".to_string(),
             name: "Saved".to_string(),
             username: String::new(),
@@ -931,6 +943,7 @@ mod tests {
             ..ConnectionAuth::default()
         };
         let account = config::SavedPassword {
+            sort_order: 0,
             id: "account-1".to_string(),
             name: "Account".to_string(),
             username: "admin".to_string(),
@@ -954,6 +967,7 @@ mod tests {
             ..ConnectionAuth::default()
         };
         let account = config::SavedPassword {
+            sort_order: 0,
             id: "account-1".to_string(),
             name: "Account".to_string(),
             username: "admin".to_string(),
@@ -1273,7 +1287,10 @@ pub async fn attach_session(
         .await?;
     ack_rx
         .await
-        .map_err(|_| AppError::Channel("Session attach acknowledgement was dropped".to_string()))
+        .map_err(|_| AppError::Channel("Session attach acknowledgement was dropped".to_string()))?;
+    // Send a fresh snapshot after listeners attach (including after hibernation).
+    state.publish_terminal_execution_state(&session_id);
+    Ok(())
 }
 
 #[tauri::command]

@@ -229,13 +229,9 @@ fn resolve_launch_target(
         protocol,
         host,
         port,
-        username: request
-            .username
-            .map(normalize_rdp_username)
-            .or_else(|| {
-                matches!(protocol, RemoteDesktopProtocol::Rdp)
-                    .then(|| DEFAULT_RDP_USERNAME.to_string())
-            }),
+        username: request.username.map(normalize_rdp_username).or_else(|| {
+            matches!(protocol, RemoteDesktopProtocol::Rdp).then(|| DEFAULT_RDP_USERNAME.to_string())
+        }),
         preferred_client: String::new(),
         rdp,
     })
@@ -303,13 +299,8 @@ fn spawn_client(
             command.arg(rdp_path);
             spawn_detached(command)
         }
-        (
-            RemoteDesktopProtocol::Rdp,
-            id @ ("xfreerdp" | "wlfreerdp" | "wfreerdp" | "freerdp"),
-        ) => {
-            let exe = path
-                .cloned()
-                .unwrap_or_else(|| PathBuf::from(id));
+        (RemoteDesktopProtocol::Rdp, id @ ("xfreerdp" | "wlfreerdp" | "wfreerdp" | "freerdp")) => {
+            let exe = path.cloned().unwrap_or_else(|| PathBuf::from(id));
             let options = target.rdp.clone().unwrap_or_default();
             let mut command = Command::new(exe);
             for arg in build_freerdp_args(
@@ -323,9 +314,7 @@ fn spawn_client(
             spawn_detached(command)
         }
         (RemoteDesktopProtocol::Rdp, "remmina") => {
-            let exe = path
-                .cloned()
-                .unwrap_or_else(|| PathBuf::from("remmina"));
+            let exe = path.cloned().unwrap_or_else(|| PathBuf::from("remmina"));
             let mut uri = format!("rdp://{}:{}", target.host, target.port);
             if let Some(user) = target.username.as_deref() {
                 uri = format!("rdp://{}@{}:{}", user, target.host, target.port);
@@ -351,9 +340,7 @@ fn spawn_client(
             spawn_detached(command)
         }
         (RemoteDesktopProtocol::Vnc, "remmina") => {
-            let exe = path
-                .cloned()
-                .unwrap_or_else(|| PathBuf::from("remmina"));
+            let exe = path.cloned().unwrap_or_else(|| PathBuf::from("remmina"));
             let uri = format!("vnc://{}:{}", target.host, target.port);
             let mut command = Command::new(exe);
             command.args(["-c", &uri]);
@@ -401,9 +388,7 @@ fn write_temp_rdp_file(
 pub(super) fn primary_screen_size() -> (u32, u32) {
     #[cfg(windows)]
     {
-        use windows::Win32::UI::WindowsAndMessaging::{
-            GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN,
-        };
+        use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
         let width = unsafe { GetSystemMetrics(SM_CXSCREEN) };
         let height = unsafe { GetSystemMetrics(SM_CYSCREEN) };
         if width > 0 && height > 0 {
@@ -413,11 +398,7 @@ pub(super) fn primary_screen_size() -> (u32, u32) {
     (1920, 1080)
 }
 
-pub(super) fn centered_winposstr(
-    width: u16,
-    height: u16,
-    screen: (u32, u32),
-) -> String {
+pub(super) fn centered_winposstr(width: u16, height: u16, screen: (u32, u32)) -> String {
     let screen_w = screen.0 as i32;
     let screen_h = screen.1 as i32;
     let win_w = width as i32;

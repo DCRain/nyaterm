@@ -115,11 +115,7 @@ async fn fetch_with_authorization(
     authorization: &str,
 ) -> opendal::Result<Response<HttpBody>> {
     let header = HeaderValue::from_str(authorization).map_err(|err| {
-        Error::new(
-            ErrorKind::Unexpected,
-            "build WebDAV authorization header",
-        )
-        .set_source(err)
+        Error::new(ErrorKind::Unexpected, "build WebDAV authorization header").set_source(err)
     })?;
     req.headers_mut().insert(AUTHORIZATION, header);
     inner.fetch(req).await

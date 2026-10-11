@@ -57,6 +57,7 @@ import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
 import { matchesKeyEvent } from "@/lib/shortcutRegistry";
 import type { NewSessionTarget } from "@/lib/windowManager";
+import type { SavedConnectionOpenOptions } from "@/lib/appSessionFactory";
 import type { ConnectionTypeTag, Group, SavedConnection } from "@/types/global";
 import ConnectionItem from "./ConnectionItem";
 import { matchesConnectionSearch } from "./connectionSearch";
@@ -79,7 +80,10 @@ interface SavedConnectionsProps {
     autoConnect?: boolean,
     target?: NewSessionTarget,
   ) => void;
-  onConnectConnection: (connection: SavedConnection) => Promise<void> | void;
+  onConnectConnection: (
+    connection: SavedConnection,
+    options?: SavedConnectionOpenOptions,
+  ) => Promise<void> | void;
   onOpenSftp?: (connection: SavedConnection) => Promise<void> | void;
   onOpenS3?: (connection: SavedConnection) => Promise<void> | void;
   onOpenFtp?: (connection: SavedConnection) => Promise<void> | void;
@@ -714,11 +718,11 @@ export default function SavedConnections({
     });
   };
 
-  const connectConnection = async (conn: SavedConnection) => {
+  const connectConnection = async (conn: SavedConnection, options?: SavedConnectionOpenOptions) => {
     if (connectingIdsRef.current.has(conn.id)) return;
     connectingIdsRef.current.add(conn.id);
     try {
-      await onConnectConnection(conn);
+      await onConnectConnection(conn, options);
     } catch (e) {
       toast.error(t("savedConnections.connectionFailed", { error: getErrorMessage(e) }));
     } finally {
@@ -737,8 +741,8 @@ export default function SavedConnections({
     openConnections(selectedConnections);
   };
 
-  const handleConnectOnly = (conn: SavedConnection) => {
-    openConnections([conn]);
+  const handleConnectOnly = (conn: SavedConnection, options?: SavedConnectionOpenOptions) => {
+    void connectConnection(conn, options);
   };
 
   const handleConnect = (conn: SavedConnection) => {

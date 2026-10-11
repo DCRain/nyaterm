@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::core::sftp::transfer::{
-    register_transfer, unregister_transfer, wait_for_transfer_ready, TransferController,
+    TransferController, register_transfer, unregister_transfer, wait_for_transfer_ready,
 };
 use crate::error::AppResult;
 
@@ -108,30 +108,26 @@ mod tests {
 
     #[test]
     fn try_register_skips_empty_id() {
-        assert!(try_register_storage_transfer(
-            None,
-            "s3:x",
-            "a",
-            "/a",
-            "/tmp/a",
-            "upload",
-            "file",
-            10,
-            None,
-        )
-        .is_none());
-        assert!(try_register_storage_transfer(
-            Some(""),
-            "s3:x",
-            "a",
-            "/a",
-            "/tmp/a",
-            "upload",
-            "file",
-            10,
-            None,
-        )
-        .is_none());
+        assert!(
+            try_register_storage_transfer(
+                None, "s3:x", "a", "/a", "/tmp/a", "upload", "file", 10, None,
+            )
+            .is_none()
+        );
+        assert!(
+            try_register_storage_transfer(
+                Some(""),
+                "s3:x",
+                "a",
+                "/a",
+                "/tmp/a",
+                "upload",
+                "file",
+                10,
+                None,
+            )
+            .is_none()
+        );
     }
 
     #[test]

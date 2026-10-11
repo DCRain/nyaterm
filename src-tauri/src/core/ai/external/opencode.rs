@@ -143,7 +143,9 @@ impl OpenCodeRuntime {
         let output = timeout(OPENCODE_MODELS_TIMEOUT, command.output())
             .await
             .map_err(|_| AppError::Config("timed out while listing OpenCode models".to_string()))?
-            .map_err(|error| AppError::Config(format!("Failed to list OpenCode models: {error}")))?;
+            .map_err(|error| {
+                AppError::Config(format!("Failed to list OpenCode models: {error}"))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -638,7 +640,11 @@ fn build_opencode_turn_prompt(
         prompt.push('\n');
     }
     prompt.push_str("\nUser request:\n");
-    prompt.push_str(if user_input.is_empty() { "-" } else { user_input });
+    prompt.push_str(if user_input.is_empty() {
+        "-"
+    } else {
+        user_input
+    });
     if mcp_attached {
         prompt.push_str(
             "\n\nRespond as the OpenCode coding agent. Prefer nyaterm_terminal.execute_command for terminal work \
@@ -987,7 +993,12 @@ fn add_common_opencode_candidates(
             }
             let opencode_home = Path::new(&local_appdata).join("opencode");
             for name in ["opencode.exe", "opencode.cmd", "opencode"] {
-                add_existing_opencode_candidate(candidates, seen, opencode_home.join(name), "common");
+                add_existing_opencode_candidate(
+                    candidates,
+                    seen,
+                    opencode_home.join(name),
+                    "common",
+                );
             }
         }
         if let Ok(userprofile) = env::var("USERPROFILE") {

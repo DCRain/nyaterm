@@ -12,18 +12,16 @@ use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, RootCertStore, SignatureScheme};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use suppaftp::list::File;
-use suppaftp::tokio::{
-    AsyncFtpStream, AsyncRustlsConnector, AsyncRustlsFtpStream,
-};
 use suppaftp::Mode;
+use suppaftp::list::File;
+use suppaftp::tokio::{AsyncFtpStream, AsyncRustlsConnector, AsyncRustlsFtpStream};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::config::{ConnectionType, SavedConnection};
+use crate::core::sftp::transfer::{TransferController, collect_local_directory_stats};
 use crate::core::sftp::{DirectoryChild, FileEntry, FileProperties};
-use crate::core::sftp::transfer::{collect_local_directory_stats, TransferController};
 use crate::core::storage_transfer::{
     check_storage_control, finalize_completed_sizes, finish_storage_transfer,
     is_transfer_cancelled, try_register_storage_transfer,
@@ -420,9 +418,9 @@ impl FtpManager {
         transfer_id: Option<&str>,
         target_window_label: Option<&str>,
     ) -> AppResult<()> {
-        let handle = app.cloned().ok_or_else(|| {
-            AppError::Config("FTP upload requires an application handle".into())
-        })?;
+        let handle = app
+            .cloned()
+            .ok_or_else(|| AppError::Config("FTP upload requires an application handle".into()))?;
         let session = self
             .get_session(&handle, connection_id, target_window_label)
             .await?;
@@ -563,20 +561,20 @@ impl FtpManager {
                         }
                     };
                     let path = entry.path();
-                    let rel = path.strip_prefix(root).map_err(|err| {
-                        AppError::Config(format!("Invalid relative path: {err}"))
-                    })?;
+                    let rel = path
+                        .strip_prefix(root)
+                        .map_err(|err| AppError::Config(format!("Invalid relative path: {err}")))?;
                     let rel_key = rel
                         .components()
                         .map(|c| c.as_os_str().to_string_lossy())
                         .collect::<Vec<_>>()
                         .join("/");
-                    let remote = if remote_path.trim_end_matches('/').is_empty() || remote_path == "/"
-                    {
-                        format!("/{rel_key}")
-                    } else {
-                        format!("{}/{}", remote_path.trim_end_matches('/'), rel_key)
-                    };
+                    let remote =
+                        if remote_path.trim_end_matches('/').is_empty() || remote_path == "/" {
+                            format!("/{rel_key}")
+                        } else {
+                            format!("{}/{}", remote_path.trim_end_matches('/'), rel_key)
+                        };
                     let file_type = entry.file_type().await.map_err(|err| {
                         AppError::Config(format!("Failed to stat local entry: {err}"))
                     })?;
@@ -907,11 +905,7 @@ fn system_client_config() -> AppResult<ClientConfig> {
     ClientConfig::builder_with_provider(rustls_provider())
         .with_safe_default_protocol_versions()
         .map_err(|err| AppError::Config(format!("FTP TLS config failed: {err}")))
-        .map(|builder| {
-            builder
-                .with_root_certificates(roots)
-                .with_no_client_auth()
-        })
+        .map(|builder| builder.with_root_certificates(roots).with_no_client_auth())
 }
 
 fn danger_client_config(
@@ -1253,10 +1247,9 @@ async fn ftp_upload_file(
                     if let Some(controller) = controller.as_ref() {
                         check_storage_control(controller).await?;
                     }
-                    let read = source
-                        .read(&mut buf)
-                        .await
-                        .map_err(|err| AppError::Config(format!("Failed to read local file: {err}")))?;
+                    let read = source.read(&mut buf).await.map_err(|err| {
+                        AppError::Config(format!("Failed to read local file: {err}"))
+                    })?;
                     if read == 0 {
                         break;
                     }
@@ -1284,10 +1277,9 @@ async fn ftp_upload_file(
                     if let Some(controller) = controller.as_ref() {
                         check_storage_control(controller).await?;
                     }
-                    let read = source
-                        .read(&mut buf)
-                        .await
-                        .map_err(|err| AppError::Config(format!("Failed to read local file: {err}")))?;
+                    let read = source.read(&mut buf).await.map_err(|err| {
+                        AppError::Config(format!("Failed to read local file: {err}"))
+                    })?;
                     if read == 0 {
                         break;
                     }
@@ -1411,12 +1403,26 @@ async fn ftp_download_file(
     let result: AppResult<u64> = async {
         let transferred = match ftp {
             LiveFtp::Plain(s) => {
-                copy_retr_plain(s, &key, &mut target, emit.as_ref(), controller.as_ref(), total_size)
-                    .await?
+                copy_retr_plain(
+                    s,
+                    &key,
+                    &mut target,
+                    emit.as_ref(),
+                    controller.as_ref(),
+                    total_size,
+                )
+                .await?
             }
             LiveFtp::Tls(s) => {
-                copy_retr_tls(s, &key, &mut target, emit.as_ref(), controller.as_ref(), total_size)
-                    .await?
+                copy_retr_tls(
+                    s,
+                    &key,
+                    &mut target,
+                    emit.as_ref(),
+                    controller.as_ref(),
+                    total_size,
+                )
+                .await?
             }
         };
         target
@@ -1663,9 +1669,9 @@ fn download_dir_tree<'a>(
             );
             let local = local_dir.join(&entry.name);
             if entry.is_dir {
-                tokio::fs::create_dir_all(&local)
-                    .await
-                    .map_err(|err| AppError::Config(format!("Failed to create local dir: {err}")))?;
+                tokio::fs::create_dir_all(&local).await.map_err(|err| {
+                    AppError::Config(format!("Failed to create local dir: {err}"))
+                })?;
                 download_dir_tree(
                     ftp,
                     &remote,
@@ -1711,8 +1717,7 @@ impl<'a> FtpEmitter<'a> {
         event.bytes_transferred = bytes_transferred;
         event.error_msg = error_msg;
         if status == "completed" {
-            let (size, total_size) =
-                finalize_completed_sizes(event.total_size, bytes_transferred);
+            let (size, total_size) = finalize_completed_sizes(event.total_size, bytes_transferred);
             event.size = size;
             event.total_size = total_size;
         }
@@ -1787,9 +1792,7 @@ fn load_ftp_connection(connection_id: &str) -> AppResult<SavedConnection> {
 
 pub fn decrypt_ftp_secrets_in_place(conn: &mut SavedConnection) -> AppResult<()> {
     let ConnectionType::Ftp {
-        username,
-        password,
-        ..
+        username, password, ..
     } = &mut conn.config
     else {
         return Ok(());

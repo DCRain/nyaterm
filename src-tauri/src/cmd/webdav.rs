@@ -1,7 +1,7 @@
 use tauri::AppHandle;
 
-use crate::core::webdav::{connection_id_from_session, SharedWebDavManager};
 use crate::core::sftp::{DirectoryChild, FileEntry, FileProperties};
+use crate::core::webdav::{SharedWebDavManager, connection_id_from_session};
 use crate::error::{AppError, AppResult};
 
 fn resolve_connection_id(session_id: &str, connection_id: Option<&str>) -> AppResult<String> {

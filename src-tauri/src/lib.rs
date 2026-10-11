@@ -23,20 +23,20 @@ use tauri::Manager;
 use crate::cmd::app::AppLockState;
 use crate::cmd::docker::DockerSudoManager;
 use crate::core::ai::AgentApprovalManager;
+use crate::core::ftp::FtpManager;
 use crate::core::mcp::McpManager;
 use crate::core::monitoring::stats::RemoteStatsSampler;
+use crate::core::s3::S3Manager;
 use crate::core::sftp::TransferDuplicateManager;
 use crate::core::ssh::{
     HostKeyVerifyManager, PendingAuthManager, PendingSshAgentAuthManager, PendingSshAuthManager,
     TunnelManager,
 };
+use crate::core::webdav::WebDavManager;
 use crate::core::{
     CloudSyncManager, QuickCommandsStore, RdpSessionManager, RecordingManager, SessionManager,
     VncSessionManager,
 };
-use crate::core::s3::S3Manager;
-use crate::core::ftp::FtpManager;
-use crate::core::webdav::WebDavManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -44,6 +44,7 @@ pub fn run() {
     // are in the graph (FTP uses ring; ironrdp/sspi may pull aws-lc-rs). RDP
     // CredSSP then panics on ClientConfig::builder(). Install ring first.
     let _ = rustls::crypto::ring::default_provider().install_default();
+    platform::prepare_webkit_renderer();
     platform::prepare_appimage_wayland_backend();
     portable_updater::schedule_cleanup_from_environment();
     let runtime = runtime::resolve().expect("failed to resolve runtime paths");
@@ -81,8 +82,12 @@ pub fn run() {
         runtime.config_dir().to_path_buf(),
         runtime.executable_dir().to_path_buf(),
     );
+    let plugin_manager = core::plugins::PluginManager::new(
+        runtime.config_dir().join("plugins"),
+        env!("CARGO_PKG_VERSION").into(),
+    );
 
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default().invoke_system(core::plugins::guarded_invoke_script());
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
         if external_open::handle_external_open_args(
@@ -134,6 +139,7 @@ pub fn run() {
         .manage(docker_sudo_manager.clone())
         .manage(remote_stats_sampler.clone())
         .manage(mcp_manager.clone())
+        .manage(plugin_manager)
         .manage(app_lock_state)
         .manage(external_open_state)
         .manage(portable_update_state)
@@ -162,7 +168,40 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(app::on_window_event)
+        .register_asynchronous_uri_scheme_protocol(
+            "nyaterm-plugin",
+            |context, request, responder| {
+                let app = context.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    responder.respond(
+                        core::plugins::serve_asset(&app, &request.uri().to_string()).await,
+                    );
+                });
+            },
+        )
         .invoke_handler(tauri::generate_handler![
+            cmd::plugins::subscribe_plugin_monitor,
+            cmd::plugins::unsubscribe_plugin_monitor,
+            cmd::plugins::refresh_plugin_monitor,
+            cmd::plugins::get_plugin_probe_scripts,
+            cmd::plugins::get_plugin_diagnostics,
+            cmd::plugins::clear_plugin_logs,
+            cmd::plugins::stop_plugin_backend,
+            cmd::plugins::list_plugins,
+            cmd::plugins::get_plugin_marketplace,
+            cmd::plugins::inspect_marketplace_plugin,
+            cmd::plugins::install_marketplace_plugin,
+            cmd::plugins::cancel_marketplace_plugin_review,
+            cmd::plugins::inspect_plugin_package,
+            cmd::plugins::install_plugin_package,
+            cmd::plugins::configure_plugin,
+            cmd::plugins::activate_plugin_version,
+            cmd::plugins::uninstall_plugin,
+            cmd::plugins::create_plugin_scope,
+            cmd::plugins::close_plugin_scope,
+            cmd::plugins::plugin_host_call,
+            cmd::plugins::plugin_backend_call,
+            cmd::plugins::respond_plugin_approval,
             cmd::app::quit_application,
             cmd::app::hide_main_window,
             cmd::app::open_devtools,
@@ -261,6 +300,7 @@ pub fn run() {
             cmd::session::create_telnet_session,
             cmd::session::create_serial_session,
             cmd::rdp::create_rdp_session,
+            cmd::rdp::launch_windows_rdp,
             cmd::rdp::rdp_attach_frame_channel,
             cmd::rdp::rdp_input_batch,
             cmd::rdp::rdp_set_keyboard_capture,
@@ -272,9 +312,11 @@ pub fn run() {
             cmd::rdp::respond_rdp_certificate,
             cmd::vnc::create_vnc_session,
             cmd::vnc::vnc_attach_frame_channel,
+            cmd::vnc::vnc_detach_frame_channel,
             cmd::vnc::vnc_input_batch,
             cmd::vnc::vnc_set_clipboard_text,
             cmd::vnc::vnc_reconnect,
+            cmd::vnc::respond_vnc_server_key,
             cmd::vnc::close_vnc_session,
             cmd::session::cancel_session_creation,
             cmd::session::list_serial_ports,
@@ -445,6 +487,8 @@ pub fn run() {
             cmd::credential::save_credential,
             cmd::credential::delete_credential,
             cmd::credential::reorder_credentials,
+            cmd::connection::reorder_passwords,
+            cmd::connection::reorder_ssh_keys,
             cmd::settings::get_app_settings,
             cmd::settings::save_app_settings,
             cmd::settings::save_app_language,
@@ -527,6 +571,9 @@ pub fn run() {
                 tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
             ) {
                 if matches!(_event, tauri::RunEvent::Exit) {
+                    if let Some(manager) = _app.try_state::<Arc<core::plugins::PluginManager>>() {
+                        tauri::async_runtime::block_on(manager.revoke_all());
+                    }
                     if let Some(manager) = _app.try_state::<Arc<RecordingManager>>() {
                         manager.finish_all_scopes();
                     }

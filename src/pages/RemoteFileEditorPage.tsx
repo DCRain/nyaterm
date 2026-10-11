@@ -1,9 +1,12 @@
+import { supports } from "@/lib/backend/runtime";
+import { downloadBrowserFile } from "@/lib/backend/files";
+import { logger } from "@/lib/logger";
 import { closeSearchPanel } from "@codemirror/search";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { join, tempDir } from "@tauri-apps/api/path";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { join, tempDir } from "@/lib/backend/platform/path";
+import { getCurrentWindow } from "@/lib/backend/platform/window";
+import { openPath } from "@/lib/backend/platform/opener";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -170,9 +173,7 @@ export default function RemoteFileEditorPage() {
   const { theme } = useTheme();
   const colors = theme.colors;
   const { handleZoomIn, handleZoomOut } = useFileEditorZoom(updateAppSettings);
-  const editorFontSize = clampFileEditorFontSize(
-    appSettings.transfer.internal_editor_font_size,
-  );
+  const editorFontSize = clampFileEditorFontSize(appSettings.transfer.internal_editor_font_size);
   const initialData = useMemo(() => {
     const params = new URLSearchParams(window.location.search);
     return parseJsonSearchParam<RemoteFileEditorData>(params.get("data"));
@@ -190,7 +191,10 @@ export default function RemoteFileEditorPage() {
   const [closeConfirmOpen, setCloseConfirmOpen] = useState(false);
   const [pendingCloseTabId, setPendingCloseTabId] = useState<string | null>(null);
   const [reloadConfirmTabId, setReloadConfirmTabId] = useState<string | null>(null);
-  const [cursorPosition, setCursorPosition] = useState<CursorPosition>({ line: 1, column: 1 });
+  const [cursorPosition, setCursorPosition] = useState<CursorPosition>({
+    line: 1,
+    column: 1,
+  });
 
   const activeTab = useMemo(
     () => tabs.find((tab) => tab.id === activeTabId) ?? tabs[0] ?? null,
@@ -338,20 +342,20 @@ export default function RemoteFileEditorPage() {
 
   const openExternalFile = useCallback(
     async (tab: EditorTab) => {
+      if (!supports("nativeFiles")) {
+        await downloadBrowserFile(tab.sessionId, tab.path);
+        return;
+      }
       if (tab.backend === "local") {
         await openPath(tab.path, appSettings.transfer.default_editor || undefined);
         return;
       }
 
       const root = await tempDir();
-      const safeName = await invoke<string>("sanitize_download_file_name", { name: tab.name });
-      const localPath = await join(
-        root,
-        "nyaterm",
-        tab.sessionId,
-        Date.now().toString(),
-        safeName,
-      );
+      const safeName = await invoke<string>("sanitize_download_file_name", {
+        name: tab.name,
+      });
+      const localPath = await join(root, "nyaterm", tab.sessionId, Date.now().toString(), safeName);
       await invoke("download_remote_file", {
         sessionId: tab.sessionId,
         remotePath: tab.path,
@@ -385,15 +389,25 @@ export default function RemoteFileEditorPage() {
         if (result.status === "unsupported") {
           toast.info(
             t(
-              result.reason === "binary"
-                ? "fileExplorer.binaryOpenExternal"
-                : "fileExplorer.unsupportedEncodingOpenExternal",
+              !supports("nativeFiles")
+                ? "fileExplorer.webUnsupportedDownload"
+                : result.reason === "binary"
+                  ? "fileExplorer.binaryOpenExternal"
+                  : "fileExplorer.unsupportedEncodingOpenExternal",
             ),
           );
           try {
             await openExternalFile(tab);
             removeUnsupportedTab(id);
           } catch (externalError) {
+            logger.error({
+              domain: "transfer.lifecycle",
+              event: "download.failed",
+              message: "Browser download failed",
+              error: externalError,
+            });
+            if (!supports("nativeFiles"))
+              toast.error(getErrorMessage(externalError) || t("fileEditor.openExternalFailed"));
             updateTab(id, (current) => ({
               ...current,
               loading: false,
@@ -424,6 +438,14 @@ export default function RemoteFileEditorPage() {
           editorStatesRef.current[id] = createEditorState(file.content, tab.language);
         }
       } catch (err) {
+        logger.error({
+          domain: "ui.error",
+          event: "editor.open_failed",
+          message: "File open failed",
+          error: err,
+        });
+        if (!supports("nativeFiles"))
+          toast.error(getErrorMessage(err) || t("fileEditor.loadFailed"));
         updateTab(id, (current) => ({
           ...current,
           loading: false,
@@ -890,23 +912,25 @@ export default function RemoteFileEditorPage() {
               <MdRefresh className="text-sm" />
               {t("fileEditor.reload")}
             </Button>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="inline-flex">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 gap-1.5"
-                    disabled={!activeTab || activeTab.loading}
-                    onClick={() => activeTab && openExternal(activeTab)}
-                  >
-                    <MdOpenInNew className="text-sm" />
-                    {t("fileEditor.openExternal")}
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">{t("fileEditor.openExternalTooltip")}</TooltipContent>
-            </Tooltip>
+            {supports("nativeFiles") && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1.5"
+                      disabled={!activeTab || activeTab.loading}
+                      onClick={() => activeTab && openExternal(activeTab)}
+                    >
+                      <MdOpenInNew className="text-sm" />
+                      {t("fileEditor.openExternal")}
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{t("fileEditor.openExternalTooltip")}</TooltipContent>
+              </Tooltip>
+            )}
             <Button
               size="sm"
               className="h-8 gap-1.5"
@@ -975,7 +999,9 @@ export default function RemoteFileEditorPage() {
                   ·
                 </span>
                 <span className="truncate">
-                  {t("fileEditor.unsavedFilesDesc", { count: dirtyTabs.length })}
+                  {t("fileEditor.unsavedFilesDesc", {
+                    count: dirtyTabs.length,
+                  })}
                 </span>
               </>
             ) : null}

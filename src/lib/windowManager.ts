@@ -1,5 +1,6 @@
-import { emit, listen } from "@tauri-apps/api/event";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { emit, listen } from "@/lib/backend/api";
+import { WebviewWindow } from "@/lib/backend/platform/webviewWindow";
+import { runtime } from "@/lib/backend/runtime";
 import {
   availableMonitors,
   getCurrentWindow,
@@ -7,7 +8,7 @@ import {
   primaryMonitor,
   type Window as TauriWindow,
   UserAttentionType,
-} from "@tauri-apps/api/window";
+} from "@/lib/backend/platform/window";
 import i18n from "../i18n";
 import { ChildWindowCommandQueue } from "./childWindowCommandQueue";
 import {
@@ -128,6 +129,10 @@ export function setOwnerMainWindowLabel(label: string) {
 
 export function getOwnerMainWindowLabel() {
   return ownerMainWindowLabel;
+}
+
+export function eventTargetsCurrentWindow(targetWindowLabel?: string | null) {
+  return !targetWindowLabel || targetWindowLabel === getOwnerMainWindowLabel();
 }
 
 export function isPrimaryMainWindow() {
@@ -731,21 +736,24 @@ async function openChildWindowInternal(opts: ChildWindowOptions) {
   );
   const listenerReadyMs = Math.round(performance.now() - startedAt);
   try {
-    await invoke("open_child_window", {
-      options: {
-        label: opts.label,
-        title: opts.title,
-        url: appendChildWindowReadyToken(opts.url, readyToken),
-        kind,
-        parentLabel: opts.parentLabel ?? ownerMainWindowLabel,
-        width: opts.width ?? 720,
-        height: opts.height ?? 560,
-        resizable: opts.resizable ?? true,
-        alwaysOnTop: needsAlwaysOnTop(opts.label),
-        stateKey: opts.stateKey,
-        transparent: opts.transparent,
-      },
-    });
+    const options = {
+      label: opts.label,
+      title: opts.title,
+      url: appendChildWindowReadyToken(opts.url, readyToken),
+      kind,
+      parentLabel: opts.parentLabel ?? ownerMainWindowLabel,
+      width: opts.width ?? 720,
+      height: opts.height ?? 560,
+      resizable: opts.resizable ?? true,
+      alwaysOnTop: needsAlwaysOnTop(opts.label),
+      stateKey: opts.stateKey,
+      transparent: opts.transparent,
+    };
+    if (runtime === "web") {
+      new WebviewWindow(opts.label, { ...options, visible: false });
+    } else {
+      await invoke("open_child_window", { options });
+    }
     const invokeMs = Math.round(performance.now() - startedAt);
 
     const win = await WebviewWindow.getByLabel(opts.label);
@@ -818,8 +826,30 @@ export function openChildWindow(opts: ChildWindowOptions): Promise<WebviewWindow
   return operation;
 }
 
-export function openSettings(tab?: string) {
-  openSettingsInWorkspace(tab);
+export async function openSettings(tab?: string) {
+  if (runtime !== "web") {
+    openSettingsInWorkspace(tab);
+    return;
+  }
+
+  const label = scopedModalLabel("settings");
+  const url = tab
+    ? `index.html?window=settings&owner=${encodeURIComponent(ownerMainWindowLabel)}&tab=${encodeURIComponent(tab)}`
+    : `index.html?window=settings&owner=${encodeURIComponent(ownerMainWindowLabel)}`;
+  const win = await openChildWindow({
+    label,
+    title: i18n.t("settings.title"),
+    url,
+    parentLabel: ownerMainWindowLabel,
+    width: 800,
+    height: 560,
+    stateKey: "settings",
+  });
+  if (tab) {
+    const payload = { tab, targetWindowLabel: ownerMainWindowLabel };
+    dispatchChildWindowCommand(label, CHILD_WINDOW_COMMANDS.settingsOpenTab, payload);
+  }
+  return win;
 }
 
 export interface NewSessionTarget {

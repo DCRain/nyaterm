@@ -15,8 +15,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
 use crate::config::{ConnectionType, SavedConnection};
-use crate::core::sftp::{DirectoryChild, FileEntry, FileProperties};
 use crate::core::sftp::transfer::collect_local_directory_stats;
+use crate::core::sftp::{DirectoryChild, FileEntry, FileProperties};
 use crate::core::storage_transfer::{
     check_storage_control, finalize_completed_sizes, finish_storage_transfer,
     is_transfer_cancelled, try_register_storage_transfer,
@@ -271,7 +271,17 @@ impl S3Manager {
             .await
             .map_err(|err| AppError::Config(format!("Failed to open local file: {err}")))?;
 
-        let emit = make_emitter(app, transfer_id, &session_id, &file_name, remote_path, local_path, "upload", "file", total_size);
+        let emit = make_emitter(
+            app,
+            transfer_id,
+            &session_id,
+            &file_name,
+            remote_path,
+            local_path,
+            "upload",
+            "file",
+            total_size,
+        );
         let controller = try_register_storage_transfer(
             transfer_id,
             &session_id,
@@ -406,7 +416,17 @@ impl S3Manager {
         // Total size is optional for S3; we still report bytes_transferred on
         // each progress tick so the UI can show indeterminate progress.
         let total_size = op.stat(&key).await.map(|m| m.content_length()).unwrap_or(0);
-        let emit = make_emitter(app, transfer_id, &session_id, &file_name, remote_path, local_path, "download", "file", total_size);
+        let emit = make_emitter(
+            app,
+            transfer_id,
+            &session_id,
+            &file_name,
+            remote_path,
+            local_path,
+            "download",
+            "file",
+            total_size,
+        );
         let controller = try_register_storage_transfer(
             transfer_id,
             &session_id,
@@ -422,51 +442,50 @@ impl S3Manager {
             emitter.emit_status("started", 0, None);
         }
 
-        let result: AppResult<u64> = async {
-            let reader = op
-                .reader(&key)
-                .await
-                .map_err(map_opendal_error)?
-                .into_futures_async_read(0..)
-                .await
-                .map_err(map_opendal_error)?;
-            let mut reader = reader;
-            let mut buf = vec![0u8; S3_CHUNK_SIZE];
-            let mut transferred: u64 = 0;
-            let mut last_progress = Instant::now();
-            use futures_util::AsyncReadExt;
-            loop {
-                if let Some(controller) = controller.as_ref() {
-                    check_storage_control(controller).await?;
-                }
-                let read = reader
-                    .read(&mut buf)
+        let result: AppResult<u64> =
+            async {
+                let reader = op
+                    .reader(&key)
                     .await
-                    .map_err(|err| AppError::Config(format!("Failed to read S3 object: {err}")))?;
-                if read == 0 {
-                    break;
-                }
-                target
-                    .write_all(&buf[..read])
+                    .map_err(map_opendal_error)?
+                    .into_futures_async_read(0..)
                     .await
-                    .map_err(|err| AppError::Config(format!("Failed to write local file: {err}")))?;
-                transferred = transferred.saturating_add(read as u64);
-                if let Some(controller) = controller.as_ref() {
-                    controller.update_progress(transferred, total_size);
-                }
-                if let Some(emitter) = emit.as_ref() {
-                    if last_progress.elapsed() >= S3_PROGRESS_INTERVAL {
-                        last_progress = Instant::now();
-                        emitter.emit_status("progress", transferred, None);
+                    .map_err(map_opendal_error)?;
+                let mut reader = reader;
+                let mut buf = vec![0u8; S3_CHUNK_SIZE];
+                let mut transferred: u64 = 0;
+                let mut last_progress = Instant::now();
+                use futures_util::AsyncReadExt;
+                loop {
+                    if let Some(controller) = controller.as_ref() {
+                        check_storage_control(controller).await?;
+                    }
+                    let read = reader.read(&mut buf).await.map_err(|err| {
+                        AppError::Config(format!("Failed to read S3 object: {err}"))
+                    })?;
+                    if read == 0 {
+                        break;
+                    }
+                    target.write_all(&buf[..read]).await.map_err(|err| {
+                        AppError::Config(format!("Failed to write local file: {err}"))
+                    })?;
+                    transferred = transferred.saturating_add(read as u64);
+                    if let Some(controller) = controller.as_ref() {
+                        controller.update_progress(transferred, total_size);
+                    }
+                    if let Some(emitter) = emit.as_ref() {
+                        if last_progress.elapsed() >= S3_PROGRESS_INTERVAL {
+                            last_progress = Instant::now();
+                            emitter.emit_status("progress", transferred, None);
+                        }
                     }
                 }
+                target.flush().await.map_err(|err| {
+                    AppError::Config(format!("Failed to flush local file: {err}"))
+                })?;
+                Ok(transferred)
             }
-            target.flush().await.map_err(|err| {
-                AppError::Config(format!("Failed to flush local file: {err}"))
-            })?;
-            Ok(transferred)
-        }
-        .await;
+            .await;
 
         match &result {
             Ok(transferred) => {
@@ -551,9 +570,9 @@ impl S3Manager {
         let mut completed = 0u64;
         let result: AppResult<()> = async {
             while let Some(dir) = stack.pop() {
-                let mut entries = tokio::fs::read_dir(&dir).await.map_err(|err| {
-                    AppError::Config(format!("Failed to read local dir: {err}"))
-                })?;
+                let mut entries = tokio::fs::read_dir(&dir)
+                    .await
+                    .map_err(|err| AppError::Config(format!("Failed to read local dir: {err}")))?;
                 while let Some(entry) = entries
                     .next_entry()
                     .await
@@ -563,21 +582,20 @@ impl S3Manager {
                         check_storage_control(controller).await?;
                     }
                     let path = entry.path();
-                    let rel = path.strip_prefix(root).map_err(|err| {
-                        AppError::Config(format!("Invalid relative path: {err}"))
-                    })?;
+                    let rel = path
+                        .strip_prefix(root)
+                        .map_err(|err| AppError::Config(format!("Invalid relative path: {err}")))?;
                     let rel_key = rel
                         .components()
                         .map(|c| c.as_os_str().to_string_lossy())
                         .collect::<Vec<_>>()
                         .join("/");
-                    let remote = if remote_path.trim_end_matches('/').is_empty()
-                        || remote_path == "/"
-                    {
-                        format!("/{rel_key}")
-                    } else {
-                        format!("{}/{}", remote_path.trim_end_matches('/'), rel_key)
-                    };
+                    let remote =
+                        if remote_path.trim_end_matches('/').is_empty() || remote_path == "/" {
+                            format!("/{rel_key}")
+                        } else {
+                            format!("{}/{}", remote_path.trim_end_matches('/'), rel_key)
+                        };
                     let file_type = entry.file_type().await.map_err(|err| {
                         AppError::Config(format!("Failed to stat local entry: {err}"))
                     })?;
@@ -632,14 +650,8 @@ impl S3Manager {
         remote_path: &str,
         local_path: &str,
     ) -> AppResult<()> {
-        self.download_directory_with_progress(
-            connection_id,
-            remote_path,
-            local_path,
-            None,
-            None,
-        )
-        .await
+        self.download_directory_with_progress(connection_id, remote_path, local_path, None, None)
+            .await
     }
 
     pub async fn download_directory_with_progress(
@@ -782,8 +794,7 @@ impl<'a> S3Emitter<'a> {
         event.bytes_transferred = bytes_transferred;
         event.error_msg = error_msg;
         if status == "completed" {
-            let (size, total_size) =
-                finalize_completed_sizes(event.total_size, bytes_transferred);
+            let (size, total_size) = finalize_completed_sizes(event.total_size, bytes_transferred);
             event.size = size;
             event.total_size = total_size;
         }
@@ -852,13 +863,14 @@ impl Default for S3Manager {
 }
 
 fn load_s3_connection(connection_id: &str) -> AppResult<SavedConnection> {
-        let mut conn = crate::storage::get_connection(connection_id)?
-            .ok_or_else(|| AppError::SessionNotFound(format!("Connection '{connection_id}' not found")))?;
-        decrypt_s3_secrets_in_place(&mut conn)?;
-        if !matches!(conn.config, ConnectionType::S3 { .. }) {
-            return Err(AppError::Config("Connection is not an S3 type".into()));
-        }
-        Ok(conn)
+    let mut conn = crate::storage::get_connection(connection_id)?.ok_or_else(|| {
+        AppError::SessionNotFound(format!("Connection '{connection_id}' not found"))
+    })?;
+    decrypt_s3_secrets_in_place(&mut conn)?;
+    if !matches!(conn.config, ConnectionType::S3 { .. }) {
+        return Err(AppError::Config("Connection is not an S3 type".into()));
+    }
+    Ok(conn)
 }
 
 /// Decrypt S3 connection secrets in place. Public so connection tests and
@@ -927,11 +939,8 @@ pub fn build_operator_from_connection(connection: &SavedConnection) -> AppResult
 }
 
 pub fn build_s3_operator(spec: S3OperatorSpec) -> AppResult<Operator> {
-    let (endpoint, bucket, virtual_host_style) = resolve_s3_location(
-        &spec.endpoint,
-        &spec.bucket,
-        spec.virtual_host_style,
-    );
+    let (endpoint, bucket, virtual_host_style) =
+        resolve_s3_location(&spec.endpoint, &spec.bucket, spec.virtual_host_style);
     let mut builder = S3::default().bucket(&bucket);
     if !endpoint.is_empty() {
         builder = builder.endpoint(&endpoint);
@@ -1111,7 +1120,11 @@ fn is_s3_list_self_entry(listed_prefix: &str, entry_path: &str) -> bool {
 
 /// Keep only an immediate child of `listed_prefix`. Nested keys become the first
 /// path segment as a directory so list-without-delimiter does not invent files.
-fn s3_list_child(listed_prefix: &str, entry_path: &str, listed_as_dir: bool) -> Option<(String, bool)> {
+fn s3_list_child(
+    listed_prefix: &str,
+    entry_path: &str,
+    listed_as_dir: bool,
+) -> Option<(String, bool)> {
     if is_s3_list_self_entry(listed_prefix, entry_path) {
         return None;
     }
@@ -1268,7 +1281,11 @@ fn summarize_s3_error_reason(raw: &str) -> String {
     }
     raw.lines()
         .map(str::trim)
-        .find(|line| !line.is_empty() && !line.eq_ignore_ascii_case("context:") && !line.eq_ignore_ascii_case("source:"))
+        .find(|line| {
+            !line.is_empty()
+                && !line.eq_ignore_ascii_case("context:")
+                && !line.eq_ignore_ascii_case("source:")
+        })
         .unwrap_or(raw)
         .chars()
         .take(240)
@@ -1352,11 +1369,8 @@ mod tests {
 
     #[test]
     fn aliyun_regional_endpoint_enables_virtual_host() {
-        let (endpoint, bucket, vhost) = resolve_s3_location(
-            "https://oss-cn-hangzhou.aliyuncs.com",
-            "my-bucket",
-            false,
-        );
+        let (endpoint, bucket, vhost) =
+            resolve_s3_location("https://oss-cn-hangzhou.aliyuncs.com", "my-bucket", false);
         assert_eq!(endpoint, "https://oss-cn-hangzhou.aliyuncs.com");
         assert_eq!(bucket, "my-bucket");
         assert!(vhost);
@@ -1376,8 +1390,11 @@ mod tests {
 
     #[test]
     fn aliyun_bucket_host_fills_empty_bucket() {
-        let (endpoint, bucket, vhost) =
-            resolve_s3_location("https://photos.oss-cn-hangzhou-internal.aliyuncs.com", "", false);
+        let (endpoint, bucket, vhost) = resolve_s3_location(
+            "https://photos.oss-cn-hangzhou-internal.aliyuncs.com",
+            "",
+            false,
+        );
         assert_eq!(endpoint, "https://oss-cn-hangzhou-internal.aliyuncs.com");
         assert_eq!(bucket, "photos");
         assert!(vhost);

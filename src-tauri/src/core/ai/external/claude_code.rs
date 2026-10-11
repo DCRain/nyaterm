@@ -25,7 +25,7 @@ use crate::utils::process::hide_window;
 
 use super::super::history::{append_message, save_user_message, set_session_external_session_id};
 use super::super::prompt::build_prompt;
-use super::super::redaction::{redact_context, redact_marker_values, redact_sensitive_text};
+use super::super::redaction::{redact_marker_values, redact_request, redact_sensitive_text};
 use super::super::stream::{active_streams, emit_stream_event};
 use super::super::types::{AiChatRequest, AiMessage, AiMessageRole, AiStreamEventPayload};
 use super::super::types::{now_rfc3339, uuid};
@@ -221,8 +221,7 @@ async fn run_claude_code_stream_inner(
     );
 
     if settings.redaction_enabled {
-        redact_context(&mut request.context);
-        request.user_input = redact_sensitive_text(&request.user_input);
+        redact_request(request);
     }
     if settings.record_history {
         save_user_message(&app, &session_id, request)?;
@@ -312,15 +311,13 @@ async fn run_claude_code_stream_inner(
         }
     };
     if let Err(error) = stdin.write_all(invocation.prompt_stdin.as_bytes()).await {
-        cleanup_claude_mcp_turn(&mcp_runtime, mcp_token.as_deref(), mcp_config_path.as_ref())
-            .await;
+        cleanup_claude_mcp_turn(&mcp_runtime, mcp_token.as_deref(), mcp_config_path.as_ref()).await;
         return Err(AppError::Channel(format!(
             "Failed to write Claude Code prompt: {error}"
         )));
     }
     if let Err(error) = stdin.shutdown().await {
-        cleanup_claude_mcp_turn(&mcp_runtime, mcp_token.as_deref(), mcp_config_path.as_ref())
-            .await;
+        cleanup_claude_mcp_turn(&mcp_runtime, mcp_token.as_deref(), mcp_config_path.as_ref()).await;
         return Err(AppError::Channel(format!(
             "Failed to close Claude Code stdin: {error}"
         )));
@@ -1052,8 +1049,12 @@ mod tests {
         let mut request = test_request();
         request.permission_mode = AiPermissionMode::FullAccess;
 
-        let invocation =
-            build_claude_invocation(&request, &AiSettings::default(), "prompt".to_string(), false);
+        let invocation = build_claude_invocation(
+            &request,
+            &AiSettings::default(),
+            "prompt".to_string(),
+            false,
+        );
 
         assert_eq!(
             arg_value(&invocation.args, "--permission-mode"),

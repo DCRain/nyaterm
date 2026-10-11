@@ -1,4 +1,4 @@
-﻿import type { TFunction } from "i18next";
+import type { TFunction } from "i18next";
 import {
   type ComponentProps,
   type ReactNode,
@@ -24,6 +24,8 @@ import type { FtpCertificateVerifyRequest } from "@/components/dialog/connection
 import { FtpCertificateVerifyDialog } from "@/components/dialog/connections/FtpCertificateVerifyDialog";
 import type { RdpCertificateVerifyRequest } from "@/components/dialog/connections/RdpCertificateVerifyDialog";
 import { RdpCertificateVerifyDialog } from "@/components/dialog/connections/RdpCertificateVerifyDialog";
+import type { VncServerKeyVerifyRequest } from "@/components/dialog/connections/VncServerKeyVerifyDialog";
+import { VncServerKeyVerifyDialog } from "@/components/dialog/connections/VncServerKeyVerifyDialog";
 import type { SshAgentAuthRequest } from "@/components/dialog/connections/SshAgentAuthDialog";
 import { SshAgentAuthDialog } from "@/components/dialog/connections/SshAgentAuthDialog";
 import type { SshAuthRequest } from "@/components/dialog/connections/SshAuthDialog";
@@ -182,6 +184,8 @@ interface AppLayoutProps {
     onRdpCertificateVerifyDone: (requestId: string) => void;
     ftpCertificateVerifyRequest: FtpCertificateVerifyRequest | null;
     onFtpCertificateVerifyDone: (requestId: string) => void;
+    vncServerKeyVerifyRequest: VncServerKeyVerifyRequest | null;
+    onVncServerKeyVerifyDone: (requestId: string) => void;
     modalChildWindowCount: number;
     locked: boolean;
     hasMasterPassword: boolean;
@@ -345,9 +349,7 @@ export default function AppLayout({
   );
   const windowTransparencyEnabled = isWindowTransparencyEnabled(effectiveAppearance);
   const windowTransparencyBlur =
-    windowTransparencyEnabled &&
-    isWindows &&
-    Boolean(effectiveAppearance.window_transparency_blur);
+    windowTransparencyEnabled && isWindows && Boolean(effectiveAppearance.window_transparency_blur);
   useWindowTransparencyDom(theme.colors, effectiveAppearance);
   const shellStyle = useMemo(
     () => ({
@@ -702,6 +704,11 @@ export default function AppLayout({
         <FtpCertificateVerifyDialog
           request={dialogs.ftpCertificateVerifyRequest}
           onDone={dialogs.onFtpCertificateVerifyDone}
+        />
+        <VncServerKeyVerifyDialog
+          key={dialogs.vncServerKeyVerifyRequest?.requestId ?? "no-vnc-prompt"}
+          request={dialogs.vncServerKeyVerifyRequest}
+          onDone={dialogs.onVncServerKeyVerifyDone}
         />
         <TransferDuplicateDialog />
 

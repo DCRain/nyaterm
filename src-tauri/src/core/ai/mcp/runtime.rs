@@ -79,10 +79,7 @@ impl NyaTermMcpRuntime {
         }
     }
 
-    pub async fn register_turn(
-        &self,
-        request: RegisterMcpTurnRequest,
-    ) -> AppResult<McpEndpoint> {
+    pub async fn register_turn(&self, request: RegisterMcpTurnRequest) -> AppResult<McpEndpoint> {
         self.ensure_started().await?;
         let url = self
             .endpoint_url
@@ -133,9 +130,9 @@ impl NyaTermMcpRuntime {
         let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
             .await
             .map_err(|error| AppError::Config(format!("Failed to bind MCP server: {error}")))?;
-        let addr = listener
-            .local_addr()
-            .map_err(|error| AppError::Config(format!("Failed to read MCP bind address: {error}")))?;
+        let addr = listener.local_addr().map_err(|error| {
+            AppError::Config(format!("Failed to read MCP bind address: {error}"))
+        })?;
         let url = format!("http://127.0.0.1:{}/mcp", addr.port());
         let _ = self.endpoint_url.set(url);
 
@@ -163,7 +160,10 @@ impl NyaTermMcpRuntime {
 }
 
 fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
-    let value = headers.get(axum::http::header::AUTHORIZATION)?.to_str().ok()?;
+    let value = headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?;
     let token = value
         .strip_prefix("Bearer ")
         .or_else(|| value.strip_prefix("bearer "))
@@ -316,10 +316,8 @@ async fn handle_tools_call(turn: &ActiveMcpTurn, params: Value) -> Result<Value,
         })),
         "execute_command" => {
             let args = parse_execute_command_args(&arguments)?;
-            let target = resolve_command_target(
-                &turn.request,
-                args.target_terminal_session_id.as_deref(),
-            )?;
+            let target =
+                resolve_command_target(&turn.request, args.target_terminal_session_id.as_deref())?;
             let step_index = {
                 let mut counter = turn.step_counter.lock().await;
                 *counter = counter.saturating_add(1);
@@ -360,8 +358,14 @@ async fn handle_tools_call(turn: &ActiveMcpTurn, params: Value) -> Result<Value,
     }
 }
 
-fn json_rpc_result(id: Value, result: Value) -> (StatusCode, [(axum::http::HeaderName, &'static str); 1], String)
-{
+fn json_rpc_result(
+    id: Value,
+    result: Value,
+) -> (
+    StatusCode,
+    [(axum::http::HeaderName, &'static str); 1],
+    String,
+) {
     (
         StatusCode::OK,
         [(axum::http::header::CONTENT_TYPE, "application/json")],
@@ -378,7 +382,11 @@ fn json_rpc_error(
     id: Option<Value>,
     code: i64,
     message: &str,
-) -> (StatusCode, [(axum::http::HeaderName, &'static str); 1], String) {
+) -> (
+    StatusCode,
+    [(axum::http::HeaderName, &'static str); 1],
+    String,
+) {
     (
         StatusCode::OK,
         [(axum::http::header::CONTENT_TYPE, "application/json")],

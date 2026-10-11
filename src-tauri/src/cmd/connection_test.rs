@@ -7,8 +7,8 @@ use opendal::Operator;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Window};
 
-use crate::core::s3::{self, S3OperatorSpec};
 use crate::core::ftp::{FtpConnectParams, SharedFtpManager};
+use crate::core::s3::{self, S3OperatorSpec};
 
 use crate::core::ssh::{DraftSshTestInput, build_test_ssh_config, test_authenticated_ssh};
 use crate::error::{AppError, AppResult};
@@ -243,10 +243,7 @@ async fn test_ftp(
         use_tls: input.use_tls,
     };
     let started = Instant::now();
-    match ftp_manager
-        .probe(app, params, Some(window_label))
-        .await
-    {
+    match ftp_manager.probe(app, params, Some(window_label)).await {
         Ok(()) => {
             tracing::debug!(
                 target: "user_action",
@@ -721,9 +718,7 @@ mod tests {
 
     #[test]
     fn local_shell_missing_path_fails() {
-        let result = test_local_shell(Some(
-            "__nyaterm_missing_shell_path_that_should_not_exist__",
-        ));
+        let result = test_local_shell(Some("__nyaterm_missing_shell_path_that_should_not_exist__"));
         assert!(!result.ok);
         assert_eq!(result.code, "shell_missing");
     }

@@ -4,6 +4,7 @@ import { invoke } from "./invoke";
 import { logger } from "./logger";
 import { isMacOS, isWindows } from "./platform";
 import type { TerminalColors, ThemeColors } from "./themes";
+import { runtime } from "./backend/runtime";
 
 export const BACKGROUND_IMAGE_FITS = ["cover", "contain", "stretch", "tile"] as const;
 export const DEFAULT_BACKGROUND_IMAGE_FIT: BackgroundImageFit = "cover";
@@ -68,8 +69,12 @@ function quoteCssUrl(url: string) {
 export async function loadBackgroundImageDataUrl(path: string | null | undefined): Promise<string> {
   const trimmed = path?.trim();
   if (!trimmed) return "";
+  if (runtime === "web")
+    return /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(trimmed) ? trimmed : "";
   try {
-    return await invoke<string>("read_background_image_data_url", { path: trimmed });
+    return await invoke<string>("read_background_image_data_url", {
+      path: trimmed,
+    });
   } catch (error) {
     logger.warn({
       domain: "background-image",

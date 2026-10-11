@@ -100,7 +100,7 @@ NyaTerm is built for people who move between servers, local commands, devices, a
 
 - SSH, Local Terminal, Telnet, Serial, RDP, and VNC session support
 - Multi-tab workspace with horizontal and vertical pane splits, tab drag docking, and layout restoration
-- RDP and VNC remote desktop panes; VNC currently supports direct TCP, None / classic VNC Auth, Raw / ZRLE / Tight / Tight JPEG framebuffer updates, window scaling, bounded reconnects, and text clipboard exchange for Latin-1 text
+- RDP and VNC remote desktop panes; VNC supports direct TCP, None / classic VNC Auth, RA2_256 in Auto mode with server-key TOFU verification, Raw / ZRLE / Tight / Tight JPEG framebuffer updates, window scaling, bounded reconnects, and text clipboard exchange for Latin-1 text
 - Saved connections with folders, icons, metadata, duplication, keyboard copy, reconnect, and import flows
 - Command Palette and session quick switcher for finding actions, open sessions, saved connections, and new-session entry points
 - Main-window `Background Image` customization with `cover` / `contain` / `stretch` / `tile` sizing and adjustable `Background Content Opacity`
@@ -322,6 +322,10 @@ AUR package: [`nyaterm-bin`](https://aur.archlinux.org/packages/nyaterm-bin)
 > `nyaterm-bin` is a community-maintained binary AUR package. If the AUR package has not yet caught up with the latest release, download the official package from [Releases](https://github.com/nyakang/nyaterm/releases).
 
 
+## Web / Docker Deployment
+
+The Web Beta serves the browser interface and API from a single container for one trusted administrator. See [deploy/web/](./deploy/web/README.md) for build and Compose commands, and the [deployment guide](./docs/web-deployment.md) for configuration and supported capabilities.
+
 ## Prerequisites for Development
 
 - Node.js 18+
@@ -351,6 +355,7 @@ pnpm tauri dev
 │   ├── src/core/           # SSH, SFTP, PTY, Telnet, Serial, AI, backup logic
 │   ├── src/config/         # Persistent config models
 │   └── crates/otp/         # Local OTP implementation
+├── deploy/web/             # Web Dockerfile, Compose, and deployment entry point
 ├── docs-site/              # Docusaurus documentation site
 ├── public/                 # Static assets
 └── scripts/                # Checks, version sync, and demo helper scripts

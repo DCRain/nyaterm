@@ -1,5 +1,6 @@
-import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { randomUUID } from "@/lib/uuid";
+import { listen } from "@/lib/backend/api";
+import { getCurrentWindow } from "@/lib/backend/platform/window";
 import {
   type ReactNode,
   useCallback,
@@ -71,6 +72,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     minimize_to_tray: false,
     boss_key: null,
     confirm_on_close: true,
+    rdp_client_mode: "builtin",
   },
   appearance: {
     theme: "github-dark",
@@ -271,6 +273,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
 const DEFAULT_RUNTIME_INFO: AppRuntimeInfo = {
   portable: false,
   mode: "installed",
+  packageManager: null,
   executableDir: "",
   dataDir: "",
   configDir: "",
@@ -433,7 +436,7 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
   const noop = useCallback(() => {}, []);
   const noopString = useCallback(() => "", []);
   const noopPendingTab = useCallback(
-    () => ({ tabId: "", paneId: "", createRequestId: crypto.randomUUID() }),
+    () => ({ tabId: "", paneId: "", createRequestId: randomUUID() }),
     [],
   );
   const noopPaneConnecting = useCallback(() => null, []);

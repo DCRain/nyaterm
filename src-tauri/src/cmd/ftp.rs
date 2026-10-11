@@ -1,7 +1,7 @@
 use tauri::AppHandle;
 use tauri::Window;
 
-use crate::core::ftp::{connection_id_from_session, SharedFtpManager};
+use crate::core::ftp::{SharedFtpManager, connection_id_from_session};
 use crate::core::sftp::{DirectoryChild, FileEntry, FileProperties};
 use crate::error::{AppError, AppResult};
 

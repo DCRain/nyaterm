@@ -2,6 +2,7 @@ mod agent;
 mod codex;
 pub(crate) mod external;
 mod history;
+mod http;
 pub(crate) mod mcp;
 mod model;
 mod parser;
@@ -12,7 +13,6 @@ pub(crate) mod stream;
 mod types;
 
 pub use agent::AgentApprovalManager;
-pub use mcp::NyaTermMcpRuntime;
 pub use codex::{
     CodexAccountStatus, CodexAppServerManager, CodexCliStatus, CodexLoginFlow, CodexLoginStart,
     manager_from_app, run_codex_stream,
@@ -28,6 +28,7 @@ pub use history::{
     append_ai_audit, clear_ai_history, delete_ai_session, get_ai_audit_logs, get_ai_messages,
     get_ai_sessions, rebind_ai_session,
 };
+pub use mcp::NyaTermMcpRuntime;
 pub use model::{
     list_model_names, list_model_names_for_settings, test_model_connection,
     test_provider_connection,

@@ -1,6 +1,6 @@
 use tauri::AppHandle;
 
-use crate::core::s3::{connection_id_from_session, SharedS3Manager};
+use crate::core::s3::{SharedS3Manager, connection_id_from_session};
 use crate::core::sftp::{DirectoryChild, FileEntry, FileProperties};
 use crate::error::{AppError, AppResult};
 

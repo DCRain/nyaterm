@@ -692,12 +692,7 @@ impl TunnelManager {
     }
 
     /// Persist `is_open=false` after reconnect attempts are exhausted, then notify the UI.
-    async fn persist_tunnel_closed(
-        &self,
-        app: &AppHandle,
-        tunnel_id: &str,
-        error: Option<String>,
-    ) {
+    async fn persist_tunnel_closed(&self, app: &AppHandle, tunnel_id: &str, error: Option<String>) {
         {
             let mut runtime = self.runtime.lock().await;
             if let Some(entry) = runtime.get_mut(tunnel_id) {
@@ -1300,8 +1295,8 @@ fn should_schedule_reconnect(is_open: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        TunnelRuntimeEntry, TunnelRuntimeStatus, should_schedule_reconnect, tunnel_reconnect_delay,
-        TUNNEL_RECONNECT_MAX_ATTEMPTS,
+        TUNNEL_RECONNECT_MAX_ATTEMPTS, TunnelRuntimeEntry, TunnelRuntimeStatus,
+        should_schedule_reconnect, tunnel_reconnect_delay,
     };
     use std::time::Duration;
 

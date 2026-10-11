@@ -16,11 +16,15 @@ import ResourceMonitor from "@/components/panel/ResourceMonitor";
 import SyncBackupHistoryPanel from "@/components/panel/SyncBackupHistoryPanel";
 import SavedConnections from "@/components/panel/saved-connections";
 import SecurityAuthPanel from "@/components/panel/security-auth";
+import { PluginPanel } from "@/components/plugins/PluginPanel";
+import { PluginsPanel } from "@/components/plugins/PluginsPanel";
+import { usePlugins } from "@/context/PluginContext";
 import type { NetworkHistoryStore } from "@/hooks/useNetworkHistory";
 import type { RemoteGpuOverviewState } from "@/hooks/useRemoteGpuOverview";
 import type { RemoteNpuOverviewState } from "@/hooks/useRemoteNpuOverview";
 import type { RemoteStatsState } from "@/hooks/useRemoteStats";
 import type { AIOpenIntent } from "@/lib/aiEvents";
+import { getGpuMonitor, parsePluginPanelId, pluginPanelId } from "@/lib/plugins";
 import type { NewSessionTarget } from "@/lib/windowManager";
 import type {
   RecordingMode,
@@ -66,10 +70,7 @@ interface AppPanelContentProps {
   canReconnect: (sessionId: string) => boolean;
   onCommandSend: (command: string, execute?: boolean) => void;
   onOpenDirectoryInNewTerminal: (sessionId: string, path: string) => void;
-  onToggleSessionRecording: (
-    session: SessionInfo,
-    mode?: RecordingMode,
-  ) => Promise<void> | void;
+  onToggleSessionRecording: (session: SessionInfo, mode?: RecordingMode) => Promise<void> | void;
   onSaveSessionTranscript: (session: SessionInfo) => Promise<void> | void;
 }
 
@@ -108,15 +109,13 @@ export default function AppPanelContent({
   onToggleSessionRecording,
   onSaveSessionTranscript,
 }: AppPanelContentProps) {
+  const { plugins } = usePlugins();
+  const pluginGpu = getGpuMonitor(plugins);
   const liveActivePane =
-    activePane && !activePane.connecting && !activePane.connectError
-      ? activePane
-      : null;
-  const liveTerminalPane =
-    liveActivePane?.paneKind === "terminal" ? liveActivePane : null;
+    activePane && !activePane.connecting && !activePane.connectError ? activePane : null;
+  const liveTerminalPane = liveActivePane?.paneKind === "terminal" ? liveActivePane : null;
   const filePanelPane =
-    liveActivePane?.paneKind === "terminal" ||
-    liveActivePane?.paneKind === "file"
+    liveActivePane?.paneKind === "terminal" || liveActivePane?.paneKind === "file"
       ? liveActivePane
       : null;
   const filePanelSessionId = filePanelPane?.sessionId ?? activeSessionId;
@@ -140,16 +139,15 @@ export default function AppPanelContent({
               />
             </div>
             <ResizeHandle direction="vertical" onResize={onTransferResize} />
-            <div
-              style={{ height: transferHeight }}
-              className="shrink-0 overflow-hidden"
-            >
+            <div style={{ height: transferHeight }} className="shrink-0 overflow-hidden">
               <FileTransfer activeSessionId={filePanelSessionId} />
             </div>
           </div>
         );
       case "network":
         return <NetworkPanel />;
+      case "plugins":
+        return <PluginsPanel sessionId={activeSessionId} />;
       case "notes":
         return <NotesPanel />;
       case "securityAuth":
@@ -205,6 +203,14 @@ export default function AppPanelContent({
           />
         );
       case "gpuMonitor":
+        if (pluginGpu)
+          return (
+            <PluginPanel
+              activityId={pluginPanelId(pluginGpu.pluginId, pluginGpu.monitor.panel)}
+              sessionId={activeStatsSessionId}
+              followActiveSession
+            />
+          );
         return (
           <GpuMonitor
             activeSessionId={activeStatsSessionId}
@@ -227,7 +233,9 @@ export default function AppPanelContent({
       case "aiAssistant":
         return null;
       default:
-        return null;
+        return parsePluginPanelId(panelId) && panelId ? (
+          <PluginPanel activityId={panelId} sessionId={activeSessionId} />
+        ) : null;
     }
   })();
 

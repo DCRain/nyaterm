@@ -1,9 +1,9 @@
+use crate::core::SessionManager;
 use crate::core::sftp::util::content_hash;
 use crate::core::sftp::{
     DirectoryChild, FileEntry, FileProperties, RemoteBinaryFile, RemoteTextFile,
     TextFileOpenResult, WriteRemoteTextResult, classify_text_file,
 };
-use crate::core::{SessionManager};
 use crate::error::{AppError, AppResult};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -392,7 +392,10 @@ async fn write_local_file_text_impl(
 
 /// Read a user-chosen text file without requiring an active session (Save As / Open With).
 #[tauri::command]
-pub async fn read_user_text_file(path: String, max_bytes: Option<u64>) -> AppResult<RemoteTextFile> {
+pub async fn read_user_text_file(
+    path: String,
+    max_bytes: Option<u64>,
+) -> AppResult<RemoteTextFile> {
     read_local_file_text_impl(&path, max_bytes.unwrap_or(20 * 1024 * 1024)).await
 }
 

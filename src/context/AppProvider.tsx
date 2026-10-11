@@ -1,6 +1,8 @@
-import { listen } from "@tauri-apps/api/event";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import i18n from "@/i18n";
+import { listen } from "@/lib/backend/api";
+import { runtime } from "@/lib/backend/runtime";
+import { randomUUID } from "@/lib/uuid";
 import { useAppLockState } from "@/hooks/useAppLockState";
 import { EncryptedNotesSessionProvider } from "@/hooks/useEncryptedNotesSession";
 import { DEFAULT_AI_SETTINGS } from "@/lib/aiSettings";
@@ -34,12 +36,12 @@ import {
   getActivePane,
   getFirstSessionPane,
   getNextPersistOrder,
-    insertTabAfter,
-    moveTab,
-    removeSessionPane,
-    replaceSessionReferences as replacePaneSessionReferences,
-    resolveFileDocumentInsertAfterTabId,
-    resolveNextActiveTabAfterFileDocumentClose,
+  insertTabAfter,
+  moveTab,
+  removeSessionPane,
+  replaceSessionReferences as replacePaneSessionReferences,
+  resolveFileDocumentInsertAfterTabId,
+  resolveNextActiveTabAfterFileDocumentClose,
   restoreTabFromPersistence,
   serializeTabsForPersistence,
   splitSessionPane,
@@ -54,6 +56,7 @@ import type {
   Group,
   PaneSplitDirection,
   SavedConnection,
+  SessionInfo,
   SessionPane,
   SessionType,
   SyncGroup,
@@ -73,7 +76,7 @@ import {
 } from "./AppContext";
 
 function createSessionRequestId() {
-  return crypto.randomUUID();
+  return randomUUID();
 }
 
 const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -83,6 +86,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     minimize_to_tray: false,
     boss_key: null,
     confirm_on_close: true,
+    rdp_client_mode: "builtin",
   },
   appearance: {
     theme: "github-dark",
@@ -294,6 +298,7 @@ const RECENT_CONNECTION_LIMIT = 10;
 const DEFAULT_RUNTIME_INFO: AppRuntimeInfo = {
   portable: false,
   mode: "installed",
+  packageManager: null,
   executableDir: "",
   dataDir: "",
   configDir: "",
@@ -467,9 +472,7 @@ const WORKSPACE_UI_KEYS = [
 ] as const;
 
 function isWorkspaceUiPatch(updates: Partial<UiConfig>) {
-  return WORKSPACE_UI_KEYS.some((key) =>
-    Object.prototype.hasOwnProperty.call(updates, key),
-  );
+  return WORKSPACE_UI_KEYS.some((key) => Object.prototype.hasOwnProperty.call(updates, key));
 }
 
 function syncAppLanguage(language: string | undefined) {
@@ -505,8 +508,7 @@ function preserveWorkspaceUiOnReload(current: UiConfig, incoming: UiConfig): UiC
     asset_sort_key: current.asset_sort_key,
     asset_sort_direction: current.asset_sort_direction,
     recent_connection_ids: current.recent_connection_ids,
-    file_explorer_auto_sync_cwd_connection_ids:
-      current.file_explorer_auto_sync_cwd_connection_ids,
+    file_explorer_auto_sync_cwd_connection_ids: current.file_explorer_auto_sync_cwd_connection_ids,
     file_explorer_favorite_dirs_by_connection_id:
       current.file_explorer_favorite_dirs_by_connection_id,
     file_explorer_show_hidden_files: current.file_explorer_show_hidden_files,
@@ -1399,7 +1401,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const pendingLockedStartupRestoreTabsRef = useRef<Tab[] | null>(null);
 
   const restoreSessionsForTabs = useCallback(
-    (tabsToRestore: Tab[]) => {
+    async (tabsToRestore: Tab[]) => {
+      const reusable =
+        runtime === "web" ? await invoke<SessionInfo[]>("list_sessions").catch(() => []) : [];
       const tasks: Promise<unknown>[] = [];
       tabsToRestore.forEach((tab) => {
         const panes = collectSessionPanes(tab.root);
@@ -1417,90 +1421,135 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
 
           const cid = pane.connectionId;
+          const live = reusable.find(
+            (session) =>
+              session.ready !== false &&
+              session.workspace_pane_id === pane.id &&
+              session.session_type === pane.type &&
+              (session.connection_id ?? undefined) === cid,
+          );
+          if (live) {
+            tasks.push(
+              (async () => {
+                // Wait for the previous page's socket to release its attachment.
+                for (let attempt = 0; live.attached && attempt < 120; attempt++) {
+                  await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
+                  const info = await invoke<SessionInfo>("get_session_info", {
+                    sessionId: live.id,
+                  });
+                  live.attached = info.attached;
+                }
+                await handleRestoredSessionCreated(tab.id, pane.id, live.id, cid);
+              })().catch((error) =>
+                handleRestoredSessionFailed(tab.id, pane.id, pane.type, cid, error),
+              ),
+            );
+            return;
+          }
           switch (pane.type) {
             case "SSH":
               if (!cid) {
                 markPaneConnectionFailed(tab.id, pane.id, "Missing SSH connection id");
                 return;
               }
-              tasks.push(invoke<string>("create_ssh_session", {
-                connectionId: cid,
-                createRequestId: pane.createRequestId,
-                recordingScopeId: pane.id,
-              })
-                .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId, cid))
-                .catch((e) =>
-                  handleRestoredSessionFailed(tab.id, pane.id, "SSH", pane.connectionId, e),
-                ));
+              tasks.push(
+                invoke<string>("create_ssh_session", {
+                  connectionId: cid,
+                  createRequestId: pane.createRequestId,
+                  recordingScopeId: pane.id,
+                })
+                  .then((sessionId) =>
+                    handleRestoredSessionCreated(tab.id, pane.id, sessionId, cid),
+                  )
+                  .catch((e) =>
+                    handleRestoredSessionFailed(tab.id, pane.id, "SSH", pane.connectionId, e),
+                  ),
+              );
               break;
             case "Local":
-              tasks.push(invoke<string>("create_local_session", {
-                connectionId: cid || null,
-                createRequestId: pane.createRequestId,
-                recordingScopeId: pane.id,
-              })
-                .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId))
-                .catch((e) =>
-                  handleRestoredSessionFailed(tab.id, pane.id, "Local", pane.connectionId, e),
-                ));
+              tasks.push(
+                invoke<string>("create_local_session", {
+                  connectionId: cid || null,
+                  createRequestId: pane.createRequestId,
+                  recordingScopeId: pane.id,
+                })
+                  .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId))
+                  .catch((e) =>
+                    handleRestoredSessionFailed(tab.id, pane.id, "Local", pane.connectionId, e),
+                  ),
+              );
               break;
             case "Telnet":
               if (!cid) {
                 markPaneConnectionFailed(tab.id, pane.id, "Missing Telnet connection id");
                 return;
               }
-              tasks.push(invoke<string>("create_telnet_session", {
-                connectionId: cid,
-                createRequestId: pane.createRequestId,
-                recordingScopeId: pane.id,
-              })
-                .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId))
-                .catch((e) =>
-                  handleRestoredSessionFailed(tab.id, pane.id, "Telnet", pane.connectionId, e),
-                ));
+              tasks.push(
+                invoke<string>("create_telnet_session", {
+                  connectionId: cid,
+                  createRequestId: pane.createRequestId,
+                  recordingScopeId: pane.id,
+                })
+                  .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId))
+                  .catch((e) =>
+                    handleRestoredSessionFailed(tab.id, pane.id, "Telnet", pane.connectionId, e),
+                  ),
+              );
               break;
             case "Serial":
               if (!cid) {
                 markPaneConnectionFailed(tab.id, pane.id, "Missing Serial connection id");
                 return;
               }
-              tasks.push(invoke<string>("create_serial_session", {
-                connectionId: cid,
-                createRequestId: pane.createRequestId,
-                recordingScopeId: pane.id,
-              })
-                .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId))
-                .catch((e) =>
-                  handleRestoredSessionFailed(tab.id, pane.id, "Serial", pane.connectionId, e),
-                ));
+              tasks.push(
+                invoke<string>("create_serial_session", {
+                  connectionId: cid,
+                  createRequestId: pane.createRequestId,
+                  recordingScopeId: pane.id,
+                })
+                  .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId))
+                  .catch((e) =>
+                    handleRestoredSessionFailed(tab.id, pane.id, "Serial", pane.connectionId, e),
+                  ),
+              );
               break;
             case "VNC":
               if (!cid) {
                 markPaneConnectionFailed(tab.id, pane.id, "Missing VNC connection id");
                 return;
               }
-              tasks.push(invoke<string>("create_vnc_session", {
-                connectionId: cid,
-                createRequestId: pane.createRequestId,
-              })
-                .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId, cid))
-                .catch((e) =>
-                  handleRestoredSessionFailed(tab.id, pane.id, "VNC", pane.connectionId, e),
-                ));
+              tasks.push(
+                invoke<string>("create_vnc_session", {
+                  ownerWindowLabel: getOwnerMainWindowLabel(),
+                  connectionId: cid,
+                  createRequestId: pane.createRequestId,
+                  recordingScopeId: pane.id,
+                })
+                  .then((sessionId) =>
+                    handleRestoredSessionCreated(tab.id, pane.id, sessionId, cid),
+                  )
+                  .catch((e) =>
+                    handleRestoredSessionFailed(tab.id, pane.id, "VNC", pane.connectionId, e),
+                  ),
+              );
               break;
             case "RDP":
               if (!cid) {
                 markPaneConnectionFailed(tab.id, pane.id, "Missing RDP connection id");
                 return;
               }
-              tasks.push(invoke<string>("create_rdp_session", {
-                connectionId: cid,
-                createRequestId: pane.createRequestId,
-              })
-                .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId, cid))
-                .catch((e) =>
-                  handleRestoredSessionFailed(tab.id, pane.id, "RDP", pane.connectionId, e),
-                ));
+              tasks.push(
+                invoke<string>("create_rdp_session", {
+                  connectionId: cid,
+                  createRequestId: pane.createRequestId,
+                })
+                  .then((sessionId) =>
+                    handleRestoredSessionCreated(tab.id, pane.id, sessionId, cid),
+                  )
+                  .catch((e) =>
+                    handleRestoredSessionFailed(tab.id, pane.id, "RDP", pane.connectionId, e),
+                  ),
+              );
               break;
           }
         });
@@ -1511,7 +1560,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
-    if (hasRestored.current || !appSettingsLoaded.current || !lockStateLoaded) return;
+    if (hasRestored.current || !settingsLoaded || !lockStateLoaded) return;
 
     hasRestored.current = true;
     const primaryWindow = isPrimaryMainWindow();
@@ -1554,7 +1603,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       });
     }
     setStartupRestoreComplete(true);
-  }, [appSettings, isLocked, lockStateLoaded, restoreSessionsForTabs, setActiveTabId]);
+  }, [
+    appSettings,
+    isLocked,
+    lockStateLoaded,
+    restoreSessionsForTabs,
+    setActiveTabId,
+    settingsLoaded,
+  ]);
 
   useEffect(() => {
     if (isLocked) return;

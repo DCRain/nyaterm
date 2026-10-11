@@ -67,11 +67,7 @@ fn walk_files(
             path: root.display().to_string(),
             message: "missing file name".to_string(),
         })?;
-        out.push((
-            root.to_path_buf(),
-            relative_dir.map(str::to_string),
-            name,
-        ));
+        out.push((root.to_path_buf(), relative_dir.map(str::to_string), name));
         return Ok(());
     }
 
@@ -115,7 +111,9 @@ fn walk_files(
 }
 
 /// Build offered local file list for CLIPRDR `initiate_file_copy`.
-pub fn build_offered_local_files(paths: &[String]) -> Result<Vec<OfferedLocalFile>, OfferFilesError> {
+pub fn build_offered_local_files(
+    paths: &[String],
+) -> Result<Vec<OfferedLocalFile>, OfferFilesError> {
     let mut collected = Vec::new();
     for raw in paths {
         let trimmed = raw.trim();

@@ -1,3 +1,4 @@
+import { randomUUID } from "@/lib/uuid";
 import type {
   FileDocumentBackend,
   FileDocumentPane,
@@ -179,10 +180,7 @@ export function createWorkspaceTab(
 
 export function collectSessionPanes(node: PaneNode): SessionPane[] {
   if (isSessionPane(node)) return [node];
-  return [
-    ...collectSessionPanes(node.first),
-    ...collectSessionPanes(node.second),
-  ];
+  return [...collectSessionPanes(node.first), ...collectSessionPanes(node.second)];
 }
 
 export function getFirstSessionPane(node: PaneNode): SessionPane | null {
@@ -196,18 +194,12 @@ export function findPaneById(node: PaneNode, paneId: string): PaneNode | null {
   return findPaneById(node.first, paneId) ?? findPaneById(node.second, paneId);
 }
 
-export function findSessionPaneById(
-  node: PaneNode,
-  paneId: string,
-): SessionPane | null {
+export function findSessionPaneById(node: PaneNode, paneId: string): SessionPane | null {
   const pane = findPaneById(node, paneId);
   return pane && isSessionPane(pane) ? pane : null;
 }
 
-export function findSessionPaneBySessionId(
-  node: PaneNode,
-  sessionId: string,
-): SessionPane | null {
+export function findSessionPaneBySessionId(node: PaneNode, sessionId: string): SessionPane | null {
   if (isSessionPane(node)) return node.sessionId === sessionId ? node : null;
   return (
     findSessionPaneBySessionId(node.first, sessionId) ??
@@ -240,16 +232,8 @@ export function replaceSessionReferences(
       : root;
   }
 
-  const first = replaceSessionReferences(
-    root.first,
-    oldSessionId,
-    newSessionId,
-  );
-  const second = replaceSessionReferences(
-    root.second,
-    oldSessionId,
-    newSessionId,
-  );
+  const first = replaceSessionReferences(root.first, oldSessionId, newSessionId);
+  const second = replaceSessionReferences(root.second, oldSessionId, newSessionId);
   if (first === root.first && second === root.second) return root;
   return { ...root, first, second };
 }
@@ -319,21 +303,14 @@ export function splitSessionPane(
   });
 }
 
-export function updateSplitRatio(
-  root: PaneNode,
-  splitId: string,
-  ratio: number,
-): PaneNode {
+export function updateSplitRatio(root: PaneNode, splitId: string, ratio: number): PaneNode {
   return updatePaneTree(root, splitId, (current) => {
     if (!isSplitPane(current)) return current;
     return { ...current, ratio: clampSplitRatio(ratio) };
   });
 }
 
-export function removeSessionPane(
-  root: PaneNode,
-  paneId: string,
-): PaneNode | null {
+export function removeSessionPane(root: PaneNode, paneId: string): PaneNode | null {
   if (isSessionPane(root)) return root.id === paneId ? null : root;
 
   const nextFirst = removeSessionPane(root.first, paneId);
@@ -347,16 +324,10 @@ export function removeSessionPane(
 }
 
 export function getActivePane(tab: Tab): SessionPane | null {
-  return (
-    findSessionPaneById(tab.root, tab.activePaneId) ??
-    getFirstSessionPane(tab.root)
-  );
+  return findSessionPaneById(tab.root, tab.activePaneId) ?? getFirstSessionPane(tab.root);
 }
 
-export function getTabDisplayName(
-  tab: Tab,
-  dynamicTitle?: string | null,
-): string {
+export function getTabDisplayName(tab: Tab, dynamicTitle?: string | null): string {
   if (tab.customName) return tab.customName;
   const activePane = getActivePane(tab);
   const dynamic = dynamicTitle?.trim();
@@ -407,11 +378,7 @@ export function getNextPersistOrder(tabs: Tab[]) {
   return tabs.reduce((max, tab) => Math.max(max, tab.persistOrder), -1) + 1;
 }
 
-export function insertTabAfter(
-  tabs: Tab[],
-  afterTabId: string,
-  newTab: Tab,
-): Tab[] {
+export function insertTabAfter(tabs: Tab[], afterTabId: string, newTab: Tab): Tab[] {
   const index = tabs.findIndex((tab) => tab.id === afterTabId);
   if (index === -1) return [...tabs, newTab];
   const next = [...tabs];
@@ -419,11 +386,7 @@ export function insertTabAfter(
   return next;
 }
 
-export function moveTab(
-  tabs: Tab[],
-  fromTabId: string,
-  toIndex: number,
-): Tab[] {
+export function moveTab(tabs: Tab[], fromTabId: string, toIndex: number): Tab[] {
   const fromIndex = tabs.findIndex((tab) => tab.id === fromTabId);
   if (fromIndex === -1) return tabs;
   const boundedIndex = Math.max(0, Math.min(tabs.length - 1, toIndex));
@@ -541,10 +504,7 @@ function collectSessionReferenceCounts(tabs: Tab[]) {
   return counts;
 }
 
-export function getReleasedSessionIds(
-  previousTabs: Tab[],
-  nextTabs: Tab[],
-): string[] {
+export function getReleasedSessionIds(previousTabs: Tab[], nextTabs: Tab[]): string[] {
   const previous = collectSessionReferenceCounts(previousTabs);
   const next = collectSessionReferenceCounts(nextTabs);
   return [...previous.keys()].filter((sessionId) => !next.has(sessionId));
@@ -596,15 +556,9 @@ function findFirstRestorableLeaf(
   return node.kind === "leaf" ? node : findFirstRestorableLeaf(node.first);
 }
 
-function hasRestorablePaneId(
-  node: RestorablePaneNode,
-  paneId: string,
-): boolean {
+function hasRestorablePaneId(node: RestorablePaneNode, paneId: string): boolean {
   if (node.kind === "leaf") return node.id === paneId;
-  return (
-    hasRestorablePaneId(node.first, paneId) ||
-    hasRestorablePaneId(node.second, paneId)
-  );
+  return hasRestorablePaneId(node.first, paneId) || hasRestorablePaneId(node.second, paneId);
 }
 
 export function serializeTabsForPersistence(tabs: Tab[]): RestorableTab[] {
@@ -628,9 +582,9 @@ export function serializeTabsForPersistence(tabs: Tab[]): RestorableTab[] {
           title: tab.customName || fallback.title,
           session_type: fallback.session_type,
           connection_id: fallback.connection_id,
-      custom_name: tab.customName,
-      tab_color: tab.tabColor,
-      locked: tab.locked,
+          custom_name: tab.customName,
+          tab_color: tab.tabColor,
+          locked: tab.locked,
           active_pane_id: activePaneId,
           root,
         },
@@ -650,9 +604,7 @@ function createLegacyPaneNode(tab: RestorableTab): RestorablePaneNode | null {
   };
 }
 
-export function normalizeSessionType(
-  value: string,
-): WorkspaceSessionType | null {
+export function normalizeSessionType(value: string): WorkspaceSessionType | null {
   switch (value) {
     case "SSH":
       return "SSH";
@@ -704,7 +656,11 @@ function restorePane(node: RestorablePaneNode): PaneNode | null {
         ? node.view
         : undefined;
     const isSessionless =
-      view === "workbench" || view === "note" || view === "s3" || view === "ftp" || view === "webdav";
+      view === "workbench" ||
+      view === "note" ||
+      view === "s3" ||
+      view === "ftp" ||
+      view === "webdav";
     return {
       id: node.id || createWorkspaceId("pane"),
       kind: "leaf",
@@ -717,8 +673,8 @@ function restorePane(node: RestorablePaneNode): PaneNode | null {
             : view === "webdav" && node.connection_id
               ? `webdav:${node.connection_id}`
               : createWorkspaceId(
-              view === "note" ? "note" : view === "workbench" ? "workbench" : "pending",
-            ),
+                  view === "note" ? "note" : view === "workbench" ? "workbench" : "pending",
+                ),
       name: node.title,
       type,
       connectionId: node.connection_id,
@@ -732,7 +688,7 @@ function restorePane(node: RestorablePaneNode): PaneNode | null {
           }
         : undefined,
       connecting: !isSessionless,
-      createRequestId: isSessionless ? undefined : crypto.randomUUID(),
+      createRequestId: isSessionless ? undefined : randomUUID(),
     } as SessionPane;
   }
 
@@ -752,10 +708,7 @@ function restorePane(node: RestorablePaneNode): PaneNode | null {
   };
 }
 
-export function restoreTabFromPersistence(
-  tab: RestorableTab,
-  persistOrder: number,
-): Tab | null {
+export function restoreTabFromPersistence(tab: RestorableTab, persistOrder: number): Tab | null {
   const restorableRoot = tab.root ?? createLegacyPaneNode(tab);
   if (!restorableRoot) return null;
 

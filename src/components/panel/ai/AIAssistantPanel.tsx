@@ -1,5 +1,15 @@
-import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { randomUUID } from "@/lib/uuid";
+import { supports } from "@/lib/backend/runtime";
+import { emit, listen, type UnlistenFn } from "@/lib/backend/api";
+import {
+  memo,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { LuMessageSquarePlus, LuQuote } from "react-icons/lu";
 import {
@@ -61,7 +71,6 @@ import type {
   AIAgentCommandExecutionMode,
   AIAgentKind,
   AICommandCard,
-  AIContext,
   AIMessage,
   AIMode,
   AIModelConfigItem,
@@ -74,6 +83,7 @@ import type {
   QuickCommand,
   QuickCommandCategory,
   QuickCommandsConfig,
+  SessionInfo,
   SessionPane,
 } from "@/types/global";
 import { AgentStepView } from "./AgentStepView";
@@ -110,8 +120,12 @@ function isGenaiModel(model: AIModelConfigItem | null | undefined) {
   return (model?.backend ?? "genai") === "genai";
 }
 
-function getEnabledGenaiModels(settings: { models?: AIModelConfigItem[] | null }) {
-  return (settings.models ?? []).filter((model) => model.enabled && isGenaiModel(model));
+function getEnabledGenaiModels(settings: {
+  models?: AIModelConfigItem[] | null;
+}) {
+  return (settings.models ?? []).filter(
+    (model) => model.enabled && isGenaiModel(model),
+  );
 }
 
 function resolveRunMode(mode: AIMode, agentKind: AIAgentKind | null | undefined): AIRunMode {
@@ -137,7 +151,7 @@ function buildOwnerScope(pane: SessionPane | null): AISessionScope {
 
 function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantPanelProps) {
   const { t } = useTranslation();
-  const { appSettings, updateAppSettings, tabs, savedConnections } = useApp();
+  const { appSettings, updateAppSettings, tabs, savedConnections, savedGroups } = useApp();
   const { theme } = useTheme();
   const aiSettings = appSettings.ai;
   const [sessions, setSessions] = useState<AISession[]>([]);
@@ -187,9 +201,13 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
   const prismStyle = useMemo(() => buildPrismThemeFromColors(theme.colors), [theme.colors]);
   const mode = aiSettings.default_mode ?? "ask";
   const agentKind = aiSettings.default_agent_kind ?? "nyaterm";
-  const configuredRunMode = resolveRunMode(mode, agentKind);
-  const codexAgentEnabled = aiSettings.codex?.enabled ?? false;
-  const claudeCodeAgentEnabled = aiSettings.claude_code?.enabled ?? false;
+  const configuredRunMode = supports("aiAgents")
+    ? resolveRunMode(mode, agentKind)
+    : "ask";
+  const codexAgentEnabled =
+    supports("aiAgents") && (aiSettings.codex?.enabled ?? false);
+  const claudeCodeAgentEnabled =
+    supports("aiAgents") && (aiSettings.claude_code?.enabled ?? false);
   const runMode =
     (configuredRunMode === "codex_agent" && !codexAgentEnabled) ||
     (configuredRunMode === "claude_code_agent" && !claudeCodeAgentEnabled)
@@ -534,71 +552,11 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
     [aiSettings, claudeCodeAgentEnabled, codexAgentEnabled, t, updateAppSettings],
   );
 
-  const buildMergedContext = useCallback(
-    async (panes: SessionPane[], selectedText?: string): Promise<AIContext> => {
-      if (panes.length === 0) {
-        return buildAIContext({
-          pane: null,
-          connection: null,
-          lineLimit: aiSettings.context_line_limit,
-          selectedText,
-        });
-      }
-      if (panes.length === 1) {
-        const conn = panes[0].connectionId
-          ? (savedConnections.find((c) => c.id === panes[0].connectionId) ?? null)
-          : activeConnection;
-        return buildAIContext({
-          pane: panes[0],
-          connection: conn,
-          lineLimit: aiSettings.context_line_limit,
-          selectedText,
-        });
-      }
-      const contexts = await Promise.all(
-        panes.map((p) => {
-          const conn = p.connectionId
-            ? (savedConnections.find((c) => c.id === p.connectionId) ?? null)
-            : null;
-          return buildAIContext({
-            pane: p,
-            connection: conn,
-            lineLimit: Math.floor(aiSettings.context_line_limit / panes.length),
-          });
-        }),
-      );
-      const merged: AIContext = {
-        connectionName: contexts.map((c) => c.connectionName ?? "-").join(", "),
-        host: contexts.map((c) => c.host ?? "-").join(", "),
-        port: contexts[0]?.port ?? null,
-        username: contexts.map((c) => c.username ?? "-").join(", "),
-        cwd: contexts.map((c) => c.cwd ?? "-").join(", "),
-        os: contexts[0]?.os ?? null,
-        arch: contexts[0]?.arch ?? null,
-        recentOutput: contexts
-          .map((c, i) => `[${panes[i].name}]\n${c.recentOutput}`)
-          .filter((s) => s.trim().length > panes[0].name.length + 4)
-          .join("\n---\n"),
-        selectedText:
-          selectedText ??
-          contexts
-            .map((c) => c.selectedText)
-            .filter(Boolean)
-            .join("\n"),
-        inputBuffer: contexts
-          .map((c) => c.inputBuffer)
-          .filter(Boolean)
-          .join("\n"),
-      };
-      return merged;
-    },
-    [activeConnection, aiSettings.context_line_limit, savedConnections],
-  );
-
   const buildTargetForPane = useCallback(
     (pane: SessionPane): AITerminalTarget => {
       const conn = pane.connectionId
-        ? (savedConnections.find((item) => item.id === pane.connectionId) ?? null)
+        ? (savedConnections.find((item) => item.id === pane.connectionId) ??
+          null)
         : pane.sessionId === activePane?.sessionId
           ? activeConnection
           : null;
@@ -615,15 +573,27 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
   );
 
   const buildTargetContexts = useCallback(
-    async (panes: SessionPane[], selectedText?: string): Promise<AITargetContext[]> => {
+    async (
+      panes: SessionPane[],
+      selectedText?: string,
+    ): Promise<AITargetContext[]> => {
       const lineLimit = Math.max(
         1,
         Math.floor(aiSettings.context_line_limit / Math.max(1, panes.length)),
       );
+      // Load runtime profiles once for all selected targets. A failed lookup
+      // leaves the profile unknown instead of using obsolete saved settings.
+      const sessions = await invoke<SessionInfo[]>("list_sessions").catch(
+        () => [],
+      );
+      const sessionInfoById = new Map(
+        sessions.map((session) => [session.id, session]),
+      );
       return Promise.all(
         panes.map(async (pane, index) => {
           const conn = pane.connectionId
-            ? (savedConnections.find((item) => item.id === pane.connectionId) ?? null)
+            ? (savedConnections.find((item) => item.id === pane.connectionId) ??
+              null)
             : pane.sessionId === activePane?.sessionId
               ? activeConnection
               : null;
@@ -632,6 +602,8 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
             context: await buildAIContext({
               pane,
               connection: conn,
+              groups: savedGroups,
+              sessionInfo: sessionInfoById.get(pane.sessionId),
               lineLimit,
               selectedText: index === 0 ? selectedText : undefined,
             }),
@@ -645,6 +617,7 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
       aiSettings.context_line_limit,
       buildTargetForPane,
       savedConnections,
+      savedGroups,
     ],
   );
 
@@ -737,7 +710,7 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
 
       setDetectedError(null);
       const assistantId = `assistant-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      const requestStreamId = `ai-stream-${crypto.randomUUID()}`;
+      const requestStreamId = `ai-stream-${randomUUID()}`;
       let resolvedSessionId = requestSessionId ?? `pending-${requestStreamId}`;
       const userMessage = createLocalMessage("user", userInput, resolvedSessionId);
       const assistantMessage: AIMessage = {
@@ -930,9 +903,11 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
         );
         streamUnlistenersRef.current.set(requestStreamId, unlisten);
 
-        const context = await buildMergedContext(panes, selectedText);
         const targets = panes.map(buildTargetForPane);
         const targetContexts = await buildTargetContexts(panes, selectedText);
+        // The primary context belongs to the default target. Other targets keep
+        // their own complete snapshots rather than mixing hosts and metadata.
+        const context = targetContexts[0].context;
         const primaryConn = panes[0].connectionId
           ? (savedConnections.find((c) => c.id === panes[0].connectionId) ?? null)
           : activeConnection;
@@ -1003,7 +978,6 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
       appendAudit,
       buildTargetContexts,
       buildTargetForPane,
-      buildMergedContext,
       cleanupStreamListener,
       currentSession,
       currentSessionId,
@@ -1101,7 +1075,7 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
             };
         const categoryId = existingCategory?.id ?? newCategory?.id;
         const command: QuickCommand = {
-          id: `ai-${crypto.randomUUID()}`,
+          id: `ai-${randomUUID()}`,
           label: card.title,
           command: card.command,
           category_id: categoryId,
@@ -1440,7 +1414,9 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
               {desc}
             </span>
           </span>
-          {selected ? <MdCheck className="mt-0.5 shrink-0 text-primary" /> : null}
+          {selected ? (
+            <MdCheck className="mt-0.5 shrink-0 text-primary" />
+          ) : null}
         </button>
       );
     },
@@ -2023,8 +1999,16 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
                     </SelectTrigger>
                     <SelectContent position="popper">
                       <SelectItem value="ask">{t("ai.modeAsk")}</SelectItem>
-                      <SelectItem value="nyaterm_agent">{t("ai.modeNyatermAgent")}</SelectItem>
-                      <SelectItem value="codex_agent" disabled={!codexAgentEnabled}>
+                      <SelectItem
+                        value="nyaterm_agent"
+                        disabled={!supports("aiAgents")}
+                      >
+                        {t("ai.modeNyatermAgent")}
+                      </SelectItem>
+                      <SelectItem
+                        value="codex_agent"
+                        disabled={!codexAgentEnabled}
+                      >
                         {t("ai.modeCodexAgent")}
                       </SelectItem>
                       <SelectItem value="claude_code_agent" disabled={!claudeCodeAgentEnabled}>
