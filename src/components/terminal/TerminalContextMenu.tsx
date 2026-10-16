@@ -9,6 +9,7 @@ import {
   MdContentCopy,
   MdContentPaste,
   MdContentPasteGo,
+  MdCheck,
   MdDeleteSweep,
   MdFolderOpen,
   MdOutlineDescription,
@@ -16,10 +17,12 @@ import {
   MdSettings,
   MdSelectAll,
   MdStop,
+  MdTextFields,
   MdTranslate,
   MdTravelExplore,
 } from "react-icons/md";
 import { PiRecordFill } from "react-icons/pi";
+import { toast } from "sonner";
 import { PluginContextMenuItems } from "@/components/plugins/PluginContextMenuItems";
 import { useTerminalAppSettings } from "@/context/AppContext";
 import { resolveDisplayKeys } from "@/hooks/useShortcutMap";
@@ -29,9 +32,17 @@ import { runtime, supports } from "@/lib/backend/runtime";
 import { writeClipboardText } from "@/lib/clipboard";
 import { normalizeTerminalRightClickAction } from "@/lib/interactionSettings";
 import { invoke } from "@/lib/invoke";
-import { sendTerminalClearInput } from "@/lib/terminalControlInput";
+import {
+  clearTerminalScreen,
+  sendTerminalClearInput,
+} from "@/lib/terminalControlInput";
 import { openQuickCommand, openSettings } from "@/lib/windowManager";
-import type { RecordingMode, RecordingStatus, SearchEngine } from "@/types/global";
+import type {
+  RecordingMode,
+  RecordingStatus,
+  SearchEngine,
+  SessionType,
+} from "@/types/global";
 import TranslationDialog from "../dialog/terminal/TranslationDialog";
 import { type QuickIconDef, SEARCH_ICONS } from "../icons";
 import {
@@ -46,9 +57,12 @@ import {
   ContextMenuTrigger,
 } from "../ui/context-menu";
 
+const SESSION_ENCODINGS = ["UTF-8", "GBK", "GB2312", "GB18030"] as const;
+
 interface TerminalContextMenuProps {
   children: React.ReactNode;
   sessionId: string;
+  sessionType: SessionType;
   sessionName?: string;
   appLocked: boolean;
   terminalRef: React.RefObject<Terminal | null>;
@@ -57,13 +71,20 @@ interface TerminalContextMenuProps {
   onPasteClipboard: () => Promise<void> | void;
   onClearAll: () => void;
   recordingStatus?: RecordingStatus;
-  onToggleRecording?: (sessionId: string, mode?: RecordingMode) => Promise<void> | void;
-  onSaveTranscript?: (sessionId: string, sessionName?: string) => Promise<void> | void;
+  onToggleRecording?: (
+    sessionId: string,
+    mode?: RecordingMode,
+  ) => Promise<void> | void;
+  onSaveTranscript?: (
+    sessionId: string,
+    sessionName?: string,
+  ) => Promise<void> | void;
 }
 
 export default function TerminalContextMenu({
   children,
   sessionId,
+  sessionType,
   sessionName,
   appLocked,
   terminalRef,
@@ -92,6 +113,8 @@ export default function TerminalContextMenu({
     text: "",
     provider: "",
   });
+  const [sessionEncoding, setSessionEncoding] = useState<string | null>(null);
+  const encodingRequestRef = useRef(0);
   const suppressCloseAutoFocusRef = useRef(false);
   const appLockedRef = useRef(appLocked);
   appLockedRef.current = appLocked;
@@ -129,7 +152,9 @@ export default function TerminalContextMenu({
     },
   ].filter((p) => p.free || p.configured);
   const terminalAiActions = ai.enabled
-    ? ai.terminal_ai_actions.filter((action) => action.enabled && action.name.trim())
+    ? ai.terminal_ai_actions.filter(
+        (action) => action.enabled && action.name.trim(),
+      )
     : [];
 
   // Right-click context menu: capture selection state.
@@ -140,7 +165,42 @@ export default function TerminalContextMenu({
     const selection = terminal.getSelection();
     const hasSelection = selection.length > 0;
     setCtxSelection({ text: selection, hasSelection });
+    if (runtime === "desktop" && !appLockedRef.current) {
+      const request = ++encodingRequestRef.current;
+      setSessionEncoding(null);
+      void invoke<string>("get_session_encoding", { sessionId })
+        .then((encoding) => {
+          if (request === encodingRequestRef.current)
+            setSessionEncoding(encoding);
+        })
+        .catch(() => {
+          if (request === encodingRequestRef.current) {
+            toast.error(t("terminalCtx.encodingLoadFailed"));
+          }
+        });
+    }
   };
+
+  const changeSessionEncoding = useCallback(
+    (encoding: string) => {
+      if (runtime !== "desktop" || appLockedRef.current) return;
+      const request = ++encodingRequestRef.current;
+      void invoke<string>("set_session_encoding", { sessionId, encoding })
+        .then((active) => {
+          if (request === encodingRequestRef.current)
+            setSessionEncoding(active);
+        })
+        .catch(() => {
+          if (request === encodingRequestRef.current) {
+            toast.error(t("terminalCtx.encodingChangeFailed"));
+          }
+        })
+        .finally(() => {
+          if (request === encodingRequestRef.current) focusTerminal();
+        });
+    },
+    [focusTerminal, sessionId, t],
+  );
 
   const handleDirectPasteContextMenu = (event: React.MouseEvent) => {
     event.preventDefault();
@@ -199,8 +259,12 @@ export default function TerminalContextMenu({
   const doClearScreen = useCallback(() => {
     const terminal = terminalRef.current;
     if (appLockedRef.current || !terminal) return;
-    sendTerminalClearInput(terminal, { focus: true });
-  }, [terminalRef]);
+    if (sessionType === "Serial") {
+      clearTerminalScreen(terminal, { focus: true });
+    } else {
+      sendTerminalClearInput(terminal, { focus: true });
+    }
+  }, [sessionType, terminalRef]);
 
   const doClearAll = useCallback(() => {
     onClearAll();
@@ -221,7 +285,9 @@ export default function TerminalContextMenu({
 
   const toggleRecording = useCallback(
     (mode: RecordingMode = "transcript") => {
-      void Promise.resolve(onToggleRecording?.(sessionId, mode)).finally(() => focusTerminal());
+      void Promise.resolve(onToggleRecording?.(sessionId, mode)).finally(() =>
+        focusTerminal(),
+      );
     },
     [focusTerminal, onToggleRecording, sessionId],
   );
@@ -238,12 +304,20 @@ export default function TerminalContextMenu({
         // Keep spaces at wrap boundaries; trim only at logical line ends.
         text += line.translateToString(!buffer.getLine(index + 1)?.isWrapped);
       }
-      const name = (sessionName || "terminal").replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_");
-      downloadBlob(`${name}.txt`, new Blob([text], { type: "text/plain;charset=utf-8" }));
+      const name = (sessionName || "terminal").replace(
+        /[<>:"/\\|?*\u0000-\u001f]/g,
+        "_",
+      );
+      downloadBlob(
+        `${name}.txt`,
+        new Blob([text], { type: "text/plain;charset=utf-8" }),
+      );
       focusTerminal();
       return;
     }
-    void Promise.resolve(onSaveTranscript?.(sessionId, sessionName)).finally(() => focusTerminal());
+    void Promise.resolve(onSaveTranscript?.(sessionId, sessionName)).finally(
+      () => focusTerminal(),
+    );
   }, [focusTerminal, onSaveTranscript, sessionId, sessionName, terminalRef]);
 
   const openRecordingPath = useCallback(
@@ -330,7 +404,9 @@ export default function TerminalContextMenu({
                       let IconComponent = null;
                       let color: string | undefined;
                       if (engine.icon && SEARCH_ICONS[engine.icon]) {
-                        const iconDef = SEARCH_ICONS[engine.icon] as QuickIconDef;
+                        const iconDef = SEARCH_ICONS[
+                          engine.icon
+                        ] as QuickIconDef;
                         IconComponent = iconDef.icon;
                         color = iconDef.color;
                       }
@@ -338,10 +414,15 @@ export default function TerminalContextMenu({
                       return (
                         <ContextMenuItem
                           key={engine.name}
-                          onClick={() => doSearchOnline(ctxSelection.text, engine)}
+                          onClick={() =>
+                            doSearchOnline(ctxSelection.text, engine)
+                          }
                         >
                           {IconComponent && (
-                            <IconComponent className="text-[0.875rem] mr-2" style={{ color }} />
+                            <IconComponent
+                              className="text-[0.875rem] mr-2"
+                              style={{ color }}
+                            />
                           )}
                           {engine.name}
                         </ContextMenuItem>
@@ -405,12 +486,16 @@ export default function TerminalContextMenu({
               <ContextMenuItem onClick={doPaste}>
                 <MdContentPaste className="text-[0.875rem] text-muted-foreground mr-2" />
                 {t("terminalCtx.paste")}
-                <ContextMenuShortcut>{dk("terminal.paste")}</ContextMenuShortcut>
+                <ContextMenuShortcut>
+                  {dk("terminal.paste")}
+                </ContextMenuShortcut>
               </ContextMenuItem>
               <ContextMenuItem onClick={doPasteSelected}>
                 <MdContentPasteGo className="text-[0.875rem] text-muted-foreground mr-2" />
                 {t("terminalCtx.pasteSelectedText")}
-                <ContextMenuShortcut>{dk("terminal.pasteSelected")}</ContextMenuShortcut>
+                <ContextMenuShortcut>
+                  {dk("terminal.pasteSelected")}
+                </ContextMenuShortcut>
               </ContextMenuItem>
             </>
           ) : (
@@ -418,7 +503,9 @@ export default function TerminalContextMenu({
               <ContextMenuItem onClick={doPaste}>
                 <MdContentPaste className="text-[0.875rem] text-muted-foreground mr-2" />
                 {t("terminalCtx.paste")}
-                <ContextMenuShortcut>{dk("terminal.paste")}</ContextMenuShortcut>
+                <ContextMenuShortcut>
+                  {dk("terminal.paste")}
+                </ContextMenuShortcut>
               </ContextMenuItem>
               <ContextMenuItem onClick={() => doFind()}>
                 <MdSearch className="text-[0.875rem] text-muted-foreground mr-2" />
@@ -439,6 +526,39 @@ export default function TerminalContextMenu({
             <ContextMenuShortcut>{dk("terminal.clearAll")}</ContextMenuShortcut>
           </ContextMenuItem>
           <ContextMenuSeparator />
+          {runtime === "desktop" && (
+            <>
+              <ContextMenuSub>
+                <ContextMenuSubTrigger
+                  disabled={appLocked}
+                  title={t("terminalCtx.encodingTemporaryHint")}
+                >
+                  <MdTextFields className="text-[0.875rem] text-muted-foreground mr-2" />
+                  {t("terminalCtx.encoding")}
+                  {sessionEncoding && (
+                    <span className="ml-auto text-muted-foreground">
+                      {sessionEncoding}
+                    </span>
+                  )}
+                </ContextMenuSubTrigger>
+                <ContextMenuSubContent>
+                  {SESSION_ENCODINGS.map((encoding) => (
+                    <ContextMenuItem
+                      key={encoding}
+                      disabled={appLocked || sessionEncoding === null}
+                      onClick={() => changeSessionEncoding(encoding)}
+                    >
+                      {sessionEncoding === encoding && (
+                        <MdCheck className="size-4" />
+                      )}
+                      {encoding}
+                    </ContextMenuItem>
+                  ))}
+                </ContextMenuSubContent>
+              </ContextMenuSub>
+              <ContextMenuSeparator />
+            </>
+          )}
           {supports("recording") ? (
             <ContextMenuSub>
               <ContextMenuSubTrigger>
@@ -454,13 +574,21 @@ export default function TerminalContextMenu({
                     >
                       <MdStop className="text-[0.875rem] text-muted-foreground mr-2" />
                       {t("recording.stop")}
-                      <ContextMenuShortcut>{dk("terminal.recording.toggle")}</ContextMenuShortcut>
+                      <ContextMenuShortcut>
+                        {dk("terminal.recording.toggle")}
+                      </ContextMenuShortcut>
                     </ContextMenuItem>
-                    <ContextMenuItem onClick={() => openRecordingPath("open_recording_file")}>
+                    <ContextMenuItem
+                      onClick={() => openRecordingPath("open_recording_file")}
+                    >
                       <MdOutlineDescription className="text-[0.875rem] text-muted-foreground mr-2" />
                       {t("recording.openLog")}
                     </ContextMenuItem>
-                    <ContextMenuItem onClick={() => openRecordingPath("show_recording_in_folder")}>
+                    <ContextMenuItem
+                      onClick={() =>
+                        openRecordingPath("show_recording_in_folder")
+                      }
+                    >
                       <MdFolderOpen className="text-[0.875rem] text-muted-foreground mr-2" />
                       {t("recording.showInFolder")}
                     </ContextMenuItem>
@@ -473,7 +601,9 @@ export default function TerminalContextMenu({
                     >
                       <MdOutlineDescription className="text-[0.875rem] text-muted-foreground mr-2" />
                       {t("recording.startTranscriptLog")}
-                      <ContextMenuShortcut>{dk("terminal.recording.toggle")}</ContextMenuShortcut>
+                      <ContextMenuShortcut>
+                        {dk("terminal.recording.toggle")}
+                      </ContextMenuShortcut>
                     </ContextMenuItem>
                     <ContextMenuItem
                       disabled={!onToggleRecording}
@@ -485,7 +615,10 @@ export default function TerminalContextMenu({
                   </>
                 )}
                 <ContextMenuSeparator />
-                <ContextMenuItem disabled={!onSaveTranscript} onClick={saveTranscript}>
+                <ContextMenuItem
+                  disabled={!onSaveTranscript}
+                  onClick={saveTranscript}
+                >
                   <MdOutlineDescription className="text-[0.875rem] text-muted-foreground mr-2" />
                   {t("recording.saveTranscript")}
                 </ContextMenuItem>
@@ -505,14 +638,22 @@ export default function TerminalContextMenu({
           <ContextMenuItem onClick={doSelectAll}>
             <MdSelectAll className="text-[0.875rem] text-muted-foreground mr-2" />
             {t("terminalCtx.selectAll")}
-            <ContextMenuShortcut>{dk("terminal.selectAll")}</ContextMenuShortcut>
+            <ContextMenuShortcut>
+              {dk("terminal.selectAll")}
+            </ContextMenuShortcut>
           </ContextMenuItem>
-          <PluginContextMenuItems menu="terminal" sessionId={sessionId} disabled={appLocked} />
+          <PluginContextMenuItems
+            menu="terminal"
+            sessionId={sessionId}
+            disabled={appLocked}
+          />
         </ContextMenuContent>
       </ContextMenu>
       <TranslationDialog
         open={translateState.open}
-        onClose={() => setTranslateState({ open: false, text: "", provider: "" })}
+        onClose={() =>
+          setTranslateState({ open: false, text: "", provider: "" })
+        }
         text={translateState.text}
         provider={translateState.provider}
       />

@@ -34,6 +34,7 @@ pub mod ssh;
 pub mod ssh_config;
 mod storage_transfer;
 pub(crate) mod terminal_session;
+pub(crate) mod tmux;
 pub mod translate;
 pub mod vnc;
 pub mod watcher;

@@ -329,6 +329,8 @@ export function getActivePane(tab: Tab): SessionPane | null {
 
 export function getTabDisplayName(tab: Tab, dynamicTitle?: string | null): string {
   if (tab.customName) return tab.customName;
+  // A tmux window tab is titled by its window name (`#{window_name}`).
+  if (tab.tmux) return tab.tmux.windowName || "tmux";
   const activePane = getActivePane(tab);
   const dynamic = dynamicTitle?.trim();
   if (activePane?.paneKind === "terminal" && dynamic) return dynamic;
@@ -561,6 +563,38 @@ function hasRestorablePaneId(node: RestorablePaneNode, paneId: string): boolean 
   return hasRestorablePaneId(node.first, paneId) || hasRestorablePaneId(node.second, paneId);
 }
 
+/**
+ * Collapse every projected tmux subtree to its first leaf before persisting:
+ * the virtual pane sessions die with the app, so a tab restores as the
+ * original single connection (the user re-runs `tmux -CC attach`), while
+ * native splits around the projection stay intact.
+ */
+export function collapseTmuxPanes(node: PaneNode): PaneNode {
+  const panes = collectSessionPanes(node);
+  const controlIds = new Set(
+    panes
+      .map((pane) => pane.tmux?.controlSessionId)
+      .filter((id): id is string => Boolean(id)),
+  );
+  if (
+    panes.length > 0 &&
+    panes.every((pane) => pane.tmux) &&
+    controlIds.size === 1
+  ) {
+    // `serializePane` never writes the `tmux` marker, so the leaf persists
+    // as a plain connection leaf.
+    return panes[0];
+  }
+  if (node.kind === "split") {
+    return {
+      ...node,
+      first: collapseTmuxPanes(node.first),
+      second: collapseTmuxPanes(node.second),
+    };
+  }
+  return node;
+}
+
 export function serializeTabsForPersistence(tabs: Tab[]): RestorableTab[] {
   return [...tabs]
     .filter(
@@ -571,7 +605,16 @@ export function serializeTabsForPersistence(tabs: Tab[]): RestorableTab[] {
     )
     .sort((a, b) => a.persistOrder - b.persistOrder)
     .flatMap((tab) => {
-      const root = serializePane(tab.root);
+      // tmux window tabs are owned by the remote session and die with the
+      // app — never persist them. The host tab (a plain SSH leaf) persists
+      // normally, so restart restores the connection and the user re-runs
+      // `tmux -CC attach` to get the windows back.
+      if (tab.tmux) return [];
+      // tmux control-mode panes share one SSH channel and die with the app:
+      // collapse each projection to a single leaf so restart restores the
+      // original connection (the user can re-run `tmux -CC attach`), while
+      // native splits around it keep their structure.
+      const root = serializePane(collapseTmuxPanes(tab.root));
       if (!root) return [];
       const fallback = findFirstRestorableLeaf(root);
       const activePaneId = hasRestorablePaneId(root, tab.activePaneId)

@@ -30,6 +30,7 @@ pub mod settings;
 pub mod sftp;
 pub mod ssh_config;
 pub mod stats;
+pub mod tmux;
 pub mod translate;
 pub mod tunnel;
 pub mod updater;
