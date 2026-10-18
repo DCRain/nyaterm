@@ -18,11 +18,9 @@ vi.mock("react-i18next", () => ({
 
 function renderForm(overrides: Partial<ComponentProps<typeof RdpForm>> = {}) {
   const props: ComponentProps<typeof RdpForm> = {
-    clientMode: "builtin",
+    clientMode: "default",
+    defaultClientMode: "windows",
     setClientMode: vi.fn(),
-    rdpClientModeOverride: "default",
-    setRdpClientModeOverride: vi.fn(),
-    defaultRdpClientMode: "windows",
     host: "rdp.example.com",
     setHost: vi.fn(),
     port: 3389,
@@ -53,30 +51,6 @@ function renderForm(overrides: Partial<ComponentProps<typeof RdpForm>> = {}) {
     setReconnectEnabled: vi.fn(),
     reconnectMaxAttempts: 5,
     setReconnectMaxAttempts: vi.fn(),
-    externalDisplayMode: "fullscreen",
-    setExternalDisplayMode: vi.fn(),
-    resolutionPreset: "1920x1080",
-    setResolutionPreset: vi.fn(),
-    width: 1920,
-    setWidth: vi.fn(),
-    height: 1080,
-    setHeight: vi.fn(),
-    preferredClient: "",
-    setPreferredClient: vi.fn(),
-    redirects: {
-      redirectClipboard: true,
-      redirectPrinters: false,
-      redirectComPorts: false,
-      redirectSmartCards: false,
-      driveRedirectMode: "all",
-      driveRedirectCustom: "",
-      deviceRedirect: "off",
-      cameraRedirect: "off",
-      audioMode: 0,
-      audioCapture: true,
-      keyboardHook: 2,
-    },
-    setRedirects: vi.fn(),
     proxyId: "",
     setProxyId: vi.fn(),
     proxies: [],
@@ -84,7 +58,7 @@ function renderForm(overrides: Partial<ComponentProps<typeof RdpForm>> = {}) {
     setJumpHostId: vi.fn(),
     jumpHostOptions: [],
     ...overrides,
-  } as ComponentProps<typeof RdpForm>;
+  };
   render(<RdpForm {...props} />);
   return props;
 }
@@ -111,20 +85,20 @@ describe("RDP open method", () => {
     fireEvent.click(
       screen.getByRole("option", { name: "settings.rdpClientBuiltin" }),
     );
-    expect(props.setRdpClientModeOverride).toHaveBeenCalledWith("builtin");
+    expect(props.setClientMode).toHaveBeenCalledWith("builtin");
   });
 
   it("hides the system-client explanation for an explicit built-in choice", () => {
-    renderForm({ rdpClientModeOverride: "builtin" });
+    renderForm({ clientMode: "builtin" });
     expect(screen.queryByText("settings.rdpSystemClientDesc")).toBeNull();
   });
 
   it("hides the selector without rewriting a stored Windows preference on other platforms", () => {
     platform.windowsDesktop = false;
-    const props = renderForm({ rdpClientModeOverride: "windows" });
+    const props = renderForm({ clientMode: "windows" });
     expect(
       screen.queryByRole("combobox", { name: "dialog.rdpOpenWith" }),
     ).toBeNull();
-    expect(props.setRdpClientModeOverride).not.toHaveBeenCalled();
+    expect(props.setClientMode).not.toHaveBeenCalled();
   });
 });

@@ -54,6 +54,7 @@ import {
   getCustomProviderBaseUrlPlaceholder,
   getProviderLabel,
   isBuiltinProvider,
+  localizeDefaultAiAction,
   MODEL_REASONING_EFFORTS,
   supportsApiFormatSelection,
 } from "@/lib/aiSettings";
@@ -2798,6 +2799,9 @@ function ActionListEditor({
   const updateAction = (id: string, patch: Partial<AICustomActionConfig>) => {
     onChange(actions.map((action) => (action.id === id ? { ...action, ...patch } : action)));
   };
+  const localizedActions = actions.map((action) =>
+    localizeDefaultAiAction(action, (key) => t(key)),
+  );
 
   return (
     <SettingSection
@@ -2814,7 +2818,7 @@ function ActionListEditor({
       }
       contentClassName="space-y-4"
     >
-      {actions.map((action) => (
+      {localizedActions.map((action) => (
         <div key={action.id} className="rounded-md border border-border/70 bg-background/75 p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div className="min-w-0 truncate text-sm font-medium">{action.name}</div>
