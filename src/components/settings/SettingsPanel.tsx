@@ -267,7 +267,6 @@ export default function SettingsPanel({ paneId, tabId, settingsSection }: Settin
   const iconMap: Record<string, React.ElementType> = {
     cloud_sync: MdBackup,
     dashboard: MdDashboard,
-    dns: MdDns,
     settings: MdSettings,
     palette: MdPalette,
     swap_horiz: MdSwapHoriz,
@@ -446,7 +445,7 @@ export default function SettingsPanel({ paneId, tabId, settingsSection }: Settin
                 <div className="flex flex-col gap-2">
                   {categories.map((category) => {
                     const isExpanded = expandedGroups[category.id];
-                    const hasMultiple = category.items.length > 1 || category.id === "connections";
+                    const hasMultiple = category.items.length > 1;
 
                     if (!hasMultiple) {
                       const tabId = category.items[0];

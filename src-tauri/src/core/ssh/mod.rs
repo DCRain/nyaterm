@@ -26,5 +26,5 @@ pub(crate) use client::{
 };
 pub(crate) use session::open_ssh_direct_tcpip_stream;
 pub use session::{create_multiplexed_ssh_session, create_ssh_session};
-pub(crate) use session::{create_ssh_handle_for_tunnel, test_authenticated_ssh};
+pub(crate) use session::test_authenticated_ssh;
 pub(crate) use tunnel::{TunnelManager, TunnelRuntimeState};

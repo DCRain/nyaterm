@@ -278,11 +278,12 @@ describe("VncPaneHost", () => {
         onDisconnectedCloseRequested={onDisconnectedCloseRequested}
       />,
     );
+    await activate();
 
+    fireEvent.click(screen.getByRole("button", { name: "dialog.rdpReconnect" }));
     fireEvent.click(
-      screen.getByRole("button", { name: "Reconnect VNC session" }),
+      screen.getByRole("button", { name: "dialog.remoteDesktopChromeClose" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Close VNC session" }));
 
     expect(invokeMock).toHaveBeenCalledWith("vnc_reconnect", {
       sessionId: "vnc-session",
