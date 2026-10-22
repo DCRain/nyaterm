@@ -1344,6 +1344,7 @@ export interface GeneralSettings {
   minimize_to_tray: boolean;
   boss_key: string | null;
   confirm_on_close: boolean;
+  /** Legacy fallback for saved connections without an explicit client preference. */
   rdp_client_mode: RdpClientMode;
 }
 
@@ -2035,6 +2036,7 @@ export interface TunnelConfig {
   target_port: number;
   is_open: boolean;
   auto_open: boolean;
+  auto_reconnect: boolean;
   bind_localhost: boolean;
   group_id?: string;
 }
@@ -2048,6 +2050,9 @@ export type TunnelRuntimeStatus =
   | "error";
 
 export interface TunnelRuntimeState {
+  revision?: number;
+  retryAttempt: number;
+  nextRetryAt?: number | null;
   tunnelId: string;
   status: TunnelRuntimeStatus;
   error?: string | null;

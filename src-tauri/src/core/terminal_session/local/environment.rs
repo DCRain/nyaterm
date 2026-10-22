@@ -22,14 +22,15 @@ fn ensure_macos_interactive_path(cmd: &mut CommandBuilder) {
     }
 }
 
-/// Advertise a color-capable terminal to local shells and CLI tools.
+/// Advertise a color-capable terminal and NyaTerm identity to local shells and CLI tools.
 ///
-/// Windows ConPTY sessions previously skipped this, so many programs (git, ls,
-/// ripgrep, Node CLIs, etc.) fell back to monochrome output. Match common
-/// emulators by setting both TERM and COLORTERM.
+/// Windows ConPTY sessions previously skipped TERM/COLORTERM, so many programs
+/// (git, ls, ripgrep, Node CLIs, etc.) fell back to monochrome output.
 fn configure_local_pty_environment(cmd: &mut CommandBuilder) {
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
+    cmd.env("TERM_PROGRAM", "NyaTerm");
+    cmd.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
     #[cfg(target_os = "macos")]
     {
         set_utf8_env_if_missing_or_non_utf8(cmd, "LANG", "en_US.UTF-8");

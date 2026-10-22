@@ -12,7 +12,8 @@ mod tests {
         StartupGateOutput, StartupInjectionAttempt, StartupInjectionDecision, StartupInjectionSchedule,
         StartupInputBarrier, StartupOutputGate, StdMutex, TerminalQueryDetector, WorkingDirectoryOutcome, ZmodemDetectResult, ZmodemDetector,
         ZmodemDirection, apply_working_dir_to_command, build_cmd_prompt,
-        build_local_startup_script, cancel_startup_for_pending_zmodem, detect_local_zmodem,
+        build_local_startup_script, cancel_startup_for_pending_zmodem,
+        configure_local_pty_environment, detect_local_zmodem,
         drain_startup_pipeline_on_cancel, input_cancels_startup_injection,
         is_unresolved_shell_wrapper, local_managed_integration_enabled, lock_or_recover,
         managed_cwd_runtime_ready, parse_shell_args, reconcile_managed_cwd_payloads,
@@ -353,9 +354,9 @@ mod tests {
     }
 
     #[test]
-    fn local_pty_environment_sets_terminal() {
+    fn local_pty_environment_sets_terminal_identity() {
         let shell = if cfg!(target_os = "windows") {
-            "powershell.exe"
+            "pwsh.exe"
         } else if cfg!(target_os = "macos") {
             "/bin/zsh"
         } else {
@@ -371,6 +372,15 @@ mod tests {
         assert_eq!(
             cmd.get_env("COLORTERM").and_then(|value| value.to_str()),
             Some("truecolor")
+        );
+        assert_eq!(
+            cmd.get_env("TERM_PROGRAM").and_then(|value| value.to_str()),
+            Some("NyaTerm")
+        );
+        assert_eq!(
+            cmd.get_env("TERM_PROGRAM_VERSION")
+                .and_then(|value| value.to_str()),
+            Some(env!("CARGO_PKG_VERSION"))
         );
     }
 

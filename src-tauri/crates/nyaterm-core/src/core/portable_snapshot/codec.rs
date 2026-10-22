@@ -117,8 +117,8 @@ fn encode_portable_snapshot_redb(snapshot: &PortableSnapshot) -> AppResult<Vec<u
     fs::read(temp.path()).map_err(Into::into)
 }
 
-/// Test-visible helper: `cloud_sync` tests outside this crate encode fixture
-/// snapshots, so this cannot stay `#[cfg(test)]`/`pub(crate)`.
+/// Cross-crate fixture encoder for `cloud_sync` tests outside this crate.
+/// Available only with test support (`#[cfg(test)]` alone is not enough).
 #[cfg(any(test, feature = "test-support"))]
 pub fn encode_v3_raw_snapshot_redb_for_test(
     snapshot: &PortableSnapshot,

@@ -57,6 +57,24 @@ pub struct PendingSshAuthManager {
     pending: Mutex<HashMap<String, oneshot::Sender<Option<SshAuthResponse>>>>,
 }
 
+// Authentication policy follows the entire chain, including ProxyJump.
+// Handlers capture it before russh moves them to a transport task.
+tokio::task_local! { pub(super) static INTERACTIVE: bool; }
+
+pub(super) fn interaction_allowed() -> bool {
+    INTERACTIVE.try_with(|allowed| *allowed).unwrap_or(true)
+}
+
+fn require_interaction() -> AppResult<()> {
+    if interaction_allowed() {
+        Ok(())
+    } else {
+        Err(AppError::Auth(
+            "SSH authentication requires user interaction; retry manually".into(),
+        ))
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum SshAgentAuthAction {
     Retry,
@@ -344,8 +362,9 @@ fn log_structured(
     });
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct SshAuthFailure {
+    source: Option<Box<AppError>>,
     message: String,
     remaining_methods: Vec<String>,
     partial_success: bool,
@@ -358,6 +377,7 @@ impl SshAuthFailure {
         partial_success: bool,
     ) -> Self {
         Self {
+            source: None,
             message: message.into(),
             remaining_methods: method_names(remaining_methods),
             partial_success,
@@ -369,13 +389,16 @@ impl SshAuthFailure {
             message: format!("{}: {}", message.into(), error),
             remaining_methods: Vec::new(),
             partial_success: false,
+            source: Some(Box::new(error)),
         }
     }
 
     fn has_method(&self, method: &str) -> bool {
-        self.remaining_methods
-            .iter()
-            .any(|candidate| candidate == method)
+        self.source.is_none()
+            && self
+                .remaining_methods
+                .iter()
+                .any(|candidate| candidate == method)
     }
 
     fn password_available(&self) -> bool {
@@ -389,6 +412,9 @@ impl SshAuthFailure {
 
 impl From<SshAuthFailure> for AppError {
     fn from(value: SshAuthFailure) -> Self {
+        if let Some(source) = value.source {
+            return *source;
+        }
         if value.remaining_methods.is_empty() {
             AppError::Auth(value.message)
         } else {
@@ -990,7 +1016,7 @@ pub(super) async fn authenticate_handle(
             let authenticated = handle
                 .authenticate_none(&config.username)
                 .await
-                .map_err(|error| AppError::Auth(format!("None auth failed: {}", error)))?;
+                .map_err(AppError::Ssh)?;
 
             try_keyboard_interactive_after_partial(
                 handle,
@@ -1269,7 +1295,7 @@ async fn request_runtime_auth_response(
             reason.as_str()
         )));
     }
-
+    require_interaction()?;
     let pending_mgr = app
         .try_state::<Arc<PendingSshAuthManager>>()
         .ok_or_else(|| AppError::Auth("PendingSshAuthManager not available".to_string()))?;
@@ -1477,7 +1503,7 @@ async fn authenticate_password_with_runtime_prompt(
         let authenticated =
             nyaterm_core::ssh::protocol::password(handle, &config.username, current_password)
                 .await
-                .map_err(|error| AppError::Auth(format!("Authentication failed: {}", error)))?;
+                .map_err(AppError::Ssh)?;
 
         match try_keyboard_interactive_after_partial(
             handle,
@@ -1571,10 +1597,8 @@ async fn discover_auth_methods_before_secret_prompt(
     let authenticated = handle
         .authenticate_none(&config.username)
         .await
-        .map_err(|error| SshAuthFailure {
-            message: format!("None auth probe failed: {error}"),
-            remaining_methods: Vec::new(),
-            partial_success: false,
+        .map_err(|error| {
+            SshAuthFailure::from_error("None auth probe failed", AppError::Ssh(error))
         })?;
 
     match try_keyboard_interactive_after_partial(
@@ -1734,6 +1758,7 @@ async fn authenticate_publickey_attempt(
     } = auth
     else {
         return Err(SshAuthFailure {
+            source: None,
             message: "No SSH key is configured".to_string(),
             remaining_methods: vec!["publickey".to_string()],
             partial_success: false,
@@ -1747,14 +1772,16 @@ async fn authenticate_publickey_attempt(
     let hash_alg = handle
         .best_supported_rsa_hash()
         .await
-        .ok()
-        .flatten()
+        .map_err(|error| {
+            SshAuthFailure::from_error("Failed to determine RSA hash", AppError::Ssh(error))
+        })?
         .flatten();
     let cert = cert_data
         .as_deref()
         .map(russh::keys::Certificate::from_openssh)
         .transpose()
         .map_err(|error| SshAuthFailure {
+            source: None,
             message: format!("Invalid OpenSSH certificate: {error}"),
             remaining_methods: vec!["publickey".to_string()],
             partial_success: false,
@@ -1786,10 +1813,8 @@ async fn authenticate_publickey_attempt(
         handle
             .authenticate_openssh_cert(&config.username, Arc::new(key), cert)
             .await
-            .map_err(|error| SshAuthFailure {
-                message: format!("Certificate auth failed: {error}"),
-                remaining_methods: vec!["publickey".to_string()],
-                partial_success: false,
+            .map_err(|error| {
+                SshAuthFailure::from_error("Certificate auth failed", AppError::Ssh(error))
             })?
     } else {
         handle
@@ -1798,11 +1823,7 @@ async fn authenticate_publickey_attempt(
                 russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg),
             )
             .await
-            .map_err(|error| SshAuthFailure {
-                message: format!("Key auth failed: {error}"),
-                remaining_methods: vec!["publickey".to_string()],
-                partial_success: false,
-            })?
+            .map_err(|error| SshAuthFailure::from_error("Key auth failed", AppError::Ssh(error)))?
     };
 
     try_keyboard_interactive_after_partial(
@@ -1905,8 +1926,11 @@ async fn authenticate_agent(
                     .await
                     .map_err(|_| AppError::Auth("SSH Agent signing timed out".to_string()))
                     .and_then(|result| {
-                        result.map_err(|error| {
-                            AppError::Auth(format!("SSH Agent signing failed: {error}"))
+                        result.map_err(|error| match error {
+                            russh::AgentAuthError::Send(_) => {
+                                AppError::Ssh(russh::Error::SendError)
+                            }
+                            russh::AgentAuthError::Key(error) => AppError::SshKey(error),
                         })
                     }),
                     AgentIdentity::Certificate { certificate, .. } => timeout(
@@ -1921,8 +1945,11 @@ async fn authenticate_agent(
                     .await
                     .map_err(|_| AppError::Auth("SSH Agent signing timed out".to_string()))
                     .and_then(|result| {
-                        result.map_err(|error| {
-                            AppError::Auth(format!("SSH Agent signing failed: {error}"))
+                        result.map_err(|error| match error {
+                            russh::AgentAuthError::Send(_) => {
+                                AppError::Ssh(russh::Error::SendError)
+                            }
+                            russh::AgentAuthError::Key(error) => AppError::SshKey(error),
                         })
                     }),
                 }
@@ -1946,6 +1973,9 @@ async fn authenticate_agent(
                     result
                 }
                 Err(error) => {
+                    if !interaction_allowed() {
+                        return Err(error);
+                    }
                     // The failed request waits for user action, so do not retain the old Agent stream.
                     drop(agent);
                     return agent_auth_failure_with_request(
@@ -2117,6 +2147,9 @@ async fn prepare_agent_authentication(
         Ok(None) => vec![Some(HashAlg::Sha512), Some(HashAlg::Sha256), None],
         Err(error) => {
             drop(agent);
+            if !interaction_allowed() {
+                return Err(AppError::Ssh(error));
+            }
             return Err(agent_auth_failure_error(
                 app,
                 config,
@@ -2201,6 +2234,12 @@ async fn begin_agent_auth_request(
     oneshot::Receiver<SshAgentAuthAction>,
     AgentAuthRequestGuard,
 )> {
+    if !interaction_allowed() {
+        let (tx, rx) = oneshot::channel();
+        let mut guard = AgentAuthRequestGuard::new(app.clone(), String::new());
+        guard.background_sender = Some(tx);
+        return Ok((String::new(), rx, guard));
+    }
     let request_id = uuid::Uuid::new_v4().to_string();
     let manager = app
         .try_state::<Arc<PendingSshAgentAuthManager>>()
@@ -2226,6 +2265,7 @@ async fn begin_agent_auth_request(
 }
 
 struct AgentAuthRequestGuard {
+    background_sender: Option<oneshot::Sender<SshAgentAuthAction>>,
     app: AppHandle,
     request_id: String,
     resolved: Arc<AtomicBool>,
@@ -2237,6 +2277,7 @@ impl AgentAuthRequestGuard {
             app,
             request_id,
             resolved: Arc::new(AtomicBool::new(false)),
+            background_sender: None,
         }
     }
 
@@ -2260,6 +2301,9 @@ impl Drop for AgentAuthRequestGuard {
 }
 
 async fn finish_agent_auth_request(app: &AppHandle, request_id: &str, resolved: bool) {
+    if request_id.is_empty() {
+        return;
+    }
     if let Some(manager) = app.try_state::<Arc<PendingSshAgentAuthManager>>() {
         manager.finish(request_id).await;
     }
@@ -2305,6 +2349,9 @@ async fn agent_auth_failure_with_request(
     request_guard: AgentAuthRequestGuard,
     error: String,
 ) -> AppResult<()> {
+    if !interaction_allowed() {
+        return Err(AppError::Auth(error));
+    }
     let _ = app.emit(
         "ssh-agent-auth-failed",
         SshAgentAuthEvent {
@@ -2796,7 +2843,7 @@ async fn finish_keyboard_interactive(
     let mut step = handle
         .authenticate_keyboard_interactive_start(username, None)
         .await
-        .map_err(|error| AppError::Auth(format!("Keyboard-interactive start failed: {}", error)))?;
+        .map_err(AppError::Ssh)?;
     let mut pending_totp_use: Option<TotpUseCandidate> = None;
     let mut round: u32 = 0;
     let mut restart_count: u32 = 0;
@@ -2879,12 +2926,7 @@ async fn finish_keyboard_interactive(
                         step = handle
                             .authenticate_keyboard_interactive_start(username, None)
                             .await
-                            .map_err(|error| {
-                                AppError::Auth(format!(
-                                    "Keyboard-interactive restart failed: {}",
-                                    error
-                                ))
-                            })?;
+                            .map_err(AppError::Ssh)?;
                         continue;
                     }
                 }
@@ -2992,6 +3034,7 @@ async fn finish_keyboard_interactive(
                         "Interactive 2FA required during connection test".to_string(),
                     ));
                 } else {
+                    require_interaction()?;
                     let request_id = uuid::Uuid::new_v4().to_string();
                     let rx = pending_mgr.register(request_id.clone()).await;
                     let request_guard = SecurityPromptRequestGuard::new(
@@ -3061,9 +3104,7 @@ async fn finish_keyboard_interactive(
                 step = handle
                     .authenticate_keyboard_interactive_respond(responses)
                     .await
-                    .map_err(|error| {
-                        AppError::Auth(format!("Keyboard-interactive respond failed: {}", error))
-                    })?;
+                    .map_err(AppError::Ssh)?;
             }
         }
     }
@@ -3121,12 +3162,15 @@ async fn try_keyboard_interactive_after_partial(
                     allow_interactive_auth,
                 )
                 .await
-                .map_err(|error| {
-                    SshAuthFailure::from_auth_result(
+                .map_err(|error| match error {
+                    AppError::Ssh(_) | AppError::Io(_) | AppError::Cancelled(_) => {
+                        SshAuthFailure::from_error(fallback_error, error)
+                    }
+                    error => SshAuthFailure::from_auth_result(
                         format!("{fallback_error}: {error}"),
                         remaining_methods,
                         *partial_success,
-                    )
+                    ),
                 })
             } else if can_retry_keyboard_interactive {
                 log_structured(
@@ -3161,12 +3205,15 @@ async fn try_keyboard_interactive_after_partial(
                     allow_interactive_auth,
                 )
                 .await
-                .map_err(|error| {
-                    SshAuthFailure::from_auth_result(
+                .map_err(|error| match error {
+                    AppError::Ssh(_) | AppError::Io(_) | AppError::Cancelled(_) => {
+                        SshAuthFailure::from_error(fallback_error, error)
+                    }
+                    error => SshAuthFailure::from_auth_result(
                         format!("{fallback_error}: {error}"),
                         remaining_methods,
                         *partial_success,
-                    )
+                    ),
                 })
             } else {
                 log_structured(
@@ -3803,5 +3850,39 @@ mod tests {
             "cd '/var/www'\nclear; printf '\\033[3J'\nuptime"
         );
         assert_eq!(resolved.delay_ms, 1500);
+    }
+}
+
+#[cfg(test)]
+mod tunnel_auth_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn tunnel_background_auth_rejects_interaction_and_restores_terminal_policy() {
+        assert!(require_interaction().is_ok());
+        INTERACTIVE
+            .scope(false, async {
+                assert!(matches!(require_interaction(), Err(AppError::Auth(_))));
+                INTERACTIVE
+                    .scope(true, async {
+                        assert!(require_interaction().is_ok());
+                    })
+                    .await;
+                assert!(!interaction_allowed());
+            })
+            .await;
+        assert!(interaction_allowed());
+    }
+
+    #[test]
+    fn tunnel_auth_failure_preserves_transport_error_without_auth_fallback() {
+        let failure =
+            SshAuthFailure::from_error("auth failed", AppError::Ssh(russh::Error::Disconnect));
+        assert!(!failure.password_available());
+        assert!(!failure.publickey_available());
+        assert!(matches!(
+            AppError::from(failure),
+            AppError::Ssh(russh::Error::Disconnect)
+        ));
     }
 }

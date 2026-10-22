@@ -10,16 +10,15 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { FloatingSessionChrome } from "@/components/remote-desktop/FloatingSessionChrome";
-import { listen } from "@/lib/backend/api";
-import { runtime } from "@/lib/backend/runtime";
 import {
   RemoteDesktopSurface,
   type RemoteDesktopSurfaceHandle,
 } from "@/components/remote-desktop/RemoteDesktopSurface";
+import { listen } from "@/lib/backend/api";
+import { runtime } from "@/lib/backend/runtime";
 import { readClipboardText, writeClipboardText } from "@/lib/clipboard";
 import { invoke } from "@/lib/invoke";
-import { decodeRemoteDesktopFramePatch } from "@/lib/remoteDesktopFrame";
-import { subscribeVncFrames } from "@/lib/vncFrames";
+import { VncFrameSubscription } from "@/lib/vncFrameSubscription";
 import {
   buildVncCompositionKeyEvents,
   mapKeyboardEventToVncKeysym,
@@ -85,9 +84,13 @@ function clampCoordinate(value: number) {
 
 function wheelButtonMask(event: WheelEvent) {
   if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
-    return event.deltaX > 0 ? VNC_POINTER_BUTTON.wheelRight : VNC_POINTER_BUTTON.wheelLeft;
+    return event.deltaX > 0
+      ? VNC_POINTER_BUTTON.wheelRight
+      : VNC_POINTER_BUTTON.wheelLeft;
   }
-  return event.deltaY > 0 ? VNC_POINTER_BUTTON.wheelDown : VNC_POINTER_BUTTON.wheelUp;
+  return event.deltaY > 0
+    ? VNC_POINTER_BUTTON.wheelDown
+    : VNC_POINTER_BUTTON.wheelUp;
 }
 
 function isVncClipboardTextAllowed(text: string) {
@@ -106,9 +109,12 @@ function VncPaneHost({
   onConnectionError,
 }: VncPaneHostProps) {
   const { t } = useTranslation();
-  const boundsRef = useRef<HTMLDivElement | null>(null);
   const [clipboardUnavailable, setClipboardUnavailable] = useState(false);
+  const boundsRef = useRef<HTMLDivElement | null>(null);
   const surfaceRef = useRef<RemoteDesktopSurfaceHandle | null>(null);
+  const framesRef = useRef<VncFrameSubscription | null>(null);
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
   const imeRef = useRef<HTMLTextAreaElement | null>(null);
   const pressedKeysRef = useRef(new Set<number>());
   const pointerButtonsRef = useRef(new Set<number>());
@@ -121,8 +127,12 @@ function VncPaneHost({
   const composingRef = useRef(false);
   const lastLocalSentRef = useRef<string | null>(null);
   const lastRemoteReceivedRef = useRef<string | null>(null);
-  const [state, setState] = useState<VncSessionState>(pane.connectError ? "failed" : "connecting");
-  const [message, setMessage] = useState<string | null>(pane.connectError ?? null);
+  const [state, setState] = useState<VncSessionState>(
+    pane.connectError ? "failed" : "connecting",
+  );
+  const [message, setMessage] = useState<string | null>(
+    pane.connectError ?? null,
+  );
   const [desktopSize, setDesktopSize] = useState({
     width: pane.display?.remoteWidth ?? 0,
     height: pane.display?.remoteHeight ?? 0,
@@ -130,7 +140,8 @@ function VncPaneHost({
 
   const viewOnly = pane.display?.viewOnly ?? false;
   const clipboardEnabled = pane.display?.clipboardEnabled ?? true;
-  const inputEnabled = !viewOnly && !pane.connecting && !pane.connectError && state === "active";
+  const inputEnabled =
+    !viewOnly && !pane.connecting && !pane.connectError && state === "active";
   const clipboardBridgeEnabled =
     clipboardEnabled &&
     active &&
@@ -142,7 +153,10 @@ function VncPaneHost({
   const sendInputBatch = useCallback(
     async (events: VncInputEvent[]) => {
       if (events.length === 0 || !inputEnabled) return;
-      await invoke("vnc_input_batch", { sessionId: pane.sessionId, events }).catch(() => {});
+      await invoke("vnc_input_batch", {
+        sessionId: pane.sessionId,
+        events,
+      }).catch(() => {});
     },
     [inputEnabled, pane.sessionId],
   );
@@ -157,65 +171,76 @@ function VncPaneHost({
   }, [pane.sessionId]);
 
   useEffect(() => {
-    let disposed = false;
-    const controller = new AbortController();
-    let unsubscribe: (() => void) | undefined;
-    const onFrame = (frame: ArrayBuffer) => {
-      if (disposed) return;
-      const patch = decodeRemoteDesktopFramePatch(frame);
-      setDesktopSize({ width: patch.desktopWidth, height: patch.desktopHeight });
-      surfaceRef.current?.drawFrame(patch);
-    };
-
-    if (!pane.connecting && !pane.connectError) {
-      void subscribeVncFrames(
-        pane.sessionId,
-        onFrame,
-        (error) => {
-          if (!disposed) setMessage(error.message);
-        },
-        controller.signal,
-      )
-        .then((stop) => {
-          if (disposed) stop();
-          else unsubscribe = stop;
-        })
-        .catch((error: Error) => {
-          if (!disposed) {
-            setState("failed");
-            setMessage(error.message);
-          }
-        });
-    }
+    surfaceRef.current?.reset();
+    setState(pane.connectError ? "failed" : "connecting");
+    setMessage(pane.connectError ?? null);
+    setDesktopSize({ width: 0, height: 0 });
+    if (pane.connecting || pane.connectError) return;
+    const frames = new VncFrameSubscription({
+      sessionId: pane.sessionId,
+      onPatch: (patch) => {
+        setDesktopSize((size) =>
+          size.width === patch.desktopWidth &&
+          size.height === patch.desktopHeight
+            ? size
+            : { width: patch.desktopWidth, height: patch.desktopHeight },
+        );
+        surfaceRef.current?.drawFrame(patch);
+      },
+      onReset: () => surfaceRef.current?.reset(),
+      onFailure: () => {
+        setState("failed");
+        setMessage(t("terminal.vncDisplayRecoveryFailed"));
+      },
+    });
+    framesRef.current = frames;
+    frames.start(visibleRef.current);
     return () => {
-      disposed = true;
-      controller.abort();
-      unsubscribe?.();
+      frames.stop();
+      if (framesRef.current === frames) framesRef.current = null;
     };
-  }, [pane.connectError, pane.connecting, pane.sessionId]);
+  }, [pane.connectError, pane.connecting, pane.sessionId, t]);
 
   useEffect(() => {
-    const unlisten = listen<VncStatePayload>(`vnc-state-${pane.sessionId}`, (event) => {
-      setState(event.payload.state);
-      setMessage(event.payload.message ?? null);
-      if (event.payload.state === "failed") {
-        onConnectionError?.(pane.sessionId, event.payload.message ?? "VNC connection failed");
-      }
-    });
+    framesRef.current?.setVisible(visible);
+  }, [visible]);
+
+  useEffect(() => {
+    let disposed = false;
+    const unlisten = listen<VncStatePayload>(
+      `vnc-state-${pane.sessionId}`,
+      (event) => {
+        if (disposed || event.payload.sessionId !== pane.sessionId) return;
+        if (event.payload.state === "reconnecting")
+          framesRef.current?.resetForReconnect();
+        setState(event.payload.state);
+        setMessage(event.payload.message ?? null);
+        if (event.payload.state === "failed") {
+          onConnectionError?.(
+            pane.sessionId,
+            event.payload.message ?? "VNC connection failed",
+          );
+        }
+      },
+    );
     return () => {
+      disposed = true;
       void unlisten.then((dispose) => dispose());
     };
   }, [onConnectionError, pane.sessionId]);
 
   useEffect(() => {
     if (!clipboardBridgeEnabled) return;
-    const unlisten = listen<VncClipboardPayload>(`vnc-clipboard-${pane.sessionId}`, (event) => {
-      const text = event.payload.text;
-      lastRemoteReceivedRef.current = text;
-      void writeClipboardText(text).catch(() => {
-        if (runtime === "web") setClipboardUnavailable(true);
-      });
-    });
+    const unlisten = listen<VncClipboardPayload>(
+      `vnc-clipboard-${pane.sessionId}`,
+      (event) => {
+        const text = event.payload.text;
+        lastRemoteReceivedRef.current = text;
+        void writeClipboardText(text).catch(() => {
+          if (runtime === "web") setClipboardUnavailable(true);
+        });
+      },
+    );
     return () => {
       void unlisten.then((dispose) => dispose());
     };
@@ -237,9 +262,10 @@ function VncPaneHost({
           isVncClipboardTextAllowed(text)
         ) {
           lastLocalSentRef.current = text;
-          await invoke("vnc_set_clipboard_text", { sessionId: pane.sessionId, text }).catch(
-            () => {},
-          );
+          await invoke("vnc_set_clipboard_text", {
+            sessionId: pane.sessionId,
+            text,
+          }).catch(() => {});
         }
       } catch {
         if (runtime === "web") setClipboardUnavailable(true);
@@ -271,7 +297,8 @@ function VncPaneHost({
     return () => {
       window.removeEventListener("blur", releaseAllKeys);
       releaseAllKeys();
-      if (pointerRafRef.current !== null) cancelAnimationFrame(pointerRafRef.current);
+      if (pointerRafRef.current !== null)
+        cancelAnimationFrame(pointerRafRef.current);
       pointerRafRef.current = null;
     };
   }, [releaseAllKeys]);
@@ -344,7 +371,7 @@ function VncPaneHost({
   return (
     <div
       ref={boundsRef}
-      className="relative h-full w-full min-h-0 min-w-0 bg-black"
+      className="group relative h-full w-full min-h-0 min-w-0 bg-black"
       onKeyDownCapture={handleKeyDown}
       onKeyUpCapture={handleKeyUp}
     >
@@ -383,6 +410,8 @@ function VncPaneHost({
         active={active}
         visible={visible}
         inputEnabled={inputEnabled}
+        onRecoveryRequired={(reason) => framesRef.current?.recover(reason)}
+        onFrameRendered={() => framesRef.current?.presented()}
         onFocus={() => imeRef.current?.focus({ preventScroll: true })}
         onBlur={handleBlur}
         onPointerMove={(point) => queuePointer(point)}
@@ -407,7 +436,12 @@ function VncPaneHost({
           const mask = wheelButtonMask(event);
           void sendInputBatch([
             { type: "pointer", x, y, buttonMask: mask },
-            { type: "pointer", x, y, buttonMask: pointerButtonMask(pointerButtonsRef.current) },
+            {
+              type: "pointer",
+              x,
+              y,
+              buttonMask: pointerButtonMask(pointerButtonsRef.current),
+            },
           ]);
         }}
       >
@@ -422,7 +456,10 @@ function VncPaneHost({
           boundsRef={boundsRef}
           enabled={state === "active"}
           active={active}
-          onReconnect={() => void invoke("vnc_reconnect", { sessionId: pane.sessionId })}
+          onReconnect={() => {
+            framesRef.current?.resetForReconnect();
+            void invoke("vnc_reconnect", { sessionId: pane.sessionId });
+          }}
           onClose={() => onDisconnectedCloseRequested?.()}
           extraCollapsedIcon={
             viewOnly ? (

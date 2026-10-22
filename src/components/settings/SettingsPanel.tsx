@@ -1,4 +1,4 @@
-import { canUseWindowsRdpClient, supportsSettingsTab } from "@/lib/backend/runtime";
+import { supportsSettingsTab } from "@/lib/backend/runtime";
 import {
   type ComponentType,
   useCallback,
@@ -14,7 +14,6 @@ import {
   MdAutoAwesome,
   MdBackup,
   MdDashboard,
-  MdDns,
   MdKeyboard,
   MdKeyboardArrowRight,
   MdMouse,
@@ -32,7 +31,6 @@ import { toast } from "sonner";
 import { AiAgentsTab, AiGeneralTab, AiModelsTab, AiRulesTab } from "@/components/settings/AiTab";
 import { AppearanceTab } from "@/components/settings/AppearanceTab";
 import { GeneralTab } from "@/components/settings/GeneralTab";
-import { RemoteDesktopTab } from "@/components/settings/RemoteDesktopTab";
 import { InteractionTab } from "@/components/settings/InteractionTab";
 import { KeyboardShortcutsTab } from "@/components/settings/KeyboardShortcutsTab";
 import { SearchTab } from "@/components/settings/SearchTab";
@@ -137,16 +135,6 @@ export default function SettingsPanel({ paneId, tabId, settingsSection }: Settin
         icon: "dashboard",
         items: ["general", "appearance", "interaction", "keybindings"],
       },
-      ...(canUseWindowsRdpClient()
-        ? [
-            {
-              id: "connections",
-              label: t("settings.groupConnections"),
-              icon: "dns",
-              items: ["remote-desktop"],
-            },
-          ]
-        : []),
       {
         id: "terminal_session",
         label: t("settings.groupTerminalSession"),
@@ -212,12 +200,6 @@ export default function SettingsPanel({ paneId, tabId, settingsSection }: Settin
   );
 
   const tabs: SettingsTabConfig[] = [
-    {
-      id: "remote-desktop",
-      label: t("settings.remoteDesktop"),
-      icon: "dns",
-      Component: RemoteDesktopTab,
-    },
     { id: "general", label: t("settings.general"), icon: "settings", Component: GeneralTab },
     {
       id: "appearance",

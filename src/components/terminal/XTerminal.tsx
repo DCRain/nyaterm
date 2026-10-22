@@ -40,6 +40,7 @@ import {
   isPagerSingleKeyInput,
 } from "@/lib/commandSuggestionSuppression";
 import { detectCredentialPromptKind } from "@/lib/credentialAutofill";
+import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import { hexLuminance } from "@/lib/keywordHighlightPresets";
 import { logger } from "@/lib/logger";
@@ -101,6 +102,10 @@ import {
   TerminalResizeDeduper,
 } from "./terminalFitScheduler";
 import { installTerminalImageAddon } from "./terminalImageAddon";
+import {
+  getTerminalImagePreviewBackend,
+  openTerminalImagePreview,
+} from "./terminalImagePreview";
 import { stampTerminalWrittenLines } from "./terminalLineTimestamps";
 import {
   getSelectedInputRange,
@@ -110,6 +115,7 @@ import {
   readRecentOutput,
 } from "./terminalInputSelection";
 import { createTerminalLinkHandlers } from "./terminalLinkHandlers";
+import { createTerminalHistoryRecovery } from "./terminalHistoryRecovery";
 import type { TerminalOutputDrain } from "./terminalOutputDrain";
 import { AlternateScreenStateTracker } from "./alternateScreenStateTracker";
 import type { Dec2026FrameGate } from "./dec2026FrameGate";
@@ -303,6 +309,7 @@ export default function XTerminal({
   const lineTimestampsRef = useRef<Map<number, number>>(new Map());
   const gutterLineOffsetRef = useRef(0);
   const sessionTypeRef = useRef(sessionType);
+  const sessionNameRef = useRef(sessionName);
   const connectionIdRef = useRef(connectionId);
   const temporaryConfigRef = useRef(temporaryConfig);
   const onReconnectedRef = useRef(onReconnected);
@@ -440,6 +447,10 @@ export default function XTerminal({
   useEffect(() => {
     sessionTypeRef.current = sessionType;
   }, [sessionType]);
+
+  useEffect(() => {
+    sessionNameRef.current = sessionName;
+  }, [sessionName]);
 
   useEffect(() => {
     connectionIdRef.current = connectionId;
@@ -889,8 +900,39 @@ export default function XTerminal({
     const {
       oscLinkHandler,
       webLinksAddon,
+      imagePathLinkProvider,
       removePopup: removeLinkPopup,
-    } = createTerminalLinkHandlers(terminal, tRef);
+    } = createTerminalLinkHandlers(terminal, tRef, {
+      isEnabled: () =>
+        getTerminalImagePreviewBackend(sessionTypeRef.current) !== null,
+      getMatchOptions: () => ({
+        windowsPaths: sessionTypeRef.current === "Local" && isWindows,
+      }),
+      open: (path) => {
+        const sessionType = sessionTypeRef.current;
+        const label = sessionNameRef.current?.trim();
+        openTerminalImagePreview({
+          sessionId,
+          sessionType,
+          path,
+          target:
+            sessionType === "SSH" && label
+              ? { kind: "remote", label }
+              : undefined,
+        }).catch((error: unknown) => {
+          logger.error({
+            domain: "ui.error",
+            event: "terminal.image_preview_failed",
+            message: "Failed to preview terminal image path",
+            ids: { session_id: sessionId },
+            error,
+          });
+          toast.error(
+            getErrorMessage(error) || tRef.current("filePreview.openFailed"),
+          );
+        });
+      },
+    });
     const searchAddon = new SearchAddon({
       highlightLimit: TERMINAL_SEARCH_VISIBLE_MATCH_LIMIT,
     }) as SearchAddonWithLifecycle;
@@ -940,6 +982,9 @@ export default function XTerminal({
     terminal.options.linkHandler = oscLinkHandler;
     terminal.loadAddon(fitAddon);
     terminal.loadAddon(webLinksAddon);
+    const imagePathLinkDisposable = terminal.registerLinkProvider(
+      imagePathLinkProvider,
+    );
     terminal.loadAddon(searchAddon);
     terminal.loadAddon(serializeAddon);
     terminal.loadAddon(unicodeGraphemesAddon);
@@ -1813,7 +1858,15 @@ export default function XTerminal({
       },
     );
 
+    const historyRecovery = createTerminalHistoryRecovery(
+      terminal,
+      () =>
+        (outputDrainRef.current?.getPendingBytes() ?? 0) > 0 ||
+        (frameGateRef.current?.getHeldBytes() ?? 0) > 0,
+    );
     const writeParsedDisposable = terminal.onWriteParsed(() => {
+      const recovered = historyRecovery.onWriteParsed(inputStateRef.current);
+      if (recovered) inputStateRef.current = recovered;
       alternateScreenTrackerRef.current.setXtermBufferType(
         terminal.buffer.active.type,
       );
@@ -2453,13 +2506,19 @@ export default function XTerminal({
         }
       }
 
+      const inputState = inputStateRef.current;
+      const isCompletionKey = data === "\t" || data === "\x1b[Z";
       if (
-        data !== "\t" &&
-        inputStateRef.current.desynced &&
-        inputStateRef.current.desyncReason === "tab"
+        inputState.desynced &&
+        !inputState.pasteMode &&
+        !inputState.multiline &&
+        terminal.buffer.active.type !== "alternate" &&
+        (isPlainTextInputData(data) || data === "\r") &&
+        inputState.desyncReason === "tab" &&
+        !isCompletionKey
       ) {
         const recovered = resyncFromTerminalLine(
-          inputStateRef.current,
+          inputState,
           readCurrentInputLine(terminal),
         );
         if (recovered) {
@@ -2533,7 +2592,7 @@ export default function XTerminal({
           command,
         );
       }
-      inputStateRef.current = applyTerminalInputData(
+      inputStateRef.current = historyRecovery.applyInput(
         inputStateRef.current,
         data,
       );
@@ -2739,6 +2798,7 @@ export default function XTerminal({
       oscDisposable.dispose();
       remoteColorOscGuardDisposable.dispose();
       clipboardOscDisposable.dispose();
+      imagePathLinkDisposable.dispose();
       writeParsedDisposable.dispose();
       dataDisposable.dispose();
       binaryDisposable.dispose();
@@ -2867,7 +2927,6 @@ export default function XTerminal({
     visible,
     appLocked,
     terminalReady,
-    performanceMode,
     sessionId,
     sessionType,
     showGutter,
