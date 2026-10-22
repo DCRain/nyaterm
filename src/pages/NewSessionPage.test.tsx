@@ -452,6 +452,7 @@ describe("NewSessionPage", () => {
         ([command]) => command === "save_connection",
       )?.[1].connection;
       expect(saved.rdp_client_mode).toBe(mode);
+      expect(saved.client_mode).toBe(mode === "builtin" ? "builtin" : "external");
       expect(saved.network).toEqual(rdpConnection.network);
       expect(saved.security).toEqual(rdpConnection.security);
       expect(saved.display).toEqual(rdpConnection.display);
@@ -481,7 +482,10 @@ describe("NewSessionPage", () => {
         expect(invokeMock).toHaveBeenCalledWith(
           "save_connection",
           expect.objectContaining({
-            connection: expect.objectContaining({ rdp_client_mode: mode }),
+            connection: expect.objectContaining({
+              rdp_client_mode: mode,
+              client_mode: mode === "builtin" ? "builtin" : "external",
+            }),
           }),
         ),
       );

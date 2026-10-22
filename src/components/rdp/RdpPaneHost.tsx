@@ -14,6 +14,7 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import ExternalFileDropOverlay from "@/components/ExternalFileDropOverlay";
 import { FloatingSessionChrome } from "@/components/remote-desktop/FloatingSessionChrome";
 import type { RemoteDesktopNetworkStatus } from "@/components/remote-desktop/FloatingSessionChrome";
@@ -25,7 +26,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { useApp } from "@/context/AppContext";
 import { useRdpFileDrop } from "@/hooks/useRdpFileDrop";
-import { isRdpFileTransferEnabled } from "@/lib/appSessionFactory";
+import {
+  isRdpFileTransferChromeVisible,
+  isRdpFileTransferEnabled,
+} from "@/lib/appSessionFactory";
 import { invoke } from "@/lib/invoke";
 import { decodeRdpFramePatch } from "@/lib/rdpFrame";
 import {
@@ -654,8 +658,18 @@ function RdpPaneHost({
     [pane.display, rdpConnection],
   );
 
-  const fileDropEnabled =
-    visible && state === "active" && !pane.connecting && !pane.connectError && fileTransferEnabled;
+  const transferChromeVisible = useMemo(
+    () => isRdpFileTransferChromeVisible(pane.display, rdpConnection),
+    [pane.display, rdpConnection],
+  );
+
+  const sessionReady =
+    visible && state === "active" && !pane.connecting && !pane.connectError;
+
+  // Drag-drop needs CLIPRDR file mode; the toolbar button stays visible for text-only
+  // so users can discover the setting instead of wondering why the control vanished.
+  const fileDropEnabled = sessionReady && fileTransferEnabled;
+  const transferButtonVisible = sessionReady && transferChromeVisible;
 
   const { isExternalDropActive, offerLocalPaths } = useRdpFileDrop({
     sessionId: pane.sessionId,
@@ -664,6 +678,10 @@ function RdpPaneHost({
   });
 
   const handleTransferFiles = useCallback(async () => {
+    if (!fileTransferEnabled) {
+      toast.message(t("dialog.rdpTransferFilesRequiresClipboard"));
+      return;
+    }
     const selected = await openFileDialog({ multiple: true, directory: false });
     if (!selected) return;
     const paths = Array.isArray(selected) ? selected : [selected];
@@ -718,7 +736,15 @@ function RdpPaneHost({
       { type: "key-up", scanCode: 0x2f, extended: false, repeat: false },
       { type: "key-up", scanCode: 0x1d, extended: false, repeat: false },
     ]);
-  }, [desktopSize.height, desktopSize.width, offerLocalPaths, pane.sessionId, sendInputBatch]);
+  }, [
+    desktopSize.height,
+    desktopSize.width,
+    fileTransferEnabled,
+    offerLocalPaths,
+    pane.sessionId,
+    sendInputBatch,
+    t,
+  ]);
 
   return (
     <div
@@ -832,7 +858,7 @@ function RdpPaneHost({
         isFullscreen={isFullscreen}
         shortcutPopover={<RdpShortcutPopover onSendShortcut={sendShortcut} />}
         extraActions={
-          fileDropEnabled ? (
+          transferButtonVisible ? (
             <Button
               variant="ghost"
               size="icon-xs"

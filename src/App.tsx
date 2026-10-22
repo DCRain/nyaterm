@@ -1786,7 +1786,12 @@ function App() {
 
   const handleConnectConnectionFromLeaf = useCallback(
     async (leafId: string, connection: SavedConnection) => {
-      if (shouldLaunchExternalRemoteDesktop(connection)) {
+      // Windows system client and legacy external (mstsc/FreeRDP) share connectSavedConnection.
+      // Built-in IronRDP continues below and creates an in-app tab in this leaf.
+      if (
+        shouldLaunchSavedRdpWithSystemClient(connection, appSettings.general.rdp_client_mode) ||
+        shouldLaunchExternalRemoteDesktop(connection)
+      ) {
         await connectSavedConnection(connection);
         return;
       }
@@ -1796,31 +1801,6 @@ function App() {
         : null;
       const anchorTabId =
         targetLeaf?.activeTabId ?? targetLeaf?.tabIds[targetLeaf.tabIds.length - 1] ?? null;
-
-      try {
-        if (
-          await launchSavedRdpWithSystemClient(
-            connection,
-            appSettings.general.rdp_client_mode,
-          )
-        ) {
-          recordRecentConnection(connection.id);
-          return;
-        }
-      } catch (error) {
-        const errorMessage = getErrorMessage(error);
-        logger.error({
-          domain: "session.lifecycle",
-          event: "connection.external_rdp_open_failed",
-          message: "Windows Remote Desktop launch failed from tab menu",
-          ids: { connection_id: connection.id },
-          error,
-        });
-        toast.error(
-          t("savedConnections.connectionFailed", { error: errorMessage }),
-        );
-        return;
-      }
 
       if (targetLeaf?.activeTabId) {
         handleSelectLeafTab(leafId, targetLeaf.activeTabId);

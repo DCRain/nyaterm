@@ -871,6 +871,7 @@
     "rdpSecurity": "Security",
     "rdpSmartCards": "Smart cards",
     "rdpTransferFiles": "Transfer files to remote",
+    "rdpTransferFilesRequiresClipboard": "File transfer requires clipboard mode “Text and files”. Change it in the connection settings.",
     "rdpUseNla": "Network Level Authentication",
     "rdpUseNlaDesc": "Use NLA/CredSSP when the remote host supports it.",
     "rdpUsernamePlaceholder": "administrator",

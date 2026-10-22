@@ -870,6 +870,7 @@
     "rdpSecurity": "보안",
     "rdpSmartCards": "스마트 카드",
     "rdpTransferFiles": "원격으로 파일 전송",
+    "rdpTransferFilesRequiresClipboard": "파일 전송에는 클립보드 모드 “텍스트 및 파일”이 필요합니다. 연결 설정에서 변경하세요.",
     "rdpUseNla": "네트워크 수준 인증",
     "rdpUseNlaDesc": "원격 호스트가 지원하면 NLA/CredSSP를 사용합니다.",
     "rdpUsernamePlaceholder": "administrator",

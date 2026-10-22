@@ -37,16 +37,23 @@ export function isRemoteDesktopConnection(
   return connection?.type === "rdp" || connection?.type === "vnc";
 }
 
-/** VNC always external; RDP external unless explicitly set to builtin IronRDP. */
+/**
+ * Whether to open via the legacy `launch_remote_desktop` path (mstsc/FreeRDP auto-select).
+ * Prefers `rdp_client_mode` when set so builtin/windows are not misrouted by the default
+ * legacy `client_mode: "external"`. Unset `rdp_client_mode` keeps the old `client_mode` check.
+ */
 export function shouldLaunchExternalRemoteDesktop(
-  connection: Pick<SavedConnection, "type" | "client_mode"> | null | undefined,
+  connection: Pick<SavedConnection, "type" | "client_mode" | "rdp_client_mode"> | null | undefined,
 ): boolean {
   if (!connection) return false;
   if (connection.type === "vnc") return true;
-  if (connection.type === "rdp") {
-    return connection.client_mode !== "builtin";
+  if (connection.type !== "rdp") return false;
+  // Explicit per-connection modes take the dedicated paths (IronRDP / launch_windows_rdp).
+  if (connection.rdp_client_mode === "builtin" || connection.rdp_client_mode === "windows") {
+    return false;
   }
-  return false;
+  // Legacy connections without rdp_client_mode: external unless client_mode is builtin.
+  return connection.client_mode !== "builtin";
 }
 
 export async function listRemoteDesktopClients(

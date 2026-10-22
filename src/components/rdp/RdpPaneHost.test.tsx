@@ -444,7 +444,7 @@ describe("RdpPaneHost", () => {
     });
   });
 
-  it("hides the transfer button when clipboard mode is not text-and-files", async () => {
+  it("keeps the transfer button visible in text-only clipboard mode", async () => {
     render(
       <RdpPaneHost
         pane={rdpPane({
@@ -453,6 +453,34 @@ describe("RdpPaneHost", () => {
             remoteHeight: 1080,
             scaleMode: "fit",
             clipboardMode: "text-only",
+          },
+        })}
+        active
+        visible
+      />,
+    );
+
+    await waitFor(() => expect(listeners.has("rdp-state-rdp-session")).toBe(true));
+    act(() => {
+      listeners.get("rdp-state-rdp-session")?.({
+        payload: { sessionId: "rdp-session", state: "active" },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Transfer files to remote" })).not.toBeNull();
+    });
+  });
+
+  it("hides the transfer button when clipboard is disabled", async () => {
+    render(
+      <RdpPaneHost
+        pane={rdpPane({
+          display: {
+            remoteWidth: 1920,
+            remoteHeight: 1080,
+            scaleMode: "fit",
+            clipboardMode: "disabled",
           },
         })}
         active

@@ -870,6 +870,7 @@
     "rdpSecurity": "安全",
     "rdpSmartCards": "智慧卡",
     "rdpTransferFiles": "傳輸檔案到遠端",
+    "rdpTransferFilesRequiresClipboard": "檔案傳輸需要將剪貼簿設為「文字與檔案」，請在連線設定中修改。",
     "rdpUseNla": "網路層級驗證",
     "rdpUseNlaDesc": "遠端主機支援時使用 NLA/CredSSP。",
     "rdpUsernamePlaceholder": "administrator",

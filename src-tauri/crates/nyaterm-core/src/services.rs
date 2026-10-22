@@ -101,6 +101,24 @@ pub fn save_connection(app: &impl Sized, mut connection: SavedConnection) -> App
 pub fn normalize_connection_for_save(connection: &mut SavedConnection) {
     config::migrate_legacy_ssh_agent_settings(connection);
     config::migrate_legacy_asset_tags(connection);
+    normalize_rdp_client_mode_fields(connection);
+}
+
+/// Keep legacy `client_mode` aligned with `rdp_client_mode` when the latter is set.
+fn normalize_rdp_client_mode_fields(connection: &mut SavedConnection) {
+    let config::ConnectionType::Rdp {
+        rdp_client_mode,
+        client_mode,
+        ..
+    } = &mut connection.config
+    else {
+        return;
+    };
+    match rdp_client_mode.as_deref() {
+        Some("builtin") => *client_mode = "builtin".to_string(),
+        Some("windows") => *client_mode = "external".to_string(),
+        _ => {}
+    }
 }
 
 pub fn validate_ssh_algorithm_config(connection: &SavedConnection) -> AppResult<()> {
@@ -541,4 +559,95 @@ pub fn merge_webdav_secrets_for_save(
     };
     *has_password = false;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{
+        ConnectionType, RdpClipboardSettings, RdpDisplaySettings, RdpReconnectSettings,
+        RdpSecuritySettings, SavedConnection,
+    };
+
+    fn sample_rdp(rdp_client_mode: Option<&str>, client_mode: &str) -> SavedConnection {
+        SavedConnection {
+            id: "rdp-1".to_string(),
+            name: "RDP".to_string(),
+            config: ConnectionType::Rdp {
+                rdp_client_mode: rdp_client_mode.map(str::to_string),
+                host: "example.com".to_string(),
+                port: 3389,
+                username: "administrator".to_string(),
+                domain: String::new(),
+                client_mode: client_mode.to_string(),
+                security: RdpSecuritySettings::default(),
+                display: RdpDisplaySettings::default(),
+                clipboard: RdpClipboardSettings::default(),
+                reconnect: RdpReconnectSettings::default(),
+                display_mode: "fullscreen".to_string(),
+                width: 1920,
+                height: 1080,
+                redirect_clipboard: true,
+                redirect_printers: false,
+                redirect_com_ports: false,
+                redirect_smart_cards: false,
+                drive_redirect: String::new(),
+                device_redirect: String::new(),
+                camera_redirect: String::new(),
+                audio_mode: 0,
+                audio_capture: true,
+                keyboard_hook: 2,
+                preferred_client: String::new(),
+            },
+            group_id: None,
+            description: None,
+            tags: Vec::new(),
+            sort_order: 0,
+            open_on_startup: false,
+            icon: None,
+            icon_auto_detect: None,
+            auth: None,
+            network: None,
+            post_login: None,
+            recording: None,
+            ssh_algorithms: None,
+            ssh_profile: Default::default(),
+            terminal_type: None,
+            sftp: Default::default(),
+            asset: None,
+            created_at_ms: None,
+            updated_at_ms: None,
+            last_used_at_ms: None,
+        }
+    }
+
+    #[test]
+    fn normalize_syncs_legacy_client_mode_from_rdp_client_mode() {
+        let mut builtin = sample_rdp(Some("builtin"), "external");
+        normalize_connection_for_save(&mut builtin);
+        let ConnectionType::Rdp {
+            client_mode,
+            rdp_client_mode,
+            ..
+        } = &builtin.config
+        else {
+            panic!("expected RDP");
+        };
+        assert_eq!(rdp_client_mode.as_deref(), Some("builtin"));
+        assert_eq!(client_mode, "builtin");
+
+        let mut windows = sample_rdp(Some("windows"), "builtin");
+        normalize_connection_for_save(&mut windows);
+        let ConnectionType::Rdp { client_mode, .. } = &windows.config else {
+            panic!("expected RDP");
+        };
+        assert_eq!(client_mode, "external");
+
+        let mut legacy = sample_rdp(None, "external");
+        normalize_connection_for_save(&mut legacy);
+        let ConnectionType::Rdp { client_mode, .. } = &legacy.config else {
+            panic!("expected RDP");
+        };
+        assert_eq!(client_mode, "external");
+    }
 }

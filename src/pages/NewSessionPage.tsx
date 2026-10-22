@@ -1379,6 +1379,8 @@ export default function NewSessionPage() {
         ...(currentTab === "rdp"
           ? {
               rdp_client_mode: rdpClientMode,
+              // Keep legacy client_mode in sync so older launch paths stay consistent.
+              client_mode: rdpClientMode === "builtin" ? "builtin" : "external",
               host: normalizedHost,
               port: rdpPort,
               username: normalizedUsername,

@@ -66,11 +66,20 @@ export function resolveRdpClipboardMode(
   return "text-only";
 }
 
+/** True when CLIPRDR file offers are supported (requires “text and files”). */
 export function isRdpFileTransferEnabled(
   display?: RemoteDesktopDisplayMetadata | null,
   connection?: SavedConnection | null,
 ): boolean {
   return resolveRdpClipboardMode(display, connection) === "text-and-files";
+}
+
+/** Show the floating chrome transfer control unless clipboard is fully disabled. */
+export function isRdpFileTransferChromeVisible(
+  display?: RemoteDesktopDisplayMetadata | null,
+  connection?: SavedConnection | null,
+): boolean {
+  return resolveRdpClipboardMode(display, connection) !== "disabled";
 }
 
 export function getRemoteDesktopPaneDisplay(connection: SavedConnection | null | undefined) {

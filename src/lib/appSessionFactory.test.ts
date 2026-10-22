@@ -5,6 +5,7 @@ import {
   createSessionForConnection,
   createSessionForPane,
   createTemporarySession,
+  isRdpFileTransferChromeVisible,
   isRdpFileTransferEnabled,
   launchSavedRdpWithSystemClient,
   resolveRdpClientMode,
@@ -30,6 +31,8 @@ describe("resolveRdpClipboardMode", () => {
     expect(resolveRdpClipboardMode(undefined, connection)).toBe("text-and-files");
     expect(isRdpFileTransferEnabled(undefined, connection)).toBe(true);
     expect(isRdpFileTransferEnabled({ clipboardMode: "text-only" }, connection)).toBe(false);
+    expect(isRdpFileTransferChromeVisible({ clipboardMode: "text-only" }, null)).toBe(true);
+    expect(isRdpFileTransferChromeVisible({ clipboardMode: "disabled" }, null)).toBe(false);
   });
 });
 
