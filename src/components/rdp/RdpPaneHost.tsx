@@ -1,4 +1,3 @@
-import { Channel } from "@tauri-apps/api/core";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { ShieldAlert, Upload } from "lucide-react";
 import { listen } from "@/lib/backend/api";
@@ -31,7 +30,7 @@ import {
   isRdpFileTransferEnabled,
 } from "@/lib/appSessionFactory";
 import { invoke } from "@/lib/invoke";
-import { decodeRdpFramePatch } from "@/lib/rdpFrame";
+import { RdpFrameSubscription } from "@/lib/rdpFrameSubscription";
 import {
   buildRdpUnicodeInput,
   rdpBeforeInputText,
@@ -47,6 +46,7 @@ import {
   keepDesktopSizeIfUnchanged,
   shouldDisableDynamicResizeAfterState,
 } from "@/lib/rdpResize";
+import { RemoteDesktopFrameQueue } from "@/lib/remoteDesktopFrameQueue";
 import {
   getRemoteDesktopContentRect,
   mapClientEventToRemoteDesktopPixel,
@@ -179,6 +179,10 @@ function RdpPaneHost({
   const imeRef = useRef<HTMLTextAreaElement | null>(null);
   const cursorRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<RemoteDesktopRenderer | null>(null);
+  const framesRef = useRef<RdpFrameSubscription | null>(null);
+  const pendingFramesRef = useRef(new RemoteDesktopFrameQueue());
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
   const pressedKeysRef = useRef(new Set<string>());
   const composingRef = useRef(false);
   const printableFallbackTimersRef = useRef(new Set<number>());
@@ -256,28 +260,60 @@ function RdpPaneHost({
     lastResizeRef.current = null;
     lastResizeSentAtRef.current = null;
     dynamicResizeDisabledRef.current = false;
+    pendingFramesRef.current.clear();
 
-    const channel = new Channel<ArrayBuffer>((frame) => {
-      const patch = decodeRdpFramePatch(frame);
-      setDesktopSize((current) =>
-        keepDesktopSizeIfUnchanged(current, {
-          width: patch.desktopWidth,
-          height: patch.desktopHeight,
-        }),
-      );
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      rendererRef.current ??= createRemoteDesktopRenderer(canvas);
-      rendererRef.current?.draw(patch);
+    if (pane.connecting || pane.connectError) return;
+
+    const frames = new RdpFrameSubscription({
+      sessionId: pane.sessionId,
+      onPatch: (patch) => {
+        setDesktopSize((current) =>
+          keepDesktopSizeIfUnchanged(current, {
+            width: patch.desktopWidth,
+            height: patch.desktopHeight,
+          }),
+        );
+        if (!pendingFramesRef.current.push(patch)) {
+          frames.recover("queue-overflow");
+          return;
+        }
+        const canvas = canvasRef.current;
+        if (!canvas) {
+          pendingFramesRef.current.clear();
+          return;
+        }
+        rendererRef.current ??= createRemoteDesktopRenderer(canvas);
+        const patches = pendingFramesRef.current.take();
+        try {
+          for (const pending of patches) {
+            rendererRef.current?.draw(pending);
+          }
+          frames.presented();
+        } catch {
+          pendingFramesRef.current.clear();
+          frames.recover("render-failed");
+        }
+      },
+      onReset: () => {
+        pendingFramesRef.current.clear();
+      },
+      onFailure: () => {
+        setState("failed");
+        setMessage(t("terminal.rdpDisplayRecoveryFailed"));
+      },
     });
+    framesRef.current = frames;
+    frames.start(visibleRef.current);
+    return () => {
+      frames.stop();
+      if (framesRef.current === frames) framesRef.current = null;
+      pendingFramesRef.current.clear();
+    };
+  }, [pane.connectError, pane.connecting, pane.sessionId, t]);
 
-    if (!pane.connecting && !pane.connectError) {
-      void invoke("rdp_attach_frame_channel", {
-        sessionId: pane.sessionId,
-        frameChannel: channel,
-      });
-    }
-  }, [pane.connectError, pane.connecting, pane.sessionId]);
+  useEffect(() => {
+    framesRef.current?.setVisible(visible);
+  }, [visible]);
 
   useEffect(() => {
     desktopSizeRef.current = desktopSize;
@@ -292,6 +328,9 @@ function RdpPaneHost({
 
   useEffect(() => {
     const unlisten = listen<RdpStatePayload>(`rdp-state-${pane.sessionId}`, (event) => {
+      if (event.payload.state === "reconnecting") {
+        framesRef.current?.resetForReconnect();
+      }
       setState(event.payload.state);
       setMessage(event.payload.message ?? null);
       if (event.payload.state !== "active") {
@@ -314,6 +353,15 @@ function RdpPaneHost({
       void unlisten.then((dispose) => dispose());
     };
   }, [onConnectionError, pane.sessionId]);
+
+  useEffect(() => {
+    const unlisten = listen(`rdp-frame-backpressure-${pane.sessionId}`, () => {
+      framesRef.current?.recover("backend-backpressure");
+    });
+    return () => {
+      void unlisten.then((dispose) => dispose());
+    };
+  }, [pane.sessionId]);
 
   useEffect(() => {
     if (state !== "active") {

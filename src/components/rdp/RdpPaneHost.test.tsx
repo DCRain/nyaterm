@@ -92,6 +92,10 @@ describe("RdpPaneHost", () => {
       });
     });
     expect(listenMock).toHaveBeenCalledWith("rdp-state-rdp-session", expect.any(Function));
+    expect(listenMock).toHaveBeenCalledWith(
+      "rdp-frame-backpressure-rdp-session",
+      expect.any(Function),
+    );
     expect(listenMock).toHaveBeenCalledWith("rdp-pointer-rdp-session", expect.any(Function));
   });
 

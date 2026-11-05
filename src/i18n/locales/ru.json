@@ -3690,6 +3690,7 @@
     "tabDockSplitLeft": "Разделить слева",
     "tabDockSplitRight": "Разделить справа",
     "tabDockSplitTop": "Разделить сверху",
+    "rdpDisplayRecoveryFailed": "Не удалось восстановить изображение RDP. Переподключите сеанс и повторите попытку.",
     "vncDisplayRecoveryFailed": "Не удалось восстановить изображение VNC. Переподключите сеанс и повторите попытку.",
     "xmodemSingleFileOnly": "XMODEM может загружать только один файл за раз."
   },

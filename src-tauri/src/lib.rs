@@ -302,6 +302,7 @@ pub fn run() {
             cmd::rdp::create_rdp_session,
             cmd::rdp::launch_windows_rdp,
             cmd::rdp::rdp_attach_frame_channel,
+            cmd::rdp::rdp_detach_frame_channel,
             cmd::rdp::rdp_input_batch,
             cmd::rdp::rdp_set_keyboard_capture,
             cmd::rdp::rdp_resize,

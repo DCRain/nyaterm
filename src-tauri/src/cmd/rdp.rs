@@ -89,6 +89,14 @@ pub async fn rdp_attach_frame_channel(
 }
 
 #[tauri::command]
+pub async fn rdp_detach_frame_channel(
+    state: tauri::State<'_, Arc<RdpSessionManager>>,
+    session_id: String,
+) -> AppResult<()> {
+    state.detach_frame_channel(&session_id).await
+}
+
+#[tauri::command]
 pub async fn rdp_input_batch(
     state: tauri::State<'_, Arc<RdpSessionManager>>,
     session_id: String,

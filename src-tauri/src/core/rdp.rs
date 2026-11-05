@@ -32,7 +32,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 use std::thread::JoinHandle;
 use std::{fmt, io};
@@ -45,6 +45,10 @@ use tokio::time::{Duration, sleep};
 use x509_cert::der::Decode as _;
 
 const MAX_FRAME_QUEUE: usize = 2;
+/// Cap unacked IPC frame bytes per attach. Tauri Channel queues large Raw payloads
+/// unboundedly; without this, a slow WebView grows RSS until OOM.
+const MIN_IPC_FRAME_BUDGET_BYTES: usize = 64 * 1024 * 1024;
+const WORKER_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_CLIPBOARD_TEXT_BYTES: usize = 16 * 1024 * 1024;
 const CERTIFICATE_PROMPT_TIMEOUT: Duration = Duration::from_secs(120);
 const RDP_MIN_WIDTH: u32 = 640;
@@ -189,13 +193,109 @@ pub struct RdpConnectConfig {
     pub network: Option<ConnectionNetwork>,
 }
 
+struct RdpFramebuffer {
+    width: u16,
+    height: u16,
+    rgba: Vec<u8>,
+}
+
+impl RdpFramebuffer {
+    fn new(width: u16, height: u16) -> AppResult<Self> {
+        if width == 0 || height == 0 {
+            return Err(AppError::Config(
+                "RDP framebuffer dimensions must be non-zero".to_string(),
+            ));
+        }
+        let len = usize::from(width)
+            .checked_mul(usize::from(height))
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| AppError::Config("RDP framebuffer size overflows".to_string()))?;
+        Ok(Self {
+            width,
+            height,
+            rgba: vec![0; len],
+        })
+    }
+
+    fn apply_rgba(&mut self, x: u16, y: u16, width: u16, height: u16, pixels: &[u8]) -> AppResult<()> {
+        let row_bytes = usize::from(width)
+            .checked_mul(4)
+            .ok_or_else(|| AppError::Config("RDP rectangle row size overflows".to_string()))?;
+        let required = row_bytes
+            .checked_mul(usize::from(height))
+            .ok_or_else(|| AppError::Config("RDP rectangle payload size overflows".to_string()))?;
+        if pixels.len() != required {
+            return Err(AppError::Config(
+                "RDP rectangle payload length is invalid".to_string(),
+            ));
+        }
+        if u32::from(x) + u32::from(width) > u32::from(self.width)
+            || u32::from(y) + u32::from(height) > u32::from(self.height)
+        {
+            return Err(AppError::Config(
+                "RDP rectangle is outside the framebuffer".to_string(),
+            ));
+        }
+        let framebuffer_stride = usize::from(self.width) * 4;
+        for row in 0..usize::from(height) {
+            let src_start = row * row_bytes;
+            let dst_start =
+                (usize::from(y) + row) * framebuffer_stride + usize::from(x) * 4;
+            self.rgba[dst_start..dst_start + row_bytes]
+                .copy_from_slice(&pixels[src_start..src_start + row_bytes]);
+        }
+        Ok(())
+    }
+
+    fn full_frame_bytes(&self, sequence: u64) -> AppResult<Vec<u8>> {
+        encode_frame_patch(&RemoteDesktopFramePatch {
+            sequence,
+            desktop_width: u32::from(self.width),
+            desktop_height: u32::from(self.height),
+            x: 0,
+            y: 0,
+            width: u32::from(self.width),
+            height: u32::from(self.height),
+            stride: u32::from(self.width) * 4,
+            pixel_format: RemoteDesktopPixelFormat::Rgba8888,
+            payload: &self.rgba,
+        })
+    }
+
+    fn ipc_budget_bytes(&self) -> usize {
+        let desktop_bytes = self.rgba.len();
+        MIN_IPC_FRAME_BUDGET_BYTES.max(desktop_bytes.saturating_mul(2))
+    }
+}
+
+#[derive(Clone)]
+struct RdpFrameChannel(Arc<dyn Fn(Vec<u8>) -> Result<(), ()> + Send + Sync>);
+
+impl RdpFrameChannel {
+    fn from_tauri(channel: Channel<InvokeResponseBody>) -> Self {
+        Self(Arc::new(move |frame| {
+            channel
+                .send(InvokeResponseBody::Raw(frame))
+                .map(|_| ())
+                .map_err(|_| ())
+        }))
+    }
+
+    fn send(&self, frame: Vec<u8>) -> Result<(), ()> {
+        (self.0)(frame)
+    }
+}
+
 pub struct RdpSession {
     pub config: RdpConnectConfig,
     pub state: Mutex<RdpSessionState>,
     message: Mutex<Option<String>>,
     error_kind: Mutex<Option<RdpErrorKind>>,
     generation: Mutex<u64>,
-    frame_channel: Mutex<Option<Channel<InvokeResponseBody>>>,
+    frame_channel: Mutex<Option<(u64, RdpFrameChannel)>>,
+    frame_attach_id: AtomicU64,
+    framebuffer: Mutex<Option<RdpFramebuffer>>,
+    outstanding_frame_bytes: AtomicUsize,
     pending_frames: Mutex<VecDeque<Vec<u8>>>,
     input_sender: Mutex<Option<IronRdpInputSender>>,
     input_database: Mutex<IronRdpInputDatabase>,
@@ -309,6 +409,9 @@ impl RdpSessionManager {
             error_kind: Mutex::new(None),
             generation: Mutex::new(0),
             frame_channel: Mutex::new(None),
+            frame_attach_id: AtomicU64::new(0),
+            framebuffer: Mutex::new(None),
+            outstanding_frame_bytes: AtomicUsize::new(0),
             pending_frames: Mutex::new(VecDeque::with_capacity(MAX_FRAME_QUEUE)),
             input_sender: Mutex::new(None),
             input_database: Mutex::new(IronRdpInputDatabase::new()),
@@ -343,12 +446,28 @@ impl RdpSessionManager {
         channel: Channel<InvokeResponseBody>,
     ) -> AppResult<()> {
         let session = self.get(session_id).await?;
-        {
-            let mut current = session.frame_channel.lock().await;
-            *current = Some(channel);
+        let attach_id = session.frame_attach_id.fetch_add(1, Ordering::AcqRel) + 1;
+        *session.frame_channel.lock().await =
+            Some((attach_id, RdpFrameChannel::from_tauri(channel)));
+        session.outstanding_frame_bytes.store(0, Ordering::Relaxed);
+
+        // Framebuffer is authoritative; replaying partial history before it fills
+        // bounded WebView queues and can perpetuate refresh overflows.
+        if session.framebuffer.lock().await.is_some() {
+            session.pending_frames.lock().await.clear();
+            send_full_frame(&session, Some(attach_id)).await?;
+        } else {
+            flush_pending_frames(&session, attach_id).await;
         }
-        flush_pending_frames(&session).await;
         emit_current_state(app, &session).await;
+        Ok(())
+    }
+
+    pub async fn detach_frame_channel(&self, session_id: &str) -> AppResult<()> {
+        let session = self.get(session_id).await?;
+        session.frame_attach_id.fetch_add(1, Ordering::AcqRel);
+        *session.frame_channel.lock().await = None;
+        session.outstanding_frame_bytes.store(0, Ordering::Relaxed);
         Ok(())
     }
 
@@ -415,6 +534,7 @@ impl RdpSessionManager {
         session.close_requested.store(false, Ordering::SeqCst);
         let generation = bump_generation(&session).await;
         *session.reconnect_attempts.lock().await = 0;
+        reset_frame_pipeline(&session).await;
         shutdown_worker(&session).await;
         set_state(
             &session,
@@ -784,8 +904,8 @@ fn spawn_ironrdp_engine(app: AppHandle, session: Arc<RdpSession>, generation: u6
                             emit_state(&app, &session_id, RdpSessionState::Active, None, None);
                             let _ = app.emit("sessions-changed", ());
                         }
-                        let sequence = next_frame_sequence(&session).await;
-                        match build_frame_from_ironrdp_image(
+                        match apply_ironrdp_update_and_encode(
+                            &session,
                             &buffer,
                             desktop_width.get(),
                             desktop_height.get(),
@@ -793,9 +913,12 @@ fn spawn_ironrdp_engine(app: AppHandle, session: Arc<RdpSession>, generation: u6
                             region.top,
                             region.width(),
                             region.height(),
-                            sequence,
-                        ) {
-                            Ok(frame) => queue_or_send_frame(&session, frame).await,
+                        )
+                        .await
+                        {
+                            Ok(frame) => {
+                                queue_or_send_frame(Some(&app), &session, frame).await;
+                            }
                             Err(error) => tracing::warn!(
                                 session_id = %session_id,
                                 "Discarded invalid RDP frame patch: {error}"
@@ -807,8 +930,8 @@ fn spawn_ironrdp_engine(app: AppHandle, session: Arc<RdpSession>, generation: u6
                         width,
                         height,
                     } => {
-                        let sequence = next_frame_sequence(&session).await;
-                        match build_frame_from_ironrdp_image(
+                        match apply_ironrdp_update_and_encode(
+                            &session,
                             &buffer,
                             width.get(),
                             height.get(),
@@ -816,9 +939,12 @@ fn spawn_ironrdp_engine(app: AppHandle, session: Arc<RdpSession>, generation: u6
                             0,
                             width.get(),
                             height.get(),
-                            sequence,
-                        ) {
-                            Ok(frame) => queue_or_send_frame(&session, frame).await,
+                        )
+                        .await
+                        {
+                            Ok(frame) => {
+                                queue_or_send_frame(Some(&app), &session, frame).await;
+                            }
                             Err(error) => tracing::warn!(
                                 session_id = %session_id,
                                 "Discarded invalid full RDP frame: {error}"
@@ -1393,6 +1519,21 @@ async fn shutdown_worker(session: &RdpSession) {
         if let Some(handle) = worker.join_handle.take() {
             if handle.is_finished() {
                 let _ = handle.join();
+            } else {
+                // Bound join so previous IronRDP generations cannot stack DecodedImage
+                // buffers while a slow thread refuses to exit.
+                let (done_tx, done_rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let _ = handle.join();
+                    let _ = done_tx.send(());
+                });
+                if done_rx.recv_timeout(WORKER_JOIN_TIMEOUT).is_err() {
+                    tracing::warn!(
+                        session_id = %session.config.session_id,
+                        generation = worker.generation,
+                        "RDP worker join timed out; detaching leftover thread"
+                    );
+                }
             }
         }
     }
@@ -1459,6 +1600,7 @@ async fn schedule_auto_reconnect(
             return;
         }
         let generation = bump_generation(&task_session).await;
+        reset_frame_pipeline(&task_session).await;
         spawn_ironrdp_engine(task_app, task_session, generation);
     });
     *session.reconnect_task.lock().await = Some(task);
@@ -1628,18 +1770,9 @@ async fn next_frame_sequence(session: &RdpSession) -> u64 {
     current
 }
 
-fn build_frame_from_ironrdp_image(
-    pixels: &[u32],
-    desktop_width: u16,
-    desktop_height: u16,
-    patch_x: u16,
-    patch_y: u16,
-    patch_width: u16,
-    patch_height: u16,
-    sequence: u64,
-) -> AppResult<Vec<u8>> {
-    let pixel_count = usize::from(patch_width)
-        .checked_mul(usize::from(patch_height))
+fn ironrdp_pixels_to_rgba(pixels: &[u32], width: u16, height: u16) -> AppResult<Vec<u8>> {
+    let pixel_count = usize::from(width)
+        .checked_mul(usize::from(height))
         .ok_or_else(|| AppError::Config("RDP frame pixel count overflows".to_string()))?;
     if pixels.len() < pixel_count {
         return Err(AppError::Config(
@@ -1658,7 +1791,21 @@ fn build_frame_from_ironrdp_image(
         payload[offset + 2] = blue;
         payload[offset + 3] = 255;
     }
+    Ok(payload)
+}
 
+#[cfg(test)]
+fn build_frame_from_ironrdp_image(
+    pixels: &[u32],
+    desktop_width: u16,
+    desktop_height: u16,
+    patch_x: u16,
+    patch_y: u16,
+    patch_width: u16,
+    patch_height: u16,
+    sequence: u64,
+) -> AppResult<Vec<u8>> {
+    let payload = ironrdp_pixels_to_rgba(pixels, patch_width, patch_height)?;
     encode_frame_patch(&RemoteDesktopFramePatch {
         sequence,
         desktop_width: u32::from(desktop_width),
@@ -1670,6 +1817,56 @@ fn build_frame_from_ironrdp_image(
         stride: u32::from(patch_width) * 4,
         pixel_format: RemoteDesktopPixelFormat::Rgba8888,
         payload: &payload,
+    })
+}
+
+async fn ensure_framebuffer(
+    session: &RdpSession,
+    desktop_width: u16,
+    desktop_height: u16,
+) -> AppResult<()> {
+    let mut framebuffer = session.framebuffer.lock().await;
+    let needs_rebuild = match framebuffer.as_ref() {
+        Some(fb) => fb.width != desktop_width || fb.height != desktop_height,
+        None => true,
+    };
+    if needs_rebuild {
+        *framebuffer = Some(RdpFramebuffer::new(desktop_width, desktop_height)?);
+    }
+    Ok(())
+}
+
+async fn apply_ironrdp_update_and_encode(
+    session: &RdpSession,
+    pixels: &[u32],
+    desktop_width: u16,
+    desktop_height: u16,
+    patch_x: u16,
+    patch_y: u16,
+    patch_width: u16,
+    patch_height: u16,
+) -> AppResult<Vec<u8>> {
+    let rgba = ironrdp_pixels_to_rgba(pixels, patch_width, patch_height)?;
+    ensure_framebuffer(session, desktop_width, desktop_height).await?;
+    {
+        let mut framebuffer = session.framebuffer.lock().await;
+        let framebuffer = framebuffer
+            .as_mut()
+            .ok_or_else(|| AppError::Config("RDP framebuffer missing".to_string()))?;
+        framebuffer.apply_rgba(patch_x, patch_y, patch_width, patch_height, &rgba)?;
+    }
+    let sequence = next_frame_sequence(session).await;
+    encode_frame_patch(&RemoteDesktopFramePatch {
+        sequence,
+        desktop_width: u32::from(desktop_width),
+        desktop_height: u32::from(desktop_height),
+        x: u32::from(patch_x),
+        y: u32::from(patch_y),
+        width: u32::from(patch_width),
+        height: u32::from(patch_height),
+        stride: u32::from(patch_width) * 4,
+        pixel_format: RemoteDesktopPixelFormat::Rgba8888,
+        payload: &rgba,
     })
 }
 
@@ -1753,36 +1950,196 @@ async fn bump_generation(session: &RdpSession) -> u64 {
     *generation
 }
 
-async fn queue_or_send_frame(session: &RdpSession, frame: Vec<u8>) {
-    let frame = {
-        let channel = session.frame_channel.lock().await;
-        if let Some(sender) = channel.as_ref() {
-            let _ = sender.send(InvokeResponseBody::Raw(frame));
-            return;
-        }
-        frame
-    };
+async fn reset_frame_pipeline(session: &RdpSession) {
+    session.frame_attach_id.fetch_add(1, Ordering::AcqRel);
+    *session.frame_channel.lock().await = None;
+    session.outstanding_frame_bytes.store(0, Ordering::Relaxed);
+    session.pending_frames.lock().await.clear();
+    *session.framebuffer.lock().await = None;
+}
 
-    {
-        let mut pending = session.pending_frames.lock().await;
-        while pending.len() >= MAX_FRAME_QUEUE {
-            pending.pop_front();
+async fn ipc_frame_budget(session: &RdpSession) -> usize {
+    session
+        .framebuffer
+        .lock()
+        .await
+        .as_ref()
+        .map(RdpFramebuffer::ipc_budget_bytes)
+        .unwrap_or(MIN_IPC_FRAME_BUDGET_BYTES)
+}
+
+async fn push_pending_frame(session: &RdpSession, frame: Vec<u8>) {
+    let mut pending = session.pending_frames.lock().await;
+    while pending.len() >= MAX_FRAME_QUEUE {
+        pending.pop_front();
+    }
+    pending.push_back(frame);
+}
+
+async fn retain_latest_full_frame_pending(session: &RdpSession) {
+    let full_frame = {
+        let framebuffer = session.framebuffer.lock().await;
+        match framebuffer.as_ref() {
+            Some(fb) => {
+                let sequence = next_frame_sequence(session).await;
+                fb.full_frame_bytes(sequence).ok()
+            }
+            None => None,
         }
+    };
+    let mut pending = session.pending_frames.lock().await;
+    pending.clear();
+    if let Some(frame) = full_frame {
         pending.push_back(frame);
     }
 }
 
-async fn flush_pending_frames(session: &RdpSession) {
-    let channel = session.frame_channel.lock().await;
-    let Some(channel) = channel.as_ref() else {
+async fn detach_slow_frame_channel(app: Option<&AppHandle>, session: &RdpSession) {
+    *session.frame_channel.lock().await = None;
+    session.outstanding_frame_bytes.store(0, Ordering::Relaxed);
+    retain_latest_full_frame_pending(session).await;
+    if let Some(app) = app {
+        let _ = app.emit(
+            &format!("rdp-frame-backpressure-{}", session.config.session_id),
+            (),
+        );
+    }
+}
+
+async fn queue_or_send_frame(app: Option<&AppHandle>, session: &RdpSession, frame: Vec<u8>) {
+    let attach_id = session.frame_attach_id.load(Ordering::Acquire);
+    let frame_len = frame.len();
+    let budget = ipc_frame_budget(session).await;
+    let outstanding = session.outstanding_frame_bytes.load(Ordering::Relaxed);
+    if outstanding.saturating_add(frame_len) > budget {
+        detach_slow_frame_channel(app, session).await;
         return;
+    }
+
+    let sent = {
+        let mut channel = session.frame_channel.lock().await;
+        match channel.as_ref() {
+            Some((current_attach_id, sender)) if *current_attach_id == attach_id => {
+                if sender.send(frame).is_ok() {
+                    true
+                } else {
+                    if channel
+                        .as_ref()
+                        .is_some_and(|(id, _)| *id == attach_id)
+                    {
+                        *channel = None;
+                    }
+                    false
+                }
+            }
+            _ => {
+                drop(channel);
+                push_pending_frame(session, frame).await;
+                return;
+            }
+        }
     };
-    let mut pending = session.pending_frames.lock().await;
-    while let Some(frame) = pending.pop_front() {
-        if channel.send(InvokeResponseBody::Raw(frame)).is_err() {
+
+    if sent {
+        session
+            .outstanding_frame_bytes
+            .fetch_add(frame_len, Ordering::Relaxed);
+    } else {
+        detach_slow_frame_channel(app, session).await;
+    }
+}
+
+async fn flush_pending_frames(session: &RdpSession, attach_id: u64) {
+    let frames = {
+        let mut pending = session.pending_frames.lock().await;
+        pending.drain(..).collect::<Vec<_>>()
+    };
+    for frame in frames {
+        let frame_len = frame.len();
+        let budget = ipc_frame_budget(session).await;
+        let outstanding = session.outstanding_frame_bytes.load(Ordering::Relaxed);
+        if outstanding.saturating_add(frame_len) > budget {
+            push_pending_frame(session, frame).await;
+            *session.frame_channel.lock().await = None;
+            session.outstanding_frame_bytes.store(0, Ordering::Relaxed);
+            break;
+        }
+        let sent = {
+            let mut channel = session.frame_channel.lock().await;
+            match channel.as_ref() {
+                Some((current_attach_id, sender)) if *current_attach_id == attach_id => {
+                    if sender.send(frame).is_ok() {
+                        true
+                    } else {
+                        if channel
+                            .as_ref()
+                            .is_some_and(|(id, _)| *id == attach_id)
+                        {
+                            *channel = None;
+                        }
+                        false
+                    }
+                }
+                _ => {
+                    drop(channel);
+                    push_pending_frame(session, frame).await;
+                    return;
+                }
+            }
+        };
+        if sent {
+            session
+                .outstanding_frame_bytes
+                .fetch_add(frame_len, Ordering::Relaxed);
+        } else {
+            session.outstanding_frame_bytes.store(0, Ordering::Relaxed);
+            retain_latest_full_frame_pending(session).await;
             break;
         }
     }
+}
+
+async fn send_full_frame(session: &RdpSession, attach_id: Option<u64>) -> AppResult<()> {
+    let frame = {
+        let framebuffer = session.framebuffer.lock().await;
+        let Some(framebuffer) = framebuffer.as_ref() else {
+            return Ok(());
+        };
+        let sequence = next_frame_sequence(session).await;
+        framebuffer.full_frame_bytes(sequence)?
+    };
+
+    let Some(expected_attach_id) = attach_id else {
+        push_pending_frame(session, frame).await;
+        return Ok(());
+    };
+
+    let frame_len = frame.len();
+    let sent = {
+        let mut channel = session.frame_channel.lock().await;
+        match channel.as_ref() {
+            Some((current_attach_id, sender)) if *current_attach_id == expected_attach_id => {
+                if sender.send(frame.clone()).is_ok() {
+                    true
+                } else {
+                    if channel.as_ref().is_some_and(|(id, _)| *id == expected_attach_id) {
+                        *channel = None;
+                    }
+                    session.outstanding_frame_bytes.store(0, Ordering::Relaxed);
+                    false
+                }
+            }
+            _ => false,
+        }
+    };
+    if sent {
+        session
+            .outstanding_frame_bytes
+            .fetch_add(frame_len, Ordering::Relaxed);
+    } else {
+        push_pending_frame(session, frame).await;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1820,6 +2177,9 @@ mod tests {
             error_kind: Mutex::new(None),
             generation: Mutex::new(0),
             frame_channel: Mutex::new(None),
+            frame_attach_id: AtomicU64::new(0),
+            framebuffer: Mutex::new(None),
+            outstanding_frame_bytes: AtomicUsize::new(0),
             pending_frames: Mutex::new(VecDeque::with_capacity(MAX_FRAME_QUEUE)),
             input_sender: Mutex::new(None),
             input_database: Mutex::new(IronRdpInputDatabase::new()),
@@ -1831,6 +2191,21 @@ mod tests {
             close_requested: AtomicBool::new(false),
             pending_certificates: Arc::new(Mutex::new(HashMap::new())),
         })
+    }
+
+    async fn attach_test_channel(session: &RdpSession, channel: RdpFrameChannel) -> u64 {
+        let attach_id = session.frame_attach_id.fetch_add(1, Ordering::AcqRel) + 1;
+        *session.frame_channel.lock().await = Some((attach_id, channel));
+        session.outstanding_frame_bytes.store(0, Ordering::Relaxed);
+        if session.framebuffer.lock().await.is_some() {
+            session.pending_frames.lock().await.clear();
+            send_full_frame(session, Some(attach_id))
+                .await
+                .expect("full frame");
+        } else {
+            flush_pending_frames(session, attach_id).await;
+        }
+        attach_id
     }
 
     #[test]
@@ -1865,14 +2240,100 @@ mod tests {
     async fn pending_frame_queue_keeps_latest_frames_under_pressure() {
         let session = test_session();
 
-        queue_or_send_frame(&session, vec![1]).await;
-        queue_or_send_frame(&session, vec![2]).await;
-        queue_or_send_frame(&session, vec![3]).await;
+        queue_or_send_frame(None, &session, vec![1]).await;
+        queue_or_send_frame(None, &session, vec![2]).await;
+        queue_or_send_frame(None, &session, vec![3]).await;
 
         let pending = session.pending_frames.lock().await;
         assert_eq!(pending.len(), MAX_FRAME_QUEUE);
         assert_eq!(pending[0], vec![2]);
         assert_eq!(pending[1], vec![3]);
+    }
+
+    #[tokio::test]
+    async fn bounded_subscriber_recovers_dropped_patches_with_a_complete_frame() {
+        let session = test_session();
+        *session.framebuffer.lock().await = Some(RdpFramebuffer::new(2, 1).unwrap());
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(2);
+        let channel = RdpFrameChannel(Arc::new(move |bytes| {
+            tx.try_send(bytes).map(|_| ()).map_err(|_| ())
+        }));
+
+        attach_test_channel(&session, channel.clone()).await;
+        // Drain the initial full-frame snapshot from attach.
+        while rx.try_recv().is_ok() {}
+
+        for value in 1..=10u8 {
+            let rgba = [value, 20, 30, 255];
+            {
+                let mut framebuffer = session.framebuffer.lock().await;
+                framebuffer
+                    .as_mut()
+                    .unwrap()
+                    .apply_rgba(1, 0, 1, 1, &rgba)
+                    .unwrap();
+            }
+            let sequence = next_frame_sequence(&session).await;
+            let frame = encode_frame_patch(&RemoteDesktopFramePatch {
+                sequence,
+                desktop_width: 2,
+                desktop_height: 1,
+                x: 1,
+                y: 0,
+                width: 1,
+                height: 1,
+                stride: 4,
+                pixel_format: RemoteDesktopPixelFormat::Rgba8888,
+                payload: &rgba,
+            })
+            .unwrap();
+            queue_or_send_frame(None, &session, frame).await;
+        }
+
+        assert!(session.frame_channel.lock().await.is_none());
+        assert!(session.pending_frames.lock().await.len() <= MAX_FRAME_QUEUE);
+
+        while rx.try_recv().is_ok() {}
+        attach_test_channel(&session, channel).await;
+        let full = rx.recv().await.expect("full frame after reattach");
+        assert_eq!(full.len(), 52);
+        assert_eq!(u32::from_le_bytes(full[16..20].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(full[24..28].try_into().unwrap()), 2);
+        assert_eq!(&full[48..52], &[10, 20, 30, 255]);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn reset_frame_pipeline_clears_pending_and_detaches_channel() {
+        let session = test_session();
+        let channel = RdpFrameChannel(Arc::new(|_| Ok(())));
+        attach_test_channel(&session, channel).await;
+        push_pending_frame(&session, vec![1, 2, 3]).await;
+        assert!(session.frame_channel.lock().await.is_some());
+
+        reset_frame_pipeline(&session).await;
+
+        assert!(session.frame_channel.lock().await.is_none());
+        assert!(session.pending_frames.lock().await.is_empty());
+        assert!(session.framebuffer.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn outstanding_budget_detaches_slow_channel() {
+        let session = test_session();
+        *session.framebuffer.lock().await = Some(RdpFramebuffer::new(2, 1).unwrap());
+        let channel = RdpFrameChannel(Arc::new(|_| Ok(())));
+        attach_test_channel(&session, channel).await;
+
+        let budget = ipc_frame_budget(&session).await;
+        session
+            .outstanding_frame_bytes
+            .store(budget, Ordering::Relaxed);
+        queue_or_send_frame(None, &session, vec![0; 64]).await;
+
+        assert!(session.frame_channel.lock().await.is_none());
+        assert!(!session.pending_frames.lock().await.is_empty());
     }
 
     #[test]

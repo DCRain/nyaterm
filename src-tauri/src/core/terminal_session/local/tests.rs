@@ -13,7 +13,7 @@ mod tests {
         StartupInputBarrier, StartupOutputGate, StdMutex, TerminalQueryDetector, WorkingDirectoryOutcome, ZmodemDetectResult, ZmodemDetector,
         ZmodemDirection, apply_working_dir_to_command, build_cmd_prompt,
         build_local_startup_script, cancel_startup_for_pending_zmodem,
-        configure_local_pty_environment, detect_local_zmodem,
+        detect_local_zmodem,
         drain_startup_pipeline_on_cancel, input_cancels_startup_injection,
         is_unresolved_shell_wrapper, local_managed_integration_enabled, lock_or_recover,
         managed_cwd_runtime_ready, parse_shell_args, reconcile_managed_cwd_payloads,

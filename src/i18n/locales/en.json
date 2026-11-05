@@ -3690,6 +3690,7 @@
     "tabDockSplitLeft": "Split Left",
     "tabDockSplitRight": "Split Right",
     "tabDockSplitTop": "Split Top",
+    "rdpDisplayRecoveryFailed": "RDP display recovery failed. Reconnect the session to try again.",
     "vncDisplayRecoveryFailed": "VNC display recovery failed. Reconnect the session to try again.",
     "xmodemSingleFileOnly": "XMODEM can upload exactly one file at a time."
   },
